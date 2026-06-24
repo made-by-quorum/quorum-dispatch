@@ -1,0 +1,7 @@
+G-ADOPTED G-WINCH VERDICT: PASS — 40-resize storm during stream via engine attach; settled capture completed clean (zero-drop settled oracle; reflow makes counts non-invariant — GATE-B2 calibration)
+
+resize storm: 40 resizes during stream
+stream completed (WINCH_DONE settled)=true
+capture UTF-8 integrity: PASS
+no-altscreen-leak=true
+

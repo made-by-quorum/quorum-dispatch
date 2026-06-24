@@ -1,0 +1,50 @@
+# DERIVATION-REFRESH evidence (NORMALIZER-ANALOG precedent, orc-3 ruling 2026-06-05)
+#
+# Context: W1 P6/P7 narrowed the normalizers (normalize.sh 756c519a -> 39bbd74a).
+# Each P6 guard only narrows matching, so 9/10 corpus rows re-derive BYTE-IDENTICAL
+# from their COMMITTED raws; the P7 <ZMX_UID> token changes exactly 1 row (the Linux
+# resolution row, whose normalized text held the literal recording-host uid 501).
+# orc-3 APPROVED derivation-refresh (regenerate normalized from the COMMITTED raw,
+# ZERO new recording) — defer-while-drifted rejected (proofs must not cite an
+# out-of-tree normalizer sha). Refresh executed on phase/0b-w1, host uid 501
+# (== the recorded Linux test uid, established W1 Step-1). Captured 2026-06-05.
+#
+# RIDER 1: re-derived ONLY from committed raws. Token values per row:
+#   macOS resolution : JAIL_ROOT=/tmp/claude-501/sbrg-runs/73394178063451110570  runid=73394178063451110570
+#   Linux resolution : JAIL_ROOT=/run/user/501/sbrg-runs/205321178063567617624  runid=205321178063567617624  uid=501
+#   (8 presence/contract rows: raws already abstracted; root/runid/port irrelevant)
+#
+=== RIDER 1: full re-derivation (NEW normalize_all over each committed raw) ===
+IDENTICAL  zmx-dir-resolution/normalized/resolution.txt        (macOS)
+CHANGED    zmx-dir-resolution/normalized/resolution-linux.txt  (Linux — P7 uid token)
+IDENTICAL  attach-detach-reattach/normalized/reattach.trace
+IDENTICAL  build-claude-cmd/normalized/cmd.txt
+IDENTICAL  exit-codes/normalized/exit-codes.trace
+IDENTICAL  history/normalized/history.trace
+IDENTICAL  ls-info-json/normalized/ls-empty.json
+IDENTICAL  new-session-trace/normalized/boot.trace
+IDENTICAL  relay-health/normalized/contract.txt
+IDENTICAL  send-pty-paste-burst/normalized/trace
+# -> 9 IDENTICAL, 1 CHANGED.
+#
+=== RIDER 2: the 1 changed row — BEFORE/AFTER normalized diff (must be ONLY the uid token) ===
+# before normalized_sha256 = d6801d27cf83b8669d0e57201b7409e7ac975d78015f20b132eb7a2ad4f4b6eb
+# after  normalized_sha256 = a3656301906a4dda96421b7136891b9bc36e60793c714c5f688bda41a0be7f26
+--- before (committed v1 golden)
++++ after  (re-derived from committed raw, new normalizer)
+@@ resolution-linux.txt @@
+ case=XDG_RUNTIME_DIR_tier expected=<XDG_RUNTIME>/zmx resolved=<XDG_RUNTIME>/zmx
+-case=TMPDIR_collapse_tier expected=<TMPDIR>/dup/zmx-501 resolved=<TMPDIR>/dup/zmx-501
+-platform=linux uid=501
++case=TMPDIR_collapse_tier expected=<TMPDIR>/dup/zmx-<ZMX_UID> resolved=<TMPDIR>/dup/zmx-<ZMX_UID>
++platform=linux uid=<ZMX_UID>
+# Footprint = EXACTLY the P7 uid-token substitution (zmx-501 -> zmx-<ZMX_UID>,
+# uid=501 -> uid=<ZMX_UID>) on lines 2-3. Line 1 (XDG tier) IDENTICAL. No other
+# hunk -> within the intended rule's footprint (rider 2 satisfied).
+#
+=== RIDER 3: proof-update scope (git-diff-checked) ===
+# 10 IDENTICAL-row proofs: normalizer_sha256 line ONLY (756c519a -> 39bbd74a).
+# MATCH-PROOF.linux: normalized_sha256 (d6801d27 -> a3656301) + normalizer_sha256.
+# resolution-linux.txt golden: the 2-line uid substitution above.
+# RECORDED-FROM* unchanged (no pin change; 8c59ec4 carry state preserved).
+# golden sha == MATCH-PROOF.linux normalized_sha256 (self-consistent: a3656301).

@@ -1,0 +1,5 @@
+queue_drained_both_users=1
+queue_order_ok=1
+wait_reply_present=0
+wait_rc=0
+user_record_count=2

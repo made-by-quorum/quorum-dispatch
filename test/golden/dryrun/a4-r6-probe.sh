@@ -1,0 +1,295 @@
+#!/bin/bash
+# a4-r6-probe.sh — A4 R6 LIVE PROBE: does a >=8KB single send:pty write WHOLESALE-DROP
+# on the Rust two-write path? (orc-2 ordered, relay-1780637708238-13 item 1.)
+#
+# HYPOTHESIS (from sb-orc-3 TS-side live verification): the merged two-write delivery
+# is NOT sufficient at large sizes. A >=4KB single PTY write can WHOLESALE-DROP because
+# the PTY input buffer (~4096B) overflows before the reader drains; composer ends EMPTY
+# and the JSONL user-record delta is 0 — a DISTINCT mode from the R4 stuck-composer.
+# TS reproduced: 4.3KB single write -> delta 0 + EMPTY composer; same msg as 5x<=1024B
+# chunks ~150ms apart + separate CR -> delta 1. A4's boot-6 4.3KB PASS may have been
+# boundary luck or zmx-transport draining. This probe: does the DROP reproduce on the
+# RUST path at 8KB and 16KB (and bisect 12KB if 8KB passes / 16KB drops)?
+#
+# Method: ported from a4-live-boot6.sh + a4-paste-investigate.sh:
+#   - seed = M5 full recipe (probe-3 GrowthBook + onboarding + auth, READ-ONLY)
+#   - PERL-ALARM wrapper (NO timeout(1) on macOS)
+#   - glob-fallback $JP resolver (re-resolved after warm-up + before each row)
+#   - resolution belt before every session-targeting row
+#   - REAL-HOME BELT before/after
+#   - composer-state classification per row: DELIVERED / STUCK-IN-COMPOSER / EMPTY-DROPPED
+#   - UNIQUE markers (R6_8K_<rand> etc.) + scattered multibyte UTF-8 (baseline for a
+#     future chunking fix's boundary handling)
+#
+# MODE selected by $1:
+#   sendpty  — BOOT 1: warm-up + 8KB + 16KB (+ conditional 12KB bisect), ONE session,
+#              on the send:pty idle two-write path.
+#   create   — BOOT 2: `sb new -p` create path, ONE size (16KB), record the EXIT CODE
+#              the went-busy contract produces on a drop (Stalled->10 expected).
+set -u
+MODE="${1:-sendpty}"
+WT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+cd "$WT" || exit 1
+export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
+. test/golden/lib/jail.sh
+
+EV="$WT/test/golden/dryrun/a4-r6-bytes.txt"
+log(){ printf '%s\n' "$*" | tee -a "$EV"; }
+strip(){ perl -pe 's/\e\][0-9].*?(\a|\e\\)//g; s/\e\[[0-9;?]*[ -\/]*[@-~]//g; s/\e[()][B0]//g; s/\r//g'; }
+# perl-alarm timeout wrapper (macOS has NO timeout(1)). EXACT M5/boot6 wrapper.
+tmo(){ local s="$1"; shift; perl -e 'my $t=shift; my $pid=fork; if($pid==0){exec @ARGV or exit 127} local $SIG{ALRM}=sub{kill 9,$pid; exit 124}; alarm $t; waitpid($pid,0); exit($?>>8)' "$s" "$@"; }
+
+log ""
+log "=== A4 R6 LIVE PROBE (mode=$MODE) ==="
+log "  date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+log "  worktree: $WT  | tip: $(git -C "$WT" log -1 --format='%h %s' 2>/dev/null)"
+log "  binary: $JAIL_SB_CMD ($($JAIL_SB_CMD --version 2>/dev/null))"
+
+jail_establish || { echo FATAL; exit 1; }
+trap jail_teardown EXIT
+REAL_SESS="$JAIL_REAL_HOME/.claude/sessions"
+rb="$(ls "$REAL_SESS" 2>/dev/null | wc -l | tr -d ' ')"
+log "=== REAL-HOME BELT before: $rb ==="
+
+# --- SEED (M5 full recipe; all READ-ONLY from real home) -------------------
+mkdir -p "$HOME/.claude/channels" "$HOME/.claude/sessions"
+ln -s /home/u/work/cc-relay "$HOME/.claude/channels/relay" 2>/dev/null || true
+GB="$(python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1])).get("cachedGrowthBookFeatures",{})))' "$JAIL_REAL_HOME/.claude.json" 2>/dev/null||echo '{}')"
+cp "$JAIL_REAL_HOME/.claude/.credentials.json" "$HOME/.claude/.credentials.json" 2>/dev/null && chmod 600 "$HOME/.claude/.credentials.json"||true
+log "  credentials seeded: $([ -f "$HOME/.claude/.credentials.json" ]&&echo yes||echo NO)"
+AUTH="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(json.dumps({k:d[k] for k in ("oauthAccount","userID","claudeCodeFirstTokenDate") if k in d}))' "$JAIL_REAL_HOME/.claude.json" 2>/dev/null||echo '{}')"
+WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"; RW="$(cd "$WORKDIR"&&pwd -P)"
+python3 -c 'import json,sys
+b={"hasCompletedOnboarding":True,"bypassPermissionsModeAccepted":True,"dangerouslyLoadDevelopmentChannels":True}
+b["cachedGrowthBookFeatures"]=json.loads(sys.argv[1]); b["projects"]={sys.argv[3]:{"hasTrustDialogAccepted":True},sys.argv[4]:{"hasTrustDialogAccepted":True}}
+b.update(json.loads(sys.argv[2])); print(json.dumps(b))' "$GB" "$AUTH" "$WORKDIR" "$RW" > "$HOME/.claude.json"
+
+# --- common helpers --------------------------------------------------------
+pidfile_for(){ local f n; for f in "$HOME/.claude/sessions"/*.json; do [ -f "$f" ]||continue; n="$(python3 -c 'import json,sys
+try:print(json.load(open(sys.argv[1])).get("name",""))
+except:pass' "$f" 2>/dev/null)"; [ "$n" = "$1" ] && { echo "$f"; return; }; done; return 1; }
+status_of(){ local pf; pf="$(pidfile_for "$1")"||{ echo NONE; return; }; python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("status",""))' "$pf" 2>/dev/null||echo '?'; }
+ws(){ local n="$1" w="$2" to="$3" i=0; while [ "$i" -lt "$((to*4))" ]; do [ "$(status_of "$n")" = "$w" ]&&return 0; sleep 0.25; i=$((i+1)); done; return 1; }
+jp_of(){ ls -t "$HOME/.claude/projects"/*/*.jsonl 2>/dev/null|head -1; }
+urc(){ [ -f "$1" ]||{ echo 0; return; }; python3 -c 'import json,sys
+n=0
+for l in open(sys.argv[1]):
+ l=l.strip()
+ if not l:continue
+ try:r=json.loads(l)
+ except:continue
+ if r.get("type")=="user":n+=1
+print(n)' "$1"; }
+
+# Build a payload of approximately N bytes carrying a unique MARKER and scattered
+# multibyte UTF-8 (the future chunking fix's boundary baseline). The marker appears
+# at BOTH ends so we can grep the composer/transcript for it. UTF-8 runs are sprinkled
+# every few chunks.
+mkp(){ python3 -c '
+import sys
+n=int(sys.argv[1]); marker=sys.argv[2]
+uni="日本語café☕"   # multibyte: CJK + accented latin + coffee emoji
+head=marker+"_START "
+tail=" "+marker+"_END"
+body=[]
+filler="lorem ipsum dolor sit amet consectetur "
+cur=len(head.encode())+len(tail.encode())
+i=0
+while cur < n:
+    chunk = filler if (i%3) else (uni+" ")
+    b=chunk.encode()
+    body.append(chunk); cur+=len(b); i+=1
+s=head+"".join(body)+tail
+enc=s.encode()[:n]
+while True:
+    try: s2=enc.decode(); break
+    except UnicodeDecodeError: enc=enc[:-1]
+if marker+"_END" not in s2:
+    s2 = s2.rstrip()+tail
+sys.stdout.write(s2)
+' "$1" "$2"; }
+
+# Classify composer state from a zmx history capture vs. the JSONL delta.
+#   delta>=1 -> DELIVERED
+#   delta==0 + marker_START on screen -> STUCK-IN-COMPOSER
+#   delta==0 + marker_START ABSENT    -> EMPTY-DROPPED
+classify(){ local name="$1" marker="$2" delta="$3"
+    if [ "$delta" -ge 1 ]; then echo "DELIVERED"; return; fi
+    local hist; hist="$(jail_zmx history "$name" 2>/dev/null|strip)"
+    if printf '%s' "$hist" | grep -q "${marker}_START"; then
+        echo "STUCK-IN-COMPOSER"
+    else
+        echo "EMPTY-DROPPED"
+    fi
+}
+
+GREEN=0; RED=0; ROWS=""
+mark(){ if [ "$1" = G ]; then GREEN=$((GREEN+1)); else RED=$((RED+1)); fi; }
+addrow(){ ROWS="${ROWS}$1
+"; }
+
+# ============================================================================
+# ONE real-claude boot, then the per-MODE rows.
+# ============================================================================
+NAME="${JAIL_PREFIX}r6"
+log ""
+log "=== sb new (real claude) ==="
+( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
+code=$?
+log "  sb new exit=$code : $(cat "$JAIL_ROOT/o")"
+[ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; head -5 "$JAIL_ROOT/e"|sed 's/^/    /'|tee -a "$EV"; }
+if [ "$code" != 0 ]; then log "!!! BOOT FAILED — capturing + stop"; jail_zmx history "$NAME" 2>/dev/null|strip|tail -20|sed 's/^/  /'|tee -a "$EV"; exit 1; fi
+ws "$NAME" idle 30 || log "  WARN not idle after boot (status=$(status_of "$NAME"))"
+sleep 1
+PF="$(pidfile_for "$NAME"||true)"
+CLVER="$([ -n "$PF" ]&&python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("version",""))' "$PF" 2>/dev/null||echo '?')"
+log "  claude version in jail: $CLVER"
+jail_assert_resolves_in_jail "$NAME" || { log "  RESOLUTION BELT REFUSED"; exit 4; }
+log "  resolution belt: $NAME resolves uniquely in-jail (OK)"
+
+# --- WARM-UP (turns flowing; resolve $JP) ----------------------------------
+log ""
+log "=== warm-up send:pty (turns flowing; resolve \$JP via glob-fallback) ==="
+out="$("$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK and nothing else." 2>&1)"
+log "  warm-up send out=[$out]"
+i=0; JP=""; while [ "$i" -lt 120 ]; do JP="$(jp_of)"; [ -n "$JP" ]&&[ "$(urc "$JP")" -ge 1 ]&&break; sleep 0.5; i=$((i+1)); done
+[ -z "$JP" ] && { log "  !!! AUTH/WARMUP FAILED — no user record after 60s"; jail_zmx history "$NAME" 2>/dev/null|strip|grep -v '^[[:space:]]*$'|tail -20|sed 's/^/    /'|tee -a "$EV"; exit 3; }
+ws "$NAME" idle 60 || true; sleep 1
+log "  warm-up OK: \$JP=$JP (urc=$(urc "$JP"))"
+
+# ============================================================================
+# send:pty idle two-write probe row. $1=size bytes, $2=marker.
+# Echoes the composer CLASS to stdout (for the bisect decision).
+# ============================================================================
+sendpty_row(){
+    local sz="$1" marker="$2" before after delta P plen busy_seen=0 cls vrc
+    log ""
+    log "===== send:pty ROW: target=$sz bytes marker=$marker ====="
+    ws "$NAME" idle 90 || log "  WARN not idle pre-row"
+    jail_assert_resolves_in_jail "$NAME" || { log "  RESOLUTION BELT REFUSED (row $sz)"; return 2; }
+    JP="$(jp_of)"; before="$(urc "$JP")"
+    P="$(mkp "$sz" "$marker")"; plen="$(printf '%s' "$P"|wc -c|tr -d ' ')"
+    log "  payload actual bytes=$plen (target $sz); marker=$marker"
+    "$JAIL_SB_CMD" send:pty "$NAME" "$P" >"$JAIL_ROOT/row.out" 2>"$JAIL_ROOT/row.err"; vrc=$?
+    log "  verb exit=$vrc"
+    log "  verb stdout: $(cat "$JAIL_ROOT/row.out" 2>/dev/null|tr '\n' '|')"
+    if [ -s "$JAIL_ROOT/row.err" ]; then log "  verb stderr:"; cat "$JAIL_ROOT/row.err"|sed 's/^/    /'|tee -a "$EV"; else log "  verb stderr: (none)"; fi
+    if ws "$NAME" busy 12; then busy_seen=1; log "  WENT BUSY within 12s"; else log "  did NOT observe busy in 12s (status=$(status_of "$NAME"))"; fi
+    ws "$NAME" idle 150 || log "  WARN not idle 150s post-row"
+    sleep 3
+    JP="$(jp_of)"; after="$(urc "$JP")"; delta=$((after-before))
+    cls="$(classify "$NAME" "$marker" "$delta")"
+    log "  user-records before=$before after=$after DELTA=$delta busy_seen=$busy_seen status=$(status_of "$NAME") CLASS=$cls"
+    log "  JSONL tail (last 4 user/assistant):"
+    python3 -c 'import json,sys
+recs=[]
+for l in open(sys.argv[1]):
+ l=l.strip()
+ if not l:continue
+ try:r=json.loads(l)
+ except:continue
+ t=r.get("type")
+ if t in ("user","assistant"):
+  msg=r.get("message",{}); c=msg.get("content","")
+  if isinstance(c,list): c="".join(x.get("text","") if isinstance(x,dict) else str(x) for x in c)
+  recs.append((t,(str(c)[:90]).replace("\n"," ")))
+for t,c in recs[-4:]: print("      [%s] %s"%(t,c))' "$JP" 2>/dev/null | tee -a "$EV"
+    log "  zmx history tail (ANSI-stripped, last 8 non-blank):"
+    jail_zmx history "$NAME" 2>/dev/null|strip|grep -v '^[[:space:]]*$'|tail -8|sed 's/^/      /'|tee -a "$EV"
+    addrow "send:pty | ${plen}B | delta=$delta | $cls | busy=$busy_seen | exit=$vrc"
+    if [ "$cls" = DELIVERED ]; then mark G; else mark R; fi
+    # Publish CLASS via a file (NOT stdout — stdout is polluted by tee'd log lines).
+    printf '%s' "$cls" > "$JAIL_ROOT/last_class"
+}
+
+if [ "$MODE" = sendpty ]; then
+    sendpty_row 8192 "R6_8K_${JAIL_RUNID}";  R8="$(cat "$JAIL_ROOT/last_class")"
+    sendpty_row 16384 "R6_16K_${JAIL_RUNID}"; R16="$(cat "$JAIL_ROOT/last_class")"
+    log ""
+    log "  >>> 8KB class=$R8   16KB class=$R16"
+    if [ "$R8" = DELIVERED ] && [ "$R16" != DELIVERED ]; then
+        log "  >>> 8KB delivered but 16KB did not — bisecting 12KB (same session)"
+        sendpty_row 12288 "R6_12K_${JAIL_RUNID}"; R12="$(cat "$JAIL_ROOT/last_class")"
+        log "  >>> 12KB class=$R12"
+    else
+        log "  >>> no bisect needed (8KB=$R8, 16KB=$R16)"
+    fi
+fi
+
+if [ "$MODE" = create ]; then
+    # FREE BISECT (same boot, NO extra session): the R6 BOOT-1 driver bug (cmd-subst
+    # captured tee'd log lines, so the bisect branch mis-fired and 12KB never ran) is
+    # recovered HERE on this boot's already-warm send:pty session. ONE 12KB send:pty
+    # row bisects the 8KB-DELIVERED / 16KB-DROPPED interval. Zero boot cost.
+    sendpty_row 12288 "R6_12K_${JAIL_RUNID}"; R12="$(cat "$JAIL_ROOT/last_class")"
+    log ""
+    log "  >>> 12KB (recovered bisect) class=$R12"
+    ws "$NAME" idle 60 || true
+
+    # BOOT 2: the `sb new -p` create path with a 16KB priming prompt. The create
+    # path drives deliver_prompt (bounded-retry, content-verified). Record the EXIT
+    # CODE the went-busy contract produces: Accepted->0, Stalled->10, PidFileMissing->1.
+    CNAME="${JAIL_PREFIX}r6c"
+    marker="R6_CREATE16_${JAIL_RUNID}"
+    P="$(mkp 16384 "$marker")"; plen="$(printf '%s' "$P"|wc -c|tr -d ' ')"
+    log ""
+    log "===== create ROW: sb new -p, target=16384 bytes marker=$marker ====="
+    log "  payload actual bytes=$plen"
+    ( cd "$WORKDIR" && tmo 150 "$JAIL_SB_CMD" new "$CNAME" --cwd "$WORKDIR" -p "$P" ) >"$JAIL_ROOT/c.out" 2>"$JAIL_ROOT/c.err"; crc=$?
+    log "  sb new -p exit=$crc"
+    log "  stdout: $(cat "$JAIL_ROOT/c.out" 2>/dev/null|tr '\n' '|')"
+    if [ -s "$JAIL_ROOT/c.err" ]; then log "  stderr:"; cat "$JAIL_ROOT/c.err"|sed 's/^/    /'|tee -a "$EV"; else log "  stderr: (none)"; fi
+    sleep 3
+    # The create session's transcript: pick the newest jsonl whose dir matches the
+    # create session (newest overall is fine — the warm session is idle, not writing).
+    JPC=""; i=0; while [ "$i" -lt 60 ]; do JPC="$(ls -t "$HOME/.claude/projects"/*/*.jsonl 2>/dev/null|head -1)"; [ -n "$JPC" ]&&break; sleep 0.5; i=$((i+1)); done
+    cdelta="$(urc "$JPC")"
+    cstat="$(status_of "$CNAME")"
+    ccls="$(classify "$CNAME" "$marker" "$cdelta")"
+    log "  create session: jsonl=$JPC user-records=$cdelta status=$cstat CLASS=$ccls"
+    log "  create JSONL tail:"
+    python3 -c 'import json,sys
+recs=[]
+for l in open(sys.argv[1]):
+ l=l.strip()
+ if not l:continue
+ try:r=json.loads(l)
+ except:continue
+ t=r.get("type")
+ if t in ("user","assistant"):
+  msg=r.get("message",{}); c=msg.get("content","")
+  if isinstance(c,list): c="".join(x.get("text","") if isinstance(x,dict) else str(x) for x in c)
+  recs.append((t,(str(c)[:90]).replace("\n"," ")))
+for t,c in recs[-4:]: print("      [%s] %s"%(t,c))' "$JPC" 2>/dev/null | tee -a "$EV"
+    log "  create zmx history tail:"
+    jail_zmx history "$CNAME" 2>/dev/null|strip|grep -v '^[[:space:]]*$'|tail -8|sed 's/^/      /'|tee -a "$EV"
+    case "$crc" in
+        0) cmap="Accepted (went busy / delivered)";;
+        10) cmap="Stalled (never went busy — the wholesale-drop contract path)";;
+        1) cmap="exit 1 (PidFileMissing / resolveOrDie / other)";;
+        124) cmap="tmo KILLED at 150s (create path hung — NOT a clean contract exit)";;
+        *) cmap="exit $crc (unexpected)";;
+    esac
+    log "  CONTRACT: sb new -p exit=$crc -> $cmap"
+    addrow "create(-p) | ${plen}B | delta=$cdelta | $ccls | exit=$crc ($cmap)"
+    if [ "$ccls" = DELIVERED ]; then mark G; else mark R; fi
+    "$JAIL_SB_CMD" ls --all --short 2>/dev/null | grep -q "$CNAME" && jail_kill_session "$CNAME" >/dev/null 2>&1
+    "$JAIL_ZMX_CMD" kill "$CNAME" --force >/dev/null 2>&1 || true
+fi
+
+# --- TEARDOWN + BELT -------------------------------------------------------
+"$JAIL_SB_CMD" ls --all --short 2>/dev/null | grep -q "$NAME" && jail_kill_session "$NAME" >/dev/null 2>&1
+"$JAIL_ZMX_CMD" kill "$NAME" --force >/dev/null 2>&1 || true
+sleep 1
+ra="$(ls "$REAL_SESS" 2>/dev/null | wc -l | tr -d ' ')"
+leaked="$(grep -l "${JAIL_PREFIX}" "$REAL_SESS"/*.json 2>/dev/null || true)"
+log ""
+log "=== REAL-HOME BELT after: $ra ($([ "$rb" = "$ra" ]&&echo HOLDS||echo VIOLATION)) ==="
+[ -n "$leaked" ] && log "  !!! BELT VIOLATION (leaked prefixed rows): $leaked"
+
+log ""
+log "=== R6 ROW SUMMARY (mode=$MODE) ==="
+printf '%s' "$ROWS" | sed 's/^/  /' | tee -a "$EV"
+log "  GREEN(delivered): $GREEN   RED(drop/stuck): $RED"
+log "=== DONE (teardown via trap) ==="

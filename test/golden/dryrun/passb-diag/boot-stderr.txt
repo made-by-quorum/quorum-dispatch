@@ -1,0 +1,2 @@
+ERROR: Session "sbrg-8590217806629291066-diagboot" is not attachable in the zmx socket dir (/var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/sbrg-runs/8590217806629291066/zmx) after creation — registration failed (Bug D).
+  Reaping the stray wrapper.

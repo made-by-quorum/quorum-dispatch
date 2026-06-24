@@ -1,0 +1,4 @@
+ 294020  294008 node /home/u/work/relay-stub/stub.js --port 39174
+ 294008    1290 bash -lc command 'claude' '--name' 'dogfood-m3b'
+   1290       1 zmx run dogfood-m3b -d bash -lc command 'claude'
+      7       2 [kworker/0:1-events]

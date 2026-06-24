@@ -1,0 +1,12 @@
+{
+  "pid": 1001,
+  "sessionId": "live-aaaa-0001",
+  "cwd": "/work/projA",
+  "startedAt": 1717490000000,
+  "updatedAt": 1717495200000,
+  "status": "busy",
+  "name": "alpha-worker",
+  "version": "1.2.3",
+  "backend": "zmx",
+  "spawnedBy": "orchestrator-1"
+}

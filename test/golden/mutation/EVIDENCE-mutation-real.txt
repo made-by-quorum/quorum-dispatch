@@ -1,0 +1,144 @@
+# EVIDENCE — mutation vs REAL corpus + R2 stub-seam negative controls (0b Part 2 / DELTA-STRENGTH)
+# pin 8c59ec4, zmx 0.6.0, stub 1.8.1. Run on brano against committed REAL fixtures + LIVE
+# seam/divergent captures (mutation/{r2-seams,divergent}/). Gate: zero false negatives.
+# HARDENED: the suite REPLAYS the live captures; it NEVER synthesizes a seam-on/
+# divergent trace from the golden (a tautology) — a missing live capture FAILS LOUDLY.
+# Regenerated: 2026-06-05T19:13:57Z (0b DELTA-STRENGTH W3.1 final close, impl-0bw-w31): adds the
+# W3.1 P3 chunked-path block — R3 STUB_NO_QUEUE control + C2 seam-load-bearing control
+# (mutation/r2-seams/{no_queue_burst,cooked_idle}.trace) + 11 idle/busy field-flip
+# mutants. Suite 70 -> 83 checks. Earlier 27/70 captures superseded by this run.
+
+## run_mutation_real.sh
+=== A. clean REAL-fixture baselines (must PASS) ===
+ok   baseline/build-claude-cmd (byte-exact) (clean REAL fixture passes)
+ok   baseline/relay-health-contract (byte-exact) (clean REAL fixture passes)
+ok   baseline/history-backlog (12 lines) (clean REAL fixture passes)
+ok   baseline/reattach-backlog (20 lines) (clean REAL fixture passes)
+ok   baseline/reattach-no-altscreen (clean REAL fixture passes)
+ok   baseline/resolution-raw-CR (byte-exact) (clean REAL fixture passes)
+ok   baseline/exit-code-1 (clean REAL fixture passes)
+ok   baseline/boot-readiness-event (clean REAL fixture passes)
+ok   baseline/submit-discipline (clean REAL fixture passes)
+
+=== A. 6 Part-1 divergence classes vs REAL fixtures (must be CAUGHT) ===
+ok   real/altered-byte-exact (build-claude-cmd drops server:relay) (caught, rc=1)
+ok   real/dropped-cr (resolution raw CR->LF) (caught, rc=1)
+ok   real/reordered-backlog (history reversed) (caught, rc=1)
+ok   real/dropped-backlog-line (reattach loses SBLINE 13) (caught, rc=1)
+ok   real/wrong-exit-code (info-missing reported 0 not 1) (caught, rc=1)
+ok   real/inject-altscreen (reattach passthrough) (caught, rc=1)
+ok   real/relay-contract-altered (POST /message has_message_id 1->0) (caught, rc=1)
+ok   real/resolution-outcome-wrong-dir (XDG tier socket misplaced) (caught, rc=1)
+
+=== B. intentionally-divergent TS invocation (never-normalized field) ===
+ok   divergent-invocation/trace-differs-in-exit-field (got_exit 1->0)
+ok   divergent-invocation/caught-vs-recorded-golden (exit-code field) (caught, rc=1)
+
+=== C. R2 stub-seam negative controls (seam-on output CHANGES + CAUGHT) ===
+ok   r2/withhold-pid/output-changed (boot EVENT surface differs from golden)
+ok   r2/withhold-pid/caught-vs-golden (byte-exact) (caught, rc=1)
+ok   r2/withhold-pid/caught-vs-row-class (boot-readiness-event) (caught, rc=1)
+ok   r2/withhold-jsonl/output-changed (paste-burst --wait surface differs from golden)
+ok   r2/withhold-jsonl/caught-vs-golden (byte-exact) (caught, rc=1)
+ok   r2/withhold-jsonl/caught-vs-row-class (submit-discipline) (caught, rc=1)
+ok   r2/dead-health/output-changed (relay /health contract surface differs from golden)
+ok   r2/dead-health/caught-vs-golden (caught, rc=1)
+
+=== W3a. DELTA-STRENGTH strengthened-row mutants (every new assertion bites) ===
+ok   w3.2/relay-clean (byte-exact, derived cross-checks present) (clean REAL fixture passes)
+ok   w3.2/foreign-parent-sidecar (relay_pid_is_child_of_claude 1->0) (caught, rc=1)
+ok   w3.2/stale-sidecar-dead-pid (sidecar.pid != health.pid join 1->0) (caught, rc=1)
+ok   w3.2/empty-message-id (mid token -> empty) (caught, rc=1)
+ok   w3.2/cross-field-sessionid-mismatch (chain 1->0) (caught, rc=1)
+ok   w3.3/boot-clean (boot-readiness-event, strengthened fields present) (clean REAL fixture passes)
+ok   w3.3/decoy-wins (decoy_rejected 1->0) (caught, rc=1)
+ok   w3.3/no-went-busy (went_busy_observed 1->0) (caught, rc=1)
+ok   w3.3/pre-pid-stdin-spam (input_chars_before_pidfile 0->5) (caught, rc=1)
+ok   w3.8/history-multiset-clean (12 lines) (clean REAL fixture passes)
+ok   w3.8/reattach-multiset-clean (20 lines) (clean REAL fixture passes)
+ok   w3.8/duplicated-sentinel-line (history SBLINE 6 twice) (caught, rc=1)
+ok   w3.8/banner-prefixed-line (history SBLINE 6 -> BANNER:SBLINE 6) (caught, rc=1)
+
+=== W3b. DELTA-STRENGTH new-row mutants (P4/P5/P9/P10 — every new assertion bites) ===
+ok   w3.4a/boot-timeout-clean (byte-exact) (clean REAL fixture passes)
+ok   w3.4a/swallow-failure-as-success (failed_nonzero 1->0) (caught, rc=1)
+ok   w3.4a/stderr-token-stripped (readiness_timeout_token 1->0) (caught, rc=1)
+ok   w3.4b/wait-no-reply-clean (byte-exact) (clean REAL fixture passes)
+ok   w3.4b/fabricated-reply (no_text_response_sentinel 1->0) (caught, rc=1)
+ok   w3.4b/assistant-record-appeared (assistant_record_absent 1->0) (caught, rc=1)
+ok   w3.4c/relay-unhealthy-clean (byte-exact) (clean REAL fixture passes)
+ok   w3.4c/ls-join-regated-on-health (sidecar_driven_robust 1->0) (caught, rc=1)
+ok   w3.4d/two-stage-tolerance-clean (byte-exact) (clean REAL fixture passes)
+ok   w3.4d/partial-json-intolerant-reader (session_visible_after 1->0, models pre-PR#20 drop) (caught, rc=1)
+ok   w3.4d/ls-crash-on-partial (ls_never_crashed_during_write 1->0) (caught, rc=1)
+ok   w3.4e/noise-stale-clean (byte-exact) (clean REAL fixture passes)
+ok   w3.4e/dup-not-deduped (dup_same_sid_deduped_to_one 1->0) (caught, rc=1)
+ok   w3.4e/dead-pid-dropped (dead_pid_entry_still_visible 1->0) (caught, rc=1)
+ok   w4.3/wrong-typed-timestamp-clean (byte-exact) (clean REAL fixture passes)
+ok   w4.3/whole-row-drop (wrong_typed_row_visible 1->0, models pre-PR#20 drop) (caught, rc=1)
+ok   w3.5/attach-first-window-clean (byte-exact) (clean REAL fixture passes)
+ok   w3.5/altscreen-in-attach-window (altscreen_1049h_absent 1->0) (caught, rc=1)
+ok   w3.5/backlog-sentinel-absent (backlog_sentinel_present 1->0) (caught, rc=1)
+ok   w3.5/clean-window-no-altscreen (mechanism baseline) (clean REAL fixture passes)
+ok   w3.5/injected-altscreen-window-caught (no-altscreen mechanism) (caught, rc=1)
+ok   w3.6/hostile-cwd-clean (byte-exact) (clean REAL fixture passes)
+ok   w3.6/wrong-project-path-mapping (specials_preserved_verbatim 1->0) (caught, rc=1)
+ok   w3.6/jsonl-at-wrong-dir (jsonl_landed_at_mapped_dir 1->0) (caught, rc=1)
+ok   w3.7/termios-report-clean (byte-exact) (clean REAL fixture passes)
+ok   w3.7/raw-mode-substituted-icanon (icanon 1->0) (caught, rc=1)
+ok   w3.7/raw-mode-substituted-echo (echo 1->0) (caught, rc=1)
+ok   w4.2/termios-report-linux-clean (byte-exact) (clean REAL fixture passes)
+ok   w4.2/termios-linux-raw-substituted-icanon (icanon 1->0) (caught, rc=1)
+ok   w4.2/termios-linux-raw-substituted-echo (echo 1->0) (caught, rc=1)
+
+=== W3.1 P3 chunked-path mutants (orc-4 ruling; riders R3 + C2) ===
+ok   w3.1/chunked-idle-clean (byte-exact, full >=4KB payload present) (clean REAL fixture passes)
+ok   w3.1/busy-strengthened-clean (submit-discipline, ordered texts+anchor+reply) (clean REAL fixture passes)
+ok   w3.1/R3-no-queue/output-changed (busy-window burst discarded -> outcome differs from golden)
+ok   w3.1/R3-no-queue/caught-vs-row-class (submit-discipline flips RED) (caught, rc=1)
+ok   w3.1/C2-cooked/output-changed (seam-unset cooked-drop differs from golden = seam is live)
+ok   w3.1/C2-cooked/caught-vs-golden (cooked-drop signature flips RED) (caught, rc=1)
+ok   w3.1/C2-pair/sub-1KB-cooked-lands (422B busy burst, MAX_CANON bracketed low) (clean REAL fixture passes)
+ok   w3.1/idle-truncated-burst (payload cut below 4KB -> user-record text differs) (caught, rc=1)
+ok   w3.1/idle-full-payload-absent (full_payload_present 1->0, chunk loss) (caught, rc=1)
+ok   w3.1/idle-wrong-reply-text (cached/wrong --wait reply) (caught, rc=1)
+ok   w3.1/idle-split-turn (user_record_count 1->2, chunking split the turn) (caught, rc=1)
+ok   w3.1/busy-swapped-order (user_text order flipped -> submit-discipline RED) (caught, rc=1)
+ok   w3.1/busy-wrong-reply-text (--wait anchored on the wrong reply) (caught, rc=1)
+
+--- run_mutation_real: 83 passed, 0 failed ---
+
+## SELF-REVIEW ADVERSARIAL CHECKS (impl-0bw-w31, in-session quality gate):
+## A1 R3 non-vacuity: the STUB_NO_QUEUE control capture (no_queue_burst.trace) is a
+##    LIVE drive (w31_seam_drive.sh @ pin) whose busy-window burst is read-and-
+##    DISCARDED -> queue_drained 1->0, burst user_text/anchor/reply absent. DIFFERS
+##    from gold AND caught by submit-discipline -> not self-fulfilling.
+## A2 C2 seam-load-bearing: the cooked_idle.trace (STUB_RAW_STDIN stripped) shows the
+##    cooked-drop signature (full_payload_present=0, rc1) -> DIFFERS from gold AND
+##    caught; PAIRED with the sub-1KB busy cooked control that LANDS -> MAX_CANON=1024
+##    bracketed both sides; proves the inline seam is live (detects silent seam-loss).
+## A3 R1 dormancy: stub 1.8.0->1.8.1 dormancy replay-verified (the 2 most stub-
+##    sensitive rows byte-match gold seam-unset, .restamp-evidence-w31.txt); 36 proofs
+##    re-stamped (sha/version lines only).
+## A4 idle field-flips survive normalization: the derived booleans/texts
+##    (full_payload_present, user_record_count, user_text[i], wait_reply_text) are
+##    byte-stable under the normalizer -> a flipped value is exactly the divergence a
+##    chunk-loss / wrong-reply / swapped-order engine produces.
+## A5 no tautology fallback: missing live capture FAILS LOUDLY (LIVE-capture-missing).
+
+## run_mutation.sh (Part-1 synthetic teeth — INTACT)
+=== baselines (must PASS) ===
+ok   baseline/byte-exact-help (clean baseline passes)
+ok   baseline/no-altscreen (clean baseline passes)
+ok   baseline/backlog-complete (clean baseline passes)
+ok   baseline/exit-code (clean baseline passes)
+
+=== mutations (must be CAUGHT) ===
+ok   mutation/altered-help (caught, rc=1)
+ok   mutation/dropped-cr (caught, rc=1)
+ok   mutation/reordered-replay (caught, rc=1)
+ok   mutation/wrong-exit-code (caught, rc=1)
+ok   mutation/inject-altscreen (caught, rc=1)
+ok   mutation/dropped-backlog-line (caught, rc=1)
+
+--- run_mutation: 10 passed, 0 failed ---

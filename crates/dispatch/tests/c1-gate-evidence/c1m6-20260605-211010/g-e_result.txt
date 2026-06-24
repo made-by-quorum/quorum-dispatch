@@ -1,0 +1,10 @@
+G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under SB_MUX=zmx, jailed ZMX_DIR
+
+zmx binary: /opt/homebrew/bin/zmx
+sb new (zmx): exit=0
+  stdout: Started detached session "ge-sess"
+  stderr: 
+sb ls (zmx): exit=0, lists ge-sess=true
+sb kill (zmx): exit=0
+  stderr: 
+

@@ -1,0 +1,71 @@
+# WS-C M5 G-SOAK — HONEST-RESULT NOTE (read before the merge ruling)
+
+Date: 2026-06-06, host brano.local (macOS 26.5, arm64, Darwin 25.5.0), RELEASE build.
+
+## Finding: the absolute 10ms p95 bound sits AT the measurement-noise boundary
+## for the SPLIT arm at the full 60s window under the spec-minimum load.
+
+Two independent full-window (60s) runs, identical config (N=10 = 7 quiet + 3
+flooders, 4 input-blast threads, all spec minimums):
+
+| Run                     | split p95 | shared baseline p95 | ratio | abs ≤10ms | ≤3× shared | timeouts | ls max |
+|-------------------------|-----------|---------------------|-------|-----------|------------|----------|--------|
+| RUN 1 (g-soak_result)   | 10.33 ms  | 11.69 ms            | 0.88x | **FALSE** | true       | 0        | 195 ms |
+| RUN 2 (…rerun2)         |  9.88 ms  | 11.01 ms            | 0.90x | **true**  | true       | 0        | 201 ms |
+
+At an 8s smoke window the split p95 was ~2.4ms (well under bound). The p95 grows
+with window length and load accumulation and lands RIGHT AT 10ms at 60s.
+
+## Why this is NOT a per-session-split regression (the architecturally load-bearing
+## reading):
+
+1. The SPLIT arm is consistently FASTER than the SAME-RUN SHARED baseline
+   (ratio 0.88–0.90x). The relative assertion (red-team M8's anti-masking guard,
+   ≤3× shared) passes with a ~3.3× margin in BOTH runs. The split topology does
+   NOT regress sibling RTT vs the shared daemon — it improves it (no cross-session
+   contention; the sampled sibling q1 is on its own daemon).
+2. ZERO timeouts in both runs. The siblings always answered.
+3. The ~10ms p95 is host-scheduling contention from the SPEC-MINIMUM concurrent
+   load itself (4 blast threads doing ~400k SendInputs over 60s + 3 unbounded
+   flooders + the in-process RTT poll loop all competing for cores on one box).
+   The rare max samples (~220ms) are thread-starvation stalls, not daemon stalls —
+   the shared baseline shows the SAME max-tail shape. This is a property of the
+   measurement host under the prescribed workload, not of the split.
+
+## What I did NOT do (per the dispatch + house rule):
+
+I did NOT tune the 10ms bound. It is spec-set (spec §7, R-1(5)). The dispatch is
+explicit: "if the soak assertions fail honestly (e.g. p95 over bound), DO NOT tune
+the bound — report the numbers and stop." The gate row asserts the spec bound
+VERBATIM; RUN 1 therefore REDS on assertion [1] and RUN 2 GREENS. I am reporting
+the numbers and the boundary behavior for the lead/orc to rule on.
+
+## The decision the lead/orc owns (NOT mine):
+
+The absolute 10ms ceiling, at the full spec-minimum load on this host, is within
+±0.4ms of measurement noise. Options the lead/orc may consider (all spec/authority
+calls, not implementer calls):
+  (a) accept the relative-baseline assertion (≤3× shared, which is the M8 guard and
+      passes robustly) as the binding soak gate, treating the absolute ceiling as an
+      advisory/observed-on-this-host number;
+  (b) re-rule the absolute ceiling against PSS-honest / less-contended hardware
+      (the Lima/Linux lane, already named as the G-IDLE PSS follow-up) where the
+      in-process RTT loop does not compete with the blast threads for the same cores;
+  (c) keep the absolute ceiling as-is and accept the gate is borderline-flaky on
+      this host at 60s (NOT recommended — a flapping gate erodes signal).
+
+My recommendation (advisory only): (a). The relative-to-shared-baseline assertion
+is the falsifiable, regression-catching tooth the red-team asked for; the absolute
+ceiling is a probe-era observation that the per-session daemon meets-or-beats but
+which lands in host noise at full load. The split's RTT is GOOD (median ~4ms, p95
+~10ms, faster than shared) — the gate's INTENT (per-session split does not starve
+siblings) is decisively met.
+
+## Reproduce:
+
+  scripts/build-lock.sh cargo build --release -p sb --bin sb -p sbmux --bin sbmux
+  C1_GATE_RUNID=<id> scripts/build-lock.sh cargo test -p sb --test c1_gate \
+    -- --ignored --exact g_soak --nocapture
+
+Knobs (env): SOAK_WINDOW_S (default 60), SOAK_N_QUIET (7), SOAK_N_FLOOD (3),
+SOAK_N_BLAST (4). Defaults are the spec minimums.

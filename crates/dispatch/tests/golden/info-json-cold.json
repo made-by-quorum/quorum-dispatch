@@ -1,0 +1,8 @@
+{
+  "name": "coldy",
+  "sessionId": "44444444-dddd-4ddd-8ddd-444444444444",
+  "status": "cold",
+  "live": false,
+  "pid": null,
+  "provider": "claude-code"
+}

@@ -1,0 +1,4 @@
+SHAPE boot_reached_idle=1
+SHAPE ls_never_crashed_during_write=1
+SHAPE ls_after_exit_zero=1
+SHAPE session_visible_after=1

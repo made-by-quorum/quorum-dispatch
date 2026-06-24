@@ -1,0 +1,19 @@
+G-DAEMONKILL VERDICT: PASS — SIGKILL of the sbmux daemon (>=2 live sessions): sb ls degrades to non-mux-live registry rows (no hang/panic/corruption), sb send:pty errors LOUD (embedded-named not-live, exit 1, bounded), sb attach fails LOUD + bounded; a FRESH sb new RELAUNCHES the daemon cold-start and the new session works (send+kill). Blast-radius disposition recorded in detail.
+
+PRECONDITION: daemon pid 16517 alive=true; children [("dk-a", true), ("dk-b", true)]; sb ls exit=0, both surface as live mux rows (zmxName set)=true
+SIGKILL sbmux daemon pid 16517 → daemon alive after kill=false
+BLAST RADIUS (empirical): session children after daemon SIGKILL: [("dk-a", false), ("dk-b", false)]
+  → all died=true, any survived orphaned=false
+sb ls (daemon dead): exit=0 (want 0, defined), elapsed=79.685708ms (no-hang=true), rows=2, NONE surface as mux-live (no zmxName)=true
+  stderr: 
+sb send:pty dk-a (daemon dead): exit=1 (want 1), elapsed=91.159834ms (no-hang=true), LOUD embedded-named not-live error=true
+  stderr: Session has no live sbmux session — cannot send (it may still be starting up; retry in a moment).
+sb attach dk-a (daemon dead): exit=1 (want nonzero), elapsed=84.791417ms (bound 20s, no-hang=true), LOUD failure=true
+  stderr: Session "dk-a" is not in zmx.
+pre-relaunch: any sb sbmux-server bound to engine dir=false (want false — old one was SIGKILLed)
+RECOVERY sb new dk-fresh: exit=0 (want 0)
+  stdout: Started detached session "dk-fresh"
+  stderr: 
+RELAUNCH: socket present at engine dir=true; fresh sb sbmux-server bound=true
+RECOVERY chain: ls exit=0 fresh mux-live=true; send:pty exit=0 (stderr: WARNING: Message sent to "dk-fresh" but session did not go busy — it may be stuck unsubmitted in the composer.); kill exit=0 (stderr: )
+

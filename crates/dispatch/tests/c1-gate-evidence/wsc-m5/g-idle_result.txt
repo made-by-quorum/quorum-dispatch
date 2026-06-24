@@ -1,0 +1,44 @@
+# WS-C M5 G-IDLE evidence (R-1(6)) — RELEASE-build idle-footprint measurement
+# Date: 2026-06-06 16:27 EDT
+# Base SHA: 8270c212f91f7d777e445762f0b1560ec0fb9e44 (the M5 rows wsc_m5_rows.rs are added in THIS phase commit, atop this base)
+# Build profile: RELEASE (target/release/sb daemons); test harness dev profile (wire client only)
+# Host: brano.local (macOS 26.5, arm64, Darwin 25.5.0)
+# Rerun: scripts/build-lock.sh cargo build --release -p sb --bin sb -p sbmux --bin sbmux
+#        C1_GATE_RUNID=wsc-m5 scripts/build-lock.sh cargo test -p sb --test c1_gate -- --ignored --exact g_idle --nocapture
+#
+G-IDLE VERDICT: MEASUREMENT COMPLETE (release build, N=[0, 1, 5, 10, 20], ≥60s settle each) — per-daemon idle RSS table recorded; macOS RSS-overcount caveat + PSS Lima follow-up named; flag-vs-2×-dev-base = false. No pass/fail threshold (measurement row).
+
+BUILD PROFILE: RELEASE (daemon = /home/u/work/sb-rust/.claude/worktrees/agent-aac709643ceed4141/target/release/sb)
+MEASUREMENT: per-session daemon idle RSS at N = [0, 1, 5, 10, 20]; settle 60s each point.
+CHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat), NOT full fakerepl (delta: no convo/submit semantics — irrelevant to idle RSS).
+MACOS RSS CAVEAT (spec §8): `ps -o rss` double-counts SHARED TEXT PAGES — N identical release binaries share their text segment, so ΣRSS OVERCOUNTS the true marginal fleet cost. PSS-honest numbers (smaps_rollup) require the Lima/Linux lane. NAMED FOLLOW-UP, not a blocker for this row.
+
+N=0: booted 0/0, daemons=0, per-daemon RSS KB: min=0 median=0 max=0 sum=0
+  teardown: reaped 0 live daemon(s), leaked after = 0
+N=1: booted 1/1, daemons=1, per-daemon RSS KB: min=2224 median=2224 max=2224 sum=2224
+  teardown: reaped 1 live daemon(s), leaked after = 0
+N=5: booted 5/5, daemons=5, per-daemon RSS KB: min=2224 median=2256 max=2272 sum=11248
+  teardown: reaped 5 live daemon(s), leaked after = 0
+N=10: booted 10/10, daemons=10, per-daemon RSS KB: min=2224 median=2272 max=2288 sum=22640
+  teardown: reaped 10 live daemon(s), leaked after = 0
+N=20: booted 20/20, daemons=20, per-daemon RSS KB: min=2192 median=2208 max=2240 sum=44208
+  teardown: reaped 20 live daemon(s), leaked after = 0
+
+=== IDLE RSS TABLE (per-session daemons, RELEASE build) ===
+N     daemons  min(KB)  median(KB)  max(KB)  sum(KB)
+0     0        0        0           0        0
+1     1        2224     2224        2224     2224
+5     5        2224     2256        2272     11248
+10    10       2224     2272        2288     22640
+20    20       2192     2208        2240     44208
+
+=== COMPARISON vs probe-2 (wsa-rss-curve, DEV build, SHARED daemon) ===
+probe-2 (dev, shared): base daemon ~5900 KB; marginal idle session ~78 KB (shared text + screen).
+M5 (release, SPLIT): each idle session = its OWN daemon process. Per-session marginal = median single-daemon RSS at N=1 = 2224 KB.
+NOTE: the split's per-session marginal is necessarily ~one process base (no sharing of the HashMap/runtime that the shared daemon amortized); the macOS ΣRSS overcounts shared TEXT, so the honest fleet cost is lower than ΣRSS — PSS lane named above.
+
+=== FLAG (spec §7 measurement guard) ===
+per-session marginal (release, N=1 median) = 2224 KB; 2× dev-build per-process base (5900 KB) = 11800 KB.
+FLAGGED to orc (marginal > 2× dev base)? false
+(Measurement row — NO pass/fail. A true flag is reported to the lead/orc, not failed here.)
+

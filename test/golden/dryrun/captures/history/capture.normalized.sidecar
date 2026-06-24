@@ -1,0 +1,5 @@
+DRYRUN-NOT-ORACLE
+file=capture.normalized
+scenario=history class=semantic-backlog fixture=fixtures/history/normalized/history.trace
+ts-head=2f1c841 (CURRENT main, NOT a pin) backfilled-sidecar
+NOTE: evidence only — NOT a golden expectation. Golden expectations live ONLY under fixtures/<corpus>/normalized/ and are minted by record.sh (Part 2).

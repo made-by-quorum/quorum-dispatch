@@ -1,0 +1,9 @@
+# DRYRUN-NOT-ORACLE
+# scenario=zmx-dir-resolution class=byte-exact fixture=fixtures/zmx-dir-resolution/normalized/resolution.txt
+# ts-head=2f1c841 (CURRENT main, NOT a pin) recorded=2026-06-04T20:10:11Z
+# provisional=0 partial=0
+# NOTE: evidence only — NOT a golden expectation. Part 2 records the real fixture.
+#---raw-capture-below---
+case=ZMX_DIR_explicit input=/tmp/claude-501/sbrg-runs/94486178060380916113/tmp/sbrg-runs/94486178060381021066/zmx
+case=XDG_RUNTIME_DIR tier=/tmp/claude-501/sbrg-runs/94486178060380916113/tmp/sbrg-runs/94486178060381021066/xdg_runtime
+case=TMPDIR_fallback input=/tmp/claude-501/sbrg-runs/94486178060380916113/tmp/sbrg-runs/94486178060381021066/tmp expect=collapsed

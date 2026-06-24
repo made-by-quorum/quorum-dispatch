@@ -1,0 +1,1 @@
+command 'claude' '--dangerously-skip-permissions' '--dangerously-load-development-channels' 'server:relay' '--name' '<NAME>'

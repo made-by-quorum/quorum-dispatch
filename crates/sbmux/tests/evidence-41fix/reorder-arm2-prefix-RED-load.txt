@@ -1,0 +1,52 @@
+# WSC exit-reorder — CR-3 differential PRE-FIX RED (arm-2 under load)
+# date: 2026-06-07T03:34:20Z
+# base: 9fabc16 (Merge PR #37) — OLD exit order: ended -> WAIT -> signal -> accept-break -> drain -> UNLINK
+# residual: the accept-as-residual lost-reply the reorder addendum closes (a fresh
+#   connect accepted+Hello'd before teardown decodes its verb AFTER the wait observed
+#   zero; its owed reply races process exit -> accepted-then-cut).
+# binary: /tmp/sbrust-base-target/debug/deps/wsc_41fix-... (base-built, isolated target)
+# command: <bin> --test-threads=1 --exact arm2_history_reply_survives_reaper_teardown  (x25)
+# load: 12 background 'yes > /dev/null' spinners (loadavg ~4.4 -> ~9.0 across the run)
+# RESULT: 2 / 25 RED with signature 'LOST REPLY: connection closed by server'
+#   (reps 4 and 22). This is the steerable differential RED.
+# ============================================================================
+=== CR-3 PRE-FIX REPRO @ base 9fabc16 (OLD exit order: wait-before-unlink) ===
+date: 2026-06-07T03:34:20Z
+binary: /tmp/sbrust-base-target/debug/deps/wsc_41fix-5c5c76232839d008
+test: arm2_history_reply_survives_reaper_teardown (pre-fix fresh-connect prober)
+load: 12 yes-spinner background procs (pids: 40931 40932 40933 40934 40935 40936 40937 40938 40939 40940 40941 40942)
+loadavg at start: load averages: 4.43 6.64 7.18
+=== begin N=25 reps ===
+rep 1: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.86s 
+rep 2: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.50s 
+rep 3: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.50s 
+rep 4: RED (exit=101) :: Error: "LOST REPLY: connection closed by server" test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.33s 
+    FAILED
+    Error: "LOST REPLY: connection closed by server"
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.33s
+rep 5: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.58s 
+rep 6: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.60s 
+rep 7: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.49s 
+rep 8: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.51s 
+rep 9: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.51s 
+rep 10: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.53s 
+rep 11: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.53s 
+rep 12: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.50s 
+rep 13: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.51s 
+rep 14: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.46s 
+rep 15: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.55s 
+rep 16: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.49s 
+rep 17: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.50s 
+rep 18: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.50s 
+rep 19: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.49s 
+rep 20: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.60s 
+rep 21: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.53s 
+rep 22: RED (exit=101) :: Error: "LOST REPLY: connection closed by server" test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.28s 
+    FAILED
+    Error: "LOST REPLY: connection closed by server"
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.28s
+rep 23: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.66s 
+rep 24: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.51s 
+rep 25: green (exit=0) :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.52s 
+=== TOTAL REDS: 2 / 25 ===
+loadavg at end: load averages: 8.99 7.53 7.49

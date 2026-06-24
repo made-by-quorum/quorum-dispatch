@@ -1,0 +1,4 @@
+{"type":"agent-name","agentName":"epsilon-stray","timestamp":"2024-06-04T11:00:00.000Z"}
+{"type":"user","cwd":"/work/projE","gitBranch":"main","timestamp":"2024-06-04T11:00:01.000Z","message":{"content":"epsilon is a live unmanaged stray (no registry entry)"}}
+{"type":"system","subtype":"turn_duration","timestamp":"2024-06-04T11:00:05.000Z"}
+{"type":"assistant","timestamp":"2024-06-04T11:00:06.000Z","message":{"content":[{"type":"text","text":"Epsilon stray working without a registry entry."}],"usage":{"input_tokens":700,"cache_read_input_tokens":250,"cache_creation_input_tokens":0,"output_tokens":30}}}

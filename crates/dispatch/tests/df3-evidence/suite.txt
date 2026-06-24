@@ -1,0 +1,53 @@
+# DF-3 fix evidence (ADD-17) | branch fix/df3-ps-parse off main 3ea647c | 2026-06-06 ~14:45 EDT
+# Prebuild: scripts/build-lock.sh cargo build -p sbmux --bin sbmux -p fakerepl -p sb
+# Command: scripts/build-lock.sh cargo test -p sb   (21 suite-result lines, all ok, zero failures)
+# Lint: cargo fmt --check CLEAN; cargo clippy -p sb --all-targets --all-features -D warnings CLEAN
+# Differential (lead-run, pre-commit): old splitn parser spliced back -> the 3 new
+# parse_ps_rows_df3_* rows RED, legacy single-space row green (vacuity demonstrated); fix restored -> all green.
+
+     Running unittests src/lib.rs (target/debug/deps/sb-7d3bd950d9b79000)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.02s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 695 filtered outtest secrets::tests::keychain_backend_info_reports_only_set_known_keys ... ok
+test result: ok. 696 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+     Running unittests src/bin/sb/main.rs (target/debug/deps/sb-b1acd13284b245ac)
+test result: ok. 90 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/ack2_gate.rs (target/debug/deps/ack2_gate-e45feba739ee092b)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.97s
+     Running tests/ack2_mutation_evidence.rs (target/debug/deps/ack2_mutation_evidence-11eaaaff4311e874)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ack3_matrix.rs (target/debug/deps/ack3_matrix-9876bafb686ecdc7)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.44s
+     Running tests/ack3_mutation_evidence.rs (target/debug/deps/ack3_mutation_evidence-05410d3ffeee3b35)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ack3_recovery.rs (target/debug/deps/ack3_recovery-d184fa52dc63e15d)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.78s
+     Running tests/c1_gate.rs (target/debug/deps/c1_gate-5e825c6d860096c3)
+test result: ok. 13 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 21.43s
+     Running tests/create_claim_race.rs (target/debug/deps/create_claim_race-a05862a66e2852b4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+     Running tests/embedded_mux_live.rs (target/debug/deps/embedded_mux_live-d463dea2163350df)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+     Running tests/fakerepl_gate.rs (target/debug/deps/fakerepl_gate-b6312b12b2da0f10)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 68.51s
+     Running tests/negative_control.rs (target/debug/deps/negative_control-93ba198088a3bbbf)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/parity.rs (target/debug/deps/parity-84d3a6eeb2633df3)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/relay_contract.rs (target/debug/deps/relay_contract-7460abb87c73195a)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s
+     Running tests/relay_verb.rs (target/debug/deps/relay_verb-7c74954d362c70f0)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/roundtrip.rs (target/debug/deps/roundtrip-04ba919754f8cdf3)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/secrets_integration.rs (target/debug/deps/secrets_integration-97c93abde747ac60)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/verbs_a4.rs (target/debug/deps/verbs_a4-48365305e3b8c804)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+   Doc-tests sb
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+# The four parse_ps_rows rows at the fix tip:
+test effects::tests::parse_ps_rows_df3_linux_padded_class ... ok
+test effects::tests::parse_ps_rows_df3_macos_width_pad_and_command_intact ... ok
+test effects::tests::parse_ps_rows_splits_three_fields ... ok
+test effects::tests::parse_ps_rows_df3_tab_and_boundary_edges ... ok

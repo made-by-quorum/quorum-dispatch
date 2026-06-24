@@ -1,0 +1,26 @@
+# Codex P2 bound-surface manifest (spec section 5).
+# Each line: <quoted-name-to-find> <fixture-relative-file-to-search>.
+# The always-on test (crates/sb/tests/codex_schema.rs) asserts every name
+# appears (quoted) in its file; dropping a bound message from the schema
+# fixture reds the suite. Names = the protocol surface P2 binds (W2/W6).
+# Core protocol (v2 rollup):
+initialize codex_app_server_protocol.v2.schemas.json
+thread/start codex_app_server_protocol.v2.schemas.json
+thread/resume codex_app_server_protocol.v2.schemas.json
+turn/start codex_app_server_protocol.v2.schemas.json
+turn/steer codex_app_server_protocol.v2.schemas.json
+turn/interrupt codex_app_server_protocol.v2.schemas.json
+thread/status/changed codex_app_server_protocol.v2.schemas.json
+turn/started codex_app_server_protocol.v2.schemas.json
+turn/completed codex_app_server_protocol.v2.schemas.json
+thread/tokenUsage/updated codex_app_server_protocol.v2.schemas.json
+# Approvals-as-data surface (spec section 3.3 feed). v2 names approvals as
+# Guardian Approval Review notifications; the requestApproval params family
+# lives on the v1 surface (top-level rollup). W6 pins the runtime method
+# strings via jailed probe; both schema surfaces are pinned here.
+ItemGuardianApprovalReviewStartedNotification codex_app_server_protocol.v2.schemas.json
+ItemGuardianApprovalReviewCompletedNotification codex_app_server_protocol.v2.schemas.json
+CommandExecutionRequestApprovalParams codex_app_server_protocol.schemas.json
+FileChangeRequestApprovalParams codex_app_server_protocol.schemas.json
+PermissionsRequestApprovalParams codex_app_server_protocol.schemas.json
+ToolRequestUserInputParams codex_app_server_protocol.schemas.json

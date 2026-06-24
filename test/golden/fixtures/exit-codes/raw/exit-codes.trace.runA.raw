@@ -1,0 +1,4 @@
+cmd=info-missing-session expect_exit=1 got_exit=1
+stderr_present=1
+cmd=config-unknown-subcommand expect_exit=2 got_exit=2
+stderr_present=1

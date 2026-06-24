@@ -1,0 +1,17 @@
+target/
+**/*.rs.bk
+Cargo.lock.orig
+.DS_Store
+
+# build-lock stderr captures (never commit; rode in on the PR #8 hotfix by mistake)
+.a3_build.err
+*.build.err
+
+# transient c1_gate per-run output (every `cargo test -p dispatch` writes these; NAMED
+# evidence dirs like c1-final-remint/ stay tracked — only the run-<nanos> debris
+# is ignored; ACK-2 hygiene fix, flagged by the M5 row work)
+crates/dispatch/tests/c1-gate-evidence/run-*
+
+# agent worktree gitlinks — Claude Code agent isolation worktrees, accidentally
+# committed as gitlinks; never track these (worktree state, not source).
+.claude/worktrees/

@@ -1,0 +1,26 @@
+=== v1 (mv-aside reclaim, commit 130b7c5) storm baseline, 10 reps, Sat Jun  6 20:05:01 EDT 2026 ===
+assertion `left == right` failed: mutual exclusion violated 2x under stale-reclaim storm (two holders ran concurrently — the double-reclaim race)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.56s
+rep1 binary_exit=101
+assertion `left == right` failed: mutual exclusion violated 2x under stale-reclaim storm (two holders ran concurrently — the double-reclaim race)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.58s
+rep2 binary_exit=101
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.08s
+rep3 binary_exit=101
+assertion `left == right` failed: mutual exclusion violated 2x under stale-reclaim storm (two holders ran concurrently — the double-reclaim race)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.63s
+rep4 binary_exit=101
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.05s
+rep5 binary_exit=101
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.49s
+rep6 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.52s
+rep7 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.52s
+rep8 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.47s
+rep9 binary_exit=0
+assertion `left == right` failed: mutual exclusion violated 1x under stale-reclaim storm (two holders ran concurrently — the double-reclaim race)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.01s
+rep10 binary_exit=101
+=== v1 SUMMARY: 6/10 reps FAILED ===

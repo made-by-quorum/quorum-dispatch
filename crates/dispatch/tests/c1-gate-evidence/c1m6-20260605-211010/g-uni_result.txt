@@ -1,0 +1,6 @@
+G-UNI VERDICT: PASS — CJK+emoji app-output through engine attach; post-strip whole-UTF-8 width sanity; glyphs present
+
+app-output landed (UNI_START+UNI_END)=true
+CJK/UTF-8 integrity post-strip: PASS
+glyphs present (CJK+emoji)=true
+

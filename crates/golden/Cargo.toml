@@ -1,0 +1,12 @@
+[package]
+name = "golden"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Golden-master oracle support crate: permissive-parse reference + layer-2 dirty-state corpus tests (Phase 0b)."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

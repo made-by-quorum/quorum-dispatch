@@ -1,0 +1,7 @@
+# DRYRUN-NOT-ORACLE
+# scenario=ls-info-json class=byte-exact fixture=fixtures/ls-info-json/normalized/ls-empty.json
+# ts-head=2f1c841 (CURRENT main, NOT a pin) recorded=2026-06-04T20:10:10Z
+# provisional=0 partial=0
+# NOTE: evidence only — NOT a golden expectation. Part 2 records the real fixture.
+#---raw-capture-below---
+[]

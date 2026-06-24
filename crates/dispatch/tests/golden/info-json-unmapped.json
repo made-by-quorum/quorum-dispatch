@@ -1,0 +1,8 @@
+{
+  "name": "bare",
+  "sessionId": "33333333-cccc-4ccc-8ccc-333333333333",
+  "status": "idle",
+  "live": true,
+  "pid": "<PID>",
+  "provider": "claude-code"
+}

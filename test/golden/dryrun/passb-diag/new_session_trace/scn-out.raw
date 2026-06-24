@@ -1,0 +1,4 @@
+EVENT pidfile_appeared=1
+EVENT name_matched=1
+EVENT status_ready_idle=1
+EVENT new_exit=0

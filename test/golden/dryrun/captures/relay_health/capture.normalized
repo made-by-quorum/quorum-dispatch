@@ -1,0 +1,5 @@
+CONTRACT sidecar: {"session":"<NAME>","endpoint":"<RELAY_ENDPOINT>","port":<RELAY_PORT>}
+CONTRACT GET /health -> {"status":"<ok|down>"}
+CONTRACT POST /message -> {"from_session":"<FROM>","message_id":"<MID>"}
+CONTRACT ls-join:
+  (empty jail: no relay-joined rows)

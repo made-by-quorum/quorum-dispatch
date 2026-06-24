@@ -1,0 +1,12 @@
+# RECORDED-FROM pin=8c59ec4 (verified-diff-carry from 0d0fa9e; proof exec/a5-grec-pin-carry-proof.md; orc-3 ruling relay-1780671157930-19) verb=resume (error shapes; cold relaunch covered live by Rust+Lima)
+$ sb resume sbrg-nope (no such session)
+No session matching "sbrg-541u-nope"
+exit=1
+$ sb resume coldsess-rec --zmx-name '../evil' (cold session, unsafe zmx-name)
+ERROR: Session name "../evil" contains unsafe characters. Names may only contain letters, digits, hyphens, underscores, and dots.
+exit=1
+$ sb resume gonecwd-rec (recorded cwd missing, no --cwd)
+ERROR: Session's recorded directory no longer exists: /var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/sbrg-runs/541u/tmp/this-dir-was-deleted
+  The project may have been moved, renamed, or deleted.
+  Resume it elsewhere with: sb resume <session> --cwd <dir>
+exit=1

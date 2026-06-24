@@ -1,0 +1,47 @@
+# Re-stamp DORMANCY-REPLAY evidence — 0b DELTA-STRENGTH W3.1 (stub 1.8.0 -> 1.8.1)
+# R1 precedent (orc-2 ruling 2026-06-05; .restamp-evidence.txt) + the A4 pass-(b)
+# extension (orc-3 ruling relay-1780664987618-6) + the W2 step (.restamp-evidence-w2.txt,
+# stub 1.7.0 -> 1.8.0): re-stamp WITHOUT re-record is permitted ONLY for a provably-
+# DORMANT stub edit — env/prompt-gated + default-byte-identical + REPLAY-VERIFIED.
+#
+# The W3.1 edit adds ONE env-gated seam (STUB_RAW_STDIN, orc-4 Option C ruling 14:50
+# EDT): at startup, when STUB_RAW_STDIN=1, flip the PTY stdin termios to raw
+# (tty.setcbreak) so the cooked-mode canonical-line bound (macOS MAX_CANON=1024) does
+# not cap the chunked-IDLE >=4KB write. DORMANT default => the PTY stays COOKED and
+# the default observable behaviour is unchanged. The two MOST stub-sensitive rows
+# (send-pty-paste-burst + relay-health) were replayed under the COMMITTED 1.8.1 stub
+# with the seam UNSET, in FRESH jails, replay basis = pinned TS 8c59ec4 (prep clone),
+# TMPDIR=/tmp. Normalized output MUST byte-match the committed golden (sha compare).
+# BOTH byte-match -> dormancy proven -> re-stamp authorized.
+# Captured: 2026-06-05 (Darwin arm64).
+#
+=== step 1: dormancy replay (committed 1.8.1 stub, STUB_RAW_STDIN UNSET, fresh jails, pinned TS 8c59ec4) ===
+# committed stub version: stub-claude-1.8.1 (2026-06-05)
+send_pty_paste_burst  replay_sha=0558a82d76018d7b51398800e456ca764780e28fe06546d3494bcf8375964352  golden_sha=0558a82d76018d7b51398800e456ca764780e28fe06546d3494bcf8375964352  BYTE-MATCH
+relay_health  replay_sha=706a753c2c664013b59fccdc2f53f3429d9cb365bd5393600a0e37027a2d31f4  golden_sha=706a753c2c664013b59fccdc2f53f3429d9cb365bd5393600a0e37027a2d31f4  BYTE-MATCH
+#
+# Interpretation: replay_sha == golden_sha for BOTH rows -> the 1.8.0->1.8.1 edit is
+# provably DORMANT (the STUB_RAW_STDIN seam is env-gated; the default cooked path is
+# byte-identical). send_pty_paste_burst's match also equals the v1.5.1/1.8.0 dormancy
+# evidence (0558a82d...), confirming the default output is stable across the whole
+# stub version chain.
+#
+# ADDITIONAL ANTI-VACUITY proof (selftest test_stub_claude.sh tests 12-13, over a REAL
+# PTY — MAX_CANON cannot be exercised over the selftest's stdin pipe): seam ON, a
+# 1508B (>MAX_CANON) no-inter-CR line LANDS whole; seam OFF (dormant), the SAME line is
+# DROPPED cooked while a <MAX_CANON line lands. The seam is LOAD-BEARING, not vacuous.
+#
+=== step 2: re-stamp (sha before/after) ===
+# old stub sha (1.8.0, as-recorded) = 581ad3c32b5ba393e5e6067c6462eea72c863a48f2637399425e113840888056
+# new stub sha (1.8.1, committed)   = 20a51331148f03450ada6cf9cfae8593df11764e9b36c456a1a9140aba3e7afa
+# Re-stamped stub_sha256 in 36 proof files (RECORDED-FROM + MATCH-PROOF, incl. the
+# zmx-dir-resolution + termios-report macos/linux platform siblings) and the paired
+# stub_version line (1.8.0 -> 1.8.1) in the 18 RECORDED-FROM files that carry it.
+# EXCLUDED from re-stamp: .restamp-evidence-w2.txt (historical W2 evidence — its
+# 581ad3c/1.8.0 strings are the as-of-W2 truth and must stay frozen).
+#
+=== step 3: git-diff scope check ===
+# The re-stamp commit touches stub-sha + paired stub_version LINES ONLY:
+#   36x  -stub_sha256=581ad3c3...  / +stub_sha256=20a51331...
+#   18x  -stub_version=...1.8.0...  / +stub_version=...1.8.1...
+# No rawA/rawB/normalized/normalizer/scenario/pin/host/proof_generated line changed.

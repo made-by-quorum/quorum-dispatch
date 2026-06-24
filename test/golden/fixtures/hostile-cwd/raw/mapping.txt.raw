@@ -1,0 +1,5 @@
+MAP specials_preserved_verbatim=1
+MAP project_basename_ends_with_hostile=1
+MAP slash_mapped_to_dash=1
+MAP jsonl_landed_at_mapped_dir=1
+MAP sendpty_wait_works_from_cwd=1

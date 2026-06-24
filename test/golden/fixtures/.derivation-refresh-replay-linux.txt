@@ -1,0 +1,29 @@
+# DERIVATION-REFRESH in-VM replay evidence (rider 4, orc-3 ruling 2026-06-05)
+#
+# The Linux zmx-dir-resolution row can only be AUTHENTICALLY replayed on Linux
+# (XDG_RUNTIME_DIR tier = /run/user/<uid>, absent on macOS). For a derivation-
+# refresh the raw is UNCHANGED; only normalize.sh narrowed (756c519a -> 39bbd74a),
+# so the authentic in-VM check is: does the NEW normalizer, run on the COMMITTED
+# Linux raw with the recorded token values, on a native Linux uid-501 host, produce
+# the refreshed committed golden — and does that golden replay green via verify.sh.
+#
+# Host: Lima `sbtest`, Linux aarch64, native uid=501 (== recorded Linux test uid).
+# The macOS worktree is virtiofs-mounted RO into the VM at the same absolute path,
+# so the IN-VM tools see the exact refreshed worktree artifacts. Captured in-VM
+# 2026-06-05T12:55:00Z.
+#
+=== rider 4: in-VM re-derivation + replay-verify (Lima sbtest, Linux aarch64, uid 501) ===
+token values: JAIL_ROOT=/run/user/501/sbrg-runs/205321178063567617624  runid=205321178063567617624  uid=501
+normalizer_sha (in-VM) = 39bbd74a2fbc0424d7f96b32fedfc6cbc0ae4fde8e7b23c10f787b5a2b507457
+re-derive(committed raw, NEW normalizer) == refreshed committed golden : BYTE-MATCH
+verify.sh --replay <golden> --class byte-exact --expected <golden>     : PASS
+golden_sha       = a3656301906a4dda96421b7136891b9bc36e60793c714c5f688bda41a0be7f26
+proof normalized = a3656301906a4dda96421b7136891b9bc36e60793c714c5f688bda41a0be7f26  (self-consistent)
+proof normalizer = 39bbd74a2fbc0424d7f96b32fedfc6cbc0ae4fde8e7b23c10f787b5a2b507457  (== in-tree)
+#
+# Interpretation: the refreshed Linux golden is the EXACT output the new normalizer
+# produces from the committed raw on the authentic Linux/uid-501 substrate, AND it
+# is a normalize_all fixed point (idempotent), AND it replays green. The earlier
+# live-boot tick (.verify-replay-evidence-linux.txt, pin 0d0fa9e/8c59ec4 carry)
+# established the OUTCOME (socket lands under the resolved dir); that boot is
+# unaffected by a normalizer-only change (raw unchanged), so it is not re-run here.

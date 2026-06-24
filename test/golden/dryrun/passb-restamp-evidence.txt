@@ -1,0 +1,11 @@
+# Re-stamp replay evidence — A4 pass-(b), stub 1.5.1->1.7.0 (F1 dialog strings + F3 timestamp shape)
+# Mechanism: orc-3 ruling relay-1780664987618-6 (re-stamp on byte-match, re-record on mismatch),
+# extending the R1 dormancy-replay precedent (.restamp-evidence.txt). Sha-only, no judgment calls.
+# Replay basis: pinned TS 8c59ec4 (prep clone), fresh jails, TMPDIR=/tmp, 2026-06-05T13:17:18Z.
+# committed stub version: stub-claude-1.7.0 (2026-06-05)
+#
+attach_detach_reattach  replay_sha=e8b58ca4e67097d9561e16d94c0b66f99498d6b05992cdc471006d93cf2f3b10  golden_sha=e8b58ca4e67097d9561e16d94c0b66f99498d6b05992cdc471006d93cf2f3b10  BYTE-MATCH
+build_claude_cmd  replay_sha=e2b226992e0e8214da8717fef40f4144e009bfc4cc1f661874d991f5f40e424a  golden_sha=e2b226992e0e8214da8717fef40f4144e009bfc4cc1f661874d991f5f40e424a  BYTE-MATCH
+history  replay_sha=234a6b407f0d7a6f75ec581f2873e0c80bca95f8f91f807f610f15cc0d0a483f  golden_sha=234a6b407f0d7a6f75ec581f2873e0c80bca95f8f91f807f610f15cc0d0a483f  BYTE-MATCH
+zmx_dir_resolution  replay_sha=967aa81ed662e5e311c8c0eac72fc769e6c0516327af048f50aef118303add0a  golden_sha=967aa81ed662e5e311c8c0eac72fc769e6c0516327af048f50aef118303add0a  BYTE-MATCH
+zmx_dir_resolution_linux  replay_sha=a3656301906a4dda96421b7136891b9bc36e60793c714c5f688bda41a0be7f26  golden_sha=a3656301906a4dda96421b7136891b9bc36e60793c714c5f688bda41a0be7f26  BYTE-MATCH

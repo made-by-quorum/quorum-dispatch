@@ -1,0 +1,11 @@
+# DRYRUN-NOT-ORACLE
+# scenario=relay-health class=byte-exact fixture=fixtures/relay-health/normalized/contract.txt
+# ts-head=2f1c841 (CURRENT main, NOT a pin) recorded=2026-06-04T20:19:56Z
+# provisional=1 partial=1
+# NOTE: evidence only — NOT a golden expectation. Part 2 records the real fixture.
+#---raw-capture-below---
+CONTRACT sidecar: {"session":"<NAME>","endpoint":"<RELAY_ENDPOINT>","port":47018}
+CONTRACT GET /health -> {"status":"<ok|down>"}
+CONTRACT POST /message -> {"from_session":"<FROM>","message_id":"<MID>"}
+CONTRACT ls-join:
+  (empty jail: no relay-joined rows)

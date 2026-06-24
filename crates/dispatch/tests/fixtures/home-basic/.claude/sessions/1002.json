@@ -1,0 +1,10 @@
+{
+  "pid": 1002,
+  "sessionId": "live-bbbb-0002",
+  "cwd": "/work/projB",
+  "startedAt": 1717480000000,
+  "updatedAt": 1717485000000,
+  "status": "idle",
+  "name": "beta-legacy",
+  "version": "1.0.0"
+}

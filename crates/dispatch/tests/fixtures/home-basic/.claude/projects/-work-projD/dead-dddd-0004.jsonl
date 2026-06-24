@@ -1,0 +1,4 @@
+{"type":"agent-name","agentName":"delta-cold","timestamp":"2024-06-02T10:00:00.000Z"}
+{"type":"user","cwd":"/work/projD","gitBranch":"main","timestamp":"2024-06-02T10:00:01.000Z","message":{"content":"delta cold transcript, no registry, no live process"}}
+{"type":"system","subtype":"turn_duration","timestamp":"2024-06-02T10:00:05.000Z"}
+{"type":"assistant","timestamp":"2024-06-02T10:00:06.000Z","message":{"content":[{"type":"text","text":"Delta done, going cold."}],"usage":{"input_tokens":1200,"cache_read_input_tokens":600,"cache_creation_input_tokens":0,"output_tokens":40}}}

@@ -1,0 +1,10 @@
+{
+  "name": "wk",
+  "sessionId": "11111111-aaaa-4aaa-8aaa-111111111111",
+  "sbId": "ab3kx9mq",
+  "sbIdPrefix": "ab3",
+  "status": "idle",
+  "live": true,
+  "pid": "<PID>",
+  "provider": "claude-code"
+}

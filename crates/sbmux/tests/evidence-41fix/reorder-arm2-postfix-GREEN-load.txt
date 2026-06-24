@@ -1,0 +1,45 @@
+# WSC exit-reorder — CR-3 differential POST-FIX GREEN (arm-2 under load)
+# date: 2026-06-07T03:35:02Z
+# branch: reorder-work @ 2bd1b91 — NEW exit order: ended -> signal -> accept-break ->
+#   CLOSE LISTENER + UNLINK FIRST -> bounded in-flight WAIT -> drain -> return
+# binary: <worktree>/target/debug/deps/wsc_41fix-... (post-fix, build-lock)
+# command: <bin> --test-threads=1 --exact arm2_history_reply_survives_reaper_teardown  (x25)
+# load: 12 background 'yes > /dev/null' spinners (loadavg ~6.8 -> ~9.8 across the run)
+# RESULT: 0 / 25 RED (0 vacuity-logged reps — the window WAS exercised every rep;
+#   the LOST-REPLY tooth is UNCHANGED from pre-fix). Same harness as the PRE-FIX RED.
+# Differential: PRE-FIX 2/25 RED (reorder-arm2-prefix-RED-load.txt) -> POST-FIX 0/25.
+# ============================================================================
+=== CR-3 POST-FIX @ reorder-work 2bd1b91 (NEW exit order: unlink-before-wait) ===
+date: 2026-06-07T03:35:02Z
+binary: /home/u/work/sb-rust/.claude/worktrees/agent-ac127d20247bf4c0d/target/debug/deps/wsc_41fix-5c5c76232839d008
+test: arm2_history_reply_survives_reaper_teardown (post-fix, anti-vacuity; LOST-REPLY tooth unchanged)
+load: 12 yes-spinner background procs (pids: 49677 49678 49679 49680 49681 49682 49684 49685 49686 49687 49688 49689)
+loadavg at start: load averages: 6.76 7.11 7.34
+=== begin N=25 reps ===
+rep 1: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.83s
+rep 2: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.80s
+rep 3: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.50s
+rep 4: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.50s
+rep 5: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.54s
+rep 6: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.52s
+rep 7: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.48s
+rep 8: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.52s
+rep 9: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.49s
+rep 10: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.48s
+rep 11: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.51s
+rep 12: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.49s
+rep 13: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.49s
+rep 14: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.51s
+rep 15: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.50s
+rep 16: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.50s
+rep 17: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.50s
+rep 18: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.50s
+rep 19: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.49s
+rep 20: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.53s
+rep 21: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.50s
+rep 22: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.54s
+rep 23: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.49s
+rep 24: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.50s
+rep 25: green :: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.49s
+=== TOTAL REDS: 0 / 25  (vacuity-logged reps: 0) ===
+loadavg at end: load averages: 9.76 7.76 7.57

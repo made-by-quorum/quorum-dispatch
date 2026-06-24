@@ -1,0 +1,6 @@
+{"type":"user","cwd":"/work/projA","gitBranch":"main","timestamp":"2024-06-04T09:00:00.000Z","message":{"content":"Start the alpha task please"}}
+{"type":"system","subtype":"turn_duration","timestamp":"2024-06-04T09:00:05.000Z"}
+{"type":"assistant","timestamp":"2024-06-04T09:00:06.000Z","message":{"content":[{"type":"text","text":"On it — beginning the alpha task now."}],"usage":{"input_tokens":1500,"cache_read_input_tokens":1000,"cache_creation_input_tokens":500,"output_tokens":80}}}
+{"type":"user","cwd":"/work/projA","gitBranch":"feature/alpha","timestamp":"2024-06-04T09:05:00.000Z","message":{"content":[{"type":"text","text":"Looks good, continue."}]}}
+{"type":"system","subtype":"turn_duration","timestamp":"2024-06-04T09:05:10.000Z"}
+{"type":"assistant","timestamp":"2024-06-04T09:05:11.000Z","message":{"content":[{"type":"text","text":"Continuing the alpha task."}],"usage":{"input_tokens":8000,"cache_read_input_tokens":4000,"cache_creation_input_tokens":500,"output_tokens":150}}}

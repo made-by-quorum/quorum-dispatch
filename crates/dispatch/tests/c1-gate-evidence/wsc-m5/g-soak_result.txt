@@ -1,0 +1,49 @@
+# WS-C M5 G-SOAK evidence (R-1(5)) — RELEASE-build many-session soak — RUN 1 (60s window)
+# Date: 2026-06-06 16:27 EDT
+# Base SHA: 8270c212f91f7d777e445762f0b1560ec0fb9e44 (M5 rows wsc_m5_rows.rs added in THIS phase commit, atop this base)
+# Build profile: RELEASE (target/release/sb daemons); test harness dev profile (wire client only)
+# Host: brano.local (macOS 26.5, arm64, Darwin 25.5.0)
+# Rerun: scripts/build-lock.sh cargo build --release -p sb --bin sb -p sbmux --bin sbmux
+#        C1_GATE_RUNID=wsc-m5 scripts/build-lock.sh cargo test -p sb --test c1_gate -- --ignored --exact g_soak --nocapture
+#
+G-SOAK VERDICT: FAIL — one or more spec §7 assertions did not hold (see detail; bounds are spec-set and NOT tuned here).
+
+BUILD PROFILE: RELEASE (daemon = /home/u/work/sb-rust/.claude/worktrees/agent-aac709643ceed4141/target/release/sb)
+CONFIG: N_total=10 (quiet=7 + flooders=3), blast_threads=4, window=60s
+CHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat/flood-loop); NOT full fakerepl (delta named in header)
+
+=== SHARED-BASELINE ARM (SBMUX_TEST_SHARED=1, one daemon, same N) ===
+[shared] booted 10/10 sessions
+[shared] daemon count = 1 (expected 1)
+[shared] PRE-FLOOD per-daemon RSS: max=4064 KB sum=4064 KB across 1 daemon(s)
+[shared] flood-liveness (all 3 flooders changing) = true
+[shared] sibling RTT (n=974): min=0.35 median=4.32 p95=11.69 max=251.70 ms, timeouts=0
+[shared] ls latency (n=974): median=0.25 p95=0.81 max=99.76 ms, errors=0
+[shared] POST-FLOOD per-daemon RSS: max=92784 KB sum=92784 KB
+[shared] input-blast acked total = 425813 (4 threads x 256B)
+[shared] teardown: reaped 1 live daemon(s)
+[shared] post-teardown leaked daemons = 0
+
+=== SPLIT ARM (per-session daemons, N daemons) ===
+[split] booted 10/10 sessions
+[split] daemon count = 10 (expected 10)
+[split] PRE-FLOOD per-daemon RSS: max=2992 KB sum=27952 KB across 10 daemon(s)
+[split] flood-liveness (all 3 flooders changing) = true
+[split] sibling RTT (n=947): min=0.38 median=3.93 p95=10.33 max=218.76 ms, timeouts=0
+[split] ls latency (n=947): median=1.46 p95=5.03 max=194.93 ms, errors=0
+[split] POST-FLOOD per-daemon RSS: max=10064 KB sum=52480 KB
+[split] input-blast acked total = 412486 (4 threads x 256B)
+[split] teardown: reaped 10 live daemon(s)
+[split] post-teardown leaked daemons = 0
+
+=== GATE ASSERTIONS (spec §7) ===
+shared-baseline p95 = 11.69 ms (shared daemon RSS max 92784 KB)
+split p95          = 10.33 ms (split daemon RSS max 10064 KB)
+baseline ratio (split/shared) = 0.88x
+[1] sibling RTT p95 ≤ 10ms ABSOLUTE: 10.33 ≤ 10 = false
+[2] sibling RTT p95 ≤ 3× shared baseline: 10.33 ≤ 35.06 = true
+[3] ZERO timeouts (split arm): timeouts=0 → true
+[4] ls completes ≤ 1s at N≥10: ls_max=194.93 ms ≤ 1000 = true
+positive control flood-liveness (both arms) = true
+positive control input-blast acked>0 (both arms) = true
+

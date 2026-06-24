@@ -1,0 +1,4 @@
+[verify] scenario=send-pty-paste-burst class=semantic-submit-discipline budget=90000ms
+[verify] stub provenance OK (RECORDED-FROM: stub_sha256 matches installed stub)
+[compare] FAIL(submit-discipline): queue did not drain both messages
+[verify] DIFF: send-pty-paste-burst failed its comparator (semantic-submit-discipline)

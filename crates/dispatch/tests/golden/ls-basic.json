@@ -1,0 +1,163 @@
+[
+  {
+    "name": "epsilon-stray",
+    "userNamed": true,
+    "sessionId": "stray-eeee-0005",
+    "status": "cold",
+    "turns": 1,
+    "tokens": 950,
+    "cwd": "/work/projE",
+    "lastActive": "2024-06-04T11:00:06.000Z",
+    "jsonlPath": "<HOME>/.claude/projects/-work-projE/stray-eeee-0005.jsonl",
+    "gitBranch": "main",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "epsilon is a live unmanaged stray (no registry entry)",
+        "timestamp": "2024-06-04T11:00:01.000Z"
+      },
+      {
+        "role": "assistant",
+        "text": "Epsilon stray working without a registry entry.",
+        "timestamp": "2024-06-04T11:00:06.000Z"
+      }
+    ],
+    "provider": "claude-code",
+    "code": "z72"
+  },
+  {
+    "name": "alpha-worker",
+    "userNamed": true,
+    "sessionId": "live-aaaa-0001",
+    "pid": 1001,
+    "status": "busy",
+    "zmxName": "alpha-zmx",
+    "zmxClients": 1,
+    "socketDir": "<ZMX>",
+    "relayPort": 8901,
+    "turns": 2,
+    "tokens": 12500,
+    "cwd": "/work/projA",
+    "lastActive": "2024-06-04T10:00:00.000Z",
+    "version": "1.2.3",
+    "startedAt": "2024-06-04T08:33:20.000Z",
+    "gitBranch": "feature/alpha",
+    "jsonlPath": "<HOME>/.claude/projects/-work-projA/live-aaaa-0001.jsonl",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "Start the alpha task please",
+        "timestamp": "2024-06-04T09:00:00.000Z"
+      },
+      {
+        "role": "assistant",
+        "text": "On it — beginning the alpha task now.",
+        "timestamp": "2024-06-04T09:00:06.000Z"
+      },
+      {
+        "role": "user",
+        "text": "Looks good, continue.",
+        "timestamp": "2024-06-04T09:05:00.000Z"
+      },
+      {
+        "role": "assistant",
+        "text": "Continuing the alpha task.",
+        "timestamp": "2024-06-04T09:05:11.000Z"
+      }
+    ],
+    "provider": "claude-code",
+    "code": "109"
+  },
+  {
+    "name": "beta-legacy",
+    "userNamed": true,
+    "sessionId": "live-bbbb-0002",
+    "pid": 1002,
+    "status": "idle",
+    "turns": 1,
+    "tokens": 4500,
+    "cwd": "/work/projB",
+    "lastActive": "2024-06-04T07:10:00.000Z",
+    "version": "1.0.0",
+    "startedAt": "2024-06-04T05:46:40.000Z",
+    "gitBranch": "develop",
+    "jsonlPath": "<HOME>/.claude/projects/-work-projB/live-bbbb-0002.jsonl",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "beta legacy session kickoff",
+        "timestamp": "2024-06-04T08:00:00.000Z"
+      },
+      {
+        "role": "assistant",
+        "text": "Acknowledged, beta legacy session running.",
+        "timestamp": "2024-06-04T08:00:04.000Z"
+      }
+    ],
+    "provider": "claude-code",
+    "code": "496"
+  },
+  {
+    "userNamed": false,
+    "sessionId": "dead-cccc-0003",
+    "status": "cold",
+    "turns": 1,
+    "tokens": 0,
+    "cwd": "/work/projC",
+    "lastActive": "2024-06-03T12:00:03.000Z",
+    "jsonlPath": "<HOME>/.claude/projects/-work-projC/dead-cccc-0003.jsonl",
+    "gitBranch": "main",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "gamma session that later got killed",
+        "timestamp": "2024-06-03T12:00:00.000Z"
+      },
+      {
+        "role": "assistant",
+        "text": "Working on gamma.",
+        "timestamp": "2024-06-03T12:00:03.000Z"
+      }
+    ],
+    "provider": "claude-code",
+    "code": "p1n"
+  },
+  {
+    "name": "delta-cold",
+    "userNamed": true,
+    "sessionId": "dead-dddd-0004",
+    "status": "cold",
+    "turns": 1,
+    "tokens": 1800,
+    "cwd": "/work/projD",
+    "lastActive": "2024-06-02T10:00:06.000Z",
+    "jsonlPath": "<HOME>/.claude/projects/-work-projD/dead-dddd-0004.jsonl",
+    "gitBranch": "main",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "delta cold transcript, no registry, no live process",
+        "timestamp": "2024-06-02T10:00:01.000Z"
+      },
+      {
+        "role": "assistant",
+        "text": "Delta done, going cold.",
+        "timestamp": "2024-06-02T10:00:06.000Z"
+      }
+    ],
+    "provider": "claude-code",
+    "code": "1nw"
+  },
+  {
+    "sessionId": "stray-eeee-0005",
+    "pid": 3001,
+    "status": "unmanaged",
+    "turns": 0,
+    "tokens": 0,
+    "lastActive": "2024-06-04T11:20:00.000Z",
+    "jsonlPath": "<HOME>/.claude/projects/-work-projE/stray-eeee-0005.jsonl",
+    "provider": "claude-code",
+    "activeRecent": false,
+    "code": "z72"
+  }
+]

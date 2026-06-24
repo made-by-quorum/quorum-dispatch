@@ -1,0 +1,52 @@
+# W4.2 Verify-replay evidence (Linux tick proof) — IN-VM fresh-jail end-to-end green
+# pin 8c59ec4 (re-minted from 0d0fa9e via TRUE re-record — red-team M2), zmx 0.6.0,
+# Linux aarch64 (Lima sbtest, uid 501), recorded+verified 2026-06-05T18:1x:xxZ.
+#
+# WHY in-VM (not brano): the Linux zmx-dir-resolution rows exercise the
+# XDG_RUNTIME_DIR tier (/run/user/501, a Linux systemd construct ABSENT on macOS —
+# brano has no /run/user) and the TMPDIR-collapse OUTCOME; the termios-report-linux
+# row records the Linux session-PTY termios the engine establishes. These can only
+# be AUTHENTICALLY recorded + replayed on Linux, so record + verify run in-VM and
+# this output is the captured tick evidence (Step-3 brief: "if a row can only replay
+# in-VM, run verify in-VM and capture the output as evidence").
+#
+# RECORD: record.sh in-VM (VM-local fixtures-out, NOT the RO /Users mount), double-
+# record by construction, stub 1.8.0 sha 581ad3c. zmx-dir rooted the jail under
+# TMPDIR=/run/user/501 so the XDG tier hits the REAL Linux runtime tmpfs while every
+# resolved socket dir stays under JAIL_ROOT (sbrg-prefixed) — hermetic, zero leftovers.
+# COPY-BACK: tar-streamed VM fixtures-out -> host staging -> platform-aware
+# fixture_admit (FA_PLATFORMS="macos linux") re-scan + hash-pairing re-verify BEFORE
+# placement (the audited single path, README M1). See .admit-evidence-linux-w42.txt.
+#
+# IN-VM REPLAY (after copy-back admission, fixtures re-synced into the VM harness):
+#
+zmx_dir_resolution_linux:
+  [verify] scenario=zmx-dir-resolution-linux class=semantic-resolution-outcome budget=90000ms
+  [verify] stub provenance OK (RECORDED-FROM.linux: stub_sha256 matches installed stub)
+  [verify] PASS: zmx-dir-resolution-linux
+  case=XDG_RUNTIME_DIR_tier  resolved==expected (<XDG_RUNTIME>/zmx)
+  case=TMPDIR_collapse_tier  resolved==expected (<TMPDIR>/dup/zmx-<ZMX_UID>; collapse(dup/dup)=dup)
+  normalized BYTE-IDENTICAL to the committed 0d0fa9e capture (engine surface inert across delta)
+
+termios_report_linux:
+  [verify] scenario=termios-report-linux class=semantic-termios budget=60000ms
+  [verify] stub provenance OK (RECORDED-FROM.linux: stub_sha256 matches installed stub)
+  [verify] PASS: termios-report-linux
+  STTY-REPORT iflag=0x500 oflag=0x5 cflag=0xf00bf lflag=0x8a3b icanon=1 echo=1 isig=1
+  semantic fields (icanon=1 echo=1 isig=1) = cooked mode (engine sets no raw mode;
+  stub is a line reader). Linux flag BITMASKS differ from macOS (the platform-split
+  reason); the recorded SEMANTIC contract matches macOS.
+
+TICK SUMMARY: 2/2 Linux-sided rows replay green in-VM at pin 8c59ec4
+  (zmx-dir-resolution-linux: TMPDIR-collapse + XDG_RUNTIME_DIR tiers; termios-report-linux).
+
+# --- 0b DELTA-STRENGTH W3.1 consolidated re-run (impl-0bw-w31, 2026-06-05T19:31:39Z) ---
+# The 2 Linux rows are UNCHANGED by W3.1 (W3.1 touched no Linux fixture). Re-run
+# IN-VM (Lima sbtest, aarch64, uid 501) at the W3.1 TIP against the re-stamped
+# stub 1.8.1 (sha 20a5133) for the consolidated phase-close claim; VM left hermetic
+# (replay-only, no recording, no cargo; fresh /tmp untar, removed after).
+# PATH=$HOME/.bun/bin:$PATH (bun not on the non-login PATH); TMPDIR=/run/user/501
+# (the XDG_RUNTIME_DIR tier the zmx-dir row exercises).
+zmx_dir_resolution_linux: [verify] stub provenance OK (1.8.1) + PASS: zmx-dir-resolution-linux
+termios_report_linux:     [verify] stub provenance OK (1.8.1) + PASS: termios-report-linux
+W3.1 LINUX RE-RUN: 2/2 Linux rows replay green in-VM at the W3.1 tip / stub 1.8.1.

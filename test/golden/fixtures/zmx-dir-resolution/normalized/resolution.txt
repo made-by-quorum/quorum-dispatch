@@ -1,0 +1,5 @@
+Started detached session "sbrg-<RUNID>-zd"
+Waiting for "sbrg-<RUNID>-zd" to be ready. [enter] found ready
+case=ZMX_DIR_explicit expected=<ZMX_DIR> resolved=<ZMX_DIR>
+case=TMPDIR_fallback note=collapse-outcome-Linux-Step3
+case=XDG_RUNTIME_DIR note=Linux-only-Step3

@@ -1,0 +1,16 @@
+WSA-FLOODCONT PROBE: COMPLETE — observations recorded (research evidence, not a gate)
+
+CONFIG: heavy=true flooders=3 blast_threads=4
+P1 BASELINE (flooder idle): sib-a RTT n=20 min=0.2ms median=0.2ms p95=0.5ms max=0.5ms timeouts=0
+  list() n=20 min=0.1ms median=0.1ms p95=0.1ms max=0.1ms timeouts=0
+  daemon RSS 6800 KB
+P2 flood-liveness control: all 3 flooder(s) rendering FLOOD lines and content changing across 300ms = true
+P2 OUTPUT-FLOOD: sib-a RTT n=20 min=0.5ms median=0.8ms p95=1.2ms max=1.2ms timeouts=0
+  list() n=20 min=0.1ms median=0.2ms p95=0.2ms max=0.2ms timeouts=0
+  sib-b spot RTT 0.4ms timeout=false
+  daemon RSS 32432 KB (was 6800 KB)
+P3 INPUT-FLOOD (4 threads x 256B SendInput at sink, 6857 sends acked; blast-live control=true):
+  sib-a RTT n=20 min=0.4ms median=0.5ms p95=0.6ms max=0.6ms timeouts=0
+  list() n=20 min=0.1ms median=0.1ms p95=0.2ms max=0.2ms timeouts=0
+  daemon RSS 32784 KB
+

@@ -1,0 +1,4 @@
+CONTRACT sidecar: present keys=pid,port,sessionId,status status=ok
+CONTRACT GET /health -> ERROR
+CONTRACT POST /message -> has_message_id=1
+CONTRACT ls-join: relay_joined_rows=1 has_relayPort=1

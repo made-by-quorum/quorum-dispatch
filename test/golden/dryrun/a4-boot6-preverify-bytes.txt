@@ -1,0 +1,43 @@
+=== A4 BOOT-#6 PHASE A PRE-VERIFICATION (no real claude) ===
+  date: 2026-06-05 00:35:34 EDT
+  worktree: /home/u/work/sb-rust/.claude/worktrees/agent-ab1242104580d00ca
+  sb: 0.1.0
+
+--- GREP PROOF: no timeout(1) in this driver ---
+  OK: no bare timeout(1) invocation in the driver (only --timeout flag / wrapper prose)
+
+=== REAL-HOME BELT before: 728 ===
+
+=== CHECK 1: perl-alarm wrapper mechanics ===
+  1a tmo 1 sleep 5 -> rc=124 (expect 124 = alarm fired)
+    PASS: wrapper fires + reports 124
+  1b tmo 5 true -> rc=0 (expect 0 = propagated)
+    PASS: wrapper propagates 0
+  1c tmo 5 'exit 7' -> rc=7 (expect 7 = propagated non-zero)
+    PASS: wrapper propagates non-zero exactly
+  1d tmo 5 <missing-cmd> -> rc=127 (child exec-fail surfaces as 127, wrapper intact)
+
+=== CHECK 2: fakerepl boot + sb wait rows (status-keyed) ===
+  sb new exit=0 : Started detached session "sbrg-92840178063413432593-fr"
+  resolution belt: sbrg-92840178063413432593-fr resolves uniquely in-jail (OK)
+  2a sb wait (idle) rc=0 out=[sbrg-92840178063413432593-fr is idle]
+    PASS: idle-at-entry -> 'is idle' exit 0
+  2b sb wait (busy->idle) rc=0 out=[Waiting for sbrg-92840178063413432593-fr... done]
+    PASS: busy -> ' done' exit 0
+  2c sb wait --timeout 5 (kept busy) rc=1 out=[Waiting for sbrg-92840178063413432593-fr... timeout]
+    PASS: kept-busy --timeout 5 -> ' timeout' exit 1
+
+=== CHECK 3: send:pty path ===
+  3 send:pty rc=0 out=[Message sent to sbrg-92840178063413432593-fr]
+    PASS: send path accepted ('Message sent')
+
+=== CHECK 4: send:pty --wait documented failure (no conversation JSONL) ===
+  4 send:pty --wait rc=1 out=[Cannot find conversation JSONL file.]
+    PASS: --wait fails CLEAN (documented: no JSONL -> exit 1, NOT rc=127)
+
+=== REAL-HOME BELT after: 728 (HOLDS) ===
+
+=== PRE-VERIFICATION SUMMARY ===
+  ALL PRE-VERIFICATION CHECKS PASSED — wrapper mechanics + sb wait + send
+  path + --wait clean-failure all GREEN. No rc=127-class anomaly. GO for boot.
+=== DONE (teardown via trap) ===

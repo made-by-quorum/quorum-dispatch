@@ -1,0 +1,4 @@
+SHAPE new_exit=1
+SHAPE failed_nonzero=1
+SHAPE readiness_timeout_token=1
+SHAPE pidfile_appeared=0

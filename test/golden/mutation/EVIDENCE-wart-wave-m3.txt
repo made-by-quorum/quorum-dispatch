@@ -1,0 +1,43 @@
+# WART-WAVE M3 DIFFERENTIAL EVIDENCE — W6+W7 content-keyed wait (ADD-15)
+# date: 2026-06-06T00:59:30Z
+#
+# THE CLAIM: pre-fix 'sb wait' times out on the W6 window (turn starts+ends
+# inside one poll interval -> every status poll reads idle); post-fix it
+# completes via the transcript end_turn record. RED-pre-fix is STRUCTURAL:
+# the pre-fix deps trait has NO transcript channel — no input exists by
+# which content could influence the outcome (stronger than a failing run).
+
+== PRE-FIX (main abba9e7) wait deps trait — read_status/sleep/now_ms ONLY ==
+pub trait WaitStatusDeps {
+    /// Read the session status from the pid file. `None` → unreadable/parse error
+    /// (TS `catch` → "session exited", status.ts:384-387).
+    fn read_status(&self) -> Option<String>;
+    /// Sleep `ms` (the 500ms poll; seamed so tests run instantly).
+    fn sleep(&self, ms: u64);
+    /// Monotonic-ish clock in ms (the timeout deadline).
+    fn now_ms(&self) -> i64;
+}
+
+== PRE-FIX pinned behavior: idle-without-sawBusy polls to TIMEOUT (the W6 window outcome) ==
+    #[test]
+    fn idle_without_sawbusy_keeps_polling_to_timeout() {
+        // W5: idle from the very first poll, NEVER busy → must NOT early-exit;
+        // it polls until the deadline → Timeout (NOT Done).
+        let f = FakeWait::new(|_| Some("idle"));
+        assert_eq!(
+            run_wait_status_loop(&f, 1500, 500),
+            WaitStatusOutcome::Timeout
+        );
+    }
+
+== POST-FIX differential + mutation + negative-control rows (this branch) ==
+test wait::tests::negctl_content_alone_does_not_complete_while_busy ... ok
+test wait::tests::negctl_no_stale_evidence_before_offset ... ok
+test wait::tests::mutation_content_key_disabled_times_out_on_w6_window ... ok
+test wait::tests::w6_window_content_evidence_completes_idle_only_statuses ... ok
+test wait::tests::probe_absent_file_keeps_polling ... ok
+test wait::tests::degrade_on_source_error_warns_once_and_stays_status_keyed ... ok
+test wait::tests::degrade_does_not_false_done_after_shrink ... ok
+test wait::tests::probe_shrunk_file_is_integrity_error ... ok
+test wait::tests::probe_offset_excludes_pre_entry_records ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 588 filtered out; finished in 0.00s

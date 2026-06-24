@@ -1,0 +1,5 @@
+# ACK-3 lint evidence | 0d4b6c5 | 2026-06-06 12:55 EDT
+# scripts/build-lock.sh cargo fmt --check:
+CLEAN (exit 0)
+# scripts/build-lock.sh cargo clippy --workspace --all-targets --all-features -- -D warnings:
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s

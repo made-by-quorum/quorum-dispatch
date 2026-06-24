@@ -1,0 +1,45 @@
+[
+  {
+    "name": "claude-worker",
+    "userNamed": true,
+    "sessionId": "claude-sid-0001",
+    "pid": 1001,
+    "status": "idle",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/projA",
+    "lastActive": "2024-06-04T10:01:40.000Z",
+    "version": "1.0.0",
+    "startedAt": "2024-06-04T10:01:39.000Z",
+    "provider": "claude-code",
+    "code": "as7"
+  },
+  {
+    "name": "codex-worker",
+    "userNamed": true,
+    "sessionId": "019ea0b3-04d3-7400-8d95-f55d41e961e4",
+    "pid": 5050,
+    "status": "busy",
+    "turns": 0,
+    "tokens": 15800,
+    "cwd": "/work/codexA",
+    "lastActive": "2024-06-04T10:00:00.000Z",
+    "version": "0.134.0",
+    "startedAt": "2024-06-04T09:59:59.000Z",
+    "jsonlPath": "<CODEX_HOME>/sessions/2026/06/04/rollout-2026-06-04T10-01-39-019ea0b3-04d3-7400-8d95-f55d41e961e4.jsonl",
+    "provider": "codex",
+    "code": "1yd"
+  },
+  {
+    "userNamed": false,
+    "sessionId": "019e9f3b-deea-7392-9861-b5d8ad376e2b",
+    "status": "cold",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/codexCold",
+    "lastActive": "2024-06-04T08:33:20.000Z",
+    "jsonlPath": "<CODEX_HOME>/sessions/2026/06/04/rollout-2026-06-04T08-33-20-019e9f3b-deea-7392-9861-b5d8ad376e2b.jsonl",
+    "provider": "codex",
+    "code": "1gz"
+  }
+]

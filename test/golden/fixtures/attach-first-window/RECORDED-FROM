@@ -1,0 +1,7 @@
+RECORDED-FROM
+pinned_ts_commit=8c59ec456fe82780fd75d8afb5fe48dc72e10bc8
+zmx_version=0.6.0
+stub_sha256=20a51331148f03450ada6cf9cfae8593df11764e9b36c456a1a9140aba3e7afa
+stub_version=stub-claude-1.8.1 (2026-06-05)
+scenario=attach-first-window class=semantic-presence
+recorded=2026-06-05T17:33:46Z host=Darwin arm64

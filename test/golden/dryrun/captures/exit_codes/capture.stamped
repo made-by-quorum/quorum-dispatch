@@ -1,0 +1,10 @@
+# DRYRUN-NOT-ORACLE
+# scenario=exit-codes class=exit-code fixture=fixtures/exit-codes/normalized/exit-codes.trace
+# ts-source=PINNED prep clone (HEAD=0d0fa9e, NOT current main) recorded=2026-06-05T03:00:47Z
+# provisional=0 partial=0
+# NOTE: evidence only — NOT a golden expectation. Part 2 records the real fixture.
+#---raw-capture-below---
+cmd=info-missing-session expect_exit=1 got_exit=1
+stderr_present=1
+cmd=config-unknown-subcommand expect_exit=2 got_exit=2
+stderr_present=1

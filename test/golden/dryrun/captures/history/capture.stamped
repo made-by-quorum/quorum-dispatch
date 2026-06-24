@@ -1,0 +1,18 @@
+# DRYRUN-NOT-ORACLE
+# scenario=history class=semantic-backlog fixture=fixtures/history/normalized/history.trace
+# ts-head=2f1c841 (CURRENT main, NOT a pin) recorded=2026-06-04T20:10:26Z
+# provisional=0 partial=1
+# NOTE: evidence only — NOT a golden expectation. Part 2 records the real fixture.
+#---raw-capture-below---
+HLINE 1
+HLINE 2
+HLINE 3
+HLINE 4
+HLINE 5
+HLINE 6
+HLINE 7
+HLINE 8
+HLINE 9
+HLINE 10
+HLINE 11
+HLINE 12

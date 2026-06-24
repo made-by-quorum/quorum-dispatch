@@ -1,0 +1,12 @@
+[buildlock-mutex] forensics kept at /var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/buildlock-mutex-stale-20341-1780787491215613000
+assertion `left == right` failed: mutual exclusion violated 2x under stale-reclaim storm (two holders ran concurrently — the double-reclaim race)
+test stale_reclaim_storm_mutual_exclusion ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.58s
+[buildlock-mutex] forensics kept at /var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/buildlock-mutex-stale-20981-1780787493902170000
+assertion `left == right` failed: mutual exclusion violated 2x under stale-reclaim storm (two holders ran concurrently — the double-reclaim race)
+test stale_reclaim_storm_mutual_exclusion ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.61s
+[buildlock-mutex] forensics kept at /var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/buildlock-mutex-stale-21608-1780787496596844000
+assertion `left == right` failed: mutual exclusion violated 2x under stale-reclaim storm (two holders ran concurrently — the double-reclaim race)
+test stale_reclaim_storm_mutual_exclusion ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.16s

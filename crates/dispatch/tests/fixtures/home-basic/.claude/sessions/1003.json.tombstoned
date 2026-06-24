@@ -1,0 +1,10 @@
+{
+  "pid": 1003,
+  "sessionId": "dead-cccc-0003",
+  "cwd": "/work/projC",
+  "startedAt": 1717400000000,
+  "updatedAt": 1717405000000,
+  "status": "idle",
+  "name": "gamma-killed",
+  "version": "1.0.0"
+}

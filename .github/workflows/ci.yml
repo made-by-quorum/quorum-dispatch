@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build+test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Budget belt (macOS bills 10x; the 2026-06-05 G-B4 pty grind burned ~55min):
+    # a healthy whole-job is 3-7 min — anything past 20 is a wedge, fail it fast.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report + assert arch
+        shell: bash
+        run: |
+          arch="$(uname -m)"
+          echo "uname -m = $arch on ${{ matrix.os }}"
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            if [ "$arch" != "arm64" ]; then
+              echo "::error::macos-latest expected arm64, got $arch"
+              exit 1
+            fi
+          fi
+
+      - name: Install Rust 1.95
+        uses: dtolnay/rust-toolchain@1.95
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+
+      - name: rustfmt check
+        run: cargo fmt --all -- --check
+
+      - name: clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: engine scope audit (ADD-8, success criterion 7)
+        run: ./scripts/scope-audit.sh
+
+      - name: build (through build-lock)
+        run: ./scripts/build-lock.sh cargo build --workspace --all-targets
+
+      - name: test (through build-lock)
+        # SBMUX_CI_QUARANTINE: g3-macos — g3_winch_storm is QUARANTINED on
+        # macos-latest ONLY (ledger: crates/sbmux/GATE-B2.md "Quarantine").
+        # Deterministic marker loss on the GH macOS runner that does not
+        # reproduce locally (incl. with the runner's prompt width); G3 keeps
+        # two-platform coverage via macOS-local (brano) + ubuntu-latest here.
+        env:
+          SBMUX_CI_QUARANTINE: ${{ matrix.os == 'macos-latest' && 'g3-macos' || '' }}
+        run: ./scripts/build-lock.sh cargo test --workspace
+
+      - name: build-lock serialization smoke
+        # Spawns concurrent lock-holders (self-bounds at SB_RUST_LOCK_TIMEOUT=60s);
+        # belt it anyway since concurrent-process steps are the wedge-prone class.
+        timeout-minutes: 3
+        run: ./scripts/build-lock-smoke.sh
+
+      # A7: golden self-test RUNNER (replaces the former standalone fetch-zmx
+      # step — test_fetch_zmx.sh is one of the suites this runner drives, so the
+      # standalone step was de-duped away). VERIFIED HERMETIC: the whole runner
+      # needs no network and no CI-absent recorded state — every suite reads
+      # in-repo fixtures only (test_fetch_zmx uses the vendored zmx mirror +
+      # SB_ZMX_MIRROR_URL file copies; test_stub_claude / test_normalize touch
+      # only 127.0.0.1 loopback to their own stubs). A4_RUN_LIVE stays unset, so
+      # the ~2min live went-busy scenario is SKIPPED (QA/M6 runs it standalone).
+      # Measured locally (TMPDIR=/tmp): ~49s wall. Belt sized ~3x + cold-start.
+      - name: golden selftests (hermetic runner)
+        shell: bash
+        timeout-minutes: 4
+        run: TMPDIR=/tmp bash test/golden/selftest/run_selftests.sh
+
+      # A7: mutation harness — proves the oracle BITES (zero false negatives).
+      # SYNTHETIC: builds its own captures in a tmpdir, no fixtures, no network.
+      # Measured locally: ~0.6s. Belt floored at 2min.
+      - name: mutation (synthetic)
+        shell: bash
+        timeout-minutes: 2
+        run: TMPDIR=/tmp bash test/golden/mutation/run_mutation.sh
+
+      # A7: mutation-REAL — same teeth against the committed golden corpus. HERMETIC
+      # (verified): it replays the in-tree fixtures/ + the committed divergent/ and
+      # r2-seams/ captures; the live-boot paths (divergent_invocation / in-jail stub
+      # seams) are only taken when a pinned sb is present, else the recorded capture
+      # is replayed — so CI (no pinned sb) runs fully from committed state and FAILS
+      # LOUDLY if a capture is missing rather than booting. Measured locally: ~3.7s.
+      # Belt floored at 2min.
+      - name: mutation (real corpus)
+        shell: bash
+        timeout-minutes: 2
+        run: TMPDIR=/tmp bash test/golden/mutation/run_mutation_real.sh
+
+      # A7 (A5 redteam MINOR carry): fixture secret-scan in fail-closed CLI mode.
+      # No git-level pre-commit hook exists — CI is the net that keeps a real
+      # credential out of the checked-in corpus. DEFAULT (corpus-safe) pattern set:
+      # the 40-hex flat catch is the opt-in STRICT tier ONLY (corpus pin-SHA
+      # metadata legitimately carries 40-hex), so this gate passes benign pins and
+      # bites only real key shapes. Measured locally: ~1s. Belt floored at 2min.
+      - name: fixture secret-scan (fail-closed)
+        shell: bash
+        timeout-minutes: 2
+        run: bash test/golden/lib/secret-scan.sh test/golden/fixtures/
+
+      # A5 §4 gate rows G-B5/G-B1/G-B3/G-B4/G-N2: RUNTIME bootstrap content audit
+      # + relay-offer behavior, in a scratch-HOME jail against the built binary.
+      - name: bootstrap output audit (engine content-free + relay offer)
+        shell: bash
+        timeout-minutes: 5
+        env:
+          SB_BIN: ${{ github.workspace }}/target/debug/sb
+        run: bash test/golden/scenarios/bootstrap_output_audit.sh

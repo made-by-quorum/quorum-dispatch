@@ -1,0 +1,50 @@
+# RECORDED-FROM pin=8c59ec4 (verified-diff-carry from 0d0fa9e; proof exec/a5-grec-pin-carry-proof.md; orc-3 ruling relay-1780671157930-19) verb=gc (forged file mtimes >7d / prunedAt >30d)
+$ sb gc --dry-run (empty)
+Scanning for GC candidates...
+No GC candidates found. Everything is clean.
+$ sb gc --list-trash (empty)
+Trash is empty.
+$ sb gc --dry-run (forged aged candidate)
+Scanning for GC candidates...
+[1m
+GC candidates:
+[0m
+  [36mCC JSONL    [0m~/.claude/projects/jail-proj/deadsession-rec.jsonl (19 B)
+              [2mdead session, last active 8d ago[0m
+
+1 item to prune.
+[2m
+(dry run — no changes made. Run without --dry-run to move to trash.)[0m
+$ sb gc (real prune to trash)
+Scanning for GC candidates...
+[1m
+GC candidates:
+[0m
+  [36mCC JSONL    [0m~/.claude/projects/jail-proj/deadsession-rec.jsonl (19 B)
+              [2mdead session, last active 8d ago[0m
+
+1 item to prune.
+
+  ✓ ~/.claude/projects/jail-proj/deadsession-rec.jsonl → trash
+
+1 item moved to trash. Use [36msb gc --list-trash[0m to see, [36msb gc --recover <name>[0m to restore.
+$ sb gc --list-trash (after prune)
+[1mTrash contents:
+[0m
+  [36m<TS>_deadsession-rec.jsonl[0m
+    From:   ~/.claude/projects/jail-proj/deadsession-rec.jsonl
+    Reason: dead session, last active 8d ago
+    Age:    <DUR> ago
+    Size:   19 B
+
+1 item in trash. Use [36m--recover <name>[0m to restore, [36m--purge[0m to delete items >30d.
+$ sb gc --recover deadsession-rec
+✓ Recovered ~/.claude/projects/jail-proj/deadsession-rec.jsonl
+$ sb gc --recover deadsession-rec (collision: original exists → refuse)
+Cannot recover: ~/.claude/projects/jail-proj/deadsession-rec.jsonl already exists.
+Remove or rename the existing file first.
+exit=1
+$ sb gc --purge (>30d trash)
+  ✓ Purged <TS>_deadsession-rec.jsonl (~/.claude/projects/jail-proj/deadsession-rec.jsonl)
+
+Purged 1 item. 0 items remain (< 30 days).

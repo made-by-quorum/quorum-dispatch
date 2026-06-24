@@ -1,0 +1,5 @@
+G-SCROLL VERDICT: PASS — 10k backlog through engine attach→detach→reattach; tail markers present+ordered on replay (settled-text tail check)
+
+reattach replay ordered marker presence: 10000 marker occurrences, ALL 1..=10000 present (completeness), history-run ascending len 10000, tail 10000 present
+NOTE: engine attach yields a SETTLED screen render; this is the order-blind tail check (honestly weaker than sbmux assert_backlog_ordered which needs wire-order History frames — red-team #12). The wire-order ordered comparator is covered at the crate level (sbmux b3_replay).
+

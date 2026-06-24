@@ -1,0 +1,6 @@
+LEAK-GUARD CONTROL (leakctl)
+retention injected: SBMUX_TEST_LEAK=retain (800000 lines ~61MB through the PTY)
+metric: phys_footprint (resident+compressed; macOS proc_pid_rusage / Linux VmRSS+VmSwap)
+sampling: generation-keyed lockstep, one sample per confirmed 50k-line chunk
+q2_mean_kb=38464 q4_mean_kb=67924 delta_kb=29460
+guard (10% relative AND >10240KB absolute): FIRES

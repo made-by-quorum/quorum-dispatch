@@ -1,0 +1,8 @@
+G-ADOPTED G-DET VERDICT: PASS — client kill -9 mid-stream; daemon + session survive; reattach replay complete
+
+client attached + stream flowing=true
+client SIGKILLed mid-stream (no clean detach)
+daemon survives client kill=true
+session survives client kill (still listed)=true
+reattach replay complete (DET_POST or alive)=true
+

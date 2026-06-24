@@ -1,0 +1,3 @@
+case=XDG_RUNTIME_DIR_tier expected=<XDG_RUNTIME>/zmx resolved=<XDG_RUNTIME>/zmx
+case=TMPDIR_collapse_tier expected=<TMPDIR>/dup/zmx-<ZMX_UID> resolved=<TMPDIR>/dup/zmx-<ZMX_UID>
+platform=linux uid=<ZMX_UID>

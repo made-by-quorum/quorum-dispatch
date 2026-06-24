@@ -1,0 +1,63 @@
+# EVIDENCE — DELTA-CORE re-pin 0d0fa9e -> 8c59ec4 (verify-first + verified-diff carry)
+# Owner: impl-0b-delta. Captured: 2026-06-05 on brano (macOS arm64) + Lima sbtest
+# (Linux aarch64, in-VM). Scope: the orc-3 DELTA-CORE ruling (P1-P12 re-staged to
+# A7 as DELTA-STRENGTH; NOT in this pass).
+#
+# METHOD: prep a pin-verified 8c59ec4 clone (prep_pinned_ts.sh, HEAD==pin gate),
+# re-run each scenario in a FRESH jail against `bun <clone>/src/index.ts` THROUGH
+# record.sh (which double-records: run A and run B normalized must be byte-identical
+# or it refuses), into a SCRATCH RECORD_FIXTURES_ROOT (committed corpus untouched),
+# then byte-compare (cmp + sha256) the scratch normalized output vs the COMMITTED
+# golden. CONFIRMED = byte-identical (no movement). REFUTED = movement (would stop +
+# report, no re-record without lead ruling). Zero rows REFUTED.
+#
+# PIN FACTS (orc-verified, re-confirmed): 0d0fa9e..8c59ec4 = {e7dab5d idle two-write,
+# 92910a4 message_id loud-fail, 8c59ec4 chunked PTY ≤1024B/~150ms}; 8c59ec4..main
+# EMPTY (pin stable). chunkText emits a SINGLE chunk for ≤1024B payloads => identical
+# framing to the pre-delta combined write; every current row's payload is sub-1024B,
+# so the chunking commit is analytically inert for the existing corpus (E-finding).
+
+## VERIFY-FIRST (the 2 originally-named rows — prime suspects: user_record_count + timing)
+relay-health           CONFIRMED  sha e67e2c2ceac9bd3a5cd631b6a6d000f679ca55cf83d7489ec6d963c3eb39485e (golden == 8c59ec4 re-record)
+                       (92910a4 touches the MISSING-id ERROR path; this row records the success path has_message_id=1 — unmoved)
+send-pty-paste-burst   CONFIRMED  sha 0558a82d76018d7b51398800e456ca764780e28fe06546d3494bcf8375964352 (golden == 8c59ec4 re-record)
+                       (user_record_count=2 unchanged; sub-1024B burst => chunkText single-chunk => 8c59ec4 inert)
+
+## VERIFIED-DIFF CARRY re-confirms (all other rows — macOS on brano)
+attach-detach-reattach CONFIRMED (byte-identical, same sha)
+build-claude-cmd       CONFIRMED (byte-identical, same sha)
+exit-codes             CONFIRMED (byte-identical, same sha)
+history                CONFIRMED (byte-identical, same sha)
+ls-info-json           CONFIRMED (byte-identical, same sha)
+new-session-trace      CONFIRMED (byte-identical, same sha)
+zmx-dir-resolution     CONFIRMED (byte-identical, same sha) [macOS sibling resolution.txt]
+
+## VERIFIED-DIFF CARRY re-confirm (Linux sibling — IN-VM, Lima sbtest, jail under /run/user/501)
+zmx-dir-resolution-linux CONFIRMED  sha d6801d27cf83b8669d0e57201b7409e7ac975d78015f20b132eb7a2ad4f4b6eb (golden == 8c59ec4 re-record)
+                       (XDG_RUNTIME_DIR tier + TMPDIR-collapse tier both unmoved; uid=501 preserved; zero leftover sessions in VM)
+
+## RESULT: 10/10 corpus files CONFIRMED no-movement at 8c59ec4. Zero REFUTED. Zero re-records needed.
+
+## PIN METADATA MOVE (verified-diff carry, NOT re-record)
+# All 11 RECORDED-FROM[.macos/.linux] pinned_ts_commit -> 8c59ec4 + a
+# verified_diff_carry_from=0d0fa9e line. MATCH-PROOF files LEFT UNTOUCHED: the proof
+# hashes cover raw/normalized/normalizer/scenario — NOT RECORDED-FROM — so the pin
+# move does NOT invalidate any proof (confirmed: no harness path reads or cross-checks
+# MATCH-PROOF.pinned_ts_commit; fixture_admit checks only RECORDED-FROM against the
+# supplied pin). stub_sha256 lines untouched (no stub change in DELTA-CORE).
+
+## A4 PARITY FLIPS (coverage-matrix.md, commit 01f691c)
+# idle-path two-write row + message_id loud-fail row reclassified to PARITY at delta
+# pin 8c59ec4 (TS adopted both: e7dab5d/8c59ec4 + 92910a4). A4 pass-(b) consumes.
+
+## COVERAGE BOUNDARY (orc-required, no silent overclaim)
+# The send-pty-paste-burst row does NOT cover the >=4KB chunked-PTY path (sub-1024B
+# payload => single chunk). That coverage is carried meanwhile by A4's fakerepl
+# DROP_OVER_BYTES gate, and is deferred to DELTA-STRENGTH W3 (P3), re-staged to A7.
+
+## CLOSE GATES (this pass)
+# mutation synthetic 10/10 ; mutation-real 27/27 (counts UNCHANGED — no assertions
+# changed in DELTA-CORE) ; full selftest suite ALL PASSED ; ratchet-back fmt+clippy
+# clean (build+test serialized behind host build-lock; see report for final RC).
+# invisibility: 0 sbrg leftovers brano + VM ; org TS checkout + shared sb-rust on
+# main, HEAD untouched ; phantom-driver fix 43a4d88 present on branch.

@@ -1,0 +1,612 @@
+//! The `provider` seam (codex-p1-spec section 2) — a [`Provider`] trait extracted
+//! from the claude-coupled engine, mirroring the [`crate::mux::Mux`] pattern
+//! (trait + real impl + fixture impls, mux.rs:44-89).
+//!
+//! THE MISSION (codex-p1-spec section 0): **ZERO behavior change for claude
+//! sessions.** Pete dogfoods this engine daily; the existing test corpus + the
+//! goldens are the regression net. W2 is PURELY ADDITIVE — it carves the trait
+//! and lands two impls (claude + a daemon-shaped FIXTURE) but rewires NO
+//! production call site (that is W3-W5). Every concern the trait owns DELEGATES
+//! to the existing module home (codex-p1-spec section 1.8) — code is MOVED or
+//! CALLED, never re-implemented:
+//!
+//!   - launch  → [`crate::launch`] (`claude_bin` / `claude_flags` /
+//!     `build_new_extra_args` / `build_claude_cmd`)
+//!   - boot    → [`crate::boot::EventBootWaiter`] behind [`crate::create::BootWaiter`]
+//!   - status  → [`crate::model::SessionStatus::parse`] (join.rs:307-317 semantics)
+//!   - transcripts → [`crate::jsonl`] (`find_jsonl_path` / `scan_all` / `read_stats`)
+//!   - resume  → `["--resume", id]` (+ `--fork-session`), the resume.rs verb's fragment
+//!   - inject  → [`crate::relay::fast_relay_lookup`] + [`crate::relay::RelayContract`]
+//!     (ADD-5: the contract stays the contract)
+//!
+//! NAMING (codex-p1-spec section 9, Phase-D rider): nothing claude-specific in
+//! NEW public names — the trait method names are provider-neutral (`launch_plan`,
+//! not `claude_cmd`). `ClaudeProvider` / `FixtureDaemonProvider` impl names are
+//! plan-sanctioned. Existing claude-named items that this module CALLS (e.g.
+//! `claude_flags`) keep their names — rename churn is Phase-D's, not the carve's.
+//!
+//! L9a: NOTHING here resolves a real home or reads raw `std::env`; every effect
+//! arrives through [`ProviderFx`] (the NewDeps pattern, create.rs).
+
+use std::path::{Path, PathBuf};
+
+use crate::create::BootWaiter;
+use crate::effects::Env;
+use crate::jsonl::{JsonlStats, TranscriptMeta};
+use crate::model::SessionStatus;
+use crate::paths::SbPaths;
+use crate::relay::{RelayContract, RelayError};
+
+pub mod codex;
+pub mod fixture;
+
+pub use fixture::FixtureDaemonProvider;
+
+// ===========================================================================
+// 2.1 — Identity + shared types (provider-neutral by construction).
+// ===========================================================================
+
+/// How a provider's sessions are hosted (codex-p1-spec section 2.1).
+///
+/// GATE-R-agnostic (R4): BOTH variants are legal trait answers; the engine
+/// branches only where it already branches. P1 PRODUCTION CODE CONSULTS
+/// `hosting()` NOWHERE — claude is `MuxPane` and the engine keeps its existing
+/// mux calls. ONLY the fixture lane reads it. This is deliberate: the seam can
+/// EXPRESS both branches (the [`FixtureDaemonProvider`] proves it) without the
+/// engine PICKING one (that is GATE-R's call, not P1's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hosting {
+    /// Session runs as a pane under the sb-owned mux (claude today).
+    MuxPane,
+    /// Session is a thread of a provider-owned daemon process — no mux pane.
+    Daemon,
+}
+
+/// Provider-neutral session identity (codex-p1-spec section 2.1).
+///
+/// `pid` is OPTIONAL BY DESIGN (R3 tooth): a daemon-hosted session has thread-id
+/// identity and may never have a pid. NOTHING in the trait may REQUIRE pid — the
+/// conformance suite drives every daemon-lane method with `pid: None` and a
+/// pid-requiring impl reds it (provider_seam.rs `daemon_pid_none_flows_*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionKey<'a> {
+    /// Session/thread id — a claude session uuid OR a daemon thread id.
+    pub id: &'a str,
+    pub name: Option<&'a str>,
+    pub cwd: Option<&'a str>,
+    pub pid: Option<i64>,
+}
+
+/// What to run for a new session (codex-p1-spec section 2.1).
+///
+/// `argv` + `env` pairs. For `MuxPane` hosting the engine shell-assembles and
+/// runs it under the mux exactly as today (W3 will feed `argv`/`env` from this);
+/// for `Daemon` hosting the fixture lane consumes it directly (no engine branch
+/// in P1 — R4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchPlan {
+    pub argv: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+/// What the caller wants launched (codex-p1-spec section 2.1; NewOpts-shaped).
+///
+/// Provider-neutral: a 1:1 carry of the create path's [`crate::create::NewParams`]
+/// launch-relevant fields + [`crate::launch::NewOpts`], so W3's rewire is
+/// MECHANICAL (the claude impl reconstructs `NewOpts` + the args from these).
+/// Nothing in it may be claude-specific.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LaunchRequest {
+    /// The session name (claude `--name`; the daemon ignores it for argv).
+    pub name: String,
+    /// Working dir for the session (carried for parity with NewParams; the
+    /// claude argv does not embed it — the mux runs the cmd IN this cwd).
+    pub cwd: Option<String>,
+    /// `--resume <id>` (None = a fresh session).
+    pub resume: Option<String>,
+    /// `--fork-session` (only meaningful with `resume` for claude).
+    pub fork: bool,
+    /// `--agent <name>`, if given.
+    pub agent: Option<String>,
+    /// `--model <m>`, if given — emitted as a LAUNCH FLAG (warranty #2,
+    /// 2026-06-11). Model is a BIRTH PROPERTY of the session (same principle as
+    /// SB_SESSION_ID's explicit-set-at-every-launch), NOT a post-boot mutation:
+    /// the create path used to deliver it as a `/model <m>` slash command, which
+    /// in current Claude Code PERSISTS as the shared global default ("saved as
+    /// your default for new sessions") — so every `--model` commission polluted
+    /// the default a later plain session would inherit, and `--model` combined
+    /// with `-p` dropped the prompt. As a launch flag it is per-session and
+    /// needs no post-boot delivery.
+    pub model: Option<String>,
+    /// Pass-through args (everything after `--`).
+    pub passthrough: Vec<String>,
+}
+
+/// The injected effect bundle (codex-p1-spec section 2.1; the NewDeps pattern,
+/// create.rs). Holds ONLY the seams the two impls actually need — kept minimal,
+/// each member documented with which impl/method consumes it.
+///
+/// L9a: nothing here resolves a real home or reads raw `std::env`. A MINIMAL
+/// `ProviderFx` (empty env, nonexistent config path, no relay inputs) is a valid
+/// value — the daemon impl launches against exactly that (the negative control
+/// `daemon_launch_plan_minimal_fx`), proving it consumes NO claude config
+/// surface (rev B red-team (a): the config-toml path is NOT a trait param, it is
+/// an impl-internal resolution off `fx`).
+pub struct ProviderFx<'a> {
+    /// Env for `claude_bin` + `claude_flags` precedence resolution.
+    /// CONSUMED BY: `ClaudeProvider::launch_plan`. The daemon impl ignores it.
+    pub env: &'a dyn Env,
+    /// Home→state layout (L9a). `config_toml_path` is derived from it the same
+    /// way the resume verb does (`<home>/.sb/config.toml`); `sessions_dir` is the
+    /// boot waiter's PID-file root; `projects_dir` is the transcript root.
+    /// CONSUMED BY: `ClaudeProvider::launch_plan` (config toml),
+    /// `ClaudeProvider::boot_waiter` (sessions_dir).
+    pub paths: &'a SbPaths,
+    /// The canonical socket dir the session lives in (boot history + send
+    /// target; create.rs `canonical_dir`). CONSUMED BY:
+    /// `ClaudeProvider::boot_waiter` (the [`EventBootWaiter`] socket dir).
+    pub socket_dir: PathBuf,
+    /// The mux for the boot waiter's history reads + the single answerer `\r`.
+    /// CONSUMED BY: `ClaudeProvider::boot_waiter`. None for impls/units that
+    /// never drive boot (the daemon's boot readiness is a fixture record, no mux).
+    pub mux: Option<&'a dyn crate::mux::Mux>,
+    /// Clock + sleeper for the boot waiter's deadlines/polls.
+    /// CONSUMED BY: `ClaudeProvider::boot_waiter`. None when boot is not driven.
+    pub clock: Option<&'a dyn crate::effects::Clock>,
+    pub sleeper: Option<&'a dyn crate::boot::Sleeper>,
+    /// The ADD-5 relay CONTRACT — the transport `inject` sends through.
+    /// CONSUMED BY: `ClaudeProvider::inject`. None for the daemon impl (its
+    /// inject is an in-fixture enqueue, no relay).
+    pub relay: Option<&'a dyn RelayContract>,
+    /// Pre-resolved relay PORT for `inject` (W5 owns the full sidecar/ancestry
+    /// resolution at the verb layer; the lib-side `inject` body sends through the
+    /// CONTRACT given the port, never holding a transport handle in the trait
+    /// signature — the banned claude-shaped contortion). CONSUMED BY:
+    /// `ClaudeProvider::inject`.
+    pub relay_port: Option<u16>,
+    /// The codex app-server RPC transport CONTRACT (ADD-5 pattern: the contract
+    /// stays the contract; `provider::codex::ws::WsAppServer` is the driver).
+    /// CONSUMED BY: `CodexProvider::{boot_waiter, inject}`. None for the
+    /// claude/fixture lanes (they never speak the app-server protocol), mirroring
+    /// the relay members' claude-only precedent.
+    ///
+    /// LEAD DESIGN DECISION (codex-p2-spec section 6.2 sketched a sibling
+    /// `codex_endpoint: Option<&str>` member too; it is DELIBERATELY NOT added).
+    /// Endpoint resolution is a VERB-layer concern (the `relay_port` precedent
+    /// above): the verb layer reads the row's recorded endpoint, CONNECTS a
+    /// `WsAppServer`, and hands this trait an ALREADY-CONNECTED `&dyn AppServerRpc`
+    /// here. The trait never holds a raw endpoint string or opens a socket — so a
+    /// transport handle/endpoint never appears in a trait method signature (the
+    /// same banned claude-shaped contortion `relay_port` avoids). For an
+    /// already-connected rpc to be callable through this SHARED `&dyn`, the W3
+    /// refactor moved `AppServerRpc`'s methods to `&self` (interior mutability in
+    /// `WsAppServer`); the driver is single-threaded / `!Sync` by design.
+    pub app_server: Option<&'a dyn crate::provider::codex::AppServerRpc>,
+    /// The BELIEVED open turn id for the codex SEND ladder (codex-p2-spec section
+    /// 7.5) — the `relay_port` precedent for a codex-only concern. The verb layer
+    /// reads the row's rollout tail (`provider::codex::open_turn_id`) and feeds the
+    /// open turn id here when the session is believed BUSY; `None` (the common
+    /// case) means believed IDLE. CONSUMED BY: `CodexProvider::inject`, which on
+    /// `Some(T)` steers turn T (`turn/steer{expectedTurnId:T}`) and falls back to a
+    /// fresh turn on the server's stale-`expectedTurnId` fence, and on `None`
+    /// starts a fresh turn. The trait never sees the start/steer vocabulary — the
+    /// SEND surface stays SEND-only (the banned start/steer-in-a-user-string
+    /// contortion is kept out of the verb AND the trait). None for the
+    /// claude/fixture lanes.
+    pub codex_expected_turn_id: Option<&'a str>,
+}
+
+impl<'a> ProviderFx<'a> {
+    /// The config-toml path for `claude_flags`, derived from the injected home
+    /// the SAME way the resume verb does (`<home>/.sb/config.toml`,
+    /// resume.rs:127). NOT a trait param (rev B red-team (a)): config resolution
+    /// is impl-internal, off `fx`.
+    fn config_toml_path(&self) -> PathBuf {
+        self.paths
+            .home
+            .join(".quorum")
+            .join("dispatch")
+            .join("config.toml")
+    }
+}
+
+/// Provider-neutral inject failure (codex-p1-spec section 2.1).
+///
+/// The claude impl maps [`RelayError`] into it WITHOUT losing the variant
+/// distinctions send:relay's wording needs later (W5 must reproduce the exact
+/// verb wording — the `RelayFailed` variant carries the structured `RelayError`,
+/// not a flattened string). The daemon impl uses the non-relay variants only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InjectError {
+    /// No relay port resolved for the target session (claude:
+    /// send.ts:406-409 "has no relay."). Carries the session id/name context.
+    NoTransport(String),
+    /// The relay transport reported a failure — the structured [`RelayError`] is
+    /// preserved so W5 can map each class to its exact send:relay wording.
+    RelayFailed(RelayError),
+    /// A precondition on the inject failed (daemon: a steer with a stale
+    /// expected-turn-id). Carries the human-facing reason.
+    Precondition(String),
+}
+
+impl std::fmt::Display for InjectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InjectError::NoTransport(s) => write!(f, "no transport for \"{s}\""),
+            InjectError::RelayFailed(e) => write!(f, "relay failed: {e}"),
+            InjectError::Precondition(s) => write!(f, "precondition failed: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for InjectError {}
+
+// ===========================================================================
+// 2.2 — The trait.
+// ===========================================================================
+
+/// The provider seam (codex-p1-spec section 2.2). The caller owns
+/// transport/source; the provider owns INTERPRETATION + ASSEMBLY.
+///
+/// Signature note (recorded per codex-p1-spec section 2.2): `boot_waiter` takes
+/// `&ProviderFx<'a>` and returns `Box<dyn BootWaiter + 'a>` — the waiter borrows
+/// the mux/clock/sleeper out of `fx`, so the returned box is bounded by `fx`'s
+/// lifetime. `inject` carries the message/from like the send:relay verb body;
+/// it does NOT carry a port/transport handle in its SIGNATURE (the port arrives
+/// via `fx.relay_port`, W5's resolution feeds it) — that keeps the banned
+/// claude-shaped contortion out of the trait.
+pub trait Provider {
+    /// Stable provider id — the registry/dispatch key AND the `--json` value.
+    fn id(&self) -> &'static str;
+
+    /// How this provider's sessions are hosted (data, not a branch — R4).
+    fn hosting(&self) -> Hosting;
+
+    /// Launch command/flags/env resolution. The impl resolves its OWN config
+    /// surfaces from `fx` (claude: `claude_bin` + `claude_flags` precedence
+    /// env > config.toml-at-SbPaths > DEFAULT_FLAGS + `build_new_extra_args`,
+    /// byte-identical assembly to today).
+    fn launch_plan(&self, fx: &ProviderFx, req: &LaunchRequest) -> LaunchPlan;
+
+    /// The boot-readiness waiter the create path drives (claude: the existing
+    /// [`EventBootWaiter`] machinery behind [`BootWaiter`]; daemon fixture:
+    /// handshake/notification-shaped readiness).
+    fn boot_waiter<'a>(&self, fx: &'a ProviderFx<'a>) -> Box<dyn BootWaiter + 'a>;
+
+    /// Status derivation from the provider's NATIVE raw signal. claude: raw =
+    /// the registry row's status STRING (join.rs:307-317 semantics; non-string
+    /// or unknown → None and the caller picks the fallback). Daemon: raw = a
+    /// `thread/status/changed`-shaped notification object.
+    fn parse_status(&self, raw: &serde_json::Value) -> Option<SessionStatus>;
+
+    /// The provider's transcript ROOT, resolved off `fx` (codex-p2-spec section
+    /// 6.4 — the ONE recorded signature addition). claude returns
+    /// `fx.paths.projects_dir` (the call sites that pass `projects_dir` AT the
+    /// call site switch to `provider.transcript_path(&provider.transcript_root(fx),
+    /// &key)` mechanically — the root VALUE is byte-identical, so claude behavior
+    /// is unchanged; W5/W6 own that switch). codex resolves `$CODEX_HOME/sessions`
+    /// off `fx.env` ONLY (L9a — never raw `std::env`). The conformance suite pins
+    /// all three impls' roots.
+    fn transcript_root(&self, fx: &ProviderFx) -> PathBuf;
+
+    /// Transcript location + keying (claude: `projects_dir` cwd-slug +
+    /// `<session-id>.jsonl`; daemon: date/thread-id keyed, NO cwd in the key).
+    /// `state_root` is the provider's transcript root, injected.
+    fn transcript_path(&self, state_root: &Path, key: &SessionKey) -> Option<PathBuf>;
+
+    /// Scan all transcripts under `state_root` (claude: `jsonl::scan_all`).
+    fn scan_transcripts(&self, state_root: &Path) -> Vec<TranscriptMeta>;
+
+    /// Parse one transcript's stats (claude: `jsonl::read_stats`; daemon: a
+    /// rollout-SHAPED parser over fixture lines — shape only, no codex code).
+    fn transcript_stats(&self, path: &Path, include_preview: bool) -> JsonlStats;
+
+    /// Resume/fork argv fragment (claude: `["--resume", id]` (+ `--fork-session`
+    /// exactly as the bin resume verb assembles today)).
+    fn resume_args(&self, key: &SessionKey, fork: bool) -> Vec<String>;
+
+    /// The ADD-5 driver verb. claude: resolve the relay port (W5 owns the full
+    /// sidecar+ancestry resolution; the port arrives via `fx.relay_port`) then
+    /// `RelayContract::send_message`. RelayContract STAYS the contract and
+    /// becomes this impl's transport. Returns the provider-side message/turn id.
+    fn inject(
+        &self,
+        fx: &ProviderFx,
+        key: &SessionKey,
+        message: &str,
+        from: &str,
+    ) -> Result<String, InjectError>;
+}
+
+// ===========================================================================
+// 2.3 — Dispatch (the read-back key, R1).
+// ===========================================================================
+
+/// The ONE registered claude provider (a `'static` singleton so `provider_for`
+/// can hand out `&'static dyn Provider` without allocation).
+static CLAUDE_PROVIDER: ClaudeProvider = ClaudeProvider;
+
+/// Resolve a provider id to its impl (codex-p1-spec section 2.3).
+///
+/// P1 registry: **claude-code only.** `"opencode"` is DELIBERATELY NOT an impl —
+/// the attach/kill/resume/send verbs keep their existing parked branches
+/// (byte-identical messages preserved, ADD-9a); it never resolves here. An
+/// UNKNOWN id → `None`, and every ACTING caller errors LOUDLY (lifecycle.rs:39
+/// pattern) and exits nonzero. The `"fixture-daemon"` id is ALSO not registered
+/// here: [`FixtureDaemonProvider`] is a FIXTURE (the conformance lane constructs
+/// it directly), not a production-dispatchable provider — registering it would
+/// make `sb new --provider fixture-daemon` bootable, which P1 must not do.
+pub fn provider_for(id: &str) -> Option<&'static dyn Provider> {
+    match id {
+        "claude-code" => Some(&CLAUDE_PROVIDER),
+        // P2 W3: codex is now resolvable (GATE-R RULED = (A) daemon-thread). The
+        // CLI fail-closed check + the supported-providers error string (which W4
+        // updates to list codex) live in the bin verb layer
+        // (src/bin/dispatch/verbs/lifecycle.rs:138 + :155 — NOT touched here).
+        "codex" => Some(&codex::CODEX_PROVIDER),
+        _ => None,
+    }
+}
+
+// ===========================================================================
+// ClaudeProvider — DELEGATES to the existing module homes (section 1.8).
+// ===========================================================================
+
+/// The claude-code provider. Every method DELEGATES to the existing claude home
+/// (codex-p1-spec section 1.8) — code is MOVED or CALLED, never re-implemented,
+/// so claude behavior is byte-identical to today (the W3-W5 rewires keep the
+/// existing create/resume/send units passing untouched).
+pub struct ClaudeProvider;
+
+impl Provider for ClaudeProvider {
+    fn id(&self) -> &'static str {
+        // model.rs:92-98 documents this is the stable provider id / --json value.
+        "claude-code"
+    }
+
+    fn hosting(&self) -> Hosting {
+        Hosting::MuxPane
+    }
+
+    /// Reproduces EXACTLY what the create path builds today: `claude_bin` +
+    /// `claude_flags` (env > config-toml > DEFAULT_FLAGS, launch.rs:11-57) +
+    /// `build_new_extra_args`. The argv is the SAME token list `build_claude_cmd`
+    /// single-quotes (build_claude_cmd is the SHELL-assembly step the mux owns;
+    /// the trait yields the pre-quote argv + env, W3 feeds it to the mux). Pinned
+    /// against the launch.rs functions directly by `claude_launch_plan_matches_*`.
+    fn launch_plan(&self, fx: &ProviderFx, req: &LaunchRequest) -> LaunchPlan {
+        // `fx.env` is `&dyn Env`; the blanket `impl Env for &T` (effects.rs) lets
+        // it satisfy the `&impl Env` these M1-frozen helpers take.
+        let bin = crate::launch::claude_bin(&fx.env);
+        let flags = crate::launch::claude_flags(&fx.env, &fx.config_toml_path());
+        let opts = crate::launch::NewOpts {
+            resume: req.resume.clone(),
+            fork: req.fork,
+            agent: req.agent.clone(),
+            model: req.model.clone(),
+        };
+        let extra = crate::launch::build_new_extra_args(&req.name, &opts, &req.passthrough, &flags);
+        // argv = [bin, ...flags, ...extra] — the exact token order
+        // build_claude_cmd quotes (launch.rs:150-157), pre-shell-assembly.
+        let mut argv = Vec::with_capacity(1 + flags.len() + extra.len());
+        argv.push(bin);
+        argv.extend(flags);
+        argv.extend(extra);
+        // env: claude resolves its backend env via the F1 session-env-file
+        // mechanism at the create path, NOT inline argv env — so the trait-level
+        // LaunchPlan env is empty for claude (the F1 file is a create.rs concern,
+        // W3 keeps it there). Documented so W3's rewire knows env stays []: today.
+        LaunchPlan { argv, env: vec![] }
+    }
+
+    /// The SAME [`EventBootWaiter`] machinery the create path constructs today
+    /// (create.rs wires it from boot.rs). Borrows the mux/clock/sleeper out of
+    /// `fx`; panics with a clear message if a boot effect is absent (a caller
+    /// driving boot MUST supply them — units that never drive boot pass None and
+    /// never call this).
+    fn boot_waiter<'a>(&self, fx: &'a ProviderFx<'a>) -> Box<dyn BootWaiter + 'a> {
+        let mux = fx
+            .mux
+            .expect("ClaudeProvider::boot_waiter requires fx.mux (the boot history/send target)");
+        let clock = fx
+            .clock
+            .expect("ClaudeProvider::boot_waiter requires fx.clock");
+        let sleeper = fx
+            .sleeper
+            .expect("ClaudeProvider::boot_waiter requires fx.sleeper");
+        // Fix-A (RESPEC-DELTA §4): the relay-sidecar readiness phase makes up-live =
+        // pid + idle + the child's relay sidecar present, so the relay-default
+        // priming transport is sound (§4.3). `relay_dir` is the global
+        // `<home>/.claude/relay` sidecar dir.
+        //
+        // OPT-IN (SB_BOOT_AWAIT_RELAY): dispatch's `boot_waiter` is SHARED by every
+        // claude boot, but only the relay-DEFAULT PRIMING create-head needs the
+        // sidecar wait — and a fresh dispatch boot cannot tell a relay-priming boot
+        // from a non-relay one (a plain `sb start`, or a fakerepl-backed test boot
+        // that never writes a sidecar: `fx.relay`/`relay_port` are None on EVERY
+        // boot path, lifecycle.rs:1013). So the phase is engaged only when the
+        // caller opts in via SB_BOOT_AWAIT_RELAY — armed by the commission/priming
+        // create-head; OFF for plain starts, resume, and the fakerepl suite (which
+        // keeps the pre-Fix-A pid+idle readiness, byte-for-byte). See the
+        // BUILD-REPORT bubble: whether to keep this opt-in, default it on with a
+        // fakerepl sidecar-emulation, or scope it bond-side is a coordinator call.
+        let waiter = crate::boot::EventBootWaiter::new(
+            mux,
+            fx.socket_dir.clone(),
+            fx.paths.sessions_dir.clone(),
+            clock,
+            sleeper,
+        );
+        let await_relay = fx
+            .env
+            .var("SB_BOOT_AWAIT_RELAY")
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        Box::new(if await_relay {
+            waiter.with_relay_dir(fx.paths.relay_dir.clone())
+        } else {
+            waiter
+        })
+    }
+
+    /// join.rs:307-317 semantics: trust the registry status STRING through
+    /// [`SessionStatus::parse`]; a non-string or unknown value → None (the caller
+    /// picks the fallback — join uses Idle). We do NOT change join.rs (W6).
+    fn parse_status(&self, raw: &serde_json::Value) -> Option<SessionStatus> {
+        // The claude raw signal is the registry row's status STRING. A daemon
+        // notification OBJECT is `as_str() == None` → None (the cross-feed
+        // negative control: a daemon notification fed here returns None).
+        raw.as_str().and_then(SessionStatus::parse)
+    }
+
+    /// The claude transcript root is `fx.paths.projects_dir` — the SAME value the
+    /// gather/wait call sites pass at the call site today (codex-p2-spec section
+    /// 6.4). The mechanical switch (W5/W6) is byte-identical because the root
+    /// VALUE is unchanged.
+    fn transcript_root(&self, fx: &ProviderFx) -> PathBuf {
+        fx.paths.projects_dir.clone()
+    }
+
+    /// `jsonl::find_jsonl_path` over `projects_dir` (cwd-slug keying). `state_root`
+    /// IS the projects dir. The cwd-slug tier needs `key.cwd`; pid is NEVER read.
+    fn transcript_path(&self, state_root: &Path, key: &SessionKey) -> Option<PathBuf> {
+        crate::jsonl::find_jsonl_path(state_root, key.id, key.cwd)
+    }
+
+    fn scan_transcripts(&self, state_root: &Path) -> Vec<TranscriptMeta> {
+        crate::jsonl::scan_all(state_root)
+    }
+
+    fn transcript_stats(&self, path: &Path, include_preview: bool) -> JsonlStats {
+        crate::jsonl::read_stats(path, include_preview)
+    }
+
+    /// `["--resume", id]` (+ `--fork-session`) — the EXACT fragment the bin
+    /// resume verb assembles (resume.rs:130 builds `["--resume", session_id]`;
+    /// the fork shape is `--fork-session`, build_new_extra_args:123). pid is
+    /// NEVER read.
+    fn resume_args(&self, key: &SessionKey, fork: bool) -> Vec<String> {
+        let mut args = vec!["--resume".to_string(), key.id.to_string()];
+        if fork {
+            args.push("--fork-session".to_string());
+        }
+        args
+    }
+
+    /// Resolve the relay transport and send through the CONTRACT (ADD-5). The
+    /// port arrives via `fx.relay_port` — W5 owns the full sidecar+ancestry
+    /// resolution at the verb layer (the lib-side `fast_relay_lookup` is pure but
+    /// its INPUTS — pid entries / sidecars / ppid map — are gathered with
+    /// bin-crate effects RealEnv/HttpRelayProbe/RealProcessTable, send_relay.rs:
+    /// 146-169, which do not belong in lib). RESIDUAL FOR W5: feed `fx.relay_port`
+    /// from that resolution and map `InjectError::RelayFailed(RelayError)` back to
+    /// each class's exact send:relay wording (send_relay.rs `send_err_text`).
+    fn inject(
+        &self,
+        fx: &ProviderFx,
+        key: &SessionKey,
+        message: &str,
+        from: &str,
+    ) -> Result<String, InjectError> {
+        let Some(port) = fx.relay_port else {
+            return Err(InjectError::NoTransport(key.id.to_string()));
+        };
+        let relay = fx
+            .relay
+            .ok_or_else(|| InjectError::NoTransport(key.id.to_string()))?;
+        relay
+            .send_message(port, message, from)
+            .map_err(InjectError::RelayFailed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_file(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    // --- codex P1 W7: provider-routed transcript_path IS jsonl::find_jsonl_path ---
+    //
+    // The gather + send/wait `find_jsonl_path` call sites route through
+    // `ClaudeProvider::transcript_path` (codex-p1-spec section 7.2). That method
+    // DELEGATES to `jsonl::find_jsonl_path` — this is call-site ROUTING only, the
+    // resolved path must be IDENTICAL for every constructible row. These pin that
+    // delegation across both `find_jsonl_path` tiers (cwd-slug tier + fallback
+    // scan tier) for a representative jail layout.
+    //
+    // MUTATION EVIDENCE (CR-3): a keying drift in `transcript_path` — dropping
+    // `key.cwd` (cwd-slug lost → the cwd tier misses, path differs) or mangling
+    // `key.id` (the filename differs) — reds the equality assertions below.
+
+    #[test]
+    fn claude_transcript_path_equals_find_jsonl_path_cwd_tier() {
+        let tmp = TempDir::new().unwrap();
+        let projects = tmp.path();
+        let cwd = "/home/user/proj";
+        let sid = "abc-123";
+        let slug = crate::jsonl::cwd_to_project_path(cwd);
+        let path = projects.join(&slug).join(format!("{sid}.jsonl"));
+        write_file(&path, "{}");
+
+        let key = SessionKey {
+            id: sid,
+            name: Some("w"),
+            cwd: Some(cwd),
+            pid: Some(42),
+        };
+        let via_provider = ClaudeProvider.transcript_path(projects, &key);
+        let via_jsonl = crate::jsonl::find_jsonl_path(projects, sid, Some(cwd));
+        assert_eq!(via_provider, via_jsonl, "cwd-tier: routing == direct");
+        assert_eq!(
+            via_provider,
+            Some(path),
+            "resolves the cwd-slug + <id>.jsonl"
+        );
+    }
+
+    #[test]
+    fn claude_transcript_path_equals_find_jsonl_path_scan_tier() {
+        // cwd-derived dir does not contain it; the fallback scan tier finds it.
+        let tmp = TempDir::new().unwrap();
+        let projects = tmp.path();
+        let sid = "xyz-789";
+        let path = projects
+            .join("-some-other-dir")
+            .join(format!("{sid}.jsonl"));
+        write_file(&path, "{}");
+
+        let key = SessionKey {
+            id: sid,
+            name: None,
+            cwd: Some("/wrong/cwd"), // misses the cwd tier → fallback scan.
+            pid: None,               // pid is NEVER read by transcript_path.
+        };
+        let via_provider = ClaudeProvider.transcript_path(projects, &key);
+        let via_jsonl = crate::jsonl::find_jsonl_path(projects, sid, Some("/wrong/cwd"));
+        assert_eq!(via_provider, via_jsonl, "scan-tier: routing == direct");
+        assert_eq!(via_provider, Some(path), "resolves via the fallback scan");
+    }
+
+    #[test]
+    fn claude_transcript_path_missing_is_none_like_find_jsonl_path() {
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp.path().join("-d").join("other.jsonl"), "{}");
+        let key = SessionKey {
+            id: "nope",
+            name: None,
+            cwd: None,
+            pid: None,
+        };
+        let via_provider = ClaudeProvider.transcript_path(tmp.path(), &key);
+        let via_jsonl = crate::jsonl::find_jsonl_path(tmp.path(), "nope", None);
+        assert_eq!(via_provider, via_jsonl);
+        assert_eq!(via_provider, None);
+    }
+}

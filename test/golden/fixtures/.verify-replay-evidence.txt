@@ -1,0 +1,29 @@
+# Verify-replay evidence (tick proof) — macOS fresh-jail end-to-end green
+# pin 8c59ec4, zmx 0.6.0, stub 1.8.1 (sha 20a5133), Darwin arm64, verified 2026-06-05T19:31:23Z
+# (0b DELTA-STRENGTH W3.1 consolidated close, impl-0bw-w31).
+# Each row: verify.sh --scenario in a FRESH jail (stub-backed where applicable);
+# stub provenance OK (installed 1.8.1 == stamped) where stub-backed.
+# A PASS = double-recorded + admitted + replays green end-to-end -> tick.
+#
+attach_detach_reattach: [verify] PASS: attach-detach-reattach
+attach_first_window: [verify] PASS: attach-first-window
+build_claude_cmd: [verify] PASS: build-claude-cmd
+exit_codes: [verify] PASS: exit-codes
+history: [verify] PASS: history
+hostile_cwd: [verify] PASS: hostile-cwd
+ls_info_json: [verify] PASS: ls-info-json
+neg_boot_timeout: [verify] PASS: neg-boot-timeout
+neg_relay_unhealthy: [verify] PASS: neg-relay-unhealthy
+neg_two_stage_tolerance: [verify] PASS: neg-two-stage-tolerance
+neg_wait_no_reply: [verify] PASS: neg-wait-no-reply
+new_session_trace: [verify] PASS: new-session-trace
+noise_stale: [verify] PASS: noise-stale
+relay_health: [verify] PASS: relay-health
+send_pty_chunked_idle: [verify] PASS: send-pty-chunked-idle
+send_pty_paste_burst: [verify] PASS: send-pty-paste-burst
+termios_report: [verify] PASS: termios-report
+wrong_typed_timestamp: [verify] PASS: wrong-typed-timestamp
+zmx_dir_resolution: [verify] PASS: zmx-dir-resolution
+TICK SUMMARY: 19/19 macOS gate rows replay green (incl. NEW send-pty-chunked-idle + strengthened send-pty-paste-burst).
+# build-claude-cmd-config (Rust-target EXPECTATION-ONLY, ADR-0010 a) is NOT in this TS-replay set; ticked vs the Rust engine at A2 pass-(b) (orc-3).
+# Linux siblings (termios-report-linux, zmx-dir-resolution-linux) replay IN-VM -> .verify-replay-evidence-linux*.txt.

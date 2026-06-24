@@ -1,0 +1,26 @@
+# DRYRUN-NOT-ORACLE
+# scenario=attach-detach-reattach class=semantic-backlog-scroll fixture=fixtures/attach-detach-reattach/normalized/reattach.trace
+# ts-head=2f1c841 (CURRENT main, NOT a pin) recorded=2026-06-04T20:10:25Z
+# provisional=0 partial=1
+# NOTE: evidence only — NOT a golden expectation. Part 2 records the real fixture.
+#---raw-capture-below---
+ZLINE 1
+ZLINE 2
+ZLINE 3
+ZLINE 4
+ZLINE 5
+ZLINE 6
+ZLINE 7
+ZLINE 8
+ZLINE 9
+ZLINE 10
+ZLINE 11
+ZLINE 12
+ZLINE 13
+ZLINE 14
+ZLINE 15
+ZLINE 16
+ZLINE 17
+ZLINE 18
+ZLINE 19
+ZLINE 20

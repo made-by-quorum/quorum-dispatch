@@ -1,0 +1,3 @@
+case=XDG_RUNTIME_DIR_tier expected=/run/user/501/sbrg-runs/w42z/xdg_runtime/zmx resolved=/run/user/501/sbrg-runs/w42z/xdg_runtime/zmx
+case=TMPDIR_collapse_tier expected=/run/user/501/sbrg-runs/w42z/tmp/dup/zmx-501 resolved=/run/user/501/sbrg-runs/w42z/tmp/dup/zmx-501
+platform=linux uid=501

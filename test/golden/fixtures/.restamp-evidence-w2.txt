@@ -1,0 +1,39 @@
+# Re-stamp DORMANCY-REPLAY evidence — 0b DELTA-STRENGTH W2 (stub 1.7.0 -> 1.8.0)
+# R1 precedent (orc-2 ruling 2026-06-05; .restamp-evidence.txt) + the A4 pass-(b)
+# extension (orc-3 ruling relay-1780664987618-6, driver dryrun/passb-restamp-replay.sh):
+# re-stamp WITHOUT re-record is permitted ONLY for a provably-DORMANT stub edit —
+# env/prompt-gated + default-byte-identical + REPLAY-VERIFIED. The two MOST
+# stub-sensitive rows (send-pty-paste-burst + relay-health) were replayed under the
+# COMMITTED 1.8.0 stub with ALL new seams UNSET (STUB_NO_QUEUE / STUB_TWO_STAGE_PID_WRITE
+# / STUB_TWO_STAGE_GAP_MS / STUB_COUNT_PRE_PID_STDIN unset; the STTY reporter is
+# prompt-gated and never submitted), in FRESH jails, replay basis = pinned TS 8c59ec4
+# (prep clone), TMPDIR=/tmp. Normalized output MUST byte-match the committed golden
+# (sha compare). BOTH byte-match -> dormancy proven -> re-stamp authorized.
+# Captured: 2026-06-05 (Darwin arm64).
+#
+=== step 1: dormancy replay (committed 1.8.0 stub, seams UNSET, fresh jails, pinned TS 8c59ec4) ===
+# committed stub version: stub-claude-1.8.0 (2026-06-05)
+send_pty_paste_burst  replay_sha=0558a82d76018d7b51398800e456ca764780e28fe06546d3494bcf8375964352  golden_sha=0558a82d76018d7b51398800e456ca764780e28fe06546d3494bcf8375964352  BYTE-MATCH
+relay_health  replay_sha=e67e2c2ceac9bd3a5cd631b6a6d000f679ca55cf83d7489ec6d963c3eb39485e  golden_sha=e67e2c2ceac9bd3a5cd631b6a6d000f679ca55cf83d7489ec6d963c3eb39485e  BYTE-MATCH
+#
+# Interpretation: replay_sha == golden_sha for BOTH rows -> the 1.7.0->1.8.0 edit
+# is provably DORMANT (the four new seams are env/prompt-gated; the default path is
+# byte-identical). send_pty_paste_burst's match also equals the v1.5.1 dormancy
+# evidence (0558a82d...), confirming the default output is stable across the whole
+# stub version chain.
+#
+=== step 2: re-stamp (sha before/after) ===
+# old stub sha (1.7.0, as-recorded) = 1bfc5a8a859624dd4e0791c83fc0f8f87fef854fb82b14b1fed968ea161d6ab9
+# new stub sha (1.8.0, committed)   = 581ad3c32b5ba393e5e6067c6462eea72c863a48f2637399425e113840888056
+# Re-stamped stub_sha256 in 18 proof files (RECORDED-FROM + MATCH-PROOF, incl. the
+# zmx-dir-resolution macos/linux platform siblings) and the paired stub_version
+# line (1.7.0 -> 1.8.0) in the 9 RECORDED-FROM files that carry it (README pairs
+# stub_sha256/stub_version; the version line is documentary but must stay coherent
+# with the sha so a reader is not told "sha=1.8.0, version=1.7.0").
+#
+=== step 3: git-diff scope check ===
+# The re-stamp commit touches stub-sha + paired stub_version LINES ONLY:
+#   18x  -stub_sha256=1bfc5a8a...  / +stub_sha256=581ad3c3...
+#    9x  -stub_version=...1.7.0...  / +stub_version=...1.8.0...
+# No rawA/rawB/normalized/normalizer/scenario/pin/host/proof_generated line changed
+# (verified: `git diff -- test/golden/fixtures/` shows no non-stub-stamp +/- line).

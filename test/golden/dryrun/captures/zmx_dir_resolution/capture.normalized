@@ -1,0 +1,3 @@
+case=ZMX_DIR_explicit input=<ZMX_DIR>
+case=XDG_RUNTIME_DIR tier=<XDG_RUNTIME>
+case=TMPDIR_fallback input=<TMPDIR> expect=collapsed

@@ -1,0 +1,7 @@
+# RECORDED-FROM pin=8c59ec4 (verified-diff-carry from 0d0fa9e; proof exec/a5-grec-pin-carry-proof.md; orc-3 ruling relay-1780671157930-19) verb=reconcile mode=--dry-run (ADD-12: destructive OFF on macOS)
+# NON-DRY 'Repaired' line: LIMA-DEFERRED (G-X1) — TS sweeps literal /tmp; sweep-belt refuses on brano.
+$ sb reconcile --dry-run (clean — all agree)
+Nothing to reconcile — all sources of truth agree.
+$ sb reconcile --dry-run (forged I1 dead-PID registry → Would repair)
+Would repair 1 drift item(s):
+  tombstone: sbrg-<RUNID>-deadreg (pid <PID> dead)

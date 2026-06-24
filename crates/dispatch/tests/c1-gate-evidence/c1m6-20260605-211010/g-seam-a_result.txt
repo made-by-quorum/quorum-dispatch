@@ -1,0 +1,18 @@
+G-SEAM(a) VERDICT: PASS — 12/12 reattach-during-stream cycles, final-pre-detach line present each, under parallel load
+
+cycle 0: final-pre-detach idx=Some(14), present-post-reattach=true
+cycle 1: final-pre-detach idx=Some(42), present-post-reattach=true
+cycle 2: final-pre-detach idx=Some(74), present-post-reattach=true
+cycle 3: final-pre-detach idx=Some(101), present-post-reattach=true
+cycle 4: final-pre-detach idx=Some(127), present-post-reattach=true
+cycle 5: final-pre-detach idx=Some(156), present-post-reattach=true
+cycle 6: final-pre-detach idx=Some(186), present-post-reattach=true
+cycle 7: final-pre-detach idx=Some(211), present-post-reattach=true
+cycle 8: final-pre-detach idx=Some(241), present-post-reattach=true
+cycle 9: final-pre-detach idx=Some(268), present-post-reattach=true
+cycle 10: final-pre-detach idx=Some(296), present-post-reattach=true
+cycle 11: final-pre-detach idx=Some(324), present-post-reattach=true
+daemon RSS=Some(7424) KB (GATE-B2 CALIBRATION CAVEAT: macOS RSS resident-growth-only-meaningful; absolute value is NOT a hard gate — recorded for trend only)
+CYCLES: 12/12 passed (run count)
+PARALLEL LOAD: 2 CPU-burn generators ran during the cycles (loaded-brano lane)
+

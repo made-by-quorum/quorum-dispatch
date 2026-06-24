@@ -1,0 +1,44 @@
+# WART-WAVE M5 EVIDENCE — W8 bin-layer wiring: green end-to-end + RED-without-wiring differential
+# date: 2026-06-06T01:45:09Z
+# Run A: NEW scenario legs vs the FIXED binary (this branch) — all green incl. W8-TRUNC exit-1.
+# Run B: SAME legs vs the f18fd69 binary (M4: verify LIB present, bin CALL-SITE absent) +
+#        the NEW fakerepl (knobs needed by the harness) — W8-TRUNC must go RED (silent exit-0):
+#        proves the lifecycle.rs call-site, and only it, is the belt (spec red-team R5).
+# NOTE: this scenario is the QA-lane live row (A4_RUN_LIVE gate; live rows are not in per-push
+#       CI — house practice for a2/a3/a5 live rows too). Spec §4 'CI-resident' was WRONG — 
+#       corrected here; the gate report carries the lane note.
+
+== RUN A: fixed binary (expect PASS=9 FAIL=0) ==
+  [PASS] accept-run1            exit 0 + 'Prompt delivered to' marker
+  [PASS] accept-run2            exit 0 + 'Prompt delivered to' marker
+  [PASS] stall-run1             exit 10 + WARNING block + session survives
+  [PASS] stall-run2             exit 10 + WARNING block + session survives
+  [PASS] no-prompt              exit 0 (10 unreachable without -p)
+  [PASS] refuse-clean           exit 13 (belt refuses a clean env)
+  [PASS] refuse-spoof           exit 13 on SB_HOME coherence (not just HOME shape)
+  [PASS] w8-trunc               exit 1 + named truncation error after went-busy
+  [PASS] w8-accept-chunked      exit 0 verified (intact chunked delivery not punished)
+PASS=9 FAIL=0
+
+== RUN B: pre-wiring sb @ f18fd69 + new fakerepl (expect exactly w8-trunc FAIL: silent exit-0 despite truncation) ==
+  exit=0
+  [PASS] accept-run1            exit 0 + 'Prompt delivered to' marker
+  exit=0
+  [PASS] accept-run2            exit 0 + 'Prompt delivered to' marker
+  exit=10  session-alive=1 (expect 1)
+  [PASS] stall-run1             exit 10 + WARNING block + session survives
+  exit=10  session-alive=1 (expect 1)
+  [PASS] stall-run2             exit 10 + WARNING block + session survives
+  exit=0
+  [PASS] no-prompt              exit 0 (10 unreachable without -p)
+  exit=13 (expect 13)
+  [PASS] refuse-clean           exit 13 (belt refuses a clean env)
+  exit=13 (expect 13)
+  [PASS] refuse-spoof           exit 13 on SB_HOME coherence (not just HOME shape)
+  --- W8-TRUNC (name=sbrg-wb43434-w8trunc1) ---
+  exit=0 (expect 1)
+  [FAIL] w8-trunc                exit=0(want 1); missing 'payload truncated in delivery' error; missing the no-retry guidance; stdout claims delivery despite truncation;
+  exit=0 (expect 0)
+  [PASS] w8-accept-chunked      exit 0 verified (intact chunked delivery not punished)
+PASS=8 FAIL=1
+FAILED ROWS: w8-trunc

@@ -1,0 +1,122 @@
+# ACK-3 mutation-evidence run (ADD-17 / CR-3) | 0d4b6c5 | 2026-06-06 12:55 EDT
+# Command: scripts/build-lock.sh cargo test -p sb --features mutation-evidence
+
+     Running unittests src/lib.rs (target/debug/deps/sb-9b6baa9dc17fbf4f)
+test backends::tests::unknown_name_message_carries_no_values ... ok
+test bootstrap::tests::bootstrap_idempotent_same_state_both_runs ... ok
+test bootstrap::tests::paths_default_to_home_dot_sb ... ok
+test bootstrap::tests::paths_honor_sb_home_override ... ok
+test codes::tests::same_id_reuses_code_no_offset_bump ... ok
+test codes::tests::deterministic_same_input_same_codes ... ok
+test create::tests::name_reject_plain_names_unaffected ... ok
+test create::tests::name_in_use_fast_path ... ok
+test create::tests::name_reject_redteam_pair_first_rejected_second_fine ... ok
+test create::tests::name_reject_each_class_zero_mux ... ok
+test events::tests::g5_offset_absent_verdict_carries_time_window_attribution ... ok
+test events::tests::me_g4_terminal_set_pollution_would_flip_the_trap ... ok
+test events::tests::me_watchguard_deletion_shape_fails_the_row_predicate ... ok
+test events::tests::me_add20_sha_first_shrink_shape_fails_the_order ... ok
+test events::tests::me_g1_cap_56_overflows_the_bound ... ok
+test events::tests::me_add20_worst_case_preview_arithmetic ... ok
+test events::tests::reader_merges_sessionid_and_byname_files ... ok
+test fmt::tests::relative_time_tiers ... ok
+test fmt::tests::shorten_path_outside_home_untouched ... ok
+test gc::tests::relative_time_buckets ... ok
+test gc::tests::trash_name_shape ... ok
+test join::tests::embedded_by_name_links_live_row_when_ppid_edge_invisible ... ok
+test join::tests::empty_registry_name_falls_through_to_jsonl_name ... ok
+test join::tests::zmx_lane_does_not_name_match_live_rows_byte_stable ... ok
+test jsonl::tests::agent_name_takes_precedence_and_blocks_later_ai_title ... ok
+test kill::tests::fallback1_by_name_in_live_list_resolves_dir ... ok
+test kill::tests::fallback1_prefers_resolved_zmx_name_over_session_name ... ok
+test kill::tests::no_target_when_no_name_and_no_pid ... ok
+test kill::tests::fallback2_skipped_when_name_already_resolved ... ok
+test launch::tests::build_new_extra_args_name_first_then_opts_then_passthrough ... ok
+test launch::tests::session_env_file_path_is_home_rooted ... ok
+test paths::tests::empty_sb_home_falls_back_to_default ... ok
+test paths::tests::from_home_env_default_state_dir ... ok
+test paths::tests::from_home_env_honors_sb_home_override ... ok
+test ping::tests::single_ambiguous_name_is_error_exit_3 ... ok
+test ping::tests::prefix_filters_by_name_prefix_only ... ok
+test ping::tests::single_ambiguous_name_json_lists_matches ... ok
+test registry::tests::claim_concurrency_exactly_one_winner_same_name ... ok
+test registry::tests::wrong_typed_name_number_degrades ... ok
+test relay::tests::fast_lookup_exact_name_and_ancestry ... ok
+test relay::tests::fast_lookup_no_name_match_is_none ... ok
+test resolve::tests::exact_name_unique ... ok
+test resolve::tests::name_prefix_tier ... ok
+test resolve::tests::two_live_same_name_is_ambiguous ... ok
+test resolve::tests::zmx_name_exact_or_prefix_tier ... ok
+test resume::tests::empty_name_rejected ... ok
+test resume::tests::empty_opt_and_name_fall_through ... ok
+test resume::tests::session_name_when_no_opt ... ok
+test resume::tests::zmx_name_opt_wins ... ok
+test sbmux_dir::tests::empty_sb_home_falls_back_to_default ... ok
+test sbmux_dir::tests::tier1_xdg_runtime_dir_wins ... test events::tests::events_test_child ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 697 filtered out; finished in 0.02s
+test sbmux_dir::tests::tier2_sb_home_default_under_home ... ok
+test sbmux_dir::tests::tier2_sb_home_only_jail ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 697 filtered out; finished in 0.02s
+test stray::tests::two_procs_same_dir_take_distinct_transcripts ... ok
+test stray::tests::two_transcripts_same_dir_most_recent_wins ... ok
+test survey::tests::format_name_width_floor_is_5 ... ok
+test telemetry::tests::fold_name_reuse_misattributes_via_name_fallback_named_limitation ... ok
+test zmx_dir::tests::tier_xdg_runtime_dir ... ok
+test result: ok. 698 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+     Running unittests src/bin/sb/main.rs (target/debug/deps/sb-08bf3176d785b11d)
+test cli::tests::whoami_alias_name_parses ... ok
+test verbs::lifecycle::tests::deliver_outcome_accepted_is_0 ... ok
+test verbs::lifecycle::tests::deliver_outcome_pidfile_missing_is_1_not_10 ... ok
+test verbs::lifecycle::tests::deliver_outcome_stalled_is_10 ... ok
+test verbs::mark::tests::marks_path_default_under_home_dot_sb_state ... ok
+test verbs::mark::tests::marks_path_honors_sb_home_override ... ok
+test verbs::mark::tests::marks_path_none_when_home_unset ... ok
+test verbs::resume::tests::resume_boot_unconfirmed_line_is_byte_identical_both_phases ... ok
+test verbs::mark::tests::marks_land_under_sb_home_when_set_else_home_dot_sb ... ok
+test result: ok. 90 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/ack2_gate.rs (target/debug/deps/ack2_gate-8a92259c94185d5f)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.79s
+     Running tests/ack2_mutation_evidence.rs (target/debug/deps/ack2_mutation_evidence-2d7fae06d11b0b32)
+test me_priming_deletion_shape_fails_byname_row ... ok
+test me_g3_wait_timeout_deletion_shape_fails_exact_sequence ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ack3_matrix.rs (target/debug/deps/ack3_matrix-ca0f17ea9a4e41a2)
+test m1_frame_drop_event_streams ... ok
+test m1_frame_drop_exit11_expected_red_pending_add18 ... ok
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.35s
+     Running tests/ack3_mutation_evidence.rs (target/debug/deps/ack3_mutation_evidence-7beee694bef80aa6)
+test me_add18_exit_zero_shape_fails_the_contract_row ... ok
+test me_m1_daemon_log_presence_flips_the_discriminator ... ok
+test me_matrix_daemon_kill_switch_blanks_the_stream ... ok
+test me_m4_missing_eaten_report_fails_the_row ... ok
+test me_m5_plain_anchor_fails_the_mismatch_pin ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ack3_recovery.rs (target/debug/deps/ack3_recovery-99c0b0339e6db65f)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.58s
+     Running tests/c1_gate.rs (target/debug/deps/c1_gate-2af1d1bbfc6ca2ea)
+test result: ok. 13 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 20.44s
+     Running tests/create_claim_race.rs (target/debug/deps/create_claim_race-8d2c16502689d7d1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+     Running tests/embedded_mux_live.rs (target/debug/deps/embedded_mux_live-e690a194b3031473)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+     Running tests/fakerepl_gate.rs (target/debug/deps/fakerepl_gate-b295bc70a1c26aaa)
+test negctl_chunked_jumbo_passes_under_same_overflow_model_green ... ok
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 68.56s
+     Running tests/negative_control.rs (target/debug/deps/negative_control-8d3a94676fe8c127)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/parity.rs (target/debug/deps/parity-faf65c3f3669fd8e)
+test injected_home_discipline_assert_is_active ... ok
+test empty_home_renders_empty_array ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/relay_contract.rs (target/debug/deps/relay_contract-523ee6c4560d0942)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+     Running tests/relay_verb.rs (target/debug/deps/relay_verb-ac36d2e4a73e9305)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+     Running tests/roundtrip.rs (target/debug/deps/roundtrip-f27cc3f30f5ce706)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/secrets_integration.rs (target/debug/deps/secrets_integration-c603ccd29cffe6f0)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/verbs_a4.rs (target/debug/deps/verbs_a4-dba6a58dd5832fb4)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+   Doc-tests sb
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

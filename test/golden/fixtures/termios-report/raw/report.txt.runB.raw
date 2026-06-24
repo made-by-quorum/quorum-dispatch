@@ -1,0 +1,4 @@
+TERMIOS report_present=1
+TERMIOS icanon=1
+TERMIOS echo=1
+TERMIOS isig=1

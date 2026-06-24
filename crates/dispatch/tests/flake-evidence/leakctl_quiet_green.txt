@@ -1,0 +1,6 @@
+LEAK-GUARD CONTROL (leakctl_quiet)
+retention injected: NO (control-of-the-control) (800000 lines ~61MB through the PTY)
+metric: phys_footprint (resident+compressed; macOS proc_pid_rusage / Linux VmRSS+VmSwap)
+sampling: generation-keyed lockstep, one sample per confirmed 50k-line chunk
+q2_mean_kb=13588 q4_mean_kb=13728 delta_kb=140
+guard (10% relative AND >10240KB absolute): did not fire

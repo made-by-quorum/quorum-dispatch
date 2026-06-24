@@ -1,0 +1,86 @@
+# ACK-3 full-suite evidence (ADD-17 local-gate protocol)
+# Lead: sbr-ack3-lead | 2026-06-06 12:48-12:54 EDT | worktree: wt-ack3-lead
+# Tip: 0d4b6c5 (phase/ack-3) | base: main c1d96a3
+# Prebuild: scripts/build-lock.sh cargo build -p sbmux --bin sbmux -p fakerepl -p sb
+# Command: scripts/build-lock.sh cargo test --workspace   (exit code 0)
+# Note: one interleaved-output artifact at the g2 multi-process re-exec child
+# (events_test_child re-execs the lib test binary with a filter; its result line
+# ['1 passed; 692 filtered out'] interleaves mid-stream — benign, the parent
+# suite's own result line is separate and complete).
+
+     Running unittests src/main.rs (target/debug/deps/fakerepl-b389d5f78a432c1b)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ack1_seams.rs (target/debug/deps/ack1_seams-621bf83faa5412ea)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+     Running unittests src/lib.rs (target/debug/deps/golden-a0dd2fd8322594ca)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/dirty_state_corpus.rs (target/debug/deps/dirty_state_corpus-c31b8b2be1e13b72)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/sb-ff09826e6b9891de)
+test result: okok. 1 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out; finished in 0.02stest submit::tests::idle_two_write_with_chunks_then_cr_order ... ok
+test result: ok. 693 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+     Running unittests src/bin/sb/main.rs (target/debug/deps/sb-81e39c9a1b8ff5a2)
+test result: ok. 90 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/ack2_gate.rs (target/debug/deps/ack2_gate-88295801f3d041d7)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.99s
+     Running tests/ack2_mutation_evidence.rs (target/debug/deps/ack2_mutation_evidence-21ea8d0cd4aa9d52)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ack3_matrix.rs (target/debug/deps/ack3_matrix-8afa8be00e76f84d)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.18s
+     Running tests/ack3_mutation_evidence.rs (target/debug/deps/ack3_mutation_evidence-5633f2d4ea4adf50)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ack3_recovery.rs (target/debug/deps/ack3_recovery-fff6ab748b989be2)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.51s
+     Running tests/c1_gate.rs (target/debug/deps/c1_gate-25be41ce427a3491)
+test result: ok. 13 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 20.29s
+     Running tests/create_claim_race.rs (target/debug/deps/create_claim_race-bf2c52eb22a826b9)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+     Running tests/embedded_mux_live.rs (target/debug/deps/embedded_mux_live-68bbceec7eca6021)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+     Running tests/fakerepl_gate.rs (target/debug/deps/fakerepl_gate-2f2132a2347d3a9a)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 68.62s
+     Running tests/negative_control.rs (target/debug/deps/negative_control-e392f2cd465a169b)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/parity.rs (target/debug/deps/parity-bfc0d6a8f9f1d8da)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/relay_contract.rs (target/debug/deps/relay_contract-814069feb4949a2a)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+     Running tests/relay_verb.rs (target/debug/deps/relay_verb-5a26a2a8f94d5717)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+     Running tests/roundtrip.rs (target/debug/deps/roundtrip-de428b2a712180e8)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/secrets_integration.rs (target/debug/deps/secrets_integration-eba39430b8d8bcce)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+     Running tests/verbs_a4.rs (target/debug/deps/verbs_a4-a529d2e074aa5bf4)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+     Running unittests src/lib.rs (target/debug/deps/sbmux-af231b36f4f50eac)
+test result: ok. 821 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+     Running unittests src/main.rs (target/debug/deps/sbmux-8c8d92c8a94dc63f)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ack1_events.rs (target/debug/deps/ack1_events-c6dcfacee0243df9)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.90s
+     Running tests/b3_corpus.rs (target/debug/deps/b3_corpus-1023734bdcb690a7)
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/b3_r8_probe.rs (target/debug/deps/b3_r8_probe-3c06fabb11637253)
+test result: ok. 19 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/b3_replay.rs (target/debug/deps/b3_replay-a73fd872f77a4715)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.73s
+     Running tests/b3_resize.rs (target/debug/deps/b3_resize-620c36a5d4746c1e)
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.13s
+     Running tests/integration_tests.rs (target/debug/deps/integration_tests-769a8f3c36d28e50)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.81s
+   Doc-tests golden
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests sb
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests sbmux
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+# ANNOTATION: the sb lib line above was mangled by the g2 re-exec child's
+# interleaved output ('okok… 692 filtered out'). Clean re-run of that one
+# suite (same tip, 12:57 EDT):
+# Command: scripts/build-lock.sh cargo test -p sb --lib
+test result: test sendpty::tests::wait_loop_timeout_anchored_vs_unanchored ... okok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out; finished in 0.02s
+test result: ok. 693 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s

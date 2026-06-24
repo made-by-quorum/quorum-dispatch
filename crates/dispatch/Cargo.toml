@@ -1,0 +1,55 @@
+[package]
+name = "dispatch"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "sb engine crate (Rust rewrite). A1: data layer + Mux trait."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order: JSON key order is part of the ls --json parity surface (TS
+# JSON.stringify emits keys in object-literal insertion order; see render.rs).
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+libc = "0.2"
+# clap v4 BUILDER API (no derive) — A3 CLI surface. We map clap's parse errors to
+# commander phrasing + exit 1 ourselves (try_parse), so `derive`/`error-context`
+# auto-wiring is off; we keep `std` + `help`/`usage` for the help layout.
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
+# sbmux: the embedded mux backend (C1 D2). The EmbeddedMux adapter consumes the
+# M3 library client ops (sbmux::client::*_data + ensure_server_running) over the
+# protocol-v2 daemon. The adapter bridges sync `Mux` → async client via a
+# lazily-init current-thread tokio runtime + block_on, so we bring tokio + anyhow
+# in alongside it.
+sbmux = { path = "../sbmux" }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "io-util"] }
+anyhow = "1"
+# tungstenite: the codex app-server ws client (codex-p2-spec sections 3.1, 6.3,
+# sanctioned dep S-1). SYNC/blocking call-per-verb — matches the sync engine, NO
+# tokio/async creep. default-features=false drops ALL TLS (native-tls/rustls);
+# we enable ONLY `handshake` (the client ws upgrade — data-encoding/http/
+# httparse/sha1, NO TLS deps): codex talks plaintext ws://127.0.0.1:<port> on
+# localhost only, so no TLS feature is enabled (minimal dep tree — section 6.3).
+tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+# rusqlite: READ-ONLY best-effort cache over the codex $CODEX_HOME/state_5.sqlite
+# `threads` table (codex-p2-spec sections 6.3, 6.4, sanctioned dep S-1). NON-bundled
+# (default-features=false drops the `bundled` feature) → links the macOS system
+# libsqlite3 (verified present: /usr/lib/libsqlite3.dylib). EVERY error (open /
+# schema drift / query / wrong types) degrades to the rollout-scan fallback — the
+# index is a CACHE, never a contract (cut-ladder rung C2: drop to rollout-only).
+rusqlite = { version = "0.32", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
+# portable-pty: the fakerepl gate (tests/fakerepl_gate.rs) drives the M1 submit
+# discipline against the fakerepl binary over a REAL PTY. DEV-ONLY — it must
+# never appear in the normal build (verify: `cargo tree -p sb` shows it only
+# under [dev-dependencies]).
+portable-pty = "0.9"
+
+[features]
+# Negative-control evidence: deliberately-wrong decider outputs that the parity
+# tests MUST catch (gate item 6). Never enabled in normal builds.
+mutation-evidence = []

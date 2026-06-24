@@ -1,0 +1,21 @@
+Name:        alpha-worker
+Session ID:  live-aaaa-0001
+PID:         1001
+Status:      busy
+Provider:    claude-code
+zmx:         alpha-zmx (attached)
+zmx dir:     <ZMX>
+Relay:       localhost:8901
+Turns:       2
+Tokens:      12.5k
+CWD:         /work/projA
+Git branch:  feature/alpha
+Version:     1.2.3
+Started:     6/4/2024, 8:33:20 AM
+Last active: 6/4/2024, 10:00:00 AM (1h ago)
+
+── Recent conversation ──
+  You: Start the alpha task please
+  Claude: On it — beginning the alpha task now.
+  You: Looks good, continue.
+  Claude: Continuing the alpha task.

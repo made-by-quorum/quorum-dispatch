@@ -1,0 +1,52 @@
+=== v2 (instance-pinned marker-CAS reclaim) storm validation, 20 reps + 5 clean-contention, Sat Jun  6 20:05:48 EDT 2026 ===
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.57s
+storm-rep1 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.42s
+storm-rep2 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.48s
+storm-rep3 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.50s
+storm-rep4 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.51s
+storm-rep5 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.08s
+storm-rep6 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.55s
+storm-rep7 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.44s
+storm-rep8 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.53s
+storm-rep9 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.39s
+storm-rep10 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.49s
+storm-rep11 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.49s
+storm-rep12 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.55s
+storm-rep13 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.47s
+storm-rep14 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.50s
+storm-rep15 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.49s
+storm-rep16 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.39s
+storm-rep17 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.48s
+storm-rep18 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.51s
+storm-rep19 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.50s
+storm-rep20 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.44s
+clean-rep1 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.46s
+clean-rep2 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.54s
+clean-rep3 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.55s
+clean-rep4 binary_exit=0
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.41s
+clean-rep5 binary_exit=0
+=== v2 SUMMARY: 0/25 reps FAILED ===

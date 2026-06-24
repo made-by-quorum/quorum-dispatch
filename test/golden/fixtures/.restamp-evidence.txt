@@ -1,0 +1,17 @@
+# Re-stamp DORMANCY-REPLAY evidence (R1 precedent rider, orc-2 ruling 2026-06-05)
+# The 2 MOST-STUB-SENSITIVE rows replayed under the COMMITTED v1.5.1 stub with
+# ALL STUB_* seams UNSET, in fresh jails (in-VM, Lima sbtest, pin 0d0fa9e). The
+# normalized outputs MUST byte-match the recorded goldens (sha compare) — proving
+# the v1.5.0->v1.5.1 edit is provably DORMANT (env-gated + default-byte-identical),
+# which is the precondition for re-stamp-WITHOUT-re-record. BOTH byte-match ->
+# re-stamp authorized. Captured: 2026-06-05T05:45:29Z
+#
+=== rider step 1: dormancy replay (committed v1.5.1 stub, seams UNSET, fresh jails) ===
+# installed stub sha: 35de083c593df942065646bd5db8bac375853f73bffa19245d65673398f060af  version: stub-claude-1.5.1 (2026-06-05)
+new-session-trace  replay_sha=4610fb5a4136e4981b94f21a43c19ee6dbc45627a46c2f9165903c50c30c9920  golden_sha=4610fb5a4136e4981b94f21a43c19ee6dbc45627a46c2f9165903c50c30c9920  BYTE-MATCH
+send-pty-paste-burst  replay_sha=0558a82d76018d7b51398800e456ca764780e28fe06546d3494bcf8375964352  golden_sha=0558a82d76018d7b51398800e456ca764780e28fe06546d3494bcf8375964352  BYTE-MATCH
+#
+# Interpretation: replay_sha == golden_sha for BOTH rows -> dormancy proven.
+# stub v1.5.0 sha (as-recorded) = 71a8f622...; v1.5.1 sha (committed) = 35de083c...
+# The default-path output is identical across the two stub shas; only the
+# env-gated R2 seams differ. Re-stamp updates the stamped sha to 35de083c.

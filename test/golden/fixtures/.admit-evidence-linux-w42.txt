@@ -1,0 +1,19 @@
+# W4.2 Platform-aware admission evidence — Linux re-records at pin 8c59ec4
+# The commingled dual-platform corpora (zmx-dir-resolution, termios-report) are
+# each verified through ONE audited fixture_admit call in PLATFORM-AWARE mode
+# (FA_PLATFORMS="macos linux"): each platform set (RECORDED-FROM.<p> + MATCH-PROOF.<p>)
+# is pin-checked + HASH-PAIRED (proof normalized/rawA/rawB sha256 must match real
+# staging files) + the whole staging secret-scanned, BEFORE placement. The Linux
+# side is the W4.2 in-VM re-record (copy-back tar-stream); the macOS side carries
+# the already-committed W4.1/W3.7 re-record (pin 8c59ec4). Re-run on brano (host)
+# against the staged files. Captured: 2026-06-05T18:17:12Z
+#
+=== zmx-dir-resolution ===
+[admit]   platform macos: hash-pairing OK (normalized=resolution.txt, rawA+rawB matched)
+[admit]   platform linux: hash-pairing OK (normalized=resolution-linux.txt, rawA+rawB matched)
+[admit] ADMITTED zmx-dir-resolution -> /home/u/work/sb-rust/.claude/worktrees/agent-a9384fd1f459819b6/test/golden/fixtures/zmx-dir-resolution (pin 8c59ec456fe82780fd75d8afb5fe48dc72e10bc8, 2 normalized expectation(s), platforms: macos linux)
+
+=== termios-report ===
+[admit]   platform macos: hash-pairing OK (normalized=report.txt, rawA+rawB matched)
+[admit]   platform linux: hash-pairing OK (normalized=report-linux.txt, rawA+rawB matched)
+[admit] ADMITTED termios-report -> /home/u/work/sb-rust/.claude/worktrees/agent-a9384fd1f459819b6/test/golden/fixtures/termios-report (pin 8c59ec456fe82780fd75d8afb5fe48dc72e10bc8, 2 normalized expectation(s), platforms: macos linux)

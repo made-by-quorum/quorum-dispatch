@@ -1,0 +1,2 @@
+ERROR: Session "sbrg-43673178066305327329-argv" is not attachable in the zmx socket dir (/var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/sbrg-runs/43673178066305327329/zmx) after creation — registration failed (Bug D).
+  Reaping the stray wrapper.

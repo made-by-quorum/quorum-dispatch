@@ -1,0 +1,46 @@
+=== REAL-HOME BELT before: 728 ===
+=== BOOT 3 (paste investigation) ===
+  sb new exit=0 : Started detached session "sbrg-97472178063122623665-paste"
+  resolution belt: sbrg-97472178063122623665-paste resolves uniquely in-jail (OK)
+  authed; JP=/tmp/claude-501/sbrg-runs/97472178063122623665/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-97472178063122623665-tmp-work/fa75a8cb-9104-470d-ba0f-a3ad44bba31d.jsonl
+
+--- PASTE 1102 bytes ---
+  send out=[Message sent to sbrg-97472178063122623665-paste]
+  user-records before=1 after=2 DELTA=1 status=idle
+  RESULT 1100: SUBMITTED (delta=1)
+
+--- PASTE 4202 bytes ---
+  send out=[WARNING: Message sent to "sbrg-97472178063122623665-paste" but session did not go busy — it may be stuck unsubmitted in the composer.|Message sent to sbrg-97472178063122623665-paste]
+  user-records before=2 after=2 DELTA=0 status=idle
+  RESULT 4200: NOT SUBMITTED (delta=0) — composer state:
+        ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet
+        PASTE_END -- then reply exactly PA_1100
+      ⏺ PA_1100
+      ✻ Worked for 4s
+      ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-97472178063122623665-paste ──
+      ❯ 
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+        ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+  RECOVERY PROBE: does a manual follow-up CR submit the stuck composer?
+  after manual CR: user-records=2 (delta-from-before=0)
+  -> still stuck after manual CR
+
+--- PASTE 4502 bytes ---
+  send out=[WARNING: Message sent to "sbrg-97472178063122623665-paste" but session did not go busy — it may be stuck unsubmitted in the composer.|Message sent to sbrg-97472178063122623665-paste]
+  user-records before=2 after=2 DELTA=0 status=idle
+  RESULT 4500: NOT SUBMITTED (delta=0) — composer state:
+        ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet
+        PASTE_END -- then reply exactly PA_1100
+      ⏺ PA_1100
+      ✻ Worked for 4s
+      ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-97472178063122623665-paste ──
+      ❯ 
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+        ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+  RECOVERY PROBE: does a manual follow-up CR submit the stuck composer?
+  after manual CR: user-records=2 (delta-from-before=0)
+  -> still stuck after manual CR
+
+=== TALLY ===
+  REAL-HOME BELT: 728 -> 728 HOLDS
+=== DONE (teardown via trap) ===

@@ -1,0 +1,70 @@
+
+=== A4 R7 LIVE CONFIRM (12KB + 16KB send:pty idle on the FIXED binary) ===
+  date: 2026-06-05 07:24:31 EDT
+  worktree: /home/u/work/wt-a4-lead  | tip: 37881b1 Merge pull request #13 from private-org/fix/a4-chunked-delivery
+  binary: /home/u/work/wt-a4-lead/target/debug/sb (0.1.0)
+=== REAL-HOME BELT before: 734 ===
+  credentials seeded: yes
+
+=== sb new (real claude) ===
+  sb new exit=0 : Started detached session "sbrg-209801780658671170-r7"
+  claude version in jail: 2.1.165
+  resolution belt: sbrg-209801780658671170-r7 resolves uniquely in-jail (OK)
+
+=== warm-up send:pty (turns flowing; resolve $JP via glob-fallback) ===
+  warm-up send out=[Message sent to sbrg-209801780658671170-r7]
+  warm-up OK: $JP=/tmp/claude-501/sbrg-runs/209801780658671170/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-209801780658671170-tmp-work/ccc09ee0-39f4-4f7e-9c72-4f98bd6801db.jsonl (urc=1)
+
+===== send:pty ROW: target=12288 bytes marker=R7_12K_209801780658671170 =====
+  payload actual bytes=12318 (target 12288); marker=R7_12K_209801780658671170
+  verb exit=0
+  verb stdout: Message sent to sbrg-209801780658671170-r7|
+  verb stderr: (none)
+  WENT BUSY within 12s
+  user-records before=1 after=2 DELTA=1 busy_seen=1 status=idle CLASS=DELIVERED
+  JSONL tail (last 4 user/assistant):
+      [assistant] AUTHOK
+      [user] R7_12K_209801780658671170_START 日本語café☕ lorem ipsum dolor sit amet consectetur lorem ipsu
+      [assistant] 
+      [assistant] I received your message — it appears to be a test payload (markers `R7_12K_209801780658671
+  zmx history tail (ANSI-stripped, last 8 non-blank):
+      ⏺ I received your message — it appears to be a test payload (markers R7_12K_209801780658671170_START … R7_12K_209801780658671170_END with repeated filler text,
+        ~12K characters). There's no instruction or question in it. What would you like me to do?
+      ✻ Brewed for 4s
+                                                                                                                                                     ● high · /effort
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-209801780658671170-r7 ──
+      ❯ 
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+        ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+
+===== send:pty ROW: target=16384 bytes marker=R7_16K_209801780658671170 =====
+  payload actual bytes=16414 (target 16384); marker=R7_16K_209801780658671170
+  verb exit=0
+  verb stdout: Message sent to sbrg-209801780658671170-r7|
+  verb stderr: (none)
+  WENT BUSY within 12s
+  user-records before=2 after=3 DELTA=1 busy_seen=1 status=idle CLASS=DELIVERED
+  JSONL tail (last 4 user/assistant):
+      [assistant] 
+      [assistant] I received your message — it appears to be a test payload (markers `R7_12K_209801780658671
+      [user] R7_16K_209801780658671170_START 日本語café☕ lorem ipsum dolor sit amet consectetur lorem ipsu
+      [assistant] Received another test payload — this one marked `R7_16K_209801780658671170_START` … `END` 
+  zmx history tail (ANSI-stripped, last 8 non-blank):
+        dolor sit amet consectetur lorem ipsum dolor sit amet consectetur 日本語café☕  R7_16K_209801 R7_16K_209801780658671170_END
+      ⏺ Received another test payload — this one marked R7_16K_209801780658671170_START … END (~16K characters of the same filler pattern). Still no instruction or
+        question. Let me know what you'd like me to do with these.
+      ✻ Cogitated for 4s
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-209801780658671170-r7 ──
+      ❯ 
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+        ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+
+  >>> 12KB class=DELIVERED   16KB class=DELIVERED
+
+=== REAL-HOME BELT after: 734 (HOLDS) ===
+
+=== R7 ROW SUMMARY ===
+  send:pty | 12318B | delta=1 | DELIVERED | busy=1 | exit=0
+  send:pty | 16414B | delta=1 | DELIVERED | busy=1 | exit=0
+  GREEN(delivered): 2   RED(drop/stuck): 0
+=== DONE (teardown via trap) ===

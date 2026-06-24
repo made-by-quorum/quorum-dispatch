@@ -1,0 +1,87 @@
+//! `sb` — the engine crate of the sb→Rust rewrite.
+//!
+//! Phase A1: the data layer behind `sb ls --json` / `sb info`, ported from the
+//! TypeScript sb (`~/work/switchboard`, read-only source of truth) with its
+//! war-story comments carried forward (LESSONS.md rule 1 — comments-carry).
+//!
+//! Architecture (spec: ws/switchboard/rust/exec/a1-spec.md):
+//! - **Deciders are pure.** All I/O lives behind the seam traits in [`effects`]
+//!   and the [`mux::Mux`] trait; gather functions collect inputs, deciders join.
+//! - **Permissive schema parsing** (CONVENTIONS.md, lesson L8): every struct
+//!   deserialized from persisted/external data uses `#[serde(default)]` +
+//!   `Option<T>`, never `deny_unknown_fields`. Corrupt blobs fail CLEANLY.
+//! - **The registry is a disposable snapshot of the event stream** (ADD-3):
+//!   see [`registry`] module docs. Lineage = `spawned_by` ONLY (ADD-3a/3b).
+
+pub mod backends;
+pub mod boot;
+pub mod bootstrap;
+pub mod codes;
+pub mod create;
+pub mod create_daemon;
+pub mod daemon_headless;
+pub mod daemon_status;
+pub mod effects;
+pub mod embedded_mux;
+pub mod events;
+pub mod exec;
+pub mod extensions;
+pub mod fmt;
+pub mod fork_seed;
+pub mod gc;
+pub mod idstore;
+pub mod join;
+pub mod jsonl;
+pub mod kill;
+pub mod launch;
+pub mod liveness;
+pub mod model;
+pub mod mux;
+pub mod mux_selector;
+pub mod observe;
+pub mod paths;
+pub mod ping;
+pub mod preflight;
+pub mod provider;
+pub mod reconcile;
+pub mod redact;
+pub mod registry;
+pub mod relay;
+pub mod relay_http;
+pub mod relay_presence;
+pub mod relay_server;
+pub mod render;
+pub mod resolve;
+pub mod resume;
+pub mod resume_daemon;
+pub mod sbmux_dir;
+pub mod secrets;
+pub mod sendpty;
+pub mod shell_init;
+pub mod status_recency;
+pub mod stray;
+pub mod submit;
+pub mod survey;
+pub mod telemetry;
+pub mod update;
+pub mod wait;
+pub mod wait_channel;
+pub mod zmx_dir;
+pub mod zmx_list;
+pub mod zmx_mux;
+
+/// Returns the crate's marker name. Anchor kept from the 0a scaffold (the 0a
+/// gate's smoke test references it).
+pub fn crate_marker() -> &'static str {
+    "sb"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crate_marker_is_sb() {
+        assert_eq!(crate_marker(), "sb");
+    }
+}

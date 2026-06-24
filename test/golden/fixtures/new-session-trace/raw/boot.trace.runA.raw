@@ -1,0 +1,8 @@
+EVENT pidfile_appeared=1
+EVENT name_matched=1
+EVENT status_ready_idle=1
+EVENT went_busy_observed=1
+EVENT returned_idle_after_busy=1
+EVENT input_chars_before_pidfile=0
+EVENT decoy_rejected_matched_our_name=1
+EVENT new_exit=0

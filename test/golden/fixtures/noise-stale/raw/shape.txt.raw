@@ -1,0 +1,4 @@
+SHAPE ls_exit_zero=1
+SHAPE dup_same_sid_deduped_to_one=1
+SHAPE dead_pid_entry_still_visible=1
+SHAPE stale_sidecar_no_crash=1

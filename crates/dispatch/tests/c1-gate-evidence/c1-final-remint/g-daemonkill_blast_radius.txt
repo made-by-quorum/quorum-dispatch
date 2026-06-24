@@ -1,0 +1,12 @@
+G-DAEMONKILL blast-radius observation (empirical)
+children before daemon SIGKILL (all alive): [("dk-a", true), ("dk-b", true)]
+children after daemon SIGKILL (+400ms):      [("dk-a", false), ("dk-b", false)]
+all session children died with the daemon:   true
+any session child survived orphaned:         false
+
+Interpretation: sbmux runs ONE daemon per socket-dir that owns ALL
+sessions' PTY masters; daemon death tears down every session's PTY
+master, so every session's terminal child receives SIGHUP and the whole
+terminal world dies at once. Contrast zmx: one server PROCESS per
+session (one socket file per session in ZMX_DIR), so a server death is
+per-session — the blast radius is a single session, not the whole world.

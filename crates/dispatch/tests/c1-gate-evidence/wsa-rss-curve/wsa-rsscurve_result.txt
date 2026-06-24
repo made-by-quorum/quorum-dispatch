@@ -1,0 +1,11 @@
+WSA-RSSCURVE PROBE: COMPLETE — observations recorded
+
+daemon RSS: 0 sessions=5856 KB; 1 idle session=6448 KB; 10 idle sessions=7152 KB
+marginal idle-session cost (shared daemon): ~78 KB/session
+per-session-server implied idle cost: ~5856 KB/session (one process base each)
+shared@N=10 total=7152 KB vs split@N=10 implied total=~58560 KB
+NOTE: dev build, cat children, idle screens — probe-grade. Busy-session
+screen/scrollback cost (~8.5MB/busy session) measured separately in
+wsa-floodcont; that cost is per-SESSION state and moves with the session
+under either architecture.
+

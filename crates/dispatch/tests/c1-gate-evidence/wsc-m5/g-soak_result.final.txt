@@ -1,0 +1,41 @@
+G-SOAK VERDICT: PASS — release-build, N≥10 per-session daemons under ≥3 flooders + ≥4 input-blast threads for ≥60s: sibling RTT p95 ≤ 3× same-run shared baseline (BINDING tooth) and ≤ 25ms pathology ceiling (recalibrated from 10ms, orc-10 ruling relay-1780778364230-20), ZERO timeouts, ls ≤ 1s at N≥10; positive controls (flood-liveness + acked blast) asserted.
+
+BUILD PROFILE: RELEASE (daemon = /home/u/work/wt-wsc-lead/target/release/sb)
+CONFIG: N_total=10 (quiet=7 + flooders=3), blast_threads=4, window=60s
+CHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat/flood-loop); NOT full fakerepl (delta named in header)
+
+=== SHARED-BASELINE ARM (SBMUX_TEST_SHARED=1, one daemon, same N) ===
+[shared] booted 10/10 sessions
+[shared] daemon count = 1 (expected 1)
+[shared] PRE-FLOOD per-daemon RSS: max=3984 KB sum=3984 KB across 1 daemon(s)
+[shared] flood-liveness (all 3 flooders changing) = true
+[shared] sibling RTT (n=987): min=0.39 median=4.31 p95=11.57 max=163.31 ms, timeouts=0
+[shared] ls latency (n=987): median=0.26 p95=0.59 max=14.13 ms, errors=0
+[shared] POST-FLOOD per-daemon RSS: max=58960 KB sum=58960 KB
+[shared] input-blast acked total = 421803 (4 threads x 256B)
+[shared] teardown: reaped 1 live daemon(s)
+[shared] post-teardown leaked daemons = 0
+
+=== SPLIT ARM (per-session daemons, N daemons) ===
+[split] booted 10/10 sessions
+[split] daemon count = 10 (expected 10)
+[split] PRE-FLOOD per-daemon RSS: max=2944 KB sum=26944 KB across 10 daemon(s)
+[split] flood-liveness (all 3 flooders changing) = true
+[split] sibling RTT (n=959): min=0.29 median=3.76 p95=10.48 max=187.60 ms, timeouts=0
+[split] ls latency (n=959): median=1.40 p95=3.87 max=60.00 ms, errors=0
+[split] POST-FLOOD per-daemon RSS: max=10096 KB sum=52720 KB
+[split] input-blast acked total = 427889 (4 threads x 256B)
+[split] teardown: reaped 10 live daemon(s)
+[split] post-teardown leaked daemons = 0
+
+=== GATE ASSERTIONS (spec §7) ===
+shared-baseline p95 = 11.57 ms (shared daemon RSS max 58960 KB)
+split p95          = 10.48 ms (split daemon RSS max 10096 KB)
+baseline ratio (split/shared) = 0.91x
+[1] sibling RTT p95 ≤ 25ms PATHOLOGY CEILING (recalibrated, was 10): 10.48 ≤ 25 = true
+[2] sibling RTT p95 ≤ 3× shared baseline: 10.48 ≤ 34.72 = true
+[3] ZERO timeouts (split arm): timeouts=0 → true
+[4] ls completes ≤ 1s at N≥10: ls_max=60.00 ms ≤ 1000 = true
+positive control flood-liveness (both arms) = true
+positive control input-blast acked>0 (both arms) = true
+

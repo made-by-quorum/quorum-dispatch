@@ -1,0 +1,26 @@
+# WART-WAVE M2 MUTATION EVIDENCE — new gates RED against the PRE-FIX binary
+# pre-fix SUT = sb built at main abba9e7 (tag phase-a7, pre-wave), scratch worktree
+# new gates = a5rec_kill.sh (W3 direct-kill + W4 line) + a3 excl-kill-force/excl-wait-about guardrails @ 2d2c1a9
+# date: 2026-06-06T00:52:25Z
+
+== ROW 1: a5rec_kill.sh vs pre-fix binary (expect DIFF — old binary refuses the no-force non-TTY kill + prints old success bytes) ==
+[verify] scenario=a5rec-kill class=byte-exact budget=40000ms
+[verify] DIFF: a5rec-kill failed its comparator (byte-exact)
+verify_exit=1 (1=EXIT_DIFF — RED as required)
+
+== ROW 2: 12-help-kill excl-kill-force guardrail vs pre-fix binary (expect FAIL — old text 'Skip confirmation') ==
+  NORMALIZED-kill-force-desc (12-help-kill): --force description tokened BOTH sides (W3, ADD-15; divergence row)
+  [FAIL] 12-help-kill           (excl-kill-force) -> RUST-FORCE-DESC-NOT-SANCTIONED-TEXT
+PASS=0  FAIL=1  (exclusion/normalization rows handled: 1)
+FAILED ROWS: 12-help-kill
+
+== ROW 3: 22-help-wait excl-wait-about guardrail vs pre-fix binary (expect FAIL — old about line) ==
+  NORMALIZED-wait-about (22-help-wait): about line tokened BOTH sides (W6+W7, ADD-15; divergence row)
+  [FAIL] 22-help-wait           (excl-wait-about) -> RUST-WAIT-ABOUT-NOT-SANCTIONED-TEXT
+PASS=0  FAIL=1  (exclusion/normalization rows handled: 1)
+FAILED ROWS: 22-help-wait
+
+== CONTROL: same three gates vs the FIXED binary (expect PASS — proves the RED is the mutation, not the harness) ==
+[verify] PASS: a5rec-kill
+  [PASS] 12-help-kill           (excl-kill-force)
+  [PASS] 22-help-wait           (excl-wait-about)

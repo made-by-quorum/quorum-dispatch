@@ -1,0 +1,7 @@
+RECORDED-FROM
+pinned_ts_commit=8c59ec4
+carry_provenance=verified-diff-carry from 0d0fa9e (recorded there; delta 0d0fa9e..8c59ec4 proven inert for all captured surfaces — proof exec/a5-grec-pin-carry-proof.md in the phase workspace; orc-3 ruling relay-1780671157930-19; record.sh wrong-pin gate governs any future re-record)
+zmx_version=zmx0.6.0
+scenario=a5rec-reconcile class=byte-exact
+recorded=2026-06-05T12:47:56Z host=Darwin arm64
+remint_kill=wart-wave 2026-06-06T00:48:22Z (ADD-15 W3+W4, Pete-ruled 2026-06-05 19:47 EDT): kill.txt + raw/kill.txt.raw are NAMED-DIVERGENCE CONTRACT fixtures minted from the RUST binary (the pinned TS cannot produce them — W3 removed the confirm prompt TS still has; W4 changed the success line). Mint reproducer: test/golden/remint_kill_wave.sh (double-run determinism-diff enforced). Divergence rows: exec/divergence-table.md W3+W4. Other fixtures in this dir unchanged (TS-recorded per the carry above).

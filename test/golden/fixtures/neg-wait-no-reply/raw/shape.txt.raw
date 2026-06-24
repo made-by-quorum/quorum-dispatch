@@ -1,0 +1,4 @@
+SHAPE wait_exit=0
+SHAPE no_text_response_sentinel=1
+SHAPE user_record_present=1
+SHAPE assistant_record_absent=1
