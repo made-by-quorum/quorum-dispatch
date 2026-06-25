@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 struct Jail {

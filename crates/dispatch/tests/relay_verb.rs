@@ -1,6 +1,6 @@
 //! Verb-level `sb send:relay` test (spec §4.5): the no-relay error path.
 //!
-//! Drives the REAL `sb` binary (via `CARGO_BIN_EXE_dispatch`) with a hermetic tempdir
+//! Drives the REAL `sb` binary (via `CARGO_BIN_EXE_qd`) with a hermetic tempdir
 //! HOME and NO relay listening, asserting the exact stderr wording + exit 1
 //! (send.ts:407-408: `Session "<name>" has no relay.`).
 //!
@@ -76,7 +76,7 @@ fn send_relay_no_relay_errors_exit_1() {
     // A live session "lonely" with a pid that no relay's ancestry reaches → the
     // fast lookup finds the name but no relay matches; the full-scan fallback
     // resolves the session with relay_port = None → "has no relay." exit 1.
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dispatch"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_qd"));
     hermetic_env(&mut cmd, &home); // creates the .claude dirs first
     write_session(&home, 31337, "lonely", "lonely-sid");
     cmd.args(["send:relay", "lonely", "hello"]);

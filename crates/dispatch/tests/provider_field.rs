@@ -1,6 +1,6 @@
 //! codex P1, R2 (codex-p1-spec section 4) — provider-field byte-stability +
 //! read-back + acting-verb refusal, driving the REAL `sb` binary
-//! (`CARGO_BIN_EXE_dispatch`) against a JAILED, empty HOME (L9a / ADD-4 — never the real
+//! (`CARGO_BIN_EXE_qd`) against a JAILED, empty HOME (L9a / ADD-4 — never the real
 //! home; HOME + ZMX_DIR point into a per-test tempdir).
 //!
 //! These prove the NEW provider paths WITHOUT touching the rule-8 golden files
@@ -16,7 +16,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 /// Forge a single registry row `<pid>.json` under a freshly-jailed HOME and run

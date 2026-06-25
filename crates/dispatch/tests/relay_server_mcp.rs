@@ -73,7 +73,7 @@ impl McpChild {
     /// into a channel so reads can be bounded.
     fn spawn(session_id: &str) -> Self {
         let home = tempfile::tempdir().expect("tempdir for HOME");
-        let exe = env!("CARGO_BIN_EXE_dispatch");
+        let exe = env!("CARGO_BIN_EXE_qd");
         let mut child = Command::new(exe)
             .arg("relay:serve")
             .env("HOME", home.path())

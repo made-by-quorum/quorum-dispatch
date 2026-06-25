@@ -33,7 +33,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 const SESSION: &str = "hlrev";

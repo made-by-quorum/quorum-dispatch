@@ -197,7 +197,7 @@ impl RelayChild {
     ) -> Self {
         let mut cmd = match kind {
             RelayKind::Rust => {
-                let exe = env!("CARGO_BIN_EXE_dispatch");
+                let exe = env!("CARGO_BIN_EXE_qd");
                 let mut c = Command::new(exe);
                 c.arg("relay:serve");
                 c

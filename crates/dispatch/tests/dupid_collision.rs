@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::{Child, Command};
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 /// Spawn a real, short-lived child so we have a genuinely-ALIVE pid distinct from

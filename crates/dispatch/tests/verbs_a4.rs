@@ -14,7 +14,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 /// Run `sb <args...>` with HOME + ZMX_DIR jailed into `home`/`zmx` under `dir`.

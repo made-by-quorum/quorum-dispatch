@@ -3,7 +3,7 @@
 //! stub, the new/kill pattern) — the old demoted-attach pins below were
 //! retargeted to the stub contract; connect is the one attach-mechanic caller.
 //!
-//! Drives the REAL `sb` binary (`CARGO_BIN_EXE_dispatch`) against a JAILED, empty HOME
+//! Drives the REAL `sb` binary (`CARGO_BIN_EXE_qd`) against a JAILED, empty HOME
 //! (L9a / ADD-4 — never the real home; HOME + ZMX_DIR point into a per-test
 //! tempdir + an EMPTY zmx dir, so a forged claude row is necessarily COLD: it has
 //! no live mux pane to attach to). Mirrors the provider_field.rs harness — forge a
@@ -15,7 +15,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 /// Forge a single registry row `<pid>.json` under a freshly-jailed HOME and run

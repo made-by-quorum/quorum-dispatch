@@ -18,7 +18,7 @@ use std::process::{Child, Command};
 use common::{assert_not_real_home, set_mtime_ms};
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 fn golden_dir() -> PathBuf {

@@ -1,5 +1,5 @@
 //! C1 M6 — ENGINE-LEVEL gate rows (c1-spec "Gate rows"), driving the REAL `sb`
-//! binary (`CARGO_BIN_EXE_dispatch`) through per-run hermetic jails against a REAL
+//! binary (`CARGO_BIN_EXE_qd`) through per-run hermetic jails against a REAL
 //! jailed sbmux daemon. These are the gate teeth for the Stage-2 mux swap.
 //!
 //! ## How these differ from the M4 crate-level live tests
@@ -62,7 +62,7 @@ use sha2::{Digest, Sha256};
 // ===========================================================================
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 /// Locate the built `sbmux` binary from the test exe's target dir. PANICS with a

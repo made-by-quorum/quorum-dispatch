@@ -5,7 +5,7 @@
 //! (org memory 01KVB4NATAF1RCCK4JA5S8PBSX). These assertions pin the dispatch
 //! arms to the bin source. Runtime behavior (a real `dispatch relay:serve` binding
 //! a port + speaking MCP) is exercised by the `relay_server_*` suites, which
-//! spawn `CARGO_BIN_EXE_dispatch relay:serve` against a hermetic HOME.
+//! spawn `CARGO_BIN_EXE_qd relay:serve` against a hermetic HOME.
 
 const MAIN_SRC: &str = include_str!("../src/bin/dispatch/main.rs");
 

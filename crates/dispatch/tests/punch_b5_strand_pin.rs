@@ -32,7 +32,7 @@ use std::process::{Child, Command};
 use common::assert_not_real_home;
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 /// A genuinely-ALIVE process whose cmdline is visibly NOT the session program

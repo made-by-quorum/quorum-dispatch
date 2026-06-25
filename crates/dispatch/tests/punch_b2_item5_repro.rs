@@ -57,7 +57,7 @@ struct RelayChild {
 
 impl RelayChild {
     fn spawn(home: &Path, session_uuid: &str) -> Self {
-        let exe = env!("CARGO_BIN_EXE_dispatch");
+        let exe = env!("CARGO_BIN_EXE_qd");
         let mut child = Command::new(exe)
             .arg("relay:serve")
             .env("HOME", home)
@@ -209,7 +209,7 @@ fn stage_home(home: &Path) {
 /// Run `sb send:relay tgt <message>` under the staged home. `plant_env`
 /// mutates the child env (identity planting per row).
 fn run_send_relay(home: &Path, message: &str, plant_env: impl FnOnce(&mut Command)) -> String {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dispatch"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_qd"));
     cmd.args(["send:relay", "tgt", message])
         .env("HOME", home)
         .env("SB_HOME", home.join(".quorum").join("dispatch"))

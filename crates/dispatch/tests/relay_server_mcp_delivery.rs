@@ -93,7 +93,7 @@ impl McpChild {
         home: &std::path::Path,
         home_guard: Option<tempfile::TempDir>,
     ) -> McpChild {
-        let exe = env!("CARGO_BIN_EXE_dispatch");
+        let exe = env!("CARGO_BIN_EXE_qd");
         let mut child = Command::new(exe)
             .arg("relay:serve")
             .env("HOME", home)

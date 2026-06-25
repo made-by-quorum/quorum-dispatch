@@ -1,7 +1,7 @@
 //! ACK-2 M5 — GATE-ASSEMBLY INTEGRATION ROWS (ack2-spec §11): the jail-level
 //! event-sequence teeth G3, the three-arm boot-readiness gate G7, the
 //! transcript-race G8, the §9 exit/stdout stability assertions, and the §G10
-//! privacy grep. These drive the REAL `sb` binary (`CARGO_BIN_EXE_dispatch`) through
+//! privacy grep. These drive the REAL `sb` binary (`CARGO_BIN_EXE_qd`) through
 //! per-run hermetic fakerepl-backed jails against the embedded sbmux daemon —
 //! the SAME engine path `c1_gate.rs` exercises, with `fakerepl` substituted for
 //! claude via the `CLAUDE_BIN` override (launch.rs:23-27).
@@ -57,7 +57,7 @@ use dispatch::events::{parse_events, EventRecord, ReadResult};
 // ===========================================================================
 
 fn sb_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_dispatch")
+    env!("CARGO_BIN_EXE_qd")
 }
 
 /// `<target>/<profile>` from the running test exe (`.../deps/<testbin>`).
