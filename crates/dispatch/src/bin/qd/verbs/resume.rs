@@ -740,9 +740,34 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
         return 0;
     }
 
+    // FINDING #3 — CONCURRENT-RESUME ATOMIC CLAIM (acp-only): take an exclusive,
+    // self-healing flock on this sessionId BEFORE spawning, held across the whole
+    // spawn→row-write critical section. Two concurrent `qd resume` of the SAME stopped
+    // row → exactly ONE wins the claim and spawns; the LOSER refuses cleanly (no spawn,
+    // no mutation). flock auto-releases on holder death → a crashed holder NEVER bricks a
+    // later resume (self-healing; NOT a bare lock). NOTE: acp adds this concurrent-resume
+    // atomic guard that codex lacks — codex daemon-resume parity is a named follow-on.
+    let _resume_claim = match dispatch::resume_daemon::acquire_resume_claim(
+        &paths.sessions_dir,
+        &session.session_id,
+    ) {
+        Ok(Some(claim)) => claim, // WON — held until end of fn (drop releases the flock).
+        Ok(None) => {
+            eprintln!(
+                "sb resume: \"{name}\": another resume of this session is already in \
+                 progress — refusing (no double-spawn). Try again once it completes."
+            );
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("sb resume: \"{name}\": could not take the resume claim lock: {e}");
+            return 1;
+        }
+    };
+
     // Case 2/3: REVIVE — re-spawn the resident adapter in LOAD mode. Mirrors the create
     // path `run_new_acp_daemon`, with `--load-session <sessionId>` substituted for the
-    // fresh `session/new`.
+    // fresh `session/new`. The `_resume_claim` flock above serializes concurrent revives.
     let port = match real_alloc_port() {
         Ok(p) => p,
         Err(e) => {

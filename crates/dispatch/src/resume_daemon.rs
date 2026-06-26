@@ -225,6 +225,66 @@ pub fn acp_resume_is_alive(
 }
 
 // ===========================================================================
+// Item 3 FINDING #3 — ACP concurrent-resume ATOMIC + SELF-HEALING claim.
+// ===========================================================================
+
+/// An exclusive, SELF-HEALING claim on resuming ONE acp sessionId — held across the
+/// verb's spawn→row-write critical section so two concurrent `qd resume` of the SAME
+/// stopped acp row cannot BOTH spawn a load-mode adapter (the FINDING #3 double-spawn:
+/// two live rows / two bridges interleaving the SAME jsonl / a later-stop leak).
+///
+/// Mechanism: `flock(LOCK_EX|LOCK_NB)` on a per-sessionId lock file. flock is the PREFERRED
+/// (cc4) implementation because it is INHERENTLY SELF-HEALING — the OS releases the lock
+/// automatically when the holding fd closes, INCLUDING on holder process death. So a
+/// crashed claim-holder NEVER bricks future resumes (a stale lock that wedges resume
+/// forever would be WORSE than the race — super7 binding); the next legitimate resume
+/// simply re-acquires. The claim is ATOMIC (exactly one concurrent caller gets `Some`,
+/// the rest get `None` and refuse cleanly), NOT a racy check-then-spawn.
+///
+/// ACP PATH ONLY — codex resume is untouched (acp adds a concurrent-resume atomic guard
+/// codex lacks; codex daemon-resume parity is a named follow-on).
+pub struct ResumeClaim {
+    // The flock'd fd; Drop closes it → the OS releases the advisory lock. Held only to
+    // keep the lock alive for the critical section.
+    _file: std::fs::File,
+}
+
+/// Try to claim exclusive resume rights for `session_id`. `Ok(Some)` = WON (proceed to
+/// spawn; hold the returned guard through the row-write, then drop). `Ok(None)` = another
+/// resume holds the claim → the caller REFUSES cleanly (no spawn, no mutation). `Err` =
+/// the lock file could not be opened (a real fs error, surfaced).
+pub fn acquire_resume_claim(
+    sessions_dir: &std::path::Path,
+    session_id: &str,
+) -> std::io::Result<Option<ResumeClaim>> {
+    use std::os::unix::io::AsRawFd;
+    // sessionId is a uuid, but sanitize defensively so the lock name is always a safe file.
+    let safe: String = session_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    std::fs::create_dir_all(sessions_dir)?;
+    let path = sessions_dir.join(format!("{safe}.resume.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)?;
+    // SAFETY: flock on a valid owned fd; LOCK_NB makes it a non-blocking atomic try-claim.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        Ok(Some(ResumeClaim { _file: file }))
+    } else {
+        let err = std::io::Error::last_os_error();
+        // EWOULDBLOCK/EAGAIN = someone else holds the exclusive lock → a clean LOSER.
+        match err.raw_os_error() {
+            Some(e) if e == libc::EWOULDBLOCK || e == libc::EAGAIN => Ok(None),
+            _ => Err(err),
+        }
+    }
+}
+
+// ===========================================================================
 // RESUME (deliverable B).
 // ===========================================================================
 
@@ -1791,5 +1851,96 @@ mod tests {
         assert!(!acp_resume_is_alive(Some(my_pid), None, |_p| Some(
             "qd acp-daemon".to_string()
         )));
+    }
+
+    // ====================================================================
+    // FINDING #3 — concurrent-resume ATOMIC + SELF-HEALING claim.
+    // ====================================================================
+
+    /// (a) ATOMIC claim + (self-healing) RECLAIM. Two claims on the SAME sessionId in the
+    /// race window → exactly ONE wins (`Some`), the other LOSES (`None`); a DIFFERENT
+    /// sessionId is independent. Releasing the holder (fd close — the SAME OS mechanism as
+    /// holder-process-death) lets the next claim RECLAIM → never bricked. REVERT CONTROL:
+    /// remove the flock from `acquire_resume_claim` → both claims return `Some` (the
+    /// double-spawn race reappears) → this REDs.
+    #[test]
+    fn resume_claim_is_atomic_and_self_healing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let a = acquire_resume_claim(dir, "sess-x").unwrap();
+        assert!(a.is_some(), "first claim WINS");
+        // concurrent claim on the SAME session → LOSES (atomic, exactly one winner).
+        let b = acquire_resume_claim(dir, "sess-x").unwrap();
+        assert!(b.is_none(), "a concurrent claim on the same session LOSES (no double-spawn)");
+        // a DIFFERENT session is independent → wins.
+        assert!(
+            acquire_resume_claim(dir, "sess-y").unwrap().is_some(),
+            "a different session's claim is independent"
+        );
+        // release the holder (fd close == holder-death-equivalent → OS releases flock).
+        drop(a);
+        let c = acquire_resume_claim(dir, "sess-x").unwrap();
+        assert!(
+            c.is_some(),
+            "after the holder releases/dies, the claim is RECLAIMED (self-healing — never bricked)"
+        );
+    }
+
+    /// (c) STALE-CLAIM RECLAIM after holder PROCESS DEATH (deterministic, primary-source).
+    /// A subprocess takes the flock and sleeps; while it HOLDS the lock our claim LOSES;
+    /// after we KILL it the OS releases the flock → the next claim SUCCEEDS (reclaims).
+    /// Proves self-healing across real process death, not just fd-drop. Skips if the
+    /// `flock(1)` CLI is absent (same flock(2) syscall).
+    #[test]
+    fn resume_claim_reclaims_after_holder_process_dies() {
+        let flock_cli = std::process::Command::new("flock")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !flock_cli {
+            eprintln!("flock(1) absent — skipping the process-death reclaim repro");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // The lock file path MUST match acquire_resume_claim's (sessionId.resume.lock).
+        let lock = dir.join("sess-z.resume.lock");
+        std::fs::File::create(&lock).unwrap();
+        // A holder subprocess: take an EXCLUSIVE flock on the lock file, then sleep.
+        let mut holder = std::process::Command::new("flock")
+            .arg("-x")
+            .arg(&lock)
+            .arg("-c")
+            .arg("sleep 30")
+            .spawn()
+            .expect("spawn flock holder");
+        // Wait until the holder actually owns the lock (our claim LOSES).
+        let mut held = false;
+        for _ in 0..100 {
+            match acquire_resume_claim(dir, "sess-z").unwrap() {
+                None => {
+                    held = true;
+                    break;
+                }
+                Some(_claim) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+        assert!(held, "while the holder lives, a concurrent claim LOSES (atomic)");
+        // KILL the holder mid-claim → the OS releases the flock → reclaim must succeed.
+        holder.kill().ok();
+        holder.wait().ok();
+        let mut reclaimed = false;
+        for _ in 0..100 {
+            if acquire_resume_claim(dir, "sess-z").unwrap().is_some() {
+                reclaimed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            reclaimed,
+            "after the claim-holder process DIES, the next resume RECLAIMS (self-healing — never bricked)"
+        );
     }
 }
