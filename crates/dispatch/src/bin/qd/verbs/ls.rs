@@ -195,7 +195,13 @@ fn run_inner(
         });
         let daemon_src = dispatch::liveness::SocketDaemonLiveness::new(sbmux_dir);
         for s in &mut sessions {
-            if s.provider != "codex" {
+            // codex rows: daemon-hosted (rollout-tail liveness), skipped here. acp/*
+            // rows (Item 3): ALSO daemon-hosted (resident adapter + bridge) — their
+            // liveness is the adapter pid + `--listen` endpoint, NOT a claude
+            // `(pid,starttime)` or sbmux socket, so the headless gate would mis-classify
+            // them. They get a primary-sourced acp Status override at render time
+            // (`acp_human_status`) instead.
+            if s.provider != "codex" && !s.provider.starts_with("acp/") {
                 s.status = dispatch::liveness::gated_ls_status_headless(
                     s.status,
                     s.entrypoint.as_deref(),
@@ -259,6 +265,22 @@ fn run_inner(
         sessions.retain(|s| s.name.as_deref().is_some_and(|n| n.starts_with(p.as_str())));
     }
 
+    // (L) Item 3 — PRIMARY-SOURCED acp Status, computed ONCE over the FINAL session list
+    // and fed to BOTH the JSON surface (truthful `status`) and the default human table
+    // (truthful Status column). Some only for acp/* rows → non-acp JSON/golden bytes are
+    // untouched. (live pid + identity + endpoint reachability; never the stale field.)
+    let acp_status_overrides: Vec<Option<(String, SessionStatus)>> = {
+        use dispatch::effects::Env as _;
+        let sessions_dir = dispatch::effects::RealEnv
+            .var("HOME")
+            .filter(|h| !h.is_empty())
+            .map(|h| dispatch::paths::SbPaths::from_home(std::path::Path::new(&h)).sessions_dir);
+        sessions
+            .iter()
+            .map(|s| sessions_dir.as_deref().and_then(|sd| acp_human_status(s, sd)))
+            .collect()
+    };
+
     if emit_json {
         // ls JSON surface (render::ls_json) — selected by `--json` OR the agent/pipe
         // auto-default (WP-B7 PIECE 1). The byte-faithful TS surface. Strays are an
@@ -296,7 +318,13 @@ fn run_inner(
                 }
             })
             .collect();
-        let value = render::ls_json_full(&sessions, &[], fold_ref, Some(&facets));
+        // (L) Item 3: the truthful acp `status` texts, aligned to `sessions`.
+        let acp_status_texts: Vec<Option<String>> = acp_status_overrides
+            .iter()
+            .map(|o| o.as_ref().map(|(t, _)| t.clone()))
+            .collect();
+        let value =
+            render::ls_json_full_acp(&sessions, &[], fold_ref, Some(&facets), &acp_status_texts);
         // `{}\n` reproduces `println!` byte-for-byte; emit_or_pipe_exit replaces
         // the panic-on-broken-pipe with a clean exit-141 (item 20).
         emit_or_pipe_exit(&format!("{}\n", render::to_pretty(&value)));
@@ -326,7 +354,9 @@ fn run_inner(
     } else if sessions.is_empty() {
         emit_or_pipe_exit("No sessions found.\n");
     } else {
-        emit_or_pipe_exit(&render_table_human(&sessions));
+        // (L) Item 3: the acp rows ride the PRIMARY-SOURCED Status override (computed
+        // once above); non-acp rows → None → the byte-identical golden path.
+        emit_or_pipe_exit(&render_table_human_with(&sessions, &acp_status_overrides));
     }
 
     // ONE trailer emission, covering every TEXT mode (short / empty / table) —
@@ -356,12 +386,67 @@ pub fn render_table_for_live(sessions: &[Session]) -> String {
 /// number); a zero-token session renders the natural "0" (no new sentinel).
 /// ANSI-aware widths/padding (widths from VISIBLE/plain length), matching the
 /// wide table.
-fn render_table_human(sessions: &[Session]) -> String {
+/// (L) Item 3 — the DEFAULT human table with PRIMARY-SOURCED acp Status overrides aligned
+/// to `sessions` (Some for acp rows, None for the rest → the byte-identical stored path).
+fn render_table_human_with(
+    sessions: &[Session],
+    overrides: &[Option<(String, SessionStatus)>],
+) -> String {
     let now = {
         use dispatch::effects::Clock;
         dispatch::effects::RealClock.now_ms()
     };
-    render_table_human_at(sessions, now)
+    render_table_human_at_with(sessions, now, overrides)
+}
+
+/// (L) Item 3 — the pure 3-way acp Status classification (THE distinct (L) revert seam),
+/// derived from the LIVE primary probe (never the stale stored status):
+///   - pid not alive                              → "stopped"     (red, like killed)
+///   - pid alive ∧ our adapter ∧ endpoint reachable → "live"      (cyan, like idle)
+///   - pid alive but identity-fail / unreachable  → "dead-endpoint" (dim, like cold)
+/// REVERTING the wiring to read `s.status` (the stored field) instead of these live
+/// probes shows a stale "idle"/"busy" on a dead/reused acp pid — the FM-L1 wrong-data
+/// the oracle reverts this seam to catch.
+fn acp_status_classify(pid_alive: bool, identity_ok: bool, reachable: bool) -> (&'static str, SessionStatus) {
+    if !pid_alive {
+        ("stopped", SessionStatus::Killed)
+    } else if identity_ok && reachable {
+        ("live", SessionStatus::Idle)
+    } else {
+        ("dead-endpoint", SessionStatus::Cold)
+    }
+}
+
+/// (L) Item 3 — the acp Status override for ONE row (None for a non-acp row). Reads the
+/// LIVE primary truth: adapter pid alive (`is_pid_alive`) + `cmdline_is_our_acp_daemon`
+/// identity over the re-read `--listen <endpoint>` + endpoint reachability (an S4 ws
+/// connect). Degrades cleanly — a dead/stopped acp row never crashes ls (connect to a
+/// dead endpoint just returns Err → not reachable → "stopped"/"dead-endpoint").
+fn acp_human_status(s: &Session, sessions_dir: &std::path::Path) -> Option<(String, SessionStatus)> {
+    use std::time::Duration;
+    if !s.provider.starts_with("acp/") {
+        return None;
+    }
+    let pid = s.pid.filter(|&p| p != 0);
+    let pid_alive = pid.map(|p| dispatch::effects::is_pid_alive(p as i32)).unwrap_or(false);
+    // Endpoint is NOT on the Session surface — re-read it off the registry row by pid.
+    let endpoint = pid
+        .and_then(|p| dispatch::registry::read_entry(sessions_dir, p))
+        .and_then(|e| e.endpoint)
+        .filter(|e| !e.is_empty());
+    let identity_ok = match (pid, endpoint.as_deref()) {
+        (Some(p), Some(ep)) => dispatch::acp_residence::cmdline_is_our_acp_daemon(
+            dispatch::create_daemon::real_cmdline_probe(p).as_deref(),
+            Some(ep),
+        ),
+        _ => false,
+    };
+    let reachable = endpoint
+        .as_deref()
+        .map(|ep| dispatch::provider::acp::AcpConnection::connect(ep, Duration::from_millis(500)).is_ok())
+        .unwrap_or(false);
+    let (text, variant) = acp_status_classify(pid_alive, identity_ok, reachable);
+    Some((text.to_string(), variant))
 }
 
 /// Maximum visible characters for the Name column in the human (`sb ls`) table.
@@ -374,6 +459,18 @@ const NAME_COL_MAX: usize = 16;
 /// so tests/goldens can freeze `now` (mirrors `relative_time`, which takes
 /// `now_ms` as a parameter rather than reading the clock inline).
 fn render_table_human_at(sessions: &[Session], now: i64) -> String {
+    render_table_human_at_with(sessions, now, &[])
+}
+
+/// `render_table_human_at` with per-row acp Status overrides. `overrides[i]` Some →
+/// that row's Status cell shows the primary-sourced acp text/color (riding the EXISTING
+/// Status column); None (incl. an empty slice) → the unchanged stored-status path, so a
+/// non-acp listing is BYTE-IDENTICAL to the pre-Item-3 output (the golden).
+fn render_table_human_at_with(
+    sessions: &[Session],
+    now: i64,
+    overrides: &[Option<(String, SessionStatus)>],
+) -> String {
     let headers = ["Name", "Id", "Status", "Last active", "Tokens"];
     let max_name = NAME_COL_MAX;
     // Shortest-unique prefixes among the LISTED sessions' stable ids (min 2
@@ -382,7 +479,8 @@ fn render_table_human_at(sessions: &[Session], now: i64) -> String {
 
     let rows: Vec<Vec<Cell>> = sessions
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             let killed = s.status == SessionStatus::Killed;
 
             // Name: dim when killed, else plain; `s.name || "-"`; truncate@30.
@@ -404,8 +502,16 @@ fn render_table_human_at(sessions: &[Session], now: i64) -> String {
             };
 
             // Status: colorStatus (idle=cyan busy=yellow shell=green cold=dim killed=red).
-            let status = s.status.as_str().to_string();
-            let status_cell = Cell::new(status.clone(), color_status(s.status, &status));
+            // (L) Item 3: an acp row carries a PRIMARY-SOURCED override (live/stopped/
+            // dead-endpoint), colored via the matching variant; non-acp rows keep the
+            // exact stored-status text+color → the non-acp golden is byte-identical.
+            let status_cell = match overrides.get(i).and_then(|o| o.as_ref()) {
+                Some((text, variant)) => Cell::new(text.clone(), color_status(*variant, text)),
+                None => {
+                    let status = s.status.as_str().to_string();
+                    Cell::new(status.clone(), color_status(s.status, &status))
+                }
+            };
 
             // Last active: relative_time || "-".
             let last = s
@@ -806,6 +912,70 @@ mod tests {
             lineage: None,
             which_branch: SessionBranch::LiveRegistry,
         }
+    }
+
+    // ================= (L) Item 3 — acp Status override tests =================
+
+    /// The pure (L) seam: the 3-way classification from the LIVE probe.
+    #[test]
+    fn acp_status_classify_is_three_way() {
+        // pid not alive → stopped (red/killed), regardless of identity/reach.
+        assert_eq!(super::acp_status_classify(false, true, true), ("stopped", SessionStatus::Killed));
+        assert_eq!(super::acp_status_classify(false, false, false), ("stopped", SessionStatus::Killed));
+        // alive + ours + reachable → live (cyan/idle).
+        assert_eq!(super::acp_status_classify(true, true, true), ("live", SessionStatus::Idle));
+        // alive but identity-fail OR unreachable → dead-endpoint (dim/cold).
+        assert_eq!(super::acp_status_classify(true, false, true), ("dead-endpoint", SessionStatus::Cold));
+        assert_eq!(super::acp_status_classify(true, true, false), ("dead-endpoint", SessionStatus::Cold));
+    }
+
+    /// `acp_human_status`: a non-acp row → None (byte-identical stored path). An acp row
+    /// with a STORED "busy"/"idle" status but a DEAD pid → "stopped" (the live probe wins
+    /// over the stale field — the FM-L1 guard). REVERTING the wiring to read `s.status`
+    /// would return "busy" here.
+    #[test]
+    fn acp_human_status_dead_pid_is_stopped_not_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        // non-acp → None.
+        let mut claude = session(Some("wk"), Some("a01"), SessionStatus::Busy, None, 0);
+        claude.pid = Some(2_000_000_001); // dead, irrelevant for non-acp
+        assert_eq!(acp_human_status(&claude, tmp.path()), None);
+        // acp row, stored Busy, DEAD pid → "stopped" (NOT the stale "busy").
+        let mut acp = session(Some("acp-wk"), Some("a02"), SessionStatus::Busy, None, 0);
+        acp.provider = "acp/claude-code".to_string();
+        acp.pid = Some(2_000_000_001); // a very large unlikely-alive pid
+        let got = acp_human_status(&acp, tmp.path());
+        assert_eq!(
+            got,
+            Some(("stopped".to_string(), SessionStatus::Killed)),
+            "a dead acp pid reads 'stopped' from the live probe, never the stored 'busy'"
+        );
+    }
+
+    /// The override rides the EXISTING Status column (no new column); a non-acp row with
+    /// no override is BYTE-IDENTICAL to the stored-status render (the golden contract).
+    #[test]
+    fn acp_status_override_rides_status_column_nonacp_byte_identical() {
+        let mut acp = session(Some("acp-wk"), Some("a01"), SessionStatus::Idle, None, 0);
+        acp.provider = "acp/claude-code".to_string();
+        let claude = session(Some("wk"), Some("a02"), SessionStatus::Busy, None, 0);
+        let rows = vec![acp, claude];
+
+        // override the acp row's Status to a primary-sourced "live"; non-acp → None.
+        let overrides = vec![Some(("live".to_string(), SessionStatus::Idle)), None];
+        let out = render_table_human_at_with(&rows, NOW_MS, &overrides);
+        let plain: String = out.lines().map(strip_ansi).collect::<Vec<_>>().join("\n");
+        // still 5 columns (no NEW column), and the acp Status shows "live".
+        assert_eq!(out.lines().next().unwrap().split_whitespace().collect::<Vec<_>>(), vec!["Name", "Id", "Status", "Last", "active", "Tokens"]);
+        assert!(plain.contains("live"), "acp Status override rides the Status column: {plain:?}");
+        assert!(plain.contains("busy"), "the non-acp row keeps its stored status: {plain:?}");
+
+        // The NON-ACP row's rendered line is byte-identical whether or not overrides are
+        // present (all-None == the stored path == the golden).
+        let none_overrides: Vec<Option<(String, SessionStatus)>> = vec![None, None];
+        let with_none = render_table_human_at_with(&rows, NOW_MS, &none_overrides);
+        let plain_path = render_table_human_at(&rows, NOW_MS);
+        assert_eq!(with_none, plain_path, "all-None overrides == the stored-status render");
     }
 
     /// A representative set: a normal claude row, a codex-provider row, a killed

@@ -60,6 +60,21 @@ pub fn ls_json_full(
     fold: Option<&SnapshotMap>,
     readiness: Option<&[Option<&str>]>,
 ) -> Value {
+    ls_json_full_acp(sessions, strays, fold, readiness, &[])
+}
+
+/// As [`ls_json_full`], plus (L) Item 3 the PRIMARY-SOURCED acp `status` override aligned
+/// to `sessions`: `acp_status[i]` Some → that row's `"status"` reflects the live acp
+/// probe (live/stopped/dead-endpoint), not the stale stored field. None (incl. an empty
+/// slice, the [`ls_json_full`] default) → the unchanged stored status → a non-acp listing
+/// is BYTE-IDENTICAL to the pre-Item-3 JSON.
+pub fn ls_json_full_acp(
+    sessions: &[Session],
+    strays: &[Stray],
+    fold: Option<&SnapshotMap>,
+    readiness: Option<&[Option<&str>]>,
+    acp_status: &[Option<String>],
+) -> Value {
     // P0 wave-1: shortest-unique prefixes (min 2 chars) computed among the
     // LISTED sessions' stable ids — pure read-time computation, the same way
     // codes were computed. Sessions with no sb_id contribute nothing and gain
@@ -70,7 +85,8 @@ pub fn ls_json_full(
         .enumerate()
         .map(|(i, s)| {
             let facet = readiness.and_then(|r| r.get(i).copied().flatten());
-            session_to_value(s, fold, &prefixes, facet)
+            let acp = acp_status.get(i).and_then(|o| o.as_deref());
+            session_to_value(s, fold, &prefixes, facet, acp)
         })
         .collect();
     arr.extend(strays.iter().map(stray_to_value));
@@ -94,8 +110,13 @@ fn session_to_value(
     fold: Option<&SnapshotMap>,
     id_prefixes: &std::collections::HashMap<String, String>,
     readiness: Option<&str>,
+    acp_status: Option<&str>,
 ) -> Value {
     let mut m = Map::new();
+
+    // (L) Item 3: an acp row's `status` is the PRIMARY-SOURCED override when present;
+    // otherwise the stored field (non-acp rows → byte-identical to the TS surface).
+    let status_str = acp_status.unwrap_or_else(|| s.status.as_str());
 
     // Helpers that honor TS undefined-omission.
     let str_opt = |m: &mut Map<String, Value>, k: &str, v: &Option<String>| {
@@ -111,7 +132,7 @@ fn session_to_value(
             m.insert("userNamed".into(), json!(s.user_named.unwrap_or(false)));
             m.insert("sessionId".into(), json!(s.session_id));
             opt_pid(&mut m, s.pid);
-            m.insert("status".into(), json!(s.status.as_str()));
+            m.insert("status".into(), json!(status_str));
             str_opt(&mut m, "zmxName", &s.zmx_name);
             opt_u32(&mut m, "zmxClients", s.zmx_clients);
             str_opt(&mut m, "socketDir", &s.socket_dir);
@@ -134,7 +155,7 @@ fn session_to_value(
             m.insert("userNamed".into(), json!(s.user_named.unwrap_or(false)));
             m.insert("sessionId".into(), json!(s.session_id));
             opt_pid(&mut m, s.pid);
-            m.insert("status".into(), json!(s.status.as_str()));
+            m.insert("status".into(), json!(status_str));
             str_opt(&mut m, "zmxName", &s.zmx_name);
             opt_u32(&mut m, "zmxClients", s.zmx_clients);
             str_opt(&mut m, "socketDir", &s.socket_dir);
@@ -152,7 +173,7 @@ fn session_to_value(
             str_opt(&mut m, "name", &s.name);
             m.insert("sessionId".into(), json!(s.session_id));
             opt_pid(&mut m, s.pid);
-            m.insert("status".into(), json!(s.status.as_str()));
+            m.insert("status".into(), json!(status_str));
             str_opt(&mut m, "zmxName", &s.zmx_name);
             opt_u32(&mut m, "zmxClients", s.zmx_clients);
             str_opt(&mut m, "socketDir", &s.socket_dir);
@@ -168,7 +189,7 @@ fn session_to_value(
             m.insert("userNamed".into(), json!(s.user_named.unwrap_or(false)));
             m.insert("sessionId".into(), json!(s.session_id));
             opt_pid(&mut m, s.pid);
-            m.insert("status".into(), json!(s.status.as_str()));
+            m.insert("status".into(), json!(status_str));
             m.insert("turns".into(), json!(s.turns));
             m.insert("tokens".into(), json!(s.tokens));
             str_opt(&mut m, "cwd", &s.cwd);
@@ -781,6 +802,34 @@ mod tests {
     }
 
     // --- ls_json key order + omission ---
+
+    #[test]
+    fn acp_status_override_truthful_in_json_nonacp_byte_identical() {
+        // (L) Item 3: an acp row's JSON `status` shows the PRIMARY-SOURCED override
+        // (here "stopped") instead of the stale stored "busy"; a None entry / a non-acp
+        // row is BYTE-IDENTICAL to the no-override JSON (the parity contract).
+        let mut acp = base(SessionBranch::LiveRegistry);
+        acp.name = Some("acp-wk".into());
+        acp.session_id = "sess-acp".into();
+        acp.status = SessionStatus::Busy; // stale stored
+        acp.provider = "acp/claude-code".into();
+
+        // With the override → status reads "stopped" (the truthful probe verdict).
+        let overridden = ls_json_full_acp(
+            std::slice::from_ref(&acp),
+            &[],
+            None,
+            None,
+            &[Some("stopped".to_string())],
+        );
+        assert_eq!(overridden.as_array().unwrap()[0]["status"], json!("stopped"));
+
+        // No override (empty slice) → byte-identical to plain ls_json (stored "busy").
+        let plain = ls_json(std::slice::from_ref(&acp), &[]);
+        let none_override = ls_json_full_acp(std::slice::from_ref(&acp), &[], None, None, &[None]);
+        assert_eq!(to_pretty(&none_override), to_pretty(&plain), "None override == stored bytes");
+        assert_eq!(plain.as_array().unwrap()[0]["status"], json!("busy"));
+    }
 
     #[test]
     fn live_branch_key_order_and_omission() {
