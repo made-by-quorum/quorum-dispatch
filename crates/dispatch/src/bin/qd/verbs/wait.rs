@@ -559,15 +559,47 @@ fn verify_post_resume_if_marked(
     paths: &dispatch::paths::SbPaths,
     session: &dispatch::model::Session,
 ) -> Option<i32> {
+    let pid = session.pid.filter(|&p| p != 0)?;
+    verify_post_resume_for(&paths.sessions_dir, &paths.projects_dir, pid, &session.session_id)
+}
+
+/// The testable core (primitives, no `Session`): consume the resume-verify marker keyed by
+/// `pid` and rule on the post-resume continuation for the CURRENT row's `current_session_id`.
+///
+/// R2-1 (red-team round-2) — TWO independently-revertible paths:
+///   (V)(5) FALSE-POSITIVE FIX [the sid cross-check]: a marker whose `session_id` ≠ the
+///     CURRENT row's `current_session_id` is STALE/ALIASED — it survived a stop and `pid`
+///     was REUSED by a different session. Remove it and SKIP the verify (a NORMAL wait).
+///     Without this, a faithful pid-reused session B reads stale marker M_A and FALSE-FAILS
+///     as a fork. This is a SEPARATE branch — reverting ONLY it re-opens the false-fail.
+///   (V)(1) GENUINE-FORK DETECTION [unchanged]: when the marker IS for this session
+///     (`session_id` matches), run the real on-disk fork-check and FAIL LOUD on a true
+///     fork. Reverting ONLY the fork-detection re-opens the real-fork hole. The two seams
+///     never co-fire: the skip applies STRICTLY to a sid-mismatch, never to a sid-match.
+fn verify_post_resume_for(
+    sessions_dir: &std::path::Path,
+    projects_dir: &std::path::Path,
+    pid: i64,
+    current_session_id: &str,
+) -> Option<i32> {
     use dispatch::resume_daemon::{
         read_resume_verify_marker, resume_verify_marker_path, verify_post_resume_continuation,
         ResumeContinuation,
     };
-    let pid = session.pid.filter(|&p| p != 0)?;
-    let marker_path = resume_verify_marker_path(&paths.sessions_dir, pid);
+    let marker_path = resume_verify_marker_path(sessions_dir, pid);
     let marker = read_resume_verify_marker(&marker_path)?; // absent → normal wait (one stat).
+
+    // (V)(5) sid cross-check — the LOAD-BEARING R2-1 fix. STRICTLY a mismatch skip: an
+    // aliased marker (different session) is removed and IGNORED, never verified against the
+    // wrong session. Defends against pid-reuse regardless of stop-cleanup.
+    if marker.session_id != current_session_id {
+        let _ = std::fs::remove_file(&marker_path);
+        return None; // stale/aliased marker → treat as a normal wait (no false fork-fail).
+    }
+
+    // (V)(1) the marker IS for THIS session → the genuine post-resume fork-check (unchanged).
     // Bounded retry for the JSONL flush lag (eventual-consistency vs the wire terminal).
-    let verdict = verify_post_resume_continuation(&paths.projects_dir, &marker, 8, 250);
+    let verdict = verify_post_resume_continuation(projects_dir, &marker, 8, 250);
     let _ = std::fs::remove_file(&marker_path); // one-time: consume the marker.
     match verdict {
         ResumeContinuation::Continued => None, // faithful continuation — proceed.
@@ -684,6 +716,92 @@ mod tests {
         let d = super::acp_wait_observation(Err(dispatch::provider::acp::AcpError::Closed));
         assert!(matches!(d, AcpTurnObservation::TransportLost(_)));
         assert!(matches!(verdict(d), TurnCompletionProbe::Degraded(_)));
+    }
+
+    // ================= R2-1 — marker pid-reuse aliasing (the two seams) =================
+    use dispatch::jsonl::cwd_to_project_path;
+    use dispatch::resume_daemon::{
+        resume_verify_marker_path, write_resume_verify_marker, ResumeVerifyMarker,
+    };
+
+    /// Plant the RED-TEAM's exact repro: a marker for session `marker_sid` (baseline 3,
+    /// baseline_files=[A.jsonl]) + the project dir with `<marker_sid>.jsonl` UNCHANGED at
+    /// 3 lines + a NEW `B.jsonl`. Returns (sessions_dir, projects_dir, pid).
+    fn plant_r2_1_repro(tmp: &std::path::Path, marker_sid: &str, cwd: &str, pid: i64) -> (std::path::PathBuf, std::path::PathBuf) {
+        let sessions = tmp.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let projects = tmp.join("projects");
+        let dir = projects.join(cwd_to_project_path(cwd));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{marker_sid}.jsonl")), "l1\nl2\nl3\n").unwrap(); // baseline 3, flat
+        std::fs::write(dir.join("B.jsonl"), "u1\na1\n").unwrap(); // the new (would-be "fork") file
+        write_resume_verify_marker(
+            &resume_verify_marker_path(&sessions, pid),
+            &ResumeVerifyMarker {
+                session_id: marker_sid.into(),
+                cwd: Some(cwd.into()),
+                baseline_lines: 3,
+                baseline_files: vec![format!("{marker_sid}.jsonl")],
+            },
+        )
+        .unwrap();
+        (sessions, projects)
+    }
+
+    /// (V)(5) FALSE-POSITIVE FIX [the sid cross-check seam]: a stale marker for session A,
+    /// the adapter pid REUSED by a different session B (same cwd) — the first `wait B`
+    /// MUST SKIP the aliased marker (no false fork-fail) and remove it. REVERT CONTROL:
+    /// delete the `marker.session_id != current_session_id` skip → this calls verify for A
+    /// → A.jsonl flat + B.jsonl new → `Forked` → `Some(1)` → the `None` assert REDs.
+    #[test]
+    fn r2_1_aliased_marker_skipped_not_false_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid = 4242;
+        let (sessions, projects) = plant_r2_1_repro(tmp.path(), "A", "/w/projX", pid);
+        // pid reused by session "B" (≠ the marker's "A") → aliased marker → SKIP.
+        let code = super::verify_post_resume_for(&sessions, &projects, pid, "B");
+        assert_eq!(code, None, "(V)(5) an aliased (sid-mismatch) marker is SKIPPED — no false fork-fail on faithful B");
+        assert!(
+            !resume_verify_marker_path(&sessions, pid).exists(),
+            "the stale/aliased marker is removed"
+        );
+    }
+
+    /// (V)(1) GENUINE-FORK DETECTION still fires [the fork-detection seam]: when the marker
+    /// IS for the CURRENT session (sid MATCH) and a real fork happened (requested flat, the
+    /// turn in a new file), `wait` FAILS LOUD. REVERT CONTROL: weaken the fork-detection →
+    /// this no longer returns `Some(1)` → RED. (Distinct seam from (V)(5).)
+    #[test]
+    fn r2_1_genuine_fork_still_detected_on_sid_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid = 4243;
+        let (sessions, projects) = plant_r2_1_repro(tmp.path(), "A", "/w/projX", pid);
+        // the marker IS for session "A" and "A".jsonl did NOT grow + B.jsonl is new → fork.
+        let code = super::verify_post_resume_for(&sessions, &projects, pid, "A");
+        assert_eq!(code, Some(1), "(V)(1) a genuine fork (sid match, turn in a NEW file) STILL fails loud");
+    }
+
+    /// Happy path: sid MATCH + the requested file GREW → faithful continuation → proceed.
+    #[test]
+    fn r2_1_faithful_continuation_on_sid_match_proceeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid = 4244;
+        let (sessions, projects) = plant_r2_1_repro(tmp.path(), "A", "/w/projX", pid);
+        // grow A.jsonl beyond baseline 3 → faithful continuation.
+        let dir = projects.join(cwd_to_project_path("/w/projX"));
+        std::fs::write(dir.join("A.jsonl"), "l1\nl2\nl3\nl4\n").unwrap();
+        let code = super::verify_post_resume_for(&sessions, &projects, pid, "A");
+        assert_eq!(code, None, "sid match + requested file grew → faithful → proceed (exit 0)");
+    }
+
+    /// No marker for the pid → a NORMAL wait (no-op), zero work beyond the stat.
+    #[test]
+    fn r2_1_no_marker_is_a_normal_wait() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let projects = tmp.path().join("projects");
+        assert_eq!(super::verify_post_resume_for(&sessions, &projects, 9999, "anything"), None);
     }
 
     /// A fake channel status seam returning a fixed observation (no socket).

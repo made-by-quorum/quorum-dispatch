@@ -185,6 +185,10 @@ pub fn kill_acp(
     }
     if pid > 0 {
         ensure_tombstone(sessions_dir, pid, captured);
+        // R2-1 (belt-and-suspenders): a stopped session leaves NO aliasable resume-verify
+        // marker behind (the load-bearing defense is the consumer's sid cross-check, but a
+        // stop should not leak a stale marker — consistent with the tombstone discipline).
+        let _ = std::fs::remove_file(resume_verify_marker_path(sessions_dir, pid));
     }
     KillOutcome { was_alive }
 }
@@ -1263,6 +1267,39 @@ mod tests {
             body.contains("ws://127.0.0.1:18970"),
             "tombstone carries endpoint: {body}"
         );
+    }
+
+    // === R2-1 (belt-and-suspenders): kill_acp removes the resume-verify marker so a
+    //     stopped session leaves NOTHING aliasable on pid-reuse. ===
+    #[test]
+    fn kill_acp_removes_the_resume_verify_marker() {
+        let h = harness();
+        std::fs::create_dir_all(&h.sessions_dir).unwrap();
+        let dead_pid = 2_000_000_009i64;
+        // Plant a marker as if a resume had written one for this adapter pid.
+        let marker = resume_verify_marker_path(&h.sessions_dir, dead_pid);
+        write_resume_verify_marker(
+            &marker,
+            &ResumeVerifyMarker {
+                session_id: "T-STOPME".into(),
+                cwd: Some("/work/proj".into()),
+                baseline_lines: 2,
+                baseline_files: vec!["T-STOPME.jsonl".into()],
+            },
+        )
+        .unwrap();
+        assert!(marker.exists(), "marker planted");
+        let spawner = FakeSpawner::ok(0);
+        let probe = probe_absent();
+        let captured = RegistryEntry {
+            pid: Some(dead_pid),
+            session_id: Some("T-STOPME".into()),
+            provider: Some("acp/claude-code".into()),
+            endpoint: Some("ws://127.0.0.1:18977".into()),
+            ..Default::default()
+        };
+        kill_acp(&h.sessions_dir, dead_pid, Some(&captured), &spawner, &probe);
+        assert!(!marker.exists(), "kill_acp removed the resume-verify marker (no stale alias)");
     }
 
     // === Already tombstoned → idempotent no-op (no second tombstone, no kill). ===
