@@ -231,6 +231,34 @@ fn acp_host_queue_overflow_honors_configured_capacity() {
     }
 }
 
+// (W) WEDGED-BUT-ALIVE (Item 3, red-team round-1 #1): `AcpHost::bridge_confirmed_dead`
+// is TRUE only when the bridge child has genuinely EXITED (reaped, no zombie), and FALSE
+// while it is alive — the silent-loss-proof gate the adapter self-terminates on. Uses a
+// trivial `sh` child as a bridge stand-in (no model/network); the check is pure child
+// liveness, not protocol. (ii)/(iii): a live child is never "confirmed dead".
+#[test]
+fn bridge_confirmed_dead_flips_only_when_child_exits() {
+    let tmp = TempDir::new().unwrap();
+    // A child that STAYS ALIVE → NOT confirmed dead (a transient blip / busy turn arm).
+    let alive = AcpHost::spawn("sh", &["-c".to_string(), "sleep 30".to_string()], tmp.path())
+        .expect("spawn alive bridge stand-in");
+    assert!(!alive.bridge_confirmed_dead(), "a live bridge child is NOT confirmed dead");
+    drop(alive); // Drop kills + reaps it (no leak).
+    // A child that EXITS → confirmed dead (and reaped here → no zombie).
+    let dead = AcpHost::spawn("sh", &["-c".to_string(), "exit 0".to_string()], tmp.path())
+        .expect("spawn exiting bridge stand-in");
+    let mut confirmed = false;
+    for _ in 0..100 {
+        if dead.bridge_confirmed_dead() {
+            confirmed = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(confirmed, "an exited bridge child is confirmed dead (reaped)");
+    assert!(dead.bridge_confirmed_dead(), "confirmed-dead is stable after reaping (cached)");
+}
+
 // ===========================================================================
 // 2. LIVE Claude Code lane (SB_ACP_LIVE=1): the real bridge, the real engine.
 // ===========================================================================

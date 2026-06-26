@@ -226,6 +226,15 @@ pub trait AcpResident: AcpClient {
     fn resident_in_flight(&self) -> bool {
         false
     }
+
+    /// (W) WEDGED-BUT-ALIVE (Item 3) — is the bridge child CONFIRMED DEAD? The [`serve`]
+    /// loop polls this so a zombie adapter (bridge gone, process lingering with intact
+    /// pid+cmdline) SELF-TERMINATES, making `pid_alive=false` the honest signal BOTH the
+    /// resume (R-c) and ls (L) gates read — instead of a `/proc`-only lie of 'live'.
+    /// Default `false` (test residents with no bridge never self-terminate).
+    fn bridge_confirmed_dead(&self) -> bool {
+        false
+    }
 }
 
 impl AcpResident for super::client::AcpHost {
@@ -234,6 +243,9 @@ impl AcpResident for super::client::AcpHost {
     }
     fn resident_in_flight(&self) -> bool {
         self.in_flight()
+    }
+    fn bridge_confirmed_dead(&self) -> bool {
+        self.bridge_confirmed_dead()
     }
 }
 
@@ -253,6 +265,18 @@ pub fn serve(
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return Ok(());
+        }
+        // (W) WEDGED-BUT-ALIVE self-terminate: if the bridge child is CONFIRMED DEAD
+        // (reaped — not a transient blip), this zombie adapter exits NONZERO so
+        // `pid_alive=false` becomes the honest signal the resume/ls gates read (instead
+        // of a `/proc`-only 'live' lie). Polled here between connections (idle path);
+        // the shutdown check above wins first, so the normal SIGTERM/kill teardown is
+        // UNAFFECTED. REVERT SEAM (W): drop this check → a bridge-killed adapter lingers
+        // 'live' (the bug reappears) → the (W) repro reds.
+        if resident.bridge_confirmed_dead() {
+            return Err(io::Error::other(
+                "bridge confirmed dead — adapter self-terminating (W: wedged-but-alive guard)",
+            ));
         }
         listener.set_nonblocking(true)?;
         match listener.accept() {
@@ -593,6 +617,17 @@ mod tests {
         events: RefCell<std::collections::VecDeque<AcpEvent>>,
         session: Option<String>,
         in_flight: bool,
+        bridge_dead: bool,
+    }
+    impl Default for FakeResident {
+        fn default() -> Self {
+            FakeResident {
+                events: RefCell::new(Default::default()),
+                session: Some("sess-1".into()),
+                in_flight: false,
+                bridge_dead: false,
+            }
+        }
     }
     impl AcpClient for FakeResident {
         fn initialize(&self) -> Result<InitializeResult, AcpError> {
@@ -622,6 +657,9 @@ mod tests {
         }
         fn resident_in_flight(&self) -> bool {
             self.in_flight
+        }
+        fn bridge_confirmed_dead(&self) -> bool {
+            self.bridge_dead
         }
     }
 
@@ -690,8 +728,7 @@ mod tests {
                 ]
                 .into(),
             ),
-            session: Some("sess-1".into()),
-            in_flight: false,
+            ..Default::default()
         };
         with_server(resident, |url| {
             let client = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
@@ -725,11 +762,7 @@ mod tests {
 
     #[test]
     fn wire_round_trips_the_five_methods_and_status() {
-        let resident = FakeResident {
-            events: RefCell::new(Default::default()),
-            session: Some("sess-1".into()),
-            in_flight: false,
-        };
+        let resident = FakeResident::default();
         with_server(resident, |url| {
             let c = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
             assert_eq!(c.initialize().unwrap().agent_name.as_deref(), Some("fake"));
@@ -748,25 +781,68 @@ mod tests {
     #[test]
     fn status_carries_in_flight_both_arms() {
         // idle resident → in_flight=false.
-        let idle = FakeResident {
-            events: RefCell::new(Default::default()),
-            session: Some("s".into()),
-            in_flight: false,
-        };
+        let idle = FakeResident { in_flight: false, ..Default::default() };
         with_server(idle, |url| {
             let c = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
             assert!(!c.status_in_flight().unwrap(), "an idle resident reports in_flight=false");
         });
         // mid-turn resident → in_flight=true (never false-idle).
-        let busy = FakeResident {
-            events: RefCell::new(Default::default()),
-            session: Some("s".into()),
-            in_flight: true,
-        };
+        let busy = FakeResident { in_flight: true, ..Default::default() };
         with_server(busy, |url| {
             let c = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
             assert!(c.status_in_flight().unwrap(), "a mid-turn resident reports in_flight=true");
         });
+    }
+
+    /// (W) WEDGED-BUT-ALIVE — `serve` SELF-TERMINATES (returns Err, → adapter exits
+    /// nonzero) when the bridge is CONFIRMED DEAD, WITHOUT `shutdown` being set. This is
+    /// what makes `pid_alive=false` the honest signal the resume/ls gates read. REVERT
+    /// SEAM (W): drop the `bridge_confirmed_dead` check in `serve` → serve never returns
+    /// on a dead bridge → this hangs/REDs (the bug: the zombie adapter lingers 'live').
+    #[test]
+    fn serve_self_terminates_on_confirmed_dead_bridge() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        // shutdown is NEVER set → ONLY the dead-bridge guard can end serve.
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let resident = FakeResident { bridge_dead: true, ..Default::default() };
+        let sd = shutdown.clone();
+        let h = std::thread::spawn(move || serve(&resident, &listener, &sd));
+        let start = Instant::now();
+        while !h.is_finished() {
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "serve must SELF-TERMINATE on a confirmed-dead bridge (no shutdown set)"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let res = h.join().unwrap();
+        assert!(res.is_err(), "self-terminate returns Err → adapter exits nonzero");
+    }
+
+    /// (W) NEGATIVE CONTROL (arms ii+iii) — a LIVE bridge (bridge_dead=false, incl. a
+    /// busy-but-alive mid-turn or a transient blip) must NOT self-terminate: `serve` keeps
+    /// running and only ends when `shutdown` is set (the normal teardown). Proves the fix
+    /// never kills a recoverable session (no silent loss).
+    #[test]
+    fn serve_does_not_self_terminate_on_live_bridge() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let resident = FakeResident { bridge_dead: false, ..Default::default() };
+        let sd = shutdown.clone();
+        let h = std::thread::spawn(move || serve(&resident, &listener, &sd));
+        // Give it time: a live bridge must keep serving (NOT self-terminate).
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(!h.is_finished(), "a live bridge must NOT self-terminate (no silent loss)");
+        // Normal teardown ends it cleanly.
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(("127.0.0.1", port)); // nudge the accept loop awake
+        let start = Instant::now();
+        while !h.is_finished() {
+            assert!(start.elapsed() < Duration::from_secs(5), "serve must end on shutdown");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(h.join().unwrap().is_ok(), "shutdown teardown returns Ok (graceful)");
     }
 
     /// The encode/decode pair is an exact inverse for every event arm (a pure check,

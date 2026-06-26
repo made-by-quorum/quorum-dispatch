@@ -790,16 +790,25 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
             return 1;
         }
     };
-    // FAITHFULNESS GUARD: the re-established session MUST be the SAME sessionId we asked
-    // to load (`session/load` reuses the id; a divergence would mean a fresh session got
-    // dressed as a resume — the FM-R1 mirage). If it differs, tear down + refuse.
+    // WRONG-ADAPTER GUARD (NOT a bridge-fork / FM-R1 guard — honest scope, red-team #2.1):
+    // confirm the resident we just connected to reports OUR sessionId. NOTE what this can
+    // and CANNOT catch: `AcpHost::load_session` CACHES the requested id on Ok and the ACP
+    // `session/load` reply carries NO sessionId, so on the SUCCESS path `status` echoes the
+    // id we asked for → `established == requested` ALWAYS; this check therefore does NOT
+    // detect a bridge-SIDE fork (the FM-R1 mirage). What it DOES catch: we connected to a
+    // DIFFERENT resident — a stale/reused endpoint/port now serving another acp session
+    // (a different cached id) — in which case we'd be about to bless the wrong adapter as
+    // this row; refuse instead. The real FM-R1 faithfulness (same CC conversation) is
+    // established out-of-band by Component-0 + the JSONL-continuation round-trip, not by
+    // this runtime echo. (A production post-resume JSONL-continuation check is a disclosed
+    // residual, red-team #2.2 — HELD.)
     let established = conn.status_session_id().ok().flatten().unwrap_or_default();
     if established != session.session_id {
         drop(conn);
         spawner.kill(spawned.pid);
         eprintln!(
-            "sb resume: \"{name}\": resumed adapter established a DIFFERENT session \
-             ({established:?} != {:?}) — refusing (would not be the same conversation).",
+            "sb resume: \"{name}\": the endpoint is serving a DIFFERENT acp session \
+             ({established:?} != {:?}) — refusing (wrong/stale adapter, not our row).",
             session.session_id
         );
         return 1;

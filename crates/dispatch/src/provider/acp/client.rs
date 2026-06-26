@@ -417,6 +417,19 @@ impl AcpHost {
             .unwrap_or(false)
     }
 
+    /// (W) WEDGED-BUT-ALIVE (Item 3, red-team round-1 #1) — is the bridge child CONFIRMED
+    /// DEAD? A non-blocking `try_wait`: `Ok(Some(_))` = the child exited (and is REAPED
+    /// here — no zombie left), so the bridge is genuinely gone; `Ok(None)` = STILL ALIVE;
+    /// `Err(_)` = indeterminate → treated as NOT dead (conservative — never self-terminate
+    /// a possibly-recoverable session). This is the silent-loss guard: it is a CONFIRMED
+    /// child-death check, NOT the transport-loss observation — a TRANSIENT transport blip
+    /// with the child still alive returns `false` here, so the adapter SURVIVES it. A
+    /// reaped child necessarily closed its stdout (transport loss), so child-death
+    /// subsumes "transport-loss AND child-dead" while being race-free.
+    pub fn bridge_confirmed_dead(&self) -> bool {
+        matches!(self.inner.borrow_mut().child.try_wait(), Ok(Some(_)))
+    }
+
     /// `session/load` (resume): re-establish a prior session by id on this bridge.
     /// The bridge replays the session's history as `session/update`s (buffered into
     /// `pending`). Proves the resume verb on the LIVE bridge (pillar 2).
