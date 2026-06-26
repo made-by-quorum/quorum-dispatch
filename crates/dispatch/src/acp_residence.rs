@@ -50,15 +50,22 @@ pub struct AdapterOpts {
     pub bridge_cmd: String,
     /// `--bridge-arg <arg>` (repeatable) — extra bridge args (e.g. a local node entry).
     pub bridge_args: Vec<String>,
+    /// `--load-session <sessionId>` (RESUME / Item 3) — when present, the adapter boots
+    /// in LOAD mode: it re-establishes THIS prior ACP session via real `session/load`
+    /// (the bridge replays the SAME conversation's history) instead of minting a fresh
+    /// `session/new`. `None` is the create path (a brand-new session). This single
+    /// Option IS the load-vs-new boot fork [`run_adapter`] branches on.
+    pub load_session: Option<String>,
 }
 
-/// Parse `--listen`/`--cwd`/`--bridge-cmd`/`--bridge-arg` (both `--flag value` and
-/// `--flag=value`). `--listen` and `--cwd` are required.
+/// Parse `--listen`/`--cwd`/`--bridge-cmd`/`--bridge-arg`/`--load-session` (both
+/// `--flag value` and `--flag=value`). `--listen` and `--cwd` are required.
 pub fn parse_adapter_args(args: &[String]) -> Result<AdapterOpts, String> {
     let mut listen: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut bridge_cmd: Option<String> = None;
     let mut bridge_args: Vec<String> = Vec::new();
+    let mut load_session: Option<String> = None;
     let mut i = 0;
     // Take the value of `--flag`: from `=` if present, else the next token.
     let take = |i: &mut usize, args: &[String], flag: &str| -> Result<String, String> {
@@ -82,6 +89,8 @@ pub fn parse_adapter_args(args: &[String]) -> Result<AdapterOpts, String> {
             bridge_cmd = Some(take(&mut i, args, "--bridge-cmd")?);
         } else if a == "--bridge-arg" || a.starts_with("--bridge-arg=") {
             bridge_args.push(take(&mut i, args, "--bridge-arg")?);
+        } else if a == "--load-session" || a.starts_with("--load-session=") {
+            load_session = Some(take(&mut i, args, "--load-session")?);
         } else {
             return Err(format!("acp-daemon: unexpected arg {a:?}"));
         }
@@ -92,6 +101,7 @@ pub fn parse_adapter_args(args: &[String]) -> Result<AdapterOpts, String> {
         cwd: PathBuf::from(cwd.ok_or("acp-daemon: --cwd is required")?),
         bridge_cmd: bridge_cmd.unwrap_or_else(|| BRIDGE_BIN.to_string()),
         bridge_args,
+        load_session,
     })
 }
 
@@ -111,6 +121,7 @@ pub fn build_adapter_argv(
     cwd: &Path,
     bridge_cmd: Option<&str>,
     bridge_args: &[String],
+    load_session: Option<&str>,
 ) -> Vec<String> {
     let mut argv = vec![
         exe.to_string_lossy().into_owned(),
@@ -127,6 +138,12 @@ pub fn build_adapter_argv(
     for a in bridge_args {
         argv.push("--bridge-arg".to_string());
         argv.push(a.clone());
+    }
+    // RESUME (Item 3): in load mode the adapter is spawned with `--load-session <id>`
+    // so its boot re-establishes the SAME prior session via real `session/load`.
+    if let Some(sid) = load_session {
+        argv.push("--load-session".to_string());
+        argv.push(sid.to_string());
     }
     argv
 }
@@ -216,12 +233,28 @@ pub fn run_adapter(args: &[String]) -> i32 {
         return 1;
     }
     let cwd_str = opts.cwd.to_string_lossy().into_owned();
-    let session = match crate::provider::acp::AcpClient::new_session(&host, &cwd_str) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("acp-daemon: session/new failed: {e}");
-            return 1;
-        }
+    // THE LOAD-VS-NEW BOOT FORK (Item 3 RESUME; the distinct (R) revert seam). In load
+    // mode (`--load-session <id>`) the adapter re-establishes the SAME prior session via
+    // real `session/load` — the bridge replays that conversation's history (proven
+    // faithful by Component-0: same <sessionId>.jsonl continues, no fork). Otherwise it
+    // mints a fresh `session/new` (the create path). REVERTING this branch to always
+    // `new_session` makes a STOPPED→resume round-trip diverge (a NEW sessionId / empty
+    // history) — that is exactly the FM-R1 mirage the oracle reverts here to catch.
+    let session = match &opts.load_session {
+        Some(sid) => match host.load_session(sid, &cwd_str) {
+            Ok(()) => sid.clone(),
+            Err(e) => {
+                eprintln!("acp-daemon: session/load {sid} failed: {e}");
+                return 1;
+            }
+        },
+        None => match crate::provider::acp::AcpClient::new_session(&host, &cwd_str) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("acp-daemon: session/new failed: {e}");
+                return 1;
+            }
+        },
     };
     // Graceful teardown: SIGTERM/SIGINT → SHUTDOWN → serve returns → drain the bridge.
     unsafe {
@@ -261,10 +294,27 @@ mod tests {
         assert_eq!(o.cwd, PathBuf::from("/tmp/x"));
         assert_eq!(o.bridge_cmd, "node");
         assert_eq!(o.bridge_args, vec!["/p/index.js".to_string()]);
+        // no --load-session → create mode (None)
+        assert_eq!(o.load_session, None);
         // default bridge when unspecified
         let d = parse_adapter_args(&["--listen=ws://127.0.0.1:1".into(), "--cwd".into(), ".".into()])
             .unwrap();
         assert_eq!(d.bridge_cmd, BRIDGE_BIN);
+        assert_eq!(d.load_session, None);
+        // --load-session (both forms) → load mode carries the sessionId
+        let l = parse_adapter_args(&[
+            "--listen=ws://127.0.0.1:1".into(),
+            "--cwd".into(),
+            ".".into(),
+            "--load-session".into(),
+            "sess-abc".into(),
+        ])
+        .unwrap();
+        assert_eq!(l.load_session.as_deref(), Some("sess-abc"));
+        let l2 =
+            parse_adapter_args(&["--listen=ws://x:1".into(), "--cwd=.".into(), "--load-session=s2".into()])
+                .unwrap();
+        assert_eq!(l2.load_session.as_deref(), Some("s2"));
         // missing required
         assert!(parse_adapter_args(&["--cwd".into(), ".".into()]).is_err());
         assert!(parse_adapter_args(&["--listen".into(), "x".into()]).is_err());
@@ -286,6 +336,7 @@ mod tests {
             Path::new("/work"),
             Some("node"),
             &["/p/i.js".to_string()],
+            None,
         );
         assert_eq!(
             argv,
@@ -302,6 +353,37 @@ mod tests {
                 "/p/i.js",
             ]
         );
+    }
+
+    #[test]
+    fn build_adapter_argv_load_mode_appends_load_session() {
+        // RESUME (Item 3): load mode appends `--load-session <id>` (the create-path
+        // default args + the load flag). A round-trips through parse_adapter_args.
+        let argv = build_adapter_argv(
+            Path::new("/usr/bin/qd"),
+            "ws://127.0.0.1:9001",
+            Path::new("/work"),
+            None,
+            &[],
+            Some("sess-XYZ"),
+        );
+        assert_eq!(
+            argv,
+            vec![
+                "/usr/bin/qd",
+                "acp-daemon",
+                "--listen",
+                "ws://127.0.0.1:9001",
+                "--cwd",
+                "/work",
+                "--load-session",
+                "sess-XYZ",
+            ]
+        );
+        // the built argv (minus exe+verb) parses back to load mode with the same id.
+        let parsed = parse_adapter_args(&argv[2..]).unwrap();
+        assert_eq!(parsed.load_session.as_deref(), Some("sess-XYZ"));
+        assert_eq!(parsed.listen, "ws://127.0.0.1:9001");
     }
 
     #[test]

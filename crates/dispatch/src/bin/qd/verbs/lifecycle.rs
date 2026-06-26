@@ -1624,7 +1624,8 @@ fn run_new_acp_daemon(
 
     // 3. spawn the adapter DETACHED (codex RealDaemonSpawner reuse: process_group(0),
     //    stdin null, stdout/stderr → log). The bridge child inherits the group.
-    let argv = build_adapter_argv(&exe, &endpoint, cwd, None, &[]);
+    // create path: no `--load-session` (a brand-new session/new, not a resume).
+    let argv = build_adapter_argv(&exe, &endpoint, cwd, None, &[], None);
     let log_path = home
         .join(".quorum")
         .join("dispatch")

@@ -60,6 +60,22 @@ fn codex_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
     )
 }
 
+/// Item 3 RESUME (acp) — the AlreadyRunning no-op line. A genuinely-alive acp row is
+/// drivable RIGHT NOW; resume is a success no-op (NO second adapter, ZERO row mutation).
+/// Mirrors `codex_already_running_line`; pinned by a unit test.
+fn acp_already_running_line(name: &str) -> String {
+    format!("session \"{name}\" is already alive; send to it with: sb send:relay {name} <text>")
+}
+
+/// Item 3 RESUME (acp) — the revived line. The resident adapter was re-spawned in
+/// LOAD mode (real `session/load`, SAME sessionId, the CC conversation continues).
+fn acp_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
+    format!(
+        "resumed acp session \"{name}\" (adapter pid {pid}, {endpoint}); \
+         send to it with: sb send:relay {name} <text>"
+    )
+}
+
 /// `sb resume <session>` — cold-session relaunch.
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
@@ -117,6 +133,15 @@ pub fn run(m: &ArgMatches) -> i32 {
     // not just Cold).
     if session.provider == "codex" {
         return run_codex_resume(&session);
+    }
+    // scoped-ACP-CC Item 3 (RESUME): an acp/* row is ALSO daemon-hosted (the resident
+    // `qd acp-daemon` adapter + its bridge). Resume re-establishes the SAME CC session
+    // via real `session/load` (Component-0-proven faithful), mirroring the codex revive.
+    // Placed BESIDE the codex branch — BEFORE refuse_unknown_provider (which would
+    // refuse "acp/claude-code" as unknown) and before the must-be-cold gate (a
+    // daemon-hosted row is revivable from any non-alive state, incl. a tombstoned stop).
+    if session.provider.starts_with("acp/") {
+        return run_acp_resume(&session);
     }
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
     if let Some(code) = common::refuse_unknown_provider("resume", &session) {
@@ -650,12 +675,190 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
     }
 }
 
+/// scoped-ACP-CC Item 3 — the acp RESUME path at the verb layer. An acp/* row is a
+/// daemon-hosted resident adapter (+ its `claude-code-acp` bridge); `sb resume` for it
+/// is revive-to-DRIVABLE with NO interactive attach (agents have no TTY). Mirrors
+/// [`run_codex_resume`] 1:1, substituting `session/load` (the ACP resume primitive,
+/// driven by the load-mode adapter) for `thread/resume`:
+///   - resumability gate (no sessionId / no jsonl → nothing to resume),
+///   - ALIVE acp row (pid alive ∧ OUR cmdline ∧ endpoint reachable) → AlreadyRunning
+///     no-op, ZERO mutation, NO second adapter (the [`acp_resume_is_alive`] (R-c) seam),
+///   - else REVIVE: spawn a fresh resident adapter in LOAD mode (`--load-session <id>`,
+///     detached `process_group(0)`, the SAME create spawn path), confirm it re-loaded
+///     the SAME sessionId, then rewrite the row (NEW pid + NEW endpoint, SAME sessionId)
+///     and consume the prior tombstone. A later `send`/`wait` round-trips on the SAME
+///     sessionId; the CC JSONL continues (Component-0-proven faithful).
+fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
+    use dispatch::acp_residence::{build_adapter_argv, connect_ready};
+    use dispatch::create_daemon::{real_alloc_port, real_cmdline_probe, DaemonSpawner, RealDaemonSpawner};
+    use dispatch::effects::Clock;
+    use dispatch::provider::acp::AcpConnection;
+    use dispatch::resume_daemon::acp_resume_is_alive;
+    use std::time::Duration;
+
+    let name = session
+        .name
+        .clone()
+        .unwrap_or_else(|| session.session_id.clone());
+
+    let env = RealEnv;
+    let home = match env.var("HOME").filter(|s| !s.is_empty()) {
+        Some(h) => PathBuf::from(h),
+        None => {
+            eprintln!("sb resume: HOME is not set — cannot resolve the session state dir.");
+            return 1;
+        }
+    };
+    let paths = SbPaths::from_home(&home);
+
+    // Resumability gate (the acp analog of resume.rs's `no resumable transcript` arm):
+    // a stopped acp row needs BOTH a sessionId (to `session/load`) and a jsonl_path
+    // (the bridge's CC store the load reads). Either missing → nothing to resume.
+    if session.session_id.is_empty() || session.jsonl_path.is_none() {
+        eprintln!(
+            "sb resume: session \"{name}\" was stopped and has no resumable transcript — \
+             nothing to resume."
+        );
+        return 1;
+    }
+
+    // The CURRENT pid/endpoint (alive-check inputs). The endpoint is NOT on the Session
+    // surface — re-read it off the registry row by pid (mirrors run_codex_resume).
+    let current_endpoint = session
+        .pid
+        .filter(|&p| p != 0)
+        .and_then(|pid| dispatch::registry::read_entry(&paths.sessions_dir, pid))
+        .and_then(|e| e.endpoint)
+        .filter(|s| !s.is_empty());
+
+    // Case 1: ALREADY ALIVE → clean no-op, ZERO mutation, NO second adapter. Identity +
+    // reachability probed live (defeats PID reuse / a stale endpoint). The (R-c) seam.
+    let probe = real_cmdline_probe;
+    let reachable = |ep: &str| -> bool {
+        AcpConnection::connect(ep, Duration::from_millis(500))
+            .map(|c| c.status_session_id().ok().flatten().is_some())
+            .unwrap_or(false)
+    };
+    if acp_resume_is_alive(session.pid, current_endpoint.as_deref(), probe, reachable) {
+        println!("{}", acp_already_running_line(&name));
+        return 0;
+    }
+
+    // Case 2/3: REVIVE — re-spawn the resident adapter in LOAD mode. Mirrors the create
+    // path `run_new_acp_daemon`, with `--load-session <sessionId>` substituted for the
+    // fresh `session/new`.
+    let port = match real_alloc_port() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("sb resume: \"{name}\": acp port allocation failed: {e}");
+            return 1;
+        }
+    };
+    let endpoint = format!("ws://127.0.0.1:{port}");
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("sb resume: \"{name}\": cannot resolve own executable for acp adapter: {e}");
+            return 1;
+        }
+    };
+    // The adapter's cwd = the row's cwd (faithful to the original session). A row with
+    // no cwd falls back to "." (the adapter must have a cwd; the bridge resolves the
+    // CC JSONL by encodeProjectPath(cwd), so this must match the create-time cwd).
+    let cwd_str = session.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| ".".to_string());
+    let cwd = PathBuf::from(&cwd_str);
+
+    // LOAD MODE: `--load-session <sessionId>` → the adapter boots via real `session/load`.
+    let argv = build_adapter_argv(&exe, &endpoint, &cwd, None, &[], Some(&session.session_id));
+    let log_path = home
+        .join(".quorum")
+        .join("dispatch")
+        .join("log")
+        .join(format!("acp-{name}.log"));
+    let spawner = RealDaemonSpawner;
+    let spawned = match spawner.spawn_detached(&argv, &[], &cwd, &log_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("sb resume: \"{name}\": acp adapter spawn failed: {e}");
+            return 1;
+        }
+    };
+
+    // Readiness: poll connect+status until the resident session is re-established. On
+    // failure: group-kill the just-spawned adapter (no orphan).
+    let conn = match connect_ready(&endpoint, Duration::from_secs(30)) {
+        Ok(c) => c,
+        Err(e) => {
+            spawner.kill(spawned.pid);
+            eprintln!("sb resume: \"{name}\": {e} (see {})", log_path.display());
+            return 1;
+        }
+    };
+    // FAITHFULNESS GUARD: the re-established session MUST be the SAME sessionId we asked
+    // to load (`session/load` reuses the id; a divergence would mean a fresh session got
+    // dressed as a resume — the FM-R1 mirage). If it differs, tear down + refuse.
+    let established = conn.status_session_id().ok().flatten().unwrap_or_default();
+    if established != session.session_id {
+        drop(conn);
+        spawner.kill(spawned.pid);
+        eprintln!(
+            "sb resume: \"{name}\": resumed adapter established a DIFFERENT session \
+             ({established:?} != {:?}) — refusing (would not be the same conversation).",
+            session.session_id
+        );
+        return 1;
+    }
+    drop(conn); // the resident stays up; this was a short-lived readiness connection.
+
+    // Rewrite the registry row: NEW adapter pid + NEW endpoint, SAME sessionId (m2
+    // identity preserved), status live. The old dead-pid tombstone is consumed below.
+    let clock = RealClock;
+    let now = clock.now_ms();
+    let entry = dispatch::registry::RegistryEntry {
+        pid: Some(spawned.pid),
+        session_id: Some(session.session_id.clone()),
+        cwd: Some(cwd_str),
+        started_at: Some(now),
+        updated_at: Some(now),
+        status: Some("idle".to_string()),
+        name: Some(name.clone()),
+        version: None,
+        kind: None,
+        entrypoint: None,
+        backend: None,
+        spawned_by: None,
+        provider: Some(session.provider.clone()),
+        endpoint: Some(endpoint.clone()),
+        // A resumed healthy row carries NO degradation latch (tier is derived per verb).
+        transport: None,
+    };
+    if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
+        spawner.kill(spawned.pid);
+        eprintln!(
+            "sb resume: \"{name}\": revived the acp adapter but its registry row could not \
+             be written ({e}); the adapter was stopped."
+        );
+        return 1;
+    }
+
+    // Consume the prior tombstone (`<old_pid>.json.tombstoned`) so no dangling tombstone
+    // / double live-row survives (R-b). Best-effort: a missing tombstone is fine (a row
+    // stopped a different way), and the new live row is already authoritative.
+    if let Some(old_pid) = session.pid.filter(|&p| p != 0) {
+        let tomb = paths.sessions_dir.join(format!("{old_pid}.json.tombstoned"));
+        let _ = std::fs::remove_file(&tomb);
+    }
+
+    println!("{}", acp_revived_line(&name, spawned.pid, &endpoint));
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        codex_already_running_line, codex_revived_line, resume_boot_unconfirmed_line,
-        revive_launch_failed_line, revive_resume_args, revive_zmx_missing_line,
-        run_detached_revive,
+        acp_already_running_line, acp_revived_line, codex_already_running_line, codex_revived_line,
+        resume_boot_unconfirmed_line, revive_launch_failed_line, revive_resume_args,
+        revive_zmx_missing_line, run_detached_revive,
     };
     use dispatch::launch::launch_env_pairs;
     use dispatch::model::{Session, SessionBranch, SessionStatus};
@@ -878,6 +1081,29 @@ mod tests {
                 "no send:pty for a daemon: {line}"
             );
             assert!(!line.contains("--wait"), "codex ignores --wait: {line}");
+        }
+    }
+
+    /// Item 3 (acp) resume success lines name `sb send:relay` (the working agent
+    /// channel), NOT bare `sb send` / `send:pty` (no pane for a daemon-hosted session).
+    /// Mirrors `codex_resume_success_lines_point_at_send_relay`.
+    #[test]
+    fn acp_resume_success_lines_point_at_send_relay() {
+        let running = acp_already_running_line("wk");
+        assert_eq!(
+            running,
+            "session \"wk\" is already alive; send to it with: sb send:relay wk <text>"
+        );
+        let revived = acp_revived_line("wk", 4242, "ws://127.0.0.1:18951");
+        assert_eq!(
+            revived,
+            "resumed acp session \"wk\" (adapter pid 4242, ws://127.0.0.1:18951); \
+             send to it with: sb send:relay wk <text>"
+        );
+        for line in [&running, &revived] {
+            assert!(line.contains("sb send:relay wk"), "names send:relay: {line}");
+            assert!(!line.contains("send:pty"), "no send:pty for a daemon: {line}");
+            assert!(!line.contains("--wait"), "acp ignores --wait: {line}");
         }
     }
 
