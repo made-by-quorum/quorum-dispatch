@@ -142,6 +142,38 @@ fn drive_turn(conn: &dispatch::provider::acp::AcpConnection, session: &str, prom
     }
 }
 
+/// Direct child pids of `parent` (via pgrep -P) — the adapter's bridge child.
+fn child_pids(parent: i64) -> Vec<i64> {
+    std::process::Command::new("pgrep")
+        .arg("-P")
+        .arg(parent.to_string())
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|l| l.trim().parse::<i64>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Poll waitpid(WNOHANG) until `pid` exits (reaping it → no zombie) or the budget expires.
+fn wait_exited(pid: i64, budget: Duration) -> bool {
+    let deadline = Instant::now() + budget;
+    loop {
+        let mut status = 0;
+        let r = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
+        if r == pid as i32 || r < 0 {
+            return true; // exited+reaped, or ECHILD (already gone)
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn spawn_adapter(qd: &str, endpoint: &str, cwd: &Path, load_session: Option<&str>, log: &Path) -> i64 {
     let argv = build_adapter_argv(Path::new(qd), endpoint, cwd, None, &[], load_session);
     let env = vec![("PATH".to_string(), path_with_bridge())];
@@ -269,4 +301,52 @@ fn acp_resume_roundtrip_live() {
         lines_pre.len(),
         lines_post.len()
     );
+}
+
+/// (W) WEDGED-BUT-ALIVE live repro (arm i): a real `qd acp-daemon` adapter whose bridge
+/// CHILD is KILLED must SELF-TERMINATE — so `pid_alive=false` becomes the honest signal
+/// the resume (R-c) and ls (L) gates read (instead of a 'live' lie). The gate consequences
+/// (ls 'stopped'; resume revives) follow from pid_alive=false and are unit-proven
+/// (`acp_status_classify(false,_)="stopped"`; `acp_resume_is_alive(dead)=false→revive`).
+#[test]
+fn acp_adapter_self_terminates_when_bridge_child_killed() {
+    if !live() {
+        eprintln!("SB_ACP_LIVE != 1 — skipping the (W) wedged-but-alive live repro");
+        return;
+    }
+    let qd = env!("CARGO_BIN_EXE_qd");
+    let bridge_dir = bridge_bin_dir();
+    assert!(bridge_dir.join("claude-code-acp").exists(), "bridge shim not found");
+    let work = TempDir::new().unwrap();
+    let cwd = work.path();
+    let logdir = work.path().join("log");
+    std::fs::create_dir_all(&logdir).unwrap();
+
+    // Spawn the REAL adapter (create mode); confirm it + its bridge child are alive.
+    let ep = format!("ws://127.0.0.1:{}", real_alloc_port().expect("port"));
+    let adapter = spawn_adapter(qd, &ep, cwd, None, &logdir.join("wedge.log"));
+    let conn = connect_ready(&ep, Duration::from_secs(30)).expect("adapter ready");
+    let session = conn.status_session_id().ok().flatten().expect("sessionId");
+    drop(conn);
+    assert!(is_pid_alive(adapter as i32), "adapter alive after boot");
+    // Find the bridge CHILD (the node process the adapter owns).
+    let mut bridge_children = child_pids(adapter);
+    let kill_deadline = Instant::now() + Duration::from_secs(5);
+    while bridge_children.is_empty() && Instant::now() < kill_deadline {
+        std::thread::sleep(Duration::from_millis(100));
+        bridge_children = child_pids(adapter);
+    }
+    assert!(!bridge_children.is_empty(), "the adapter has a live bridge child");
+    eprintln!("(W) adapter pid={adapter} session={session} bridge children={bridge_children:?}");
+
+    // KILL ONLY the bridge child (the adapter is NOT signaled).
+    for bp in &bridge_children {
+        unsafe { libc::kill(*bp as i32, libc::SIGKILL) };
+    }
+    // THE (W) FIX: the adapter must SELF-TERMINATE (confirmed-dead bridge) — NOT linger
+    // 'live'. Pre-fix this hangs alive forever (the bug). waitpid reaps it → no zombie.
+    let exited = wait_exited(adapter, Duration::from_secs(10));
+    assert!(exited, "(W) adapter SELF-TERMINATED after its bridge child died");
+    assert!(!is_pid_alive(adapter as i32), "(W) adapter pid is gone → pid_alive=false is the honest signal");
+    eprintln!("=== (W) GREEN: bridge child killed → adapter self-terminated (no zombie 'live' adapter) ===");
 }
