@@ -401,8 +401,45 @@ fn run_codex_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i
 /// deadline elapses. The events are the REAL bridge stream relayed through the resident
 /// (faithfulness keystone) — wait never synthesizes completion. No idle short-circuit on
 /// the (stale-for-acp) disk status; a dead/degraded endpoint reports cold, never hangs.
+/// (N-O3, Item 3) — the pure observation source the completion probe consumes: map ONE
+/// `next_update` pull (the SAME real terminal observation the raw loop already saw) onto
+/// the SC-2 [`AcpTurnObservation`]. This is THE distinct (O3) revert seam: corrupting
+/// this mapping (e.g. always `Pending`, or `Terminal`→`Pending`) makes the wait verdict
+/// diverge from the raw pull — the redundancy the oracle reverts here to catch. NO new
+/// completion source: it consumes the existing `next_update`, just routed through the
+/// completion contract.
+fn acp_wait_observation(
+    res: Result<Option<dispatch::provider::acp::AcpEvent>, dispatch::provider::acp::AcpError>,
+) -> dispatch::provider::acp::AcpTurnObservation {
+    use dispatch::provider::acp::{AcpEvent, AcpTurnObservation};
+    match res {
+        // A correlated protocol terminal (stopReason) → the turn completed (SC-2a).
+        Ok(Some(AcpEvent::Terminal { stop, .. })) => AcpTurnObservation::Terminal(stop),
+        // A bridge JSON-RPC error terminal → Failed (DISTINCT from a clean completion).
+        Ok(Some(AcpEvent::TerminalError { message, .. })) => AcpTurnObservation::Failed(message),
+        // Streaming update / a quiet poll → still in flight (idle-without-evidence rule).
+        Ok(Some(AcpEvent::Update { .. })) | Ok(None) => AcpTurnObservation::Pending,
+        // Transport gone before any terminal → source integrity lost (never a false done).
+        Err(_) => AcpTurnObservation::TransportLost("channel closed".into()),
+    }
+}
+
+/// A single-shot [`AcpTurnObserver`] holding ONE mapped observation — lets the wait verb
+/// (which drives the ws connection, not the host) feed [`AcpTurnCompletion`] the SAME
+/// observation the raw `next_update` produced.
+struct OneShotObserver(dispatch::provider::acp::AcpTurnObservation);
+impl dispatch::provider::acp::AcpTurnObserver for OneShotObserver {
+    fn observe(&self) -> dispatch::provider::acp::AcpTurnObservation {
+        self.0.clone()
+    }
+}
+
 fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64) -> i32 {
-    use dispatch::provider::acp::{derive_tier, AcpClient, AcpConnection, AcpEvent, Tier};
+    use dispatch::provider::acp::{
+        derive_tier, AcpClient, AcpConnection, AcpTurnCompletion, AcpTurnObservation, TerminalReason,
+        Tier,
+    };
+    use dispatch::wait::{TurnCompletion, TurnCompletionProbe};
     use std::io::Write;
     use std::time::{Duration, Instant};
 
@@ -443,6 +480,16 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
         Err(_) => return cold(label),
     };
 
+    // (N-idle, Item 3) ENTRY-IDLE short-circuit: a genuinely-idle session (no turn in
+    // flight — the SC-1 queue's primary truth) returns PROMPTLY instead of camping to the
+    // timeout (the codex entry-idle gate analog). A turn IN FLIGHT reports in_flight=true
+    // → we fall through to the wait loop, so a mid-turn wait NEVER false-idles. A failed
+    // status probe falls through too (the loop handles a dead channel).
+    if let Ok(false) = conn.status_in_flight() {
+        eprintln!("{label} is idle.");
+        return 0;
+    }
+
     eprint!("Waiting for {label}...");
     let _ = std::io::stderr().flush();
 
@@ -460,27 +507,35 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
             return 1;
         }
         let remaining = (deadline - now).min(Duration::from_secs(1));
-        match conn.next_update(remaining) {
-            // A real protocol terminal (the session/prompt response carried a stopReason)
-            // → the turn completed and the session is idle. wait = "block until idle"
-            // (codex-consistent), exit 0.
-            Ok(Some(AcpEvent::Terminal { .. })) => {
+        // (N-O3) Factor the terminal detection through the SC-2 completion contract: map
+        // the SAME `next_update` pull onto an observation, then let `AcpTurnCompletion`
+        // render the verdict (behaviorally identical to the prior inline match — Terminal
+        // → done/0, TerminalError → failed/1, Update/None → keep polling, Err → closed).
+        let obs = acp_wait_observation(conn.next_update(remaining));
+        let observer = OneShotObserver(obs.clone());
+        let completion = AcpTurnCompletion::new(&observer);
+        match completion.poll_completion() {
+            // Visible = the turn is DONE. The SC-2a reason decides done(0) vs failed(1):
+            // a JSON-RPC-error terminal is `Failed` (an operator scripting `qd wait X &&
+            // next` must not proceed on a failed turn); every other terminal is a clean
+            // completion (end_turn / cancelled / max — all exit 0, as before).
+            TurnCompletionProbe::Visible => {
+                if matches!(completion.terminal_reason(), Some((TerminalReason::Failed, _))) {
+                    let msg = match &obs {
+                        AcpTurnObservation::Failed(m) => m.clone(),
+                        _ => String::new(),
+                    };
+                    eprintln!(" failed: {msg}");
+                    return 1;
+                }
                 eprintln!(" done");
                 usage_wait(&session.session_id, session.name.as_deref());
                 return 0;
             }
-            // F1 / SC-2a: the turn FAILED (a bridge JSON-RPC error — authRequired/
-            // internalError — or an unmappable stopReason), DISTINCT from a clean
-            // completion. Surface the failure reason + a NONZERO exit so an operator
-            // scripting `qd wait X && next` does not proceed on a failed turn (reporting
-            // a failed turn as success would be faithfulness-adjacent).
-            Ok(Some(AcpEvent::TerminalError { message, .. })) => {
-                eprintln!(" failed: {message}");
-                return 1;
-            }
-            // Streaming updates / a quiet poll → keep pulling until the terminal.
-            Ok(Some(AcpEvent::Update { .. })) | Ok(None) => continue,
-            Err(_) => {
+            // Still in flight (streaming / quiet poll) → keep pulling until the terminal.
+            TurnCompletionProbe::Pending => continue,
+            // Transport gone before any terminal → source integrity lost → exit 1.
+            TurnCompletionProbe::Degraded(_) => {
                 eprintln!(" channel closed");
                 return 1;
             }
@@ -513,6 +568,71 @@ mod tests {
     use super::*;
     use dispatch::wait::{ChannelStatus, WaitContentDeps};
     use std::cell::Cell;
+
+    /// (N-O3) the wait terminal-detection factored through the SC-2 completion contract:
+    /// each `next_update` outcome maps to the right observation AND the SAME completion
+    /// verdict the raw inline match produced — behaviorally identical, no new source.
+    /// REVERT SEAM: corrupt `acp_wait_observation` (e.g. Terminal→Pending) → the verdict
+    /// diverges (a completed turn never reads Visible) → this REDs.
+    #[test]
+    fn acp_wait_observation_factors_through_completion_contract() {
+        use dispatch::provider::acp::{
+            AcpEvent, AcpTurnCompletion, AcpTurnObservation, StopReason, TerminalReason,
+        };
+        use dispatch::wait::{TurnCompletion, TurnCompletionProbe};
+
+        let ev = |e: AcpEvent| Ok(Some(e));
+        let verdict = |obs: AcpTurnObservation| {
+            let o = super::OneShotObserver(obs);
+            AcpTurnCompletion::new(&o).poll_completion()
+        };
+
+        // clean end_turn terminal → Terminal(EndTurn) → Visible, reason Completed (done/0).
+        let t = super::acp_wait_observation(ev(AcpEvent::Terminal {
+            session: "s".into(),
+            turn: "t".into(),
+            stop: StopReason::EndTurn,
+        }));
+        assert_eq!(t, AcpTurnObservation::Terminal(StopReason::EndTurn));
+        assert_eq!(verdict(t.clone()), TurnCompletionProbe::Visible);
+        let o = super::OneShotObserver(t);
+        assert_eq!(
+            AcpTurnCompletion::new(&o).terminal_reason().unwrap().0,
+            TerminalReason::Completed
+        );
+
+        // a JSON-RPC error terminal → Failed → Visible, reason Failed (failed/1).
+        let f = super::acp_wait_observation(ev(AcpEvent::TerminalError {
+            session: "s".into(),
+            turn: "t".into(),
+            message: "internalError".into(),
+        }));
+        assert_eq!(f, AcpTurnObservation::Failed("internalError".into()));
+        assert_eq!(verdict(f.clone()), TurnCompletionProbe::Visible);
+        let o = super::OneShotObserver(f);
+        assert_eq!(
+            AcpTurnCompletion::new(&o).terminal_reason().unwrap().0,
+            TerminalReason::Failed
+        );
+
+        // a streamed update / a quiet poll → Pending (keep polling).
+        let u = super::acp_wait_observation(ev(AcpEvent::Update {
+            session: "s".into(),
+            kind: "agent_message_chunk".into(),
+            payload: serde_json::Value::Null,
+        }));
+        assert_eq!(u, AcpTurnObservation::Pending);
+        assert_eq!(verdict(u), TurnCompletionProbe::Pending);
+        assert_eq!(
+            super::acp_wait_observation(Ok(None)),
+            AcpTurnObservation::Pending
+        );
+
+        // transport gone → TransportLost → Degraded (never a false done).
+        let d = super::acp_wait_observation(Err(dispatch::provider::acp::AcpError::Closed));
+        assert!(matches!(d, AcpTurnObservation::TransportLost(_)));
+        assert!(matches!(verdict(d), TurnCompletionProbe::Degraded(_)));
+    }
 
     /// A fake channel status seam returning a fixed observation (no socket).
     struct FakeStatus(ChannelStatusObservation);

@@ -458,6 +458,9 @@ const NAME_COL_MAX: usize = 16;
 /// `render_table_human` with the clock seam (`now`) injected — the pure core,
 /// so tests/goldens can freeze `now` (mirrors `relative_time`, which takes
 /// `now_ms` as a parameter rather than reading the clock inline).
+/// Test-only convenience: the human table with NO acp overrides (the stored-status path
+/// the goldens pin). Production always routes through `render_table_human_with`.
+#[cfg(test)]
 fn render_table_human_at(sessions: &[Session], now: i64) -> String {
     render_table_human_at_with(sessions, now, &[])
 }

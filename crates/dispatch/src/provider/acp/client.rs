@@ -405,6 +405,18 @@ impl AcpHost {
         self.inner.borrow().session.clone()
     }
 
+    /// (N-idle, Item 3) Is a turn IN FLIGHT? Reads the SC-1 [`OutboundQueue`]'s primary
+    /// `is_idle` truth (the in-flight turn is released only on its REAL terminal), so a
+    /// `wait` can short-circuit a genuinely-idle session yet never false-idle mid-turn.
+    pub fn in_flight(&self) -> bool {
+        self.inner
+            .borrow()
+            .queue
+            .as_ref()
+            .map(|q| !q.is_idle())
+            .unwrap_or(false)
+    }
+
     /// `session/load` (resume): re-establish a prior session by id on this bridge.
     /// The bridge replays the session's history as `session/update`s (buffered into
     /// `pending`). Proves the resume verb on the LIVE bridge (pillar 2).

@@ -217,11 +217,23 @@ fn decode_init(v: &Value) -> InitializeResult {
 pub trait AcpResident: AcpClient {
     /// The established ACP session id, if `session/new`/`session/load` has run.
     fn resident_session_id(&self) -> Option<String>;
+
+    /// (N-idle, Item 3) Is a turn IN FLIGHT right now? The SC-1 queue's primary truth
+    /// (`OutboundQueue::is_idle` — `in_flight.is_some()`). `false` = genuinely turn-idle,
+    /// so a `wait` can short-circuit instead of camping to timeout; `true` while a turn
+    /// runs, so a mid-turn `wait` never false-idles. Default `false` (test residents that
+    /// don't model a queue are reported idle).
+    fn resident_in_flight(&self) -> bool {
+        false
+    }
 }
 
 impl AcpResident for super::client::AcpHost {
     fn resident_session_id(&self) -> Option<String> {
         self.session_id()
+    }
+    fn resident_in_flight(&self) -> bool {
+        self.in_flight()
     }
 }
 
@@ -343,7 +355,13 @@ fn dispatch_request(resident: &dyn AcpResident, req: &Value) -> Result<Value, Ac
                 None => Ok(json!({ "event": Value::Null })),
             }
         }
-        "status" => Ok(json!({ "session_id": resident.resident_session_id() })),
+        // (N-idle) `status` additionally carries `in_flight` — a `wait` queries it to
+        // short-circuit a genuinely-idle session. Additive: pre-Item-3 clients read only
+        // `session_id` (the field is ignored), so the probe stays back-compatible.
+        "status" => Ok(json!({
+            "session_id": resident.resident_session_id(),
+            "in_flight": resident.resident_in_flight(),
+        })),
         other => Err(AcpError::Protocol(format!("unknown method {other:?}"))),
     }
 }
@@ -366,10 +384,34 @@ pub struct AcpConnection {
 impl AcpConnection {
     /// Connect to `url` (a `ws://127.0.0.1:<port>` resident endpoint). `timeout` bounds
     /// the socket read granularity and floors the per-request deadline (mirrors
-    /// `WsAppServer::connect`).
+    /// `WsAppServer::connect`) AND — (N-conc, Item 3) — bounds the ws HANDSHAKE itself.
+    ///
+    /// SERIALIZE BOUND (honest, documented): the resident [`serve`] loop handles exactly
+    /// ONE connection at a time (`!Sync` host, one `RefCell` — `client.rs`). While a
+    /// client is camped in a long `wait` (a repeated `next_update` block), the listener
+    /// does not `accept()` a second client until the first disconnects. Pre-Item-3,
+    /// `tungstenite::connect` applied NO handshake deadline, so a concurrent verb's
+    /// connect could STALL for the camped wait's entire lifetime (up to 120s). We now
+    /// bound the TCP-connect AND the handshake I/O by `timeout`, so a contended connect
+    /// fails FAST (`Transport`/timeout) instead of hanging — the caller surfaces a clean
+    /// error / retries rather than wedging. True concurrency (multiple in-flight clients)
+    /// would require `Arc<Mutex<HostInner>>` in the host (DECLINED for Item 3 — a bigger
+    /// surface + keystone risk for a sequential-keystone workload); this LEAN bound +
+    /// this note is the ratified disposition.
     pub fn connect(url: &str, timeout: Duration) -> Result<AcpConnection, AcpError> {
-        let (sock, _resp) = tungstenite::connect(url)
+        // Bound the TCP connect (the SYN) ...
+        let addr = parse_ws_addr(url)?;
+        let tcp = TcpStream::connect_timeout(&addr, timeout)
             .map_err(|e| AcpError::Transport(format!("connect {url}: {e}")))?;
+        // ... and the ws UPGRADE read/write (the part that stalls behind a camped serve
+        // loop — the TCP connect itself succeeds into the accept backlog, but the upgrade
+        // is not serviced until the resident calls `accept`). A read/write deadline on
+        // the stream makes the handshake fail fast rather than block indefinitely.
+        tcp.set_read_timeout(Some(timeout))
+            .and_then(|()| tcp.set_write_timeout(Some(timeout)))
+            .map_err(|e| AcpError::Transport(format!("connect {url}: set handshake timeout: {e}")))?;
+        let (sock, _resp) = tungstenite::client(url, MaybeTlsStream::Plain(tcp))
+            .map_err(|e| AcpError::Transport(format!("handshake {url}: {e}")))?;
         let me = AcpConnection {
             sock: RefCell::new(sock),
             next_id: Cell::new(0),
@@ -383,6 +425,14 @@ impl AcpConnection {
     /// `next_update` block). `&self` (Cell-backed).
     pub fn set_request_timeout(&self, timeout: Duration) {
         self.request_timeout.set(timeout);
+    }
+
+    /// (N-idle, Item 3) Is a turn IN FLIGHT on the resident? Reads the `status` probe's
+    /// `in_flight` flag (absent/false on a pre-Item-3 resident → `false`). A `wait`
+    /// short-circuits a genuinely-idle session (in_flight=false) instead of camping.
+    pub fn status_in_flight(&self) -> Result<bool, AcpError> {
+        let result = self.request("status", json!({}))?;
+        Ok(result.get("in_flight").and_then(Value::as_bool).unwrap_or(false))
     }
 
     /// The resident's established session id (the `status` health probe). Used by the
@@ -464,6 +514,16 @@ impl AcpConnection {
     }
 }
 
+/// Parse the `127.0.0.1:<port>` socket addr out of a `ws://127.0.0.1:<port>` endpoint
+/// (for the bounded `TcpStream::connect_timeout` in [`AcpConnection::connect`]).
+fn parse_ws_addr(url: &str) -> Result<std::net::SocketAddr, AcpError> {
+    let hostport = url.strip_prefix("ws://").unwrap_or(url);
+    let hostport = hostport.split('/').next().unwrap_or(hostport);
+    hostport
+        .parse()
+        .map_err(|e| AcpError::Transport(format!("bad ws url {url}: {e}")))
+}
+
 fn map_ws_err(e: tungstenite::Error) -> AcpError {
     match e {
         tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => AcpError::Closed,
@@ -532,6 +592,7 @@ mod tests {
     struct FakeResident {
         events: RefCell<std::collections::VecDeque<AcpEvent>>,
         session: Option<String>,
+        in_flight: bool,
     }
     impl AcpClient for FakeResident {
         fn initialize(&self) -> Result<InitializeResult, AcpError> {
@@ -558,6 +619,9 @@ mod tests {
     impl AcpResident for FakeResident {
         fn resident_session_id(&self) -> Option<String> {
             self.session.clone()
+        }
+        fn resident_in_flight(&self) -> bool {
+            self.in_flight
         }
     }
 
@@ -627,6 +691,7 @@ mod tests {
                 .into(),
             ),
             session: Some("sess-1".into()),
+            in_flight: false,
         };
         with_server(resident, |url| {
             let client = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
@@ -663,6 +728,7 @@ mod tests {
         let resident = FakeResident {
             events: RefCell::new(Default::default()),
             session: Some("sess-1".into()),
+            in_flight: false,
         };
         with_server(resident, |url| {
             let c = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
@@ -671,6 +737,35 @@ mod tests {
             assert_eq!(c.prompt("", "hi", "tester").unwrap(), "turn-1");
             c.cancel("").unwrap();
             assert_eq!(c.status_session_id().unwrap().as_deref(), Some("sess-1"));
+        });
+    }
+
+    /// (N-idle, Item 3) the `status` probe carries `in_flight` over the wire BOTH ways:
+    /// an idle resident → `status_in_flight()` false (a `wait` short-circuits); a resident
+    /// with a turn in flight → true (a mid-turn `wait` does NOT false-idle). REVERT SEAM:
+    /// drop the `in_flight` field from the `status` reply → `status_in_flight` reads the
+    /// `unwrap_or(false)` default → the in-flight (true) arm REDs.
+    #[test]
+    fn status_carries_in_flight_both_arms() {
+        // idle resident → in_flight=false.
+        let idle = FakeResident {
+            events: RefCell::new(Default::default()),
+            session: Some("s".into()),
+            in_flight: false,
+        };
+        with_server(idle, |url| {
+            let c = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
+            assert!(!c.status_in_flight().unwrap(), "an idle resident reports in_flight=false");
+        });
+        // mid-turn resident → in_flight=true (never false-idle).
+        let busy = FakeResident {
+            events: RefCell::new(Default::default()),
+            session: Some("s".into()),
+            in_flight: true,
+        };
+        with_server(busy, |url| {
+            let c = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
+            assert!(c.status_in_flight().unwrap(), "a mid-turn resident reports in_flight=true");
         });
     }
 
@@ -698,5 +793,34 @@ mod tests {
             let back = decode_event(&encode_event(&ev)).unwrap();
             assert_eq!(back, ev, "encode/decode must round-trip {ev:?}");
         }
+    }
+
+    /// (N-conc, Item 3) the ws-handshake connect timeout: a server that accepts the TCP
+    /// connection but NEVER performs the ws handshake (modelling the single-conn `serve`
+    /// loop camped in a long `wait`) must make `connect` fail FAST (~timeout), NOT hang
+    /// for the camped client's lifetime. REVERT SEAM: restore `tungstenite::connect(url)`
+    /// (no handshake deadline) → this connect blocks until the server acts → the elapsed
+    /// assert REDs (the test would hang past the bound).
+    #[test]
+    fn connect_handshake_is_bounded_against_a_camped_server() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept the TCP conn, then sit WITHOUT handshaking (never `tungstenite::accept`).
+        let server = std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                std::thread::sleep(Duration::from_millis(800));
+                drop(stream);
+            }
+        });
+        let url = format!("ws://{addr}");
+        let start = Instant::now();
+        let res = AcpConnection::connect(&url, Duration::from_millis(300));
+        let elapsed = start.elapsed();
+        assert!(res.is_err(), "a camped (non-handshaking) server must not yield a connection");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "connect must fail FAST (bounded by the handshake timeout), took {elapsed:?}"
+        );
+        let _ = server.join();
     }
 }

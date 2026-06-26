@@ -625,6 +625,34 @@ mod tests {
         assert_eq!(v["ts"], "2024-06-04T11:25:00.000Z");
     }
 
+    /// (N-ids, Item 3) VERIFY (not invent): the shared `mint_or_get` backfill is
+    /// PROVIDER-AGNOSTIC — it keys purely on `session_id`, so an acp row (whose
+    /// `session_id` is the ACP sessionId) mints/reuses a stable id by the SAME path as
+    /// codex/claude, with NO acp-specific binding. And because `run_acp_resume` PRESERVES
+    /// the sessionId, the id is STABLE across a stop→resume (same sessionId → same id,
+    /// append-only, never reassigned). This is the proof the ls backfill already covers
+    /// acp rows (the plan's verify-existing disposition).
+    #[test]
+    fn acp_row_mints_and_reuses_stable_id_across_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = store(&dir);
+        let clock = FixedClock(TS);
+        let acp_sid = "ff474896-c848-46f0-9ed6-48d470a7dcbb"; // an ACP sessionId (UUID)
+        let first = mint_or_get(&path, acp_sid, Some("acp-wk"), &clock).unwrap();
+        assert!(is_valid_id(&first), "an acp row mints a valid stable id");
+        // A later `ls` backfill (rename is harmless) → SAME id, no new line.
+        let again = mint_or_get(&path, acp_sid, Some("acp-wk-renamed"), &clock).unwrap();
+        assert_eq!(first, again, "the same acp sessionId reuses its id (never reassigned)");
+        // RESUME preserves the sessionId → the resumed row's backfill reuses the SAME id.
+        let after_resume = mint_or_get(&path, acp_sid, Some("acp-wk"), &clock).unwrap();
+        assert_eq!(first, after_resume, "the id is STABLE across stop→resume (same sessionId)");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            1,
+            "append-only: exactly one mint line, no reassignment"
+        );
+    }
+
     #[test]
     fn mint_with_no_name_writes_null() {
         let dir = tempfile::tempdir().unwrap();
