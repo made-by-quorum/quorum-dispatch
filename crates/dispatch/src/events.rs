@@ -183,6 +183,24 @@ pub struct Envelope {
     pub session: Option<String>,
     /// sb session name when known.
     pub name: Option<String>,
+    /// RF-6 (R3d) — the EMITTING process's OS start-time (epoch ms), stamped on
+    /// every record so the §7 dead-writer rule can tell the genuine original
+    /// writer from a recycled pid (a NEW incarnation that happens to hold the old
+    /// pid). `None` ⇒ unreadable at emit OR an older/test record (the rule then
+    /// falls back to pid-alive only — the v1 fail-safe direction). Additive (§2.2
+    /// CR-1: absent, never empty/null), emitted AFTER `seq`, omitted when `None`.
+    pub start_ms: Option<i64>,
+}
+
+/// The emitting process's OWN OS start-time (epoch ms), memoized process-globally
+/// (RF-6 / R3d): one [`crate::effects::proc_start_ms`] read per process lifetime
+/// (a `ps -o etime=` spawn is too costly per-record), stamped on every envelope as
+/// `start_ms`. The process's start-time is constant, so a single read is exact for
+/// the whole process. A read failure caches `None` (the dead-writer rule then keeps
+/// its v1 pid-alive-only behavior — never a spurious trigger).
+fn self_start_ms() -> Option<i64> {
+    static SELF_START: OnceLock<Option<i64>> = OnceLock::new();
+    *SELF_START.get_or_init(|| crate::effects::proc_start_ms(std::process::id() as i32))
 }
 
 /// The verb that initiated a send (§2.3 `send-initiated.verb`).
@@ -312,6 +330,33 @@ pub enum Payload {
     /// PENDING). `reason` ∈ "recipient-gone" | "transport-error" (extend additively).
     /// `send_id` MANDATORY.
     SeenFailed { send_id: String, reason: String },
+    /// R3d (recovery-ladder forensics) — a recovery RUNG was ENTERED for a session.
+    /// NON-terminal (recovery telemetry, not a send terminal); carries NO send_id
+    /// (recovery is session-scoped). `rung` is the lowercase [`crate::recovery::Rung`]
+    /// token ("pidfd-signal" | "control-wake" | "pty-inject" | "respawn"). With
+    /// `rung-succeeded` / `rung-timeout` / `recovery-crit`, the event log ALONE
+    /// reconstructs which rungs a recovery episode entered/succeeded/timed-out/CRITed
+    /// ([`replay_recovery_episode`]).
+    RungEntered { session_id: String, rung: String },
+    /// R3d — a recovery rung SUCCEEDED (the session recovered at this rung).
+    /// NON-terminal, no send_id.
+    RungSucceeded { session_id: String, rung: String },
+    /// R3d — a recovery rung TIMED OUT (the rung's deadline elapsed with no
+    /// recovery; the ladder escalates or, at Rung 4, records a confirmed failure).
+    /// NON-terminal, no send_id.
+    RungTimeout {
+        session_id: String,
+        rung: String,
+        waited_ms: u64,
+    },
+    /// R3d — the recovery ladder reached CRIT (≥`CRIT_CONSECUTIVE_FAILURES`
+    /// confirmed failures, or a D-state target): terminal for the EPISODE, operator
+    /// alert, no further automation. NON-terminal in the SEND sense (no send_id);
+    /// `consecutive_failures` is the strike count at CRIT.
+    RecoveryCrit {
+        session_id: String,
+        consecutive_failures: u32,
+    },
 }
 
 impl Payload {
@@ -331,6 +376,10 @@ impl Payload {
             Payload::RelayDelivered { .. } => "relay-delivered",
             Payload::MessageSeen { .. } => "message-seen",
             Payload::SeenFailed { .. } => "seen-failed",
+            Payload::RungEntered { .. } => "rung-entered",
+            Payload::RungSucceeded { .. } => "rung-succeeded",
+            Payload::RungTimeout { .. } => "rung-timeout",
+            Payload::RecoveryCrit { .. } => "recovery-crit",
         }
     }
 
@@ -486,6 +535,32 @@ impl Payload {
                 obj.insert("send_id".into(), Value::String(send_id.clone()));
                 obj.insert("reason".into(), Value::String(reason.clone()));
             }
+            // R3d recovery-ladder forensics. Key order: session_id first, then the
+            // kind-specific fields. No send_id (recovery is session-scoped).
+            Payload::RungEntered { session_id, rung }
+            | Payload::RungSucceeded { session_id, rung } => {
+                obj.insert("session_id".into(), Value::String(session_id.clone()));
+                obj.insert("rung".into(), Value::String(rung.clone()));
+            }
+            Payload::RungTimeout {
+                session_id,
+                rung,
+                waited_ms,
+            } => {
+                obj.insert("session_id".into(), Value::String(session_id.clone()));
+                obj.insert("rung".into(), Value::String(rung.clone()));
+                obj.insert("waited_ms".into(), Value::from(*waited_ms));
+            }
+            Payload::RecoveryCrit {
+                session_id,
+                consecutive_failures,
+            } => {
+                obj.insert("session_id".into(), Value::String(session_id.clone()));
+                obj.insert(
+                    "consecutive_failures".into(),
+                    Value::from(*consecutive_failures),
+                );
+            }
         }
     }
 }
@@ -514,6 +589,10 @@ fn build_record_line(env: &Envelope, payload: &Payload, sha_cap: usize) -> Strin
     obj.insert("ts".into(), Value::String(env.ts.clone()));
     obj.insert("pid".into(), Value::from(env.pid));
     obj.insert("seq".into(), Value::from(env.seq));
+    // RF-6 start_ms: emitted right after seq, omitted when None (§2.2 additive).
+    if let Some(sm) = env.start_ms {
+        obj.insert("start_ms".into(), Value::from(sm));
+    }
     insert_opt_str(&mut obj, "session", &env.session);
     insert_opt_str(&mut obj, "name", &env.name);
     // The serde tag.
@@ -693,6 +772,7 @@ impl EventWriter {
                 seq: next_seq(&self.path),
                 session: self.session.clone(),
                 name: self.name.clone(),
+                start_ms: self_start_ms(),
             };
             let marker = build_record_line(&marker_env, &Payload::EventsTruncated, CHUNK_SHA_CAP);
             let _ = append_record(&self.path, &marker);
@@ -706,6 +786,7 @@ impl EventWriter {
             seq: next_seq(&self.path),
             session: self.session.clone(),
             name: self.name.clone(),
+            start_ms: self_start_ms(),
         };
         let line = self.fit_line(&env, payload);
         append_record(&self.path, &line)
@@ -858,6 +939,110 @@ fn append_record(path: &Path, line: &str) -> Result<(), String> {
 }
 
 // ===========================================================================
+// R3d — recovery-ladder forensics (emit + replay)
+// ===========================================================================
+
+/// One transition of a recovery episode, the typed surface over the four R3d
+/// ladder payloads. The coordinator/ladder emits these as the episode runs; a
+/// reader reconstructs the episode from the log ALONE ([`replay_recovery_episode`])
+/// — the "forensically reconstructable" property (R3d / R1 §7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LadderEvent {
+    /// A rung was entered (`rung` = the [`crate::recovery::Rung::as_str`] token).
+    RungEntered { session_id: String, rung: String },
+    /// A rung succeeded (the session recovered at it).
+    RungSucceeded { session_id: String, rung: String },
+    /// A rung timed out (deadline elapsed with no recovery).
+    RungTimeout {
+        session_id: String,
+        rung: String,
+        waited_ms: u64,
+    },
+    /// The episode reached CRIT (terminal; operator alert).
+    Crit {
+        session_id: String,
+        consecutive_failures: u32,
+    },
+}
+
+impl LadderEvent {
+    /// The wire [`Payload`] for this event.
+    pub fn payload(&self) -> Payload {
+        match self {
+            LadderEvent::RungEntered { session_id, rung } => Payload::RungEntered {
+                session_id: session_id.clone(),
+                rung: rung.clone(),
+            },
+            LadderEvent::RungSucceeded { session_id, rung } => Payload::RungSucceeded {
+                session_id: session_id.clone(),
+                rung: rung.clone(),
+            },
+            LadderEvent::RungTimeout {
+                session_id,
+                rung,
+                waited_ms,
+            } => Payload::RungTimeout {
+                session_id: session_id.clone(),
+                rung: rung.clone(),
+                waited_ms: *waited_ms,
+            },
+            LadderEvent::Crit {
+                session_id,
+                consecutive_failures,
+            } => Payload::RecoveryCrit {
+                session_id: session_id.clone(),
+                consecutive_failures: *consecutive_failures,
+            },
+        }
+    }
+}
+
+/// Emit one recovery-ladder forensic event, best-effort non-fatal (§4.2 — an emit
+/// failure NEVER changes recovery behavior; the ladder is the source of truth, the
+/// log is forensics). Append-only `O_APPEND`, ≤[`MAX_RECORD_BYTES`], via the same
+/// rotation-aware [`EventWriter::emit`] path every record uses.
+pub fn emit_ladder_event(
+    writer: &EventWriter,
+    clock: &dyn Clock,
+    event: &LadderEvent,
+) -> Result<(), String> {
+    writer.emit(clock, &event.payload())
+}
+
+/// Reconstruct a recovery episode from the event log ALONE (R3d forensics). Reads
+/// the four recovery-ladder kinds in FILE ORDER (the forensic cross-pid order, §4.4)
+/// and returns the [`LadderEvent`] sequence — proving an episode (which rungs
+/// entered / succeeded / timed-out / CRITed) is replayable WITHOUT any in-memory
+/// coordinator state. Non-recovery records are ignored.
+pub fn replay_recovery_episode(records: &[EventRecord]) -> Vec<LadderEvent> {
+    let mut out = Vec::new();
+    for r in records {
+        let session_id = r.str_field("session_id").unwrap_or_default();
+        match r.event.as_str() {
+            "rung-entered" => out.push(LadderEvent::RungEntered {
+                session_id,
+                rung: r.str_field("rung").unwrap_or_default(),
+            }),
+            "rung-succeeded" => out.push(LadderEvent::RungSucceeded {
+                session_id,
+                rung: r.str_field("rung").unwrap_or_default(),
+            }),
+            "rung-timeout" => out.push(LadderEvent::RungTimeout {
+                session_id,
+                rung: r.str_field("rung").unwrap_or_default(),
+                waited_ms: r.u64_field("waited_ms").unwrap_or(0),
+            }),
+            "recovery-crit" => out.push(LadderEvent::Crit {
+                session_id,
+                consecutive_failures: r.u64_field("consecutive_failures").unwrap_or(0) as u32,
+            }),
+            _ => {}
+        }
+    }
+    out
+}
+
+// ===========================================================================
 // §4.4 — reader (lock-free, torn-tolerant)
 // ===========================================================================
 
@@ -887,6 +1072,12 @@ impl EventRecord {
     /// A payload field as u64 (None if absent/wrong-typed).
     pub fn u64_field(&self, key: &str) -> Option<u64> {
         self.obj.get(key).and_then(Value::as_u64)
+    }
+
+    /// A payload/envelope field as i64 (None if absent/wrong-typed). The RF-6
+    /// start_ms arm reads the envelope's `start_ms` through this.
+    pub fn i64_field(&self, key: &str) -> Option<i64> {
+        self.obj.get(key).and_then(Value::as_i64)
     }
 
     /// This record's `send_id`, if it carries one.
@@ -1038,12 +1229,22 @@ pub fn send_initiated_for(records: &[EventRecord], send_id: &str) -> Option<Even
 // ===========================================================================
 
 /// Is the `send-initiated` record `si` DEAD-DANGLING (§7), given the full record
-/// set and `now_ms`? Iff: (a) no terminal for its send_id; (b) the sender pid
-/// (envelope pid) is dead (`kill(pid,0)` → ESRCH, via [`is_pid_alive`]); (c) age
-/// (now − record ts) > [`T_ANCHOR_IDLE_MS`].
+/// set and `now_ms`? Iff: (a) no terminal for its send_id; (b) the original WRITER
+/// INCARNATION is gone ([`writer_incarnation_gone`], the RF-6 start_ms-guarded
+/// check — NOT bare pid-liveness); (c) age (now − record ts) > [`T_ANCHOR_IDLE_MS`].
 ///
-/// pid-reuse makes a recycled pid look alive → the send simply stays dangling
-/// longer (L3 named imperfection; no process-start-time check in v1).
+/// ## RF-6 (R3d) — the start_ms arm closing the v1 named imperfection
+/// v1 keyed (b) on bare pid-liveness (`is_pid_alive`), so a recycled pid (the old
+/// pid now held by a DIFFERENT process) read as "alive" and SUPPRESSED the trigger
+/// — a genuinely dead-dangling send stayed dangling forever once its pid was
+/// reused. The start_ms arm folds the writer's recorded process start-time
+/// ([`Envelope::start_ms`]) against the live pid's CURRENT start-time: a drift
+/// beyond [`crate::kill::START_TIME_SLACK_MS`] proves the live process is a
+/// stranger (the original writer is gone) and the trigger is no longer suppressed.
+/// This mirrors `kill::pid_is_foreign`'s sound start-time arm. Records without a
+/// recorded `start_ms` (older/test records, or an unreadable live start) fall back
+/// to bare pid-liveness — the v1 FAIL-SAFE direction (delays, never spuriously
+/// fires).
 pub fn is_dead_dangling(records: &[EventRecord], si: &EventRecord, now_ms: i64) -> bool {
     let Some(send_id) = si.send_id() else {
         return false;
@@ -1052,8 +1253,8 @@ pub fn is_dead_dangling(records: &[EventRecord], si: &EventRecord, now_ms: i64) 
     if first_terminal_for(records, &send_id).is_some() {
         return false;
     }
-    // (b) sender pid dead.
-    if is_pid_alive(si.pid as i32) {
+    // (b) the WRITER INCARNATION (pid + start_ms, RF-6) is gone.
+    if !writer_incarnation_gone(si) {
         return false;
     }
     // (c) age > threshold.
@@ -1061,6 +1262,43 @@ pub fn is_dead_dangling(records: &[EventRecord], si: &EventRecord, now_ms: i64) 
         return false;
     };
     now_ms - ts > T_ANCHOR_IDLE_MS
+}
+
+/// Is the SPECIFIC incarnation that wrote `si` gone (RF-6, R3d)? The dead-writer
+/// rule's (b) clause, start_ms-guarded:
+/// - pid not alive → the writer is gone (the v1 ESRCH case);
+/// - pid alive AND a recorded `start_ms` whose live current start has drifted
+///   beyond [`crate::kill::START_TIME_SLACK_MS`] → a recycled pid: a STRANGER holds
+///   it, the original writer is gone (the arm that closes the imperfection);
+/// - pid alive with matching/within-slack start, or no usable start evidence →
+///   the writer is (treated as) still alive (v1 fail-safe: no spurious trigger).
+fn writer_incarnation_gone(si: &EventRecord) -> bool {
+    let pid = si.pid as i32;
+    if !is_pid_alive(pid) {
+        return true; // pid gone → writer incarnation gone
+    }
+    // Our OWN live pid is, by construction, the SAME incarnation (this process is
+    // running, so its pid cannot have been recycled out from under us). Short-circuit
+    // here so the common `await_received` self-wait (the live writer polling for its
+    // own terminal) never pays a per-poll `proc_start_ms` (`ps`) spawn — the start_ms
+    // arm only matters for a FOREIGN pid that may be a recycled stranger.
+    if pid == std::process::id() as i32 {
+        return false;
+    }
+    // A FOREIGN alive pid MAY be a recycled stranger (the recovery-reader case) — the
+    // RF-6 start_ms arm. Compare the writer's recorded process start-time against the
+    // live pid's CURRENT start-time.
+    let Some(recorded) = si.i64_field("start_ms") else {
+        return false; // no recorded start (v1/older record) → fall back to pid-alive
+    };
+    match crate::effects::proc_start_ms(pid) {
+        // The live process started no later than the writer (+slack) → SAME
+        // incarnation → writer alive. A LATER start (beyond slack) → recycled pid,
+        // the original writer is gone (mirrors kill::pid_is_foreign's start arm).
+        Some(current) => current > recorded + crate::kill::START_TIME_SLACK_MS,
+        // Can't read the live start → fail-safe: treat as alive (no spurious fire).
+        None => false,
+    }
 }
 
 // ===========================================================================
@@ -1923,6 +2161,7 @@ mod tests {
             seq,
             session: Some("11111111-2222-3333-4444-555555555555".to_string()),
             name: Some("alpha".to_string()),
+            start_ms: None,
         }
     }
 
@@ -2115,6 +2354,7 @@ mod tests {
             seq: u64::MAX,
             session: Some("11111111-2222-3333-4444-555555555555".to_string()),
             name: Some(name),
+            start_ms: None,
         };
         let p = Payload::SendInitiated {
             send_id: format!("{}-1781241549123-{}", 4_000_000_000u64, u64::MAX),
@@ -2173,6 +2413,7 @@ mod tests {
             seq: u64::MAX,
             session: Some("11111111-2222-3333-4444-555555555555".to_string()),
             name: Some(name),
+            start_ms: None,
         };
         // A preview body of short plain words (no run ≥24, no key prefix) so the
         // preview survives redaction VERBATIM at its full length — the worst case
@@ -2856,6 +3097,7 @@ mod tests {
             seq: 0,
             session: Some("sid".into()),
             name: None,
+            start_ms: None,
         };
         let line = build_record_line(&env, &p, CHUNK_SHA_CAP);
         parse_one(&line).unwrap()
@@ -3157,6 +3399,7 @@ mod tests {
             seq: 0,
             session: Some("sid".into()),
             name: None,
+            start_ms: None,
         };
         parse_one(&build_record_line(&env, &p, CHUNK_SHA_CAP)).unwrap()
     }
@@ -3191,6 +3434,7 @@ mod tests {
                 seq: 0,
                 session: Some("sid".into()),
                 name: None,
+                start_ms: None,
             },
             &Payload::SendInitiated {
                 send_id: "s2".into(),
@@ -3243,6 +3487,173 @@ mod tests {
             !is_dead_dangling(&records, &si, now),
             "live pid → NOT dead-dangling (rule requires pid dead)"
         );
+    }
+
+    /// Build a send-initiated record with an explicit pid + ts + envelope start_ms
+    /// (the RF-6 dead-writer arm subject).
+    fn si_record_with_pid_start(
+        pid: u32,
+        start_ms: Option<i64>,
+        ts: &str,
+        transcript: &str,
+        msg: &str,
+    ) -> EventRecord {
+        let p = Payload::SendInitiated {
+            send_id: "s".into(),
+            verb: "send:pty".into(),
+            send_path: "idle".into(),
+            content_sha256: sha256_hex(msg.as_bytes()),
+            content_len: msg.len() as u64,
+            chunks: 1,
+            chunk_sha256s: vec![sha256_hex(msg.as_bytes())],
+            chunk_sha256s_capped: false,
+            transcript: Some(transcript.to_string()),
+            transcript_offset: Some(0),
+            content_preview: None,
+        };
+        let env = Envelope {
+            v: 1,
+            ts: ts.to_string(),
+            pid,
+            seq: 0,
+            session: Some("sid".into()),
+            name: None,
+            start_ms,
+        };
+        parse_one(&build_record_line(&env, &p, CHUNK_SHA_CAP)).unwrap()
+    }
+
+    /// Spawn a long-lived FOREIGN child (not our pid) whose `proc_start_ms` is
+    /// readable; returns the child handle + its pid. Reap with `kill` + `wait`.
+    fn spawn_live_foreign_child() -> (std::process::Child, u32) {
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn /bin/sleep");
+        let pid = child.id();
+        (child, pid)
+    }
+
+    /// RF-6 (R3d) — the start_ms arm closes the v1 imperfection: a recycled pid (a
+    /// FOREIGN process is ALIVE on the pid, but the record's recorded `start_ms` is
+    /// far in the PAST, so the live start has drifted beyond START_TIME_SLACK_MS) no
+    /// longer SUPPRESSES the dead-dangling trigger. v1 (bare pid-alive) returned
+    /// false here forever — the named imperfection.
+    #[test]
+    fn rf6_recycled_pid_does_not_suppress_dead_dangling() {
+        let (mut child, pid) = spawn_live_foreign_child();
+        let msg = "writer died, its pid got recycled by a stranger";
+        let send_ts = "2026-06-06T06:00:00.000Z";
+        let now = iso_to_epoch_ms(send_ts).unwrap() + 60_000; // age > 30s
+        // The foreign pid is alive, but the recorded start_ms = 1000 (epoch ms in
+        // 1970): the live process's real start is ~1.7e12, drifting WAY beyond the
+        // 2-min slack → recycled-pid → the original writer is gone.
+        let si = si_record_with_pid_start(pid, Some(1000), send_ts, "/t.jsonl", msg);
+        let records = vec![si.clone()];
+        let verdict = is_dead_dangling(&records, &si, now);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            verdict,
+            "a FOREIGN live pid whose recorded start_ms proves it is a DIFFERENT \
+             incarnation must NOT suppress the dead-dangling trigger (RF-6 start_ms arm)"
+        );
+    }
+
+    /// RF-6 control (non-vacuity of the arm): the SAME incarnation (the FOREIGN child
+    /// is alive AND the record's start_ms == its real current start) is correctly NOT
+    /// dead-dangling — the arm fires ONLY on a genuine incarnation drift, never on a
+    /// matching one. Distinct verdict from the recycled case above (verdict-inequality
+    /// on the same live foreign pid, toggled only by start_ms).
+    #[test]
+    fn rf6_matching_incarnation_is_not_dead_dangling() {
+        let (mut child, pid) = spawn_live_foreign_child();
+        // The child's REAL current start (within slack of itself by construction).
+        let child_start = crate::effects::proc_start_ms(pid as i32);
+        let msg = "same incarnation, genuine writer";
+        let send_ts = "2026-06-06T06:00:00.000Z";
+        let now = iso_to_epoch_ms(send_ts).unwrap() + 60_000;
+        let si = si_record_with_pid_start(pid, child_start, send_ts, "/t.jsonl", msg);
+        let records = vec![si.clone()];
+        let verdict = is_dead_dangling(&records, &si, now);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            !verdict,
+            "a foreign live pid with a MATCHING recorded start_ms is the SAME writer → \
+             NOT dead-dangling (the arm must not over-fire on the genuine original writer)"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // R3d — recovery-ladder forensics: an episode is reconstructable from the
+    // event log ALONE (emit the four kinds, read the file back, replay).
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn r3d_recovery_episode_reconstructs_from_log_alone() {
+        let dir = tempdir().unwrap();
+        let state = dir.path();
+        let sid = "11111111-2222-3333-4444-555555555555";
+        let writer = EventWriter::for_key(state, sid, Some(sid.into()), None);
+        let clock = FixedClock(1_781_241_549_123);
+
+        // A wedged session climbs the ladder: rung 1 entered+timeout → rung 2
+        // entered+timeout → rung 3 entered+timeout → rung 4 entered → succeeded.
+        let episode = vec![
+            LadderEvent::RungEntered { session_id: sid.into(), rung: "pidfd-signal".into() },
+            LadderEvent::RungTimeout { session_id: sid.into(), rung: "pidfd-signal".into(), waited_ms: 5_000 },
+            LadderEvent::RungEntered { session_id: sid.into(), rung: "control-wake".into() },
+            LadderEvent::RungTimeout { session_id: sid.into(), rung: "control-wake".into(), waited_ms: 10_000 },
+            LadderEvent::RungEntered { session_id: sid.into(), rung: "pty-inject".into() },
+            LadderEvent::RungTimeout { session_id: sid.into(), rung: "pty-inject".into(), waited_ms: 15_000 },
+            LadderEvent::RungEntered { session_id: sid.into(), rung: "respawn".into() },
+            LadderEvent::RungSucceeded { session_id: sid.into(), rung: "respawn".into() },
+        ];
+        for e in &episode {
+            emit_ladder_event(&writer, &clock, e).expect("emit ladder event");
+        }
+
+        // Read the file back from disk and replay — NO in-memory state.
+        let read = read_merged(state, Some(sid), None);
+        let replayed = replay_recovery_episode(&read.records);
+        assert_eq!(
+            replayed, episode,
+            "the recovery episode must reconstruct byte-for-event from the log alone"
+        );
+        // Every emitted record is ≤ MAX_RECORD_BYTES (the O_APPEND atomic contract).
+        let text = std::fs::read_to_string(writer.path()).unwrap();
+        for line in text.lines() {
+            assert!(
+                line.len() < MAX_RECORD_BYTES,
+                "ladder record must stay under the {MAX_RECORD_BYTES}B append bound"
+            );
+        }
+    }
+
+    #[test]
+    fn r3d_recovery_crit_episode_reconstructs_from_log() {
+        let dir = tempdir().unwrap();
+        let state = dir.path();
+        let sid = "deadbeef-0000-1111-2222-333344445555";
+        let writer = EventWriter::for_key(state, sid, Some(sid.into()), None);
+        let clock = FixedClock(1_781_241_549_123);
+        // Three confirmed failures → CRIT (the terminal episode).
+        let episode = vec![
+            LadderEvent::RungEntered { session_id: sid.into(), rung: "respawn".into() },
+            LadderEvent::RungTimeout { session_id: sid.into(), rung: "respawn".into(), waited_ms: 96_000 },
+            LadderEvent::Crit { session_id: sid.into(), consecutive_failures: 3 },
+        ];
+        for e in &episode {
+            emit_ladder_event(&writer, &clock, e).expect("emit");
+        }
+        let read = read_merged(state, Some(sid), None);
+        assert_eq!(replay_recovery_episode(&read.records), episode);
+        // The recovery-ladder kinds are NON-terminal in the SEND sense (no send_id;
+        // never satisfy a delivery wait — the cheap-event trap stays closed).
+        for kind in ["rung-entered", "rung-succeeded", "rung-timeout", "recovery-crit"] {
+            assert!(!is_terminal(kind), "{kind} must NOT be a delivery terminal");
+        }
     }
 
     // A small AwaitDeps adapter wrapping PlantedDeps (recovery only fires on the

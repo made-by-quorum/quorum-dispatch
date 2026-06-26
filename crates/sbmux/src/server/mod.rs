@@ -29,6 +29,114 @@ fn claim_timeout_from_env() -> std::time::Duration {
         .unwrap_or(CLAIM_TIMEOUT)
 }
 
+// ===== R3c-Step-1: per-session control socket servicer =====================
+//
+// Wire opcodes (1 byte). MIRROR of `dispatch::control_sock`'s `OP_*` — there is NO
+// shared crate (dispatch depends on sbmux, not vice versa), so these are duplicated
+// by necessity; keep them in lockstep with `control_sock.rs`. A datagram's first
+// byte is the opcode; the rest (≤64B) is reserved.
+mod ctrl_op {
+    /// New inbox mail → nudge a parked session (the R3c-Step-1 payload).
+    pub const WAKE_INBOX: u8 = 1;
+    /// Liveness probe (recovery Rung 2). Reserved here.
+    pub const PING: u8 = 2;
+    /// Checkpoint request (recovery Rung 2 / pre-respawn). Reserved here.
+    pub const CHECKPOINT: u8 = 3;
+    /// Orderly turn-boundary stop (lifecycle). Reserved here.
+    pub const GRACEFUL_STOP: u8 = 4;
+}
+
+/// Bind the control socket: ensure its parent dir, clear a stale file (the `.sock`
+/// bind already proved no live duplicate, so a leftover ctrl file is stale), bind.
+fn bind_ctrl_socket(path: &std::path::Path) -> std::io::Result<tokio::net::UnixDatagram> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    tokio::net::UnixDatagram::bind(path)
+}
+
+/// RAII cleanup of the control socket file on daemon exit (mirrors `SocketGuard`).
+struct CtrlGuard(std::path::PathBuf);
+impl Drop for CtrlGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Await one control datagram and return its opcode byte. Parks FOREVER when no
+/// ctrl socket is bound (bare sbmux) so the `tokio::select!` arm — guarded by
+/// `if ctrl.is_some()` — stays inert. A 0-byte datagram or recv error yields `None`
+/// (ignored, forward-compat). Owns its buffer so no `&mut` is borrowed across the
+/// select arm.
+async fn recv_ctrl(ctrl: &Option<tokio::net::UnixDatagram>) -> Option<u8> {
+    match ctrl {
+        Some(sock) => {
+            let mut buf = [0u8; 64];
+            match sock.recv_from(&mut buf).await {
+                Ok((n, _addr)) if n >= 1 => Some(buf[0]),
+                _ => None,
+            }
+        }
+        None => std::future::pending().await,
+    }
+}
+
+/// Service one control opcode. On `WakeInbox` it drives the session-appropriate
+/// wake. THE KEYSTONE (step-0 verdict point 2): clone the wake handle UNDER the
+/// `manager` lock, RELEASE the lock, then wake OUTSIDE it — the PTY write can block
+/// on a full buffer, so it must never run while holding the lock, or a real wedge
+/// would starve the select loop. Interactive → PTY nudge (off the runtime via
+/// `spawn_blocking`); headless → a non-blocking `Republish::Wake` enqueue.
+async fn handle_ctrl_op(op: u8, session: &str, manager: &Arc<Mutex<SessionManager>>) {
+    match op {
+        ctrl_op::WAKE_INBOX => {
+            enum Wake {
+                Pty(crate::pty::SharedPtyWriter),
+                Headless(crate::headless::HeadlessWake),
+                None,
+            }
+            // Lock ONLY to clone the wake handle — mirrors the accept arm's
+            // clone-then-spawn (`server/mod.rs` accept). Released at the block end.
+            let wake = {
+                let mgr = manager.lock().await;
+                if let Some(s) = mgr.get(session) {
+                    Wake::Pty(s.pty_writer_arc())
+                } else if let Some(hs) = mgr.get_headless(session) {
+                    Wake::Headless(hs.wake_handle())
+                } else {
+                    Wake::None
+                }
+            };
+            match wake {
+                Wake::Pty(writer) => {
+                    // PTY write may block on a full buffer → run it OFF the tokio
+                    // runtime (and the manager lock is already released), so the
+                    // select loop keeps being scheduled. Best-effort: a bare newline
+                    // re-renders / re-polls a parked prompt.
+                    tokio::task::spawn_blocking(move || {
+                        use std::io::Write as _;
+                        if let Ok(mut w) = writer.lock() {
+                            let _ = w.write_all(b"\n");
+                            let _ = w.flush();
+                        }
+                    });
+                }
+                Wake::Headless(h) => h.wake(),
+                Wake::None => {
+                    warn!(session, "WakeInbox for an unknown session; ignored");
+                }
+            }
+        }
+        // Reserved for the recovery ladder (R3c-Step-2). No-op for now.
+        ctrl_op::PING | ctrl_op::CHECKPOINT | ctrl_op::GRACEFUL_STOP => {}
+        // Unknown opcode → ignore (forward-compat).
+        _ => {}
+    }
+}
+
 pub use socket::{
     session_lock_path_for, session_socket_path_for, shared_fate_test_mode, socket_dir,
     socket_dir_for, validate_session_identity,
@@ -164,6 +272,24 @@ pub async fn run_server(
     session: String,
     headless: Option<Arc<dyn crate::headless_session::HeadlessFactory>>,
 ) -> anyhow::Result<()> {
+    // Additive forwarder (R3c-Step-1): the legacy 3-arg entry keeps EVERY existing
+    // caller (bare sbmux main.rs, the b2b2b tests) byte-unchanged. Only the dispatch
+    // daemon entry adopts [`run_server_ctrl`] to bind the per-session control socket.
+    run_server_ctrl(socket_dir, session, headless, None).await
+}
+
+/// As [`run_server`], plus the R3c-Step-1 per-session control socket. `ctrl_sock`
+/// is the canonical [`dispatch::control_sock::control_sock_path`] (keyed on
+/// session_id, resolved by the dispatch daemon entry which CAN name the dispatch
+/// crate); bare sbmux passes `None` and runs with no ctrl servicer. Binding it is
+/// best-effort — a bind failure degrades the wake to the sender-side PTY-inject
+/// fallback, it never fails the primary `.sock` serve.
+pub async fn run_server_ctrl(
+    socket_dir: Option<std::path::PathBuf>,
+    session: String,
+    headless: Option<Arc<dyn crate::headless_session::HeadlessFactory>>,
+    ctrl_sock: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
     // Ignore SIGHUP so SSH disconnects don't kill us
     use nix::sys::signal::{signal, SigHandler, Signal};
     // SAFETY: SIG_IGN is async-signal-safe for SIGHUP.
@@ -221,6 +347,33 @@ pub async fn run_server(
     // bounded in-flight wait, while the final `Drop` (a no-op once taken) still
     // covers any early-error/panic path that returns before step 3 ([RT-F3]).
     let mut socket_guard = SocketGuard(Some(path.clone()));
+
+    // R3c-Step-1: bind the per-session control socket (SOCK_DGRAM) ADJACENT to the
+    // `<name>.sock` listener and BEFORE the registry-row advertise / any session
+    // create, so there is no window where a `WakeInbox` arrives but no waker is
+    // listening (R1 §5 inv 1; the confirmed design-(A) seam, step-0 verdict). The
+    // `.sock` bind above already proved no live duplicate daemon, so any leftover
+    // ctrl file is stale and safe to clear. Binding is best-effort: a failure logs
+    // and runs without a ctrl servicer (the sender's PTY-inject fallback covers it),
+    // never aborting the primary serve.
+    let ctrl: Option<tokio::net::UnixDatagram> = match ctrl_sock.as_ref() {
+        Some(cp) => match bind_ctrl_socket(cp) {
+            Ok(sock) => {
+                info!(path = ?cp, "control socket listening");
+                Some(sock)
+            }
+            Err(e) => {
+                warn!(path = ?cp, error = %e,
+                    "failed to bind control socket; wake degrades to PTY-inject fallback");
+                None
+            }
+        },
+        None => None,
+    };
+    // Unlink the ctrl socket on daemon exit (mirrors SocketGuard for `.sock`).
+    let _ctrl_guard = ctrl.is_some().then(|| {
+        CtrlGuard(ctrl_sock.clone().expect("ctrl bound implies a path"))
+    });
 
     let manager = Arc::new(Mutex::new(SessionManager::with_events(events_ctx)));
 
@@ -438,6 +591,18 @@ pub async fn run_server(
                         warn!(error = %e, "accept failed, retrying");
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
+                }
+            }
+            // R3c-Step-1 control-socket arm (the confirmed design-(A) seam). Active
+            // ONLY when a ctrl socket is bound (`if ctrl.is_some()`); `recv_ctrl`
+            // parks forever when None, so the guard + the pending future keep this
+            // arm inert for bare sbmux. The handler clones the wake handle UNDER the
+            // `manager` lock then RELEASES it before waking — so a real wedge (or a
+            // blocking PTY write) can never starve THIS select loop (the keystone,
+            // step-0 verdict point 2 / §3 R3c-0).
+            opcode = recv_ctrl(&ctrl), if ctrl.is_some() => {
+                if let Some(op) = opcode {
+                    handle_ctrl_op(op, &session, &manager).await;
                 }
             }
             // WS-C M2/M3b (§4.1): single-session claim-timeout or exit-on-session-end.

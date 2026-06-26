@@ -16,8 +16,8 @@ use clap::ArgMatches;
 
 use dispatch::effects::{is_pid_alive, Clock, Env, RealClock, RealEnv};
 use dispatch::gc::{
-    format_bytes, iso_stamp_from, jsonl_is_candidate, relative_time, shorten_path, should_purge,
-    tombstone_is_candidate, trash_name, type_token, Candidate, CandidateType, TrashMeta,
+    format_bytes, jsonl_is_candidate, move_to_trash_at, parse_iso_ms, relative_time, shorten_path,
+    should_purge, tombstone_is_candidate, Candidate, CandidateType, TrashMeta,
 };
 use dispatch::paths::SbPaths;
 use dispatch::registry::{get_tombstoned_entries, read_entries};
@@ -70,7 +70,10 @@ pub fn run(m: &ArgMatches) -> i32 {
 
 /// The default GC scan + (print | move) (gc.ts:506-580).
 fn gc_run(home: &Path, env: &RealEnv, clock: &RealClock, dry_run: bool) -> i32 {
-    let paths = SbPaths::from_home(home);
+    // from_home_env so the presence `state_dir` honors SB_HOME (the recovery rows +
+    // liveness locks live under `<SB_HOME>/state`, not the HOME default). The
+    // `.claude` dirs (sessions/projects/relay/inbox) stay HOME-derived regardless.
+    let paths = SbPaths::from_home_env(home, env);
     let now = clock.now_ms();
 
     eprintln!("Scanning for GC candidates...");
@@ -123,6 +126,17 @@ fn gc_run(home: &Path, env: &RealEnv, clock: &RealClock, dry_run: bool) -> i32 {
     let oc_servers = home.join(".opencode").join("servers");
     candidates.extend(scan_orphaned_oc_logs(&oc_servers));
 
+    // 4. WS-B / B1 — collectible relay-inbox messages (ack+TTL+GC). Presence-gated
+    //    via the BANKED `dispatch::presence` surface (read-only). The legacy classes
+    //    above keep their `is_pid_alive` live-set UNCHANGED — only this class is
+    //    presence-gated. Walks ONLY `inbox_dir` (the `.json` collision guard vs
+    //    OcSidecar is structural — no other scanner walks `inbox_dir`).
+    candidates.extend(dispatch::inbox_gc::scan_collectible(
+        &paths.inbox_dir,
+        &paths.state_dir,
+        now,
+    ));
+
     if candidates.is_empty() {
         println!("No GC candidates found. Everything is clean.");
         return 0;
@@ -151,7 +165,6 @@ fn gc_run(home: &Path, env: &RealEnv, clock: &RealClock, dry_run: bool) -> i32 {
     // Move to trash.
     println!();
     let mut moved = 0;
-    let _ = env;
     for c in &candidates {
         if move_to_trash(c, home, clock) {
             println!("  ✓ {} → trash", shorten_path(&c.path, home));
@@ -251,48 +264,29 @@ fn scan_orphaned_oc_logs(servers_dir: &Path) -> Vec<Candidate> {
     out
 }
 
-/// Move one candidate to trash: write meta, copy, then unlink the original
-/// (gc.ts:271-300). Returns true on success.
+/// Move one candidate to trash — delegates to the canonical
+/// [`dispatch::gc::move_to_trash_at`] (copy-then-unlink, `gc.ts:271-300`) so the
+/// verb and the relay sweeper share ONE trash implementation. Returns true on
+/// success. The clock is injected (the driver supplies `now_ms`).
 fn move_to_trash(c: &Candidate, home: &Path, clock: &RealClock) -> bool {
     let trash_dir = if c.kind.is_claude() {
         home.join(".claude").join("trash")
     } else {
         home.join(".opencode").join("trash")
     };
-    let timestamp = iso_stamp_from(&iso_now(clock));
-    let name = trash_name(&timestamp, &c.identifier, c.kind);
-    let trash_path = trash_dir.join(&name);
-    let meta_path = trash_dir.join(format!("{name}_meta.json"));
-
-    if fs::create_dir_all(&trash_dir).is_err() {
-        return false;
-    }
-    let meta = TrashMeta {
-        original_path: c.path.to_string_lossy().into_owned(),
-        reason: c.reason.clone(),
-        pruned_at: iso_now(clock),
-        kind: type_token(c.kind).to_string(),
-        size: c.size,
-    };
-    let Ok(meta_json) = serde_json::to_string_pretty(&meta) else {
-        return false;
-    };
-    // Write metadata first, then copy, then unlink original (only after both
-    // succeed). Clean up partial trash on failure.
-    if fs::write(&meta_path, meta_json).is_err() {
-        return false;
-    }
-    if fs::copy(&c.path, &trash_path).is_err() {
-        let _ = fs::remove_file(&meta_path);
-        return false;
-    }
-    if fs::remove_file(&c.path).is_err() {
-        let _ = fs::remove_file(&meta_path);
-        let _ = fs::remove_file(&trash_path);
+    let ok = move_to_trash_at(
+        &c.path,
+        &trash_dir,
+        c.kind,
+        &c.identifier,
+        &c.reason,
+        c.size,
+        clock.now_ms(),
+    );
+    if !ok {
         eprintln!("  ✗ Failed to trash {}", shorten_path(&c.path, home));
-        return false;
     }
-    true
+    ok
 }
 
 /// `--list-trash` (gc.ts:302-346).
@@ -473,94 +467,85 @@ fn purge_mode(cc: &Path, oc: &Path, home: &Path, clock: &RealClock) -> i32 {
     0
 }
 
-/// Current time as an ISO-8601 string (`new Date().toISOString()` shape:
-/// `YYYY-MM-DDTHH:MM:SS.mmmZ`). Built from the injected Clock's epoch ms so the
-/// timestamp stays testable; the format is UTC.
-fn iso_now(clock: &RealClock) -> String {
-    iso_from_ms(clock.now_ms())
-}
-
-/// Format epoch ms as an ISO-8601 UTC string. Hand-rolled (no chrono dep) —
-/// civil-date from a Unix timestamp via the standard days-from-epoch algorithm.
-fn iso_from_ms(ms: i64) -> String {
-    let secs = ms.div_euclid(1000);
-    let millis = ms.rem_euclid(1000);
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let (y, mo, d) = civil_from_days(days);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{millis:03}Z")
-}
-
-/// Parse the ms-precision UTC `pruned_at` ISO string back to epoch ms (inverse
-/// of [`iso_from_ms`]). Permissive: an unparseable string yields None.
-fn parse_iso_ms(iso: &str) -> Option<i64> {
-    // Expect YYYY-MM-DDTHH:MM:SS(.mmm)?Z
-    let bytes = iso.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-    let y: i64 = iso.get(0..4)?.parse().ok()?;
-    let mo: i64 = iso.get(5..7)?.parse().ok()?;
-    let d: i64 = iso.get(8..10)?.parse().ok()?;
-    let h: i64 = iso.get(11..13)?.parse().ok()?;
-    let mi: i64 = iso.get(14..16)?.parse().ok()?;
-    let s: i64 = iso.get(17..19)?.parse().ok()?;
-    let millis: i64 = if iso.len() >= 23 && iso.as_bytes().get(19) == Some(&b'.') {
-        iso.get(20..23)?.parse().ok()?
-    } else {
-        0
-    };
-    let days = days_from_civil(y, mo, d);
-    Some(((days * 86_400 + h * 3600 + mi * 60 + s) * 1000) + millis)
-}
-
-/// Days since the Unix epoch for a civil date (Howard Hinnant's algorithm).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// Civil date from days since the Unix epoch (inverse of [`days_from_civil`]).
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dispatch::gc::iso_from_ms;
+    use std::fs;
+    use tempfile::tempdir;
 
-    #[test]
-    fn iso_round_trips_epoch_ms() {
-        // 2026-06-05T01:23:45.678Z → ms → back.
-        let ms = 1_780_622_625_678;
-        let iso = iso_from_ms(ms);
-        assert!(iso.ends_with('Z'), "iso: {iso}");
-        assert_eq!(parse_iso_ms(&iso), Some(ms));
+    const RECV_MS: i64 = 1_780_000_000_000;
+    const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+    fn write_inbox(dir: &Path, id: &str, json: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(format!("{id}.json")), json).unwrap();
+    }
+
+    /// A legacy backlog file: ONLY the 4 legacy fields (no to_session/acked_at_ms).
+    fn legacy_json(id: &str, recv_ms: i64) -> String {
+        format!(
+            r#"{{"text":"Reply with exactly: RELAY_OK","from_session":"sender","message_id":"{id}","received_at":"{}"}}"#,
+            iso_from_ms(recv_ms)
+        )
     }
 
     #[test]
-    fn iso_from_ms_known_value() {
-        // Unix epoch.
-        assert_eq!(iso_from_ms(0), "1970-01-01T00:00:00.000Z");
+    fn extension_collision_guard_inbox_vs_oc() {
+        // An inbox *.json is classified RelayInbox by the inbox-dir scanner; the
+        // OC-log scanner (which walks the OC servers dir, never inbox_dir) cannot
+        // mis-claim it (§3.1 T5 — the guard is structural, by owning directory).
+        let tmp = tempdir().unwrap();
+        let inbox = tmp.path().join("inbox");
+        write_inbox(&inbox, "relay-x", &legacy_json("relay-x", RECV_MS));
+        let now = RECV_MS + 14 * DAY_MS;
+        let inbox_cands = dispatch::inbox_gc::scan_collectible(&inbox, &tmp.path().join("state"), now);
+        assert_eq!(inbox_cands.len(), 1);
+        assert_eq!(inbox_cands[0].kind, CandidateType::RelayInbox);
+        // The OC scanner pointed at the SAME dir finds no OC logs (a .json with no
+        // orphaned .log) — it never claims the inbox file as an OC class.
+        assert!(
+            scan_orphaned_oc_logs(&inbox).is_empty(),
+            "OC scanner never claims an inbox .json"
+        );
     }
 
     #[test]
-    fn iso_stamp_replaces_for_trash_name() {
-        let stamp = iso_stamp_from(&iso_from_ms(0));
-        assert_eq!(stamp, "1970-01-01T00-00-00");
+    fn legacy_class_trash_unchanged_no_regression() {
+        // Behavior-preservation: a CcJsonl candidate still trashes to ~/.claude/trash
+        // with ext .jsonl + meta kind "cc-jsonl" — the move_to_trash delegation to the
+        // shared engine primitive did NOT alter the legacy classes' on-disk shape.
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        let src = home.join("dead.jsonl");
+        fs::write(&src, b"line\n").unwrap();
+        let c = Candidate {
+            kind: CandidateType::CcJsonl,
+            path: src.clone(),
+            reason: "dead session".to_string(),
+            size: 5,
+            identifier: "sid-123".to_string(),
+        };
+        assert!(move_to_trash(&c, home, &RealClock));
+        assert!(!src.exists());
+        let trash = home.join(".claude").join("trash");
+        let entries: Vec<String> = fs::read_dir(&trash)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        let meta_file = entries
+            .iter()
+            .find(|n| n.ends_with("_meta.json"))
+            .expect("meta written");
+        let meta: TrashMeta =
+            serde_json::from_str(&fs::read_to_string(trash.join(meta_file)).unwrap()).unwrap();
+        assert_eq!(meta.kind, "cc-jsonl");
+        assert!(
+            entries
+                .iter()
+                .any(|n| n.ends_with(".jsonl") && !n.ends_with("_meta.json")),
+            "trashed file keeps the .jsonl extension"
+        );
     }
 }

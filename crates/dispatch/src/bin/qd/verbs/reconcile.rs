@@ -94,8 +94,38 @@ pub fn run(m: &ArgMatches) -> i32 {
         zmx_raw.extend(mux.list_raw(dir).unwrap_or_default());
     }
 
-    // The I1/I3/I5 plan (pure). Liveness via kill -0 (isProcessAlive).
-    let is_alive = |pid: i64| is_pid_alive(pid as i32);
+    // The I1/I3/I5 plan (pure). Liveness via the WS-R R3a-Step-3 RECONCILED
+    // predicate (R1 §2): the registry is a CACHE reconciled against KERNEL TRUTH,
+    // so a crashed session's `busy` row is never treated as live. The predicate
+    // composes the O(1) flock fast-path (R3a-Step-1) with the reuse-robust
+    // `(pid, start_ms)` `/proc` authority (R3a-Step-2). A row carrying a recorded
+    // `started_at` is checked reuse-robustly (a recycled pid => not-alive => the
+    // dead row is tombstoned); a row WITHOUT a recorded start falls back to the
+    // legacy `kill -0` check (fail-open, no regression for un-stamped rows).
+    let os = dispatch::liveness::OsLiveness::new();
+    let state_dir = paths.state_dir.clone();
+    // Per-pid lookup of (recorded start_ms, session_id) for the reuse-robust check.
+    let identity_of = |pid: i64| -> (Option<i64>, Option<String>) {
+        registry
+            .iter()
+            .find(|e| e.pid == Some(pid))
+            .map(|e| (e.started_at, e.session_id.clone()))
+            .unwrap_or((None, None))
+    };
+    let is_alive = |pid: i64| {
+        match identity_of(pid) {
+            // Reuse-robust kernel-truth reconcile (flock fast-path + /proc start_ms).
+            (Some(start), session_id) => dispatch::liveness::is_session_live_reconciled(
+                Some(state_dir.as_path()),
+                session_id.as_deref(),
+                pid,
+                start,
+                &os,
+            ),
+            // No recorded start to reuse-guard => legacy kill -0 (fail-open).
+            (None, _) => is_pid_alive(pid as i32),
+        }
+    };
     let p = plan(&registry, &zmx_raw, &is_alive);
 
     // --- Carry 4: stray discovery, READ-ONLY observation (no write path). ---

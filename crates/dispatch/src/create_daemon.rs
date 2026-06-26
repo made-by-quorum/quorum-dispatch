@@ -561,7 +561,7 @@ fn try_spawn_and_connect<'a>(
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let req = LaunchRequest {
         name: params.name.clone(),
         cwd: Some(params.cwd.to_string_lossy().into_owned()),
@@ -683,6 +683,9 @@ fn finish_create(
         spawned_by: None,
         provider: Some("codex".to_string()),
         endpoint: Some(endpoint.to_string()),
+        // scoped-ACP-CC: no degradation latch on a freshly-created healthy row
+        // (the tier is DERIVED; only degradation persists transport).
+        transport: None,
     };
     if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);

@@ -53,3 +53,31 @@ portable-pty = "0.9"
 # Negative-control evidence: deliberately-wrong decider outputs that the parity
 # tests MUST catch (gate item 6). Never enabled in normal builds.
 mutation-evidence = []
+
+# --- WS-R R3a-Step-0 fault-injection harness (gated, never in normal builds) ---
+# `faultinj` gates BOTH the RED-gate tests in tests/faultinj.rs AND the
+# faultinj_target victim bin, so the default `cargo build`/`cargo test` is byte-
+# unaffected (the no-regression floor). Run the harness with:
+#   cargo test -p dispatch --features faultinj --test faultinj -- --nocapture
+faultinj = []
+
+# The controllable VICTIM process the fault-injection harness spawns. Gated on
+# `faultinj` via required-features so it NEVER appears in the release `qd`
+# binary or the default build (R3a-Step-0: not shipped). The harness finds it via
+# CARGO_BIN_EXE_faultinj_target (Cargo sets that only when the bin is built).
+[[bin]]
+name = "faultinj_target"
+path = "src/bin/faultinj_target.rs"
+required-features = ["faultinj"]
+
+# The standing R3c-Step-2 recovery coordinator (§5.1). A SEPARATE bin from `qd`
+# (distinct compilation unit) so the `qd` binary stays byte-intact; it is a thin
+# process shell around `dispatch::recovery::coordinator_pass`. Installed alongside
+# `~/.quorum/bin/qd` and run under systemd --user (Restart=always + watchdog).
+[[bin]]
+name = "recovery_coordinator"
+path = "src/bin/recovery_coordinator.rs"
+
+# NOTE: tests/faultinj.rs is auto-discovered by Cargo (no explicit [[test]]
+# needed). Its RED-gate `#[test]`s are `#[cfg(feature = "faultinj")]`, so without
+# the feature this test binary compiles to just the always-on detector tests.

@@ -89,10 +89,83 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
                 ) as std::sync::Arc<dyn sbmux::headless_session::HeadlessFactory>
             });
 
-    match rt.block_on(sbmux::server::run_server(
+    // R3c-Step-1: resolve the per-session control socket path the daemon binds.
+    // It MUST rendezvous with the relay server's `send_control` target, which keys
+    // on `CLAUDE_CODE_SESSION_ID` + `SbPaths::state_dir` (relay_server/mod.rs). The
+    // daemon derives the identical path from the SAME env, so both sides agree
+    // without a new CLI arg. Only THIS entry can name `dispatch::control_sock`
+    // (sbmux cannot — it is the lower crate); bare sbmux (`sbmux/src/main.rs`) passes
+    // None and runs with no ctrl servicer. Absent env (no session id / HOME) → None.
+    //
+    // R3c item-1: resolve the (session_id, state_dir) pair ONCE — both the control
+    // socket AND the daemon-lifetime liveness lock key on it, so they rendezvous
+    // with the relay server / the reconcile `probe_dead` fast-path from the SAME
+    // env without a new CLI arg.
+    let session_state: Option<(String, PathBuf)> = dispatch::effects::RealEnv
+        .var("CLAUDE_CODE_SESSION_ID")
+        .filter(|s| !s.is_empty())
+        .and_then(|sid| {
+            dispatch::effects::RealEnv
+                .var("HOME")
+                .filter(|h| !h.is_empty())
+                .map(|home| {
+                    let paths = dispatch::paths::SbPaths::from_home_env(
+                        std::path::Path::new(&home),
+                        &dispatch::effects::RealEnv,
+                    );
+                    (sid, paths.state_dir)
+                })
+        });
+
+    let ctrl_sock: Option<PathBuf> = session_state
+        .as_ref()
+        .map(|(sid, state_dir)| dispatch::control_sock::control_sock_path(state_dir, sid));
+
+    // R3c item-1 (HIGH-stakes): acquire the per-session liveness flock at
+    // DAEMON-LIFETIME. THIS process — the embedded sbmux daemon — is the long-lived
+    // per-session daemon (single-session mode, §4.1); it holds the lock for its
+    // whole life and the kernel releases it on daemon death (flock last-close), so
+    // `LivenessLock::probe_dead` / `reconcile`'s flock fast-path see the session as
+    // live exactly while this daemon is alive (R2 §R3a-Step-1; makes the
+    // flock+incarnation scaffolding load-bearing on the live path). NOT the launcher
+    // (`create_daemon::run_new_daemon` is the LAUNCHER and returns — placing the lock
+    // there would free it immediately, the rev0 fleet-wide false-alive). The fd
+    // defaults to `FD_CLOEXEC` SET (livelock.rs), so the PTY tool subprocesses this
+    // daemon spawns do NOT inherit it across `exec` (the P4 scoped-CLOEXEC fix: a
+    // surviving tool child can no longer keep a dead session looking alive). We
+    // deliberately do NOT call `allow_inherit` — this process IS the intended holder,
+    // not a launcher handing the lock to a managed wrapper. Held in `_liveness_lock`
+    // across `block_on`; dropped (and kernel-released) only when the daemon exits.
+    let _liveness_lock = session_state.as_ref().and_then(|(sid, state_dir)| {
+        match dispatch::livelock::LivenessLock::acquire(state_dir, sid) {
+            Ok(Some(lock)) => {
+                eprintln!("sb sbmux-server: liveness lock acquired for session {sid}");
+                Some(lock)
+            }
+            Ok(None) => {
+                // The `.sock` bind above already proved no live duplicate daemon;
+                // a held lock here is a stale-holder anomaly. Log and run degraded
+                // — the `/proc start_ms` confirmer remains the tombstone authority.
+                eprintln!(
+                    "sb sbmux-server: liveness lock already held for session {sid} (continuing)"
+                );
+                None
+            }
+            Err(e) => {
+                eprintln!(
+                    "sb sbmux-server: liveness lock acquire failed for session {sid}: {e} \
+                     (continuing degraded — /proc remains the tombstone authority)"
+                );
+                None
+            }
+        }
+    });
+
+    match rt.block_on(sbmux::server::run_server_ctrl(
         parsed.socket_dir,
         session,
         headless,
+        ctrl_sock,
     )) {
         Ok(()) => 0,
         Err(e) => {

@@ -375,8 +375,34 @@ fn handle_message(req: &ParsedRequest, server: &RelayServer) -> Result<String, (
         "from_session": from_session,
         "message_id": message_id,
         "received_at": received_at,
+        // WS-B / B1 (additive): the addressed recipient = THIS server's own session
+        // (the message is *for* this relay's Claude Code). This is the presence-gate
+        // key the inbox GC reads (gc.rs `inbox_is_collectible`); absent on the ~2019
+        // legacy files, which are then TTL-judged as unaddressable.
+        "to_session": server.session_id,
     });
     write_inbox_file(server, &message_id, &record.to_string());
+
+    // (b') R3c-Step-1 enqueue hook: AFTER persisting the inbox file, nudge the
+    // (possibly parked/wedged) recipient session on its ALWAYS-SERVICED control fd.
+    // The recipient is THIS server's own session (`server.session_id`); its sbmux
+    // daemon binds the matching `control_sock_path` (derived from the SAME env) and
+    // drains the `WakeInbox`. If there is no live servicer (ENOENT/ECONNREFUSED) the
+    // wake degrades to a logged PTY-inject fallback — and the in-process stdout
+    // notification (step c) remains the delivery to a LIVE consumer. The fallback
+    // branch is the load-bearing proof: revert this hook or kill the ctrl reader and
+    // the always-serviced-fd wake is gone (the §3 R3c-1 negative control).
+    {
+        use crate::control_sock::{control_sock_path, wake_inbox, WakeOutcome};
+        let ctrl = control_sock_path(&server.paths.state_dir, &server.session_id);
+        if let WakeOutcome::PtyFallback { reason } = wake_inbox(&ctrl) {
+            eprintln!(
+                "relay[wake]: control socket {ctrl:?} for session {} absent ({reason}); \
+                 inbox wake fell back to PTY-inject path",
+                server.session_id
+            );
+        }
+    }
 
     // (c) P-B4 (M3): emit the outbound MCP `notifications/claude/channel` here
     // (server.ts:281-295). The state lock was ALREADY released by step (a), so this
@@ -568,7 +594,11 @@ fn handle_inbox(server: &RelayServer) -> String {
             }
             // Unreadable / unparseable files are SKIPPED, not fatal (server.ts:324-325).
             if let Ok(bytes) = std::fs::read(&path) {
-                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    // WS-B / B1 — ack-on-read: a session draining its inbox has taken
+                    // delivery of the mail addressed to it; stamp it so GC can collect
+                    // it after the short ack grace instead of the full TTL.
+                    maybe_ack_on_read(server, &path, &mut value);
                     messages.push(value);
                 }
             }
@@ -576,6 +606,63 @@ fn handle_inbox(server: &RelayServer) -> String {
     }
     let count = messages.len();
     serde_json::json!({ "messages": messages, "count": count }).to_string()
+}
+
+/// WS-B / B1 — ack-on-read. If `value` is addressed to THIS server's session
+/// (`to_session == server.session_id`) and carries no `acked_at_ms`, stamp it
+/// `now` and rewrite the file via an **atomic tmp+rename** (§5.4) so a concurrent
+/// reader / GC never sees a torn record. The in-memory `value` is mutated in place
+/// so the returned listing reflects the ack. BEST-EFFORT and LOSS-SAFE: ack is
+/// additive metadata, never a delete — any IO failure leaves the file un-acked
+/// (it re-acks on the next poll, or TTL-expires), so a crash mid-stamp loses
+/// nothing. Idempotent: a second read is a no-op (numeric `acked_at_ms` present).
+fn maybe_ack_on_read(server: &RelayServer, path: &std::path::Path, value: &mut serde_json::Value) {
+    ack_stamp_file(&server.session_id, path, value, now_ms() as i64);
+}
+
+/// The ack-on-read core (clock injected — testable). Returns `true` iff it stamped
+/// and rewrote the file. Stamps `acked_at_ms = now_ms` IFF `value.to_session ==
+/// session_id` and no numeric `acked_at_ms` is present; mutates `value` in place
+/// and rewrites via atomic tmp+rename. Any IO failure ⇒ `false`, file left
+/// un-acked (loss-safe — ack is a GC hint, never a delete).
+fn ack_stamp_file(
+    session_id: &str,
+    path: &std::path::Path,
+    value: &mut serde_json::Value,
+    now_ms: i64,
+) -> bool {
+    let Some(obj) = value.as_object_mut() else {
+        return false;
+    };
+    let addressed_to_me = obj
+        .get("to_session")
+        .and_then(|v| v.as_str())
+        .map(|s| s == session_id)
+        .unwrap_or(false);
+    if !addressed_to_me {
+        return false; // another session's mail, or a legacy unaddressed file.
+    }
+    if obj.get("acked_at_ms").and_then(|v| v.as_i64()).is_some() {
+        return false; // already acked → idempotent no-op.
+    }
+    obj.insert("acked_at_ms".to_string(), serde_json::Value::from(now_ms));
+    let Ok(serialized) = serde_json::to_vec(value) else {
+        return false;
+    };
+    let (Some(dir), Some(fname)) = (path.parent(), path.file_name().and_then(|f| f.to_str()))
+    else {
+        return false;
+    };
+    let tmp = dir.join(format!(".{fname}.ack.tmp.{}", std::process::id()));
+    if std::fs::write(&tmp, &serialized).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
+    if std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
+    true
 }
 
 /// Persist one inbox file `<inbox>/<message_id>.json` (P-C1). Creates the inbox
@@ -664,6 +751,63 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
     use std::net::TcpListener as StdTcpListener;
+
+    // --- WS-B / B1 ack-on-read (ack_stamp_file) ---
+
+    fn write_json(dir: &std::path::Path, name: &str, json: &str) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, json).unwrap();
+        p
+    }
+
+    #[test]
+    fn ack_stamps_addressed_unacked_and_rewrites_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = write_json(
+            tmp.path(),
+            "relay-1.json",
+            r#"{"text":"hi","from_session":"a","message_id":"relay-1","received_at":"2026-06-25T00:00:00.000Z","to_session":"me"}"#,
+        );
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        assert!(ack_stamp_file("me", &p, &mut v, 1_700_000_000_000));
+        // In-memory value reflects the ack...
+        assert_eq!(v["acked_at_ms"].as_i64(), Some(1_700_000_000_000));
+        // ...and so does the rewritten file (durable, all fields preserved).
+        let on_disk: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        assert_eq!(on_disk["acked_at_ms"].as_i64(), Some(1_700_000_000_000));
+        assert_eq!(on_disk["text"].as_str(), Some("hi"));
+        assert_eq!(on_disk["to_session"].as_str(), Some("me"));
+    }
+
+    #[test]
+    fn ack_idempotent_and_respects_addressing() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Already acked → no-op.
+        let p = write_json(
+            tmp.path(),
+            "a.json",
+            r#"{"message_id":"a","to_session":"me","acked_at_ms":42}"#,
+        );
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        assert!(!ack_stamp_file("me", &p, &mut v, 999));
+        assert_eq!(v["acked_at_ms"].as_i64(), Some(42), "ack is idempotent");
+
+        // Addressed to ANOTHER session → never acked.
+        let mut other: serde_json::Value =
+            serde_json::json!({"message_id":"b","to_session":"someone-else"});
+        assert!(!ack_stamp_file("me", tmp.path(), &mut other, 999));
+        assert!(other.get("acked_at_ms").is_none());
+
+        // Legacy unaddressed file (no to_session) → never acked.
+        let mut legacy: serde_json::Value =
+            serde_json::json!({"message_id":"c","text":"x","from_session":"s"});
+        assert!(!ack_stamp_file("me", tmp.path(), &mut legacy, 999));
+        assert!(legacy.get("acked_at_ms").is_none());
+    }
 
     // --- find_subslice ---
 

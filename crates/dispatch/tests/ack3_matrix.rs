@@ -1247,6 +1247,16 @@ fn engine_kind_disposition(p: &dispatch::events::Payload) -> Option<Delegation> 
             file: "crates/dispatch/src/events.rs",
             test_fn: "x3_seen_failed_key_order_and_terminal",
         }),
+        // R3d recovery-ladder forensics — not produced by this matrix; DELEGATED to
+        // the events.rs replay tests (emit the kinds, read the file back, replay).
+        RungEntered { .. } | RungSucceeded { .. } | RungTimeout { .. } => Some(Delegation {
+            file: "crates/dispatch/src/events.rs",
+            test_fn: "r3d_recovery_episode_reconstructs_from_log_alone",
+        }),
+        RecoveryCrit { .. } => Some(Delegation {
+            file: "crates/dispatch/src/events.rs",
+            test_fn: "r3d_recovery_crit_episode_reconstructs_from_log",
+        }),
     }
 }
 
@@ -1382,6 +1392,23 @@ fn coverage_inventory_every_event_kind_exercised() {
         dispatch::events::Payload::SeenFailed {
             send_id: "s".into(),
             reason: "recipient-gone".into(),
+        },
+        dispatch::events::Payload::RungEntered {
+            session_id: "s".into(),
+            rung: "respawn".into(),
+        },
+        dispatch::events::Payload::RungSucceeded {
+            session_id: "s".into(),
+            rung: "respawn".into(),
+        },
+        dispatch::events::Payload::RungTimeout {
+            session_id: "s".into(),
+            rung: "respawn".into(),
+            waited_ms: 1,
+        },
+        dispatch::events::Payload::RecoveryCrit {
+            session_id: "s".into(),
+            consecutive_failures: 3,
         },
     ];
     for p in &engine_all {

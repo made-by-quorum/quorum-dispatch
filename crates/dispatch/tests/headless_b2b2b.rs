@@ -3,7 +3,7 @@
 //!
 //! Drives the REAL `sbmux::server::run_server` (the embedded daemon entry sb
 //! itself runs) with the sb-side `DaemonHeadlessFactory` injected — exactly the
-//! production seam (`crates/dispatch/src/bin/dispatch/daemon.rs`), only the fixture binary +
+//! production seam (`crates/dispatch/src/bin/qd/daemon.rs`), only the fixture binary +
 //! the isolated registry differ. A fixture shell script emits canned stream-json;
 //! one client `LaunchHeadless`es, a second `SubscribeRepublish`es and receives
 //! `RepublishReady`/`RepublishTurnEnd`/`RepublishEnd` AND the registry `<pid>.json`
@@ -208,6 +208,8 @@ fn factory(
         sessions_dir: sessions_dir.to_path_buf(),
         // start-only launches here (resume_session_id=None) → ids_path is never read.
         ids_path: home.join(".quorum").join("dispatch").join("ids.jsonl"),
+        progress: std::sync::Arc::new(dispatch::progress::ProgressRecorder::new()),
+        turn_clock: std::sync::Arc::new(dispatch::progress::TurnStartRecorder::new()),
     })
 }
 
@@ -643,6 +645,8 @@ fn real_isolated_claude_wait_completes_off_channel() {
                 sessions_dir: sessions_dir.clone(),
                 // start-only launch (resume_session_id=None) → ids_path unused.
                 ids_path: home.join(".quorum").join("dispatch").join("ids.jsonl"),
+                progress: std::sync::Arc::new(dispatch::progress::ProgressRecorder::new()),
+                turn_clock: std::sync::Arc::new(dispatch::progress::TurnStartRecorder::new()),
             });
 
         let sock_dir_owned = sock_dir.clone();

@@ -46,6 +46,19 @@ pub struct DaemonHeadlessFactory {
     /// injected `SB_SESSION_ID` MATCHES the sbId `sb ls` surfaces for the
     /// daemon-minted child-pid row (the row↔env consistency invariant).
     pub ids_path: PathBuf,
+    /// R3b-Step-0: the per-daemon shared **signal-B** progress producer. Threaded
+    /// into every per-session [`RegistryStatusSink`] so each session's OUTPUT
+    /// Republishes advance `last_output_ms` on the live path (the daemon-mint sink
+    /// is the production tap). One recorder per daemon, shared across its sessions;
+    /// the recovery ladder (R3c) and WS-A (A3) read it via
+    /// [`crate::progress::ProgressProducer`].
+    pub progress: std::sync::Arc<crate::progress::ProgressRecorder>,
+    /// R3c item-2: the per-daemon shared **signal-A** turn-start producer. Threaded
+    /// into every per-session [`RegistryStatusSink`] so each session's turn
+    /// boundaries record/clear the turn-start anchor on the live path. One recorder
+    /// per daemon, shared across its sessions; the recovery ladder reads a REAL
+    /// `since_turn_start_ms` via [`crate::progress::TurnStartProducer`].
+    pub turn_clock: std::sync::Arc<crate::progress::TurnStartRecorder>,
 }
 
 impl DaemonHeadlessFactory {
@@ -74,6 +87,8 @@ impl DaemonHeadlessFactory {
             cwd: None,
             sessions_dir: paths.sessions_dir.clone(),
             ids_path: crate::idstore::ids_path(&paths.state_dir),
+            progress: std::sync::Arc::new(crate::progress::ProgressRecorder::new()),
+            turn_clock: std::sync::Arc::new(crate::progress::TurnStartRecorder::new()),
         }
     }
 }
@@ -170,13 +185,22 @@ impl HeadlessFactory for DaemonHeadlessFactory {
             // identity) so connect/ls/resolve dispatch on the row uniformly.
             provider: None,
         };
+        let progress = self.progress.clone();
+        let turn_clock = self.turn_clock.clone();
         let status_sink_factory: Box<dyn FnOnce(i64) -> Box<dyn Sink> + Send> =
             Box::new(move |child_pid: i64| {
-                Box::new(RegistryStatusSink::with_mint_system_clock(
-                    sessions_dir,
-                    child_pid,
-                    identity,
-                )) as Box<dyn Sink>
+                // R3b-Step-0: attach the per-daemon signal-B producer so this
+                // session's OUTPUT Republishes advance `last_output_ms` on the live
+                // path (the production tap that makes signal-B non-test-only).
+                // R3c item-2: attach the per-daemon signal-A producer so this
+                // session's turn boundaries record/clear the turn-start anchor — the
+                // production tap that makes signal-A's `since_turn_start_ms`
+                // non-test-only (the rev0 gap the live-chain gate fed synthetically).
+                Box::new(
+                    RegistryStatusSink::with_mint_system_clock(sessions_dir, child_pid, identity)
+                        .with_progress(progress)
+                        .with_turn_clock(turn_clock),
+                ) as Box<dyn Sink>
             });
         Ok(HeadlessLaunchPlan {
             launch,
@@ -199,6 +223,8 @@ mod tests {
             cwd: daemon_cwd.map(str::to_string),
             sessions_dir: PathBuf::from("/tmp/sessions"),
             ids_path: PathBuf::from("/tmp/ids.jsonl"),
+            progress: std::sync::Arc::new(crate::progress::ProgressRecorder::new()),
+            turn_clock: std::sync::Arc::new(crate::progress::TurnStartRecorder::new()),
         }
     }
 
@@ -268,6 +294,8 @@ mod tests {
             cwd: None,
             sessions_dir: dir.path().to_path_buf(),
             ids_path: dir.path().join("ids.jsonl"),
+            progress: std::sync::Arc::new(crate::progress::ProgressRecorder::new()),
+            turn_clock: std::sync::Arc::new(crate::progress::TurnStartRecorder::new()),
         };
         let plan = f.resolve("sess", "p", None, None, &[]).unwrap();
         let make = plan
@@ -321,6 +349,8 @@ mod tests {
             cwd: None,
             sessions_dir: dir.path().to_path_buf(),
             ids_path: ids_path.clone(),
+            progress: std::sync::Arc::new(crate::progress::ProgressRecorder::new()),
+            turn_clock: std::sync::Arc::new(crate::progress::TurnStartRecorder::new()),
         };
         let uuid = "11111111-2222-3333-4444-555555555555";
 

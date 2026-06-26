@@ -7,7 +7,7 @@
 //! a port + speaking MCP) is exercised by the `relay_server_*` suites, which
 //! spawn `CARGO_BIN_EXE_qd relay:serve` against a hermetic HOME.
 
-const MAIN_SRC: &str = include_str!("../src/bin/dispatch/main.rs");
+const MAIN_SRC: &str = include_str!("../src/bin/qd/main.rs");
 
 #[test]
 fn relay_serve_verb_is_dispatched_post_rename() {

@@ -13,10 +13,12 @@
 //! - **The registry is a disposable snapshot of the event stream** (ADD-3):
 //!   see [`registry`] module docs. Lineage = `spawned_by` ONLY (ADD-3a/3b).
 
+pub mod acp_residence;
 pub mod backends;
 pub mod boot;
 pub mod bootstrap;
 pub mod codes;
+pub mod control_sock;
 pub mod create;
 pub mod create_daemon;
 pub mod daemon_headless;
@@ -29,11 +31,15 @@ pub mod extensions;
 pub mod fmt;
 pub mod fork_seed;
 pub mod gc;
+pub mod health;
+pub mod identity;
 pub mod idstore;
+pub mod inbox_gc;
 pub mod join;
 pub mod jsonl;
 pub mod kill;
 pub mod launch;
+pub mod livelock;
 pub mod liveness;
 pub mod model;
 pub mod mux;
@@ -42,8 +48,11 @@ pub mod observe;
 pub mod paths;
 pub mod ping;
 pub mod preflight;
+pub mod presence;
+pub mod progress;
 pub mod provider;
 pub mod reconcile;
+pub mod recovery;
 pub mod redact;
 pub mod registry;
 pub mod relay;

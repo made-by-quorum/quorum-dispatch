@@ -131,6 +131,15 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
         return run_codex_wait(session, &label, timeout_ms);
     }
 
+    // scoped-ACP-CC residence WAIT (S7): an `acp/*` row's completion is observed by
+    // PULLING the resident's event stream (next_update) over the residence socket until
+    // the turn's terminal arrives. We deliberately do NOT gate on the disk `status` (a
+    // send does not mutate the row, so the disk status is stale for acp) — the live pull
+    // is the truth. A dead/degraded endpoint reports cold (no hang).
+    if session.provider.starts_with("acp/") {
+        return run_acp_wait(session, &label, timeout_ms);
+    }
+
     // --- claude path ---------------------------------------------------------
     // paths_from_home cannot fail here: `common::all_sessions` above already
     // resolved it (same seam), so reaching this line proves it succeeds.
@@ -386,6 +395,99 @@ fn run_codex_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i
     }
 }
 
+/// scoped-ACP-CC residence WAIT loop (S7). The ACP analog of [`run_codex_wait`]: reconnect
+/// to the resident adapter (endpoint + S6 identity + S7 ladder, exactly as the SEND path),
+/// then PULL `next_update` until the turn's `Terminal`/`TerminalError` event arrives or the
+/// deadline elapses. The events are the REAL bridge stream relayed through the resident
+/// (faithfulness keystone) — wait never synthesizes completion. No idle short-circuit on
+/// the (stale-for-acp) disk status; a dead/degraded endpoint reports cold, never hangs.
+fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64) -> i32 {
+    use dispatch::provider::acp::{derive_tier, AcpClient, AcpConnection, AcpEvent, Tier};
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    let env = RealEnv;
+    let paths = match common::paths_from_home(&env) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let cold = |label: &str| {
+        eprintln!("sb wait: \"{label}\": acp session daemon not reachable (try sb resume {label}).");
+        1
+    };
+
+    let Some(pid) = session.pid.filter(|&p| p != 0) else {
+        eprintln!("Session has no PID (cold/dead). Nothing to wait for.");
+        return 1;
+    };
+    let entry = dispatch::registry::read_entry(&paths.sessions_dir, pid);
+    let endpoint = entry
+        .as_ref()
+        .and_then(|e| e.endpoint.clone())
+        .filter(|s| !s.is_empty());
+    let transport_field = entry.as_ref().and_then(|e| e.transport.clone());
+
+    // S6 identity + S7 ladder (same gate as the SEND path — connect-success is liveness,
+    // cmdline+pid is identity; drive only on Tier::Acp).
+    let cmdline = dispatch::create_daemon::real_cmdline_probe(pid);
+    let endpoint_alive = endpoint.is_some()
+        && dispatch::effects::is_pid_alive(pid as i32)
+        && dispatch::acp_residence::cmdline_is_our_acp_daemon(cmdline.as_deref(), endpoint.as_deref());
+    if derive_tier("acp/claude-code", transport_field.as_deref(), endpoint_alive) != Tier::Acp {
+        return cold(label);
+    }
+    let endpoint = endpoint.expect("Tier::Acp implies a live endpoint");
+
+    let conn = match AcpConnection::connect(&endpoint, Duration::from_secs(5)) {
+        Ok(c) => c,
+        Err(_) => return cold(label),
+    };
+
+    eprint!("Waiting for {label}...");
+    let _ = std::io::stderr().flush();
+
+    // Honor the timeout knob; a 0/absent timeout defaults to the 120s wait default.
+    let total = if timeout_ms > 0 {
+        Duration::from_millis(timeout_ms as u64)
+    } else {
+        Duration::from_secs(120)
+    };
+    let deadline = Instant::now() + total;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            eprintln!(" timeout");
+            return 1;
+        }
+        let remaining = (deadline - now).min(Duration::from_secs(1));
+        match conn.next_update(remaining) {
+            // A real protocol terminal (the session/prompt response carried a stopReason)
+            // → the turn completed and the session is idle. wait = "block until idle"
+            // (codex-consistent), exit 0.
+            Ok(Some(AcpEvent::Terminal { .. })) => {
+                eprintln!(" done");
+                usage_wait(&session.session_id, session.name.as_deref());
+                return 0;
+            }
+            // F1 / SC-2a: the turn FAILED (a bridge JSON-RPC error — authRequired/
+            // internalError — or an unmappable stopReason), DISTINCT from a clean
+            // completion. Surface the failure reason + a NONZERO exit so an operator
+            // scripting `qd wait X && next` does not proceed on a failed turn (reporting
+            // a failed turn as success would be faithfulness-adjacent).
+            Ok(Some(AcpEvent::TerminalError { message, .. })) => {
+                eprintln!(" failed: {message}");
+                return 1;
+            }
+            // Streaming updates / a quiet poll → keep pulling until the terminal.
+            Ok(Some(AcpEvent::Update { .. })) | Ok(None) => continue,
+            Err(_) => {
+                eprintln!(" channel closed");
+                return 1;
+            }
+        }
+    }
+}
+
 /// A minimal `ProviderFx` for resolving the codex `transcript_root` off env only
 /// (codex's `transcript_root` reads `fx.env` $CODEX_HOME/$HOME — never paths).
 fn codex_root_fx<'a>(
@@ -403,7 +505,7 @@ fn codex_root_fx<'a>(
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    }
+        acp_client: None,    }
 }
 
 #[cfg(test)]

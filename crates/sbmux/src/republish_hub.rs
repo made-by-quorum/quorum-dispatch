@@ -171,6 +171,11 @@ impl Sink for SocketFanoutSink {
             // design §C / spec §3). The liveness facts (Ready/TurnEnd/End) carry the
             // control signal; raw `Event`s are not republished on the socket.
             Republish::Event(_ev) => {}
+            // R3c-Step-1 daemon wake: coalescible passthrough on the socket side.
+            // The wake's observable effect lives on the daemon-status/progress sink
+            // (`note_output` advances signal-B); it carries no new socket frame, so
+            // — like a raw `Event` — it is not re-broadcast to subscribers.
+            Republish::Wake => {}
         }
     }
 }

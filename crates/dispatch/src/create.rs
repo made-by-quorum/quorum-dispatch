@@ -450,7 +450,7 @@ fn build_claude_command(deps: &NewDeps, params: &NewParams) -> String {
         // codex-only transport; the claude create path never speaks app-server.
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let req = LaunchRequest {
         name: params.name.clone(),
         cwd: Some(params.cwd.to_string_lossy().into_owned()),

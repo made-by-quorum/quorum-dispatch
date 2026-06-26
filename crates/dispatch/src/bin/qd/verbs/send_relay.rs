@@ -79,6 +79,16 @@ fn run_with_client(
         return run_codex_send(&session, message);
     }
 
+    // scoped-ACP-CC (residence SEND): an `acp/*` row is a daemon-hosted ACP thread with
+    // no relay port — route it to the ACP SEND path (reconnect to the resident adapter →
+    // AcpProvider::inject) BEFORE the relay-port-None check, exactly as the codex arm does.
+    if provider_id.starts_with("acp/") {
+        let Some(session) = session else {
+            return no_relay_exit(&session_name);
+        };
+        return run_acp_send(&session, message);
+    }
+
     // No port on the resolved session → "has no relay." exit 1 (send.ts:406-409).
     //
     // codex P1 W5 (codex-p1-spec section 7.1): the NoTransport case stays driven by
@@ -335,7 +345,7 @@ fn inject_via_provider(
         // codex-only transport; the claude send:relay path uses relay+port.
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     // The send:relay verb keys on NAME+port (the fast path never builds a Session);
     // SessionKey carries the name as the id here (claude inject reads neither for
     // the send — it sends through relay+port). pid is None (not on this surface).
@@ -495,7 +505,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
         relay_port: None,
         app_server: Some(rpc_ref),
         codex_expected_turn_id: expected_turn_id.as_deref(),
-    };
+        acp_client: None,    };
     let key = SessionKey {
         id: &thread_id,
         name: session.name.as_deref(),
@@ -535,6 +545,94 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
     }
 }
 
+/// scoped-ACP-CC residence SEND path (S7). The ACP analog of [`run_codex_send`]: re-read
+/// the row's recorded `endpoint`, verify the resident adapter's IDENTITY (pid alive AND
+/// the live `/proc` cmdline carries our `acp-daemon --listen <endpoint>` — S6, defeats PID
+/// reuse), derive the ladder tier from `(provider, transport-field, endpoint-alive)`, and
+/// only on `Tier::Acp` connect a fresh [`AcpConnection`] and drive `AcpProvider::inject`.
+/// A dead/wrong-identity endpoint or a latched-pty row DEGRADES to the SEND "not reachable"
+/// surface — never a hang on a dead endpoint, never a fake.
+fn run_acp_send(session: &Session, message: &str) -> i32 {
+    use dispatch::provider::acp::{derive_tier, AcpClient, AcpConnection, Tier, ACP_CC_PROVIDER};
+    use dispatch::provider::{InjectError, Provider, ProviderFx, SessionKey};
+
+    let name = session.name.clone().unwrap_or_default();
+    let env = RealEnv;
+    let paths = match common::paths_from_home(&env) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let not_reachable = |name: &str| {
+        eprintln!(
+            "sb send:relay: \"{name}\": acp session daemon not reachable (try sb resume {name})"
+        );
+        1
+    };
+
+    let Some(pid) = session.pid.filter(|&p| p != 0) else {
+        return not_reachable(&name);
+    };
+    // The endpoint + degradation latch live in the row (re-read by pid; NOT on --json).
+    let entry = dispatch::registry::read_entry(&paths.sessions_dir, pid);
+    let endpoint = entry
+        .as_ref()
+        .and_then(|e| e.endpoint.clone())
+        .filter(|s| !s.is_empty());
+    let transport_field = entry.as_ref().and_then(|e| e.transport.clone());
+
+    // S6 identity + liveness: a connect-success is liveness, NOT identity — the cmdline
+    // (+ pid liveness) is the identity fence against PID reuse.
+    let cmdline = dispatch::create_daemon::real_cmdline_probe(pid);
+    let endpoint_alive = endpoint.is_some()
+        && dispatch::effects::is_pid_alive(pid as i32)
+        && dispatch::acp_residence::cmdline_is_our_acp_daemon(cmdline.as_deref(), endpoint.as_deref());
+
+    // S7 ladder: drive ONLY on Tier::Acp; else degrade (no drive-on-dead, no hang).
+    let tier = derive_tier("acp/claude-code", transport_field.as_deref(), endpoint_alive);
+    if tier != Tier::Acp {
+        return not_reachable(&name);
+    }
+    let endpoint = endpoint.expect("Tier::Acp implies a live endpoint");
+
+    let conn = match AcpConnection::connect(&endpoint, Duration::from_secs(5)) {
+        Ok(c) => c,
+        Err(_) => return not_reachable(&name),
+    };
+    let conn_ref: &dyn AcpClient = &conn;
+    let fx = ProviderFx {
+        env: &env,
+        paths: &paths,
+        socket_dir: paths.sessions_dir.clone(),
+        mux: None,
+        clock: None,
+        sleeper: None,
+        relay: None,
+        relay_port: None,
+        app_server: None,
+        codex_expected_turn_id: None,
+        acp_client: Some(conn_ref),
+    };
+    let key = SessionKey {
+        id: &session.session_id,
+        name: session.name.as_deref(),
+        cwd: session.cwd.as_deref(),
+        pid: session.pid,
+    };
+    let from = derive_from_session(&RealEnv);
+    match ACP_CC_PROVIDER.inject(&fx, &key, message, &from) {
+        Ok(turn_id) => {
+            println!("{turn_id}");
+            usage_send_relay(&name);
+            0
+        }
+        Err(InjectError::Precondition(s)) => {
+            eprintln!("sb send:relay: \"{name}\": send failed ({s}).");
+            1
+        }
+        Err(_) => not_reachable(&name),
+    }
+}
+
 /// A minimal `ProviderFx` for resolving the codex `transcript_root` off env only
 /// (codex's `transcript_root` reads `fx.env` $CODEX_HOME/$HOME — never paths). The
 /// borrow lifetimes are bounded by the caller's `env`/`paths`.
@@ -553,7 +651,7 @@ fn codex_resolve_fx<'a>(
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    }
+        acp_client: None,    }
 }
 
 /// Resolve `(relay_port, session_name, provider_id)` for `query`. The port is
@@ -596,7 +694,7 @@ fn resolve_relay_port(query: &str) -> Result<(Option<u16>, String, String, Optio
     // send:pty, which keep refusing codex via the shared helper until their own
     // wave wires them. We therefore pass a codex row through WITHOUT the refusal,
     // and refuse only a genuinely-unknown provider.
-    if session.provider != "codex" {
+    if session.provider != "codex" && !session.provider.starts_with("acp/") {
         if let Some(code) = common::refuse_unknown_provider("send:relay", session) {
             return Err(code);
         }
@@ -616,14 +714,34 @@ fn resolve_relay_port(query: &str) -> Result<(Option<u16>, String, String, Optio
 /// Run the engine fast-relay lookup with the REAL gathered inputs (registry pid
 /// entries + relay ports + ppid map). Mirror of the I/O the TS
 /// `fastRelayLookup` does inline (session.ts:1281, 1289, 1293-1298).
+/// Whether a registry row's provider participates in the relay FAST PATH (F4 guard).
+/// Daemon-hosted providers (`codex` / `acp/*`) do NOT: they carry no relay port and must
+/// take the full-scan fallback so `send:relay` routes to their own SEND ladder. Without
+/// this exclusion the fast path matches such a row BY NAME and resolves a relay via PID
+/// ANCESTRY (a claude relay up the spawn chain) — mis-delivering the send (caught live:
+/// the first acp send returned a relay id, not a turn id). Pinned by
+/// `daemon_providers_excluded_from_relay_fast_path` so the fix cannot silently regress.
+fn provider_uses_relay_fast_path(provider: Option<&str>) -> bool {
+    // An absent provider reads as claude-code at the boundary (relay-capable).
+    let p = provider.unwrap_or("claude-code");
+    p != "codex" && !p.starts_with("acp/")
+}
+
 fn fast_lookup(query: &str) -> Option<FastRelayMatch> {
     let env = RealEnv;
     let paths = common::paths_from_home(&env).ok()?;
 
-    // Live pid entries (TS getPidEntries — live only, no tombstones).
+    // Live pid entries (TS getPidEntries — live only, no tombstones). EXCLUDE
+    // daemon-hosted rows (codex / acp/*): they are NOT relay sessions, so they must
+    // take the full-scan fallback and route to their own SEND ladder. Without this
+    // filter the relay fast path matches such a row by name and resolves a relay via
+    // PID ANCESTRY (a claude relay up the spawning chain) — mis-delivering a codex/acp
+    // send to the wrong session. The codex-p2 comment ("daemon rows take the fallback")
+    // was an unenforced premise; this enforces it.
     let pid_entries: Vec<PidEntryRef> =
         dispatch::registry::read_entries(&paths.sessions_dir, false)
             .into_iter()
+            .filter(|s| provider_uses_relay_fast_path(s.entry.provider.as_deref()))
             .map(|s| PidEntryRef {
                 name: s.entry.name,
                 session_id: s.entry.session_id,
@@ -769,6 +887,25 @@ fn parse_timeout(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // F4 regression guard: the relay fast-path daemon-exclusion (the live-surfaced
+    // mis-route fix). Reverting `provider_uses_relay_fast_path` to allow codex/acp (or
+    // dropping the `acp/` check) reds this — a non-vacuous guard for the no-regression
+    // condition that previously had only the live turn-id-vs-relay-id discriminator.
+    #[test]
+    fn daemon_providers_excluded_from_relay_fast_path() {
+        // Relay-capable rows participate in the fast path.
+        assert!(provider_uses_relay_fast_path(None), "absent → claude-code (relay)");
+        assert!(provider_uses_relay_fast_path(Some("claude-code")));
+        assert!(provider_uses_relay_fast_path(Some("opencode")));
+        // Daemon-hosted rows are EXCLUDED → they take the full-scan fallback.
+        assert!(!provider_uses_relay_fast_path(Some("codex")), "codex is daemon-hosted");
+        assert!(
+            !provider_uses_relay_fast_path(Some("acp/claude-code")),
+            "acp/* is daemon-hosted"
+        );
+        assert!(!provider_uses_relay_fast_path(Some("acp/anything")));
+    }
 
     #[test]
     fn parse_timeout_leading_int() {

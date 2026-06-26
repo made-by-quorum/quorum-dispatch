@@ -196,21 +196,69 @@ impl RelayServer {
     ///    NEVER held (P-G6). Detached; lives as long as the process.
     fn spawn_sweeper(self: &Arc<Self>) {
         let server = Arc::clone(self);
-        std::thread::spawn(move || loop {
-            std::thread::sleep(SWEEP_INTERVAL);
-            // (1) resolved-reply TTL eviction — state lock, no IO under it.
-            {
-                // Poison-resilience (cond 4): recover the guard so a panic in any
-                // other critical section can't permanently disable the sweeper
-                // (which would let `resolved` grow unbounded).
-                let mut state = server.state.lock().unwrap_or_else(|p| p.into_inner());
-                let _evicted = state.sweep_expired(Instant::now());
-                // lock dropped here BEFORE the file-IO sidecar sweep (P-G6).
+        // WS-B / B1 (3): the throttled inbox-TTL pass is OPT-IN. A live relay that
+        // self-bounds its inbox is the steady state, but auto-sweeping on deploy
+        // would be an UNGATED destructive sweep of the ~2019-file production backlog
+        // — and acp-super2's standing directive is "NO destructive sweep without a
+        // reviewed dry-run". So the pass is DARK unless `QD_RELAY_INBOX_SWEEP=1`; the
+        // coordinator/supervisor flips it on AFTER the dry-run is reviewed + the
+        // oracle passes. Read once at spawn (the relay is a real long-running
+        // process; this is a behavioral toggle, not a path — distinct from the L9a
+        // home/SB_HOME seam discipline).
+        let inbox_sweep_enabled = std::env::var("QD_RELAY_INBOX_SWEEP")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        std::thread::spawn(move || {
+            let mut cycle: u64 = 0;
+            loop {
+                std::thread::sleep(SWEEP_INTERVAL);
+                cycle = cycle.wrapping_add(1);
+                // (1) resolved-reply TTL eviction — state lock, no IO under it.
+                {
+                    // Poison-resilience (cond 4): recover the guard so a panic in any
+                    // other critical section can't permanently disable the sweeper
+                    // (which would let `resolved` grow unbounded).
+                    let mut state = server.state.lock().unwrap_or_else(|p| p.into_inner());
+                    let _evicted = state.sweep_expired(Instant::now());
+                    // lock dropped here BEFORE the file-IO sidecar sweep (P-G6).
+                }
+                // (2) stale-sidecar sweep (item iii) — pure file IO, NO state lock held.
+                let _removed =
+                    sweep_stale_sidecars(&server.paths.relay_dir, server.pid, pid_is_alive);
+
+                // (3) WS-B / B1 — throttled inbox-TTL GC pass (opt-in; see above).
+                // Pure file IO + READ-ONLY presence; NO state lock is held across it
+                // (P-G6) — it never touches relay state. Throttled to one pass per
+                // `INBOX_SWEEP_EVERY_N` cycles (10 min) — far finer than the 7-day TTL.
+                if inbox_sweep_enabled && cycle % INBOX_SWEEP_EVERY_N == 0 {
+                    let now_ms = now_epoch_ms();
+                    let trash_dir = server.paths.home.join(".claude").join("trash");
+                    let _moved = crate::inbox_gc::sweep_inbox_once(
+                        &server.paths.inbox_dir,
+                        &server.paths.state_dir,
+                        &trash_dir,
+                        now_ms,
+                    );
+                }
             }
-            // (2) stale-sidecar sweep (item iii) — pure file IO, NO state lock held.
-            let _removed = sweep_stale_sidecars(&server.paths.relay_dir, server.pid, pid_is_alive);
         });
     }
+}
+
+/// Cycles between throttled inbox-TTL sweeper passes (30 s × 20 = 10 min). The TTL
+/// bound is 7 days, so a 10-minute cadence is ample and keeps the live relay's
+/// per-pass cost negligible.
+const INBOX_SWEEP_EVERY_N: u64 = 20;
+
+/// Wall-clock epoch ms for the sweeper's injected-now (the relay is a real
+/// long-running process; the inbox deciders stay pure — this is the one driver that
+/// supplies the real clock, mirroring `qd gc`'s `RealClock`).
+fn now_epoch_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Newest-N cap on the push-back sidecar probe loop (server.ts:171

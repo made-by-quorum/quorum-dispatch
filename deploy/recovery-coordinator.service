@@ -1,0 +1,32 @@
+# R3c-Step-2 §5.1 — the standing recovery coordinator, supervised exactly like the
+# zk-ops unit (the 8h-outage lesson: Restart=always does NOT fire on a clean SIGTERM
+# stop, so a watchdog catches a silent death/hang that Restart=always misses).
+#
+# Install (user scope):
+#   cp recovery-coordinator.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now recovery-coordinator
+#
+# NOTE: the binary is `recovery_coordinator` (a SEPARATE bin from `qd`, so the
+# qd binary stays byte-intact). It is installed alongside ~/.quorum/bin/qd.
+[Unit]
+Description=Dispatch recovery coordinator (WS-R R3c-Step-2)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.quorum/bin/recovery_coordinator --tick-ms 2000
+Restart=always
+RestartSec=2
+# Watchdog: Restart=always does NOT fire on a clean stop or a stalled-but-alive loop;
+# WatchdogSec + an external heartbeat-counter watcher (see
+# dispatch::recovery::read_heartbeat) catch the silent-death / wedged-loop case the
+# zk-ops outage hit. (Type=simple here; switch to Type=notify + sd_notify(WATCHDOG=1)
+# once the bin wires the libsystemd notify handshake.)
+WatchdogSec=30
+# Bounded blast radius: the coordinator only ever SIGNALS/respawns sessions that pass
+# the identity gate AND the two-signal guard AND (for destructive rungs) the
+# live-signal-B + load back-off gates — a buggy coordinator cannot kill a healthy
+# streaming long turn, a reused PID, or stampede under host pressure.
+
+[Install]
+WantedBy=default.target

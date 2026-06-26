@@ -699,10 +699,10 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // (the opencode/--port honest-error above stays FIRST + byte-identical). codex
     // P2 W4: codex is now a supported value (GATE-R RULED (A) daemon-thread).
     if let Some(p) = provider.as_deref() {
-        if p != "claude-code" && p != "codex" {
+        if p != "claude-code" && p != "codex" && p != "acp/claude-code" {
             eprintln!(
-                "sb start: unknown provider \"{p}\" — this engine supports: claude-code, codex \
-                 (--provider opencode is parked)."
+                "sb start: unknown provider \"{p}\" — this engine supports: claude-code, codex, \
+                 acp/claude-code (--provider opencode is parked)."
             );
             return 1;
         }
@@ -834,6 +834,13 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // create path (no daemon logic threads through create.rs). The daemon path
     // does NOT use the zmx/sbmux backend selection, mux, or boot waiter — its
     // readiness is the app-server initialize handshake, not a pid-file/went-busy.
+    // scoped-ACP-CC daemon-residence (S5): an `acp/*` row is Daemon-hosted like codex,
+    // but its residence is a dispatch-OWNED adapter process (the bridge speaks stdio, not
+    // ws) — a distinct create path from the codex app-server. Branch it BEFORE the codex
+    // daemon arm (both are Hosting::Daemon).
+    if provider_impl.id().starts_with("acp/") {
+        return run_new_acp_daemon(provider_impl, &env, &home, &paths, &name, &cwd, prompt.clone());
+    }
     if provider_impl.hosting() == dispatch::provider::Hosting::Daemon {
         return run_new_codex_daemon(
             provider_impl,
@@ -1018,7 +1025,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         // codex-only transport; the claude boot path has no app-server.
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let boot_waiter = provider_impl.boot_waiter(&boot_fx);
 
     let deps = NewDeps {
@@ -1572,6 +1579,120 @@ fn run_new_codex_daemon(
             e.exit_code()
         }
     }
+}
+
+/// scoped-ACP-CC daemon-residence create path (S5). Allocates a loopback port, spawns the
+/// resident `qd acp-daemon` adapter DETACHED (reusing the codex `RealDaemonSpawner`'s
+/// `process_group(0)` discipline — so a later group-kill reaps adapter + bridge together),
+/// polls it to readiness (the resident ACP session established), writes the registry row
+/// with the recorded `endpoint` (S5) so later verbs reconnect, and optionally drives the
+/// create-time prompt over the SAME connection. The adapter OUTLIVES this verb — that is
+/// cross-process residence. On a readiness failure the adapter is group-killed (no orphan).
+#[allow(clippy::too_many_arguments)]
+fn run_new_acp_daemon(
+    _provider_impl: &'static dyn dispatch::provider::Provider,
+    _env: &RealEnv,
+    home: &std::path::Path,
+    paths: &dispatch::paths::SbPaths,
+    name: &str,
+    cwd: &std::path::Path,
+    prompt: Option<String>,
+) -> i32 {
+    use dispatch::acp_residence::{build_adapter_argv, connect_ready};
+    use dispatch::create_daemon::{real_alloc_port, DaemonSpawner, RealDaemonSpawner};
+    use dispatch::effects::Clock;
+    use dispatch::provider::acp::AcpClient;
+
+    // 1. allocate a loopback port → the resident ws endpoint.
+    let port = match real_alloc_port() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("sb start: acp port allocation failed: {e}");
+            return 1;
+        }
+    };
+    let endpoint = format!("ws://127.0.0.1:{port}");
+
+    // 2. self-exec: the adapter IS this binary under the hidden `acp-daemon` verb.
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("sb start: cannot resolve own executable for acp adapter: {e}");
+            return 1;
+        }
+    };
+
+    // 3. spawn the adapter DETACHED (codex RealDaemonSpawner reuse: process_group(0),
+    //    stdin null, stdout/stderr → log). The bridge child inherits the group.
+    let argv = build_adapter_argv(&exe, &endpoint, cwd, None, &[]);
+    let log_path = home
+        .join(".quorum")
+        .join("dispatch")
+        .join("log")
+        .join(format!("acp-{name}.log"));
+    let spawner = RealDaemonSpawner;
+    let spawned = match spawner.spawn_detached(&argv, &[], cwd, &log_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("sb start: acp adapter spawn failed: {e}");
+            return 1;
+        }
+    };
+
+    // 4. readiness: poll connect+status until the resident ACP session is established
+    //    (the codex connect-with-retry analog). On failure: group-kill the adapter (no
+    //    orphan), surface the error.
+    let conn = match connect_ready(&endpoint, std::time::Duration::from_secs(30)) {
+        Ok(c) => c,
+        Err(e) => {
+            spawner.kill(spawned.pid);
+            eprintln!("sb start: {e} (see {})", log_path.display());
+            return 1;
+        }
+    };
+    let session_id = conn.status_session_id().ok().flatten().unwrap_or_default();
+
+    // 5. optional create-time prompt: drive it over the SAME connection (the resident
+    //    keeps streaming after we disconnect). Non-blocking — `wait` observes the turn.
+    if let Some(p) = prompt.as_deref().filter(|s| !s.is_empty()) {
+        if let Err(e) = conn.prompt(&session_id, p, name) {
+            eprintln!("sb start: acp create-prompt enqueue failed: {e}");
+            // The session is up; do not tear it down over a prompt-enqueue error.
+        }
+    }
+    drop(conn); // resident stays up; this was a short-lived create connection.
+
+    // 6. write the registry row (the endpoint is the residence reconnect handle, S5).
+    let clock = RealClock;
+    let now = clock.now_ms();
+    let cwd_str = cwd.to_string_lossy().into_owned();
+    let entry = dispatch::registry::RegistryEntry {
+        pid: Some(spawned.pid),
+        session_id: Some(session_id),
+        cwd: Some(cwd_str),
+        started_at: Some(now),
+        updated_at: Some(now),
+        status: Some("idle".to_string()),
+        name: Some(name.to_string()),
+        version: None,
+        kind: None,
+        entrypoint: None,
+        backend: None,
+        spawned_by: None,
+        provider: Some("acp/claude-code".to_string()),
+        endpoint: Some(endpoint),
+        // A freshly-created healthy row carries NO degradation latch (the tier is
+        // DERIVED per verb; only a drop-to-floor persists `transport`).
+        transport: None,
+    };
+    if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
+        spawner.kill(spawned.pid);
+        eprintln!("sb start: acp registry write failed: {e}");
+        return 1;
+    }
+
+    println!("Started detached acp session \"{name}\"");
+    0
 }
 
 /// §2.3.2 `chunks-delivered.ack_source` for the `new -p` create path. The create

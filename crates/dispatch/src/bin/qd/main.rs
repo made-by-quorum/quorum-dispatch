@@ -59,6 +59,12 @@ fn run(argv: &[String]) -> i32 {
         // it). Dispatched pre-clap so it never enters the user-facing clap surface
         // and cannot be commander-error-mangled. Not advertised in help. §2.
         Some("relay:serve") => return dispatch::relay_server::run(),
+        // acp-daemon: the HIDDEN resident ACP adapter entry (S1). The create path
+        // spawns `<exe> acp-daemon --listen ws://… --cwd …` DETACHED; that process
+        // owns the claude-code-acp bridge + serves the ws front, outliving the create
+        // verb (cross-process residence). Dispatched pre-clap so it never enters the
+        // user-facing surface and cannot be commander-error-mangled. Internal-only.
+        Some("acp-daemon") => return dispatch::acp_residence::run_adapter(&rest[1..]),
         // relay:register (alias relay:repoint) / relay:rollback: hidden verbs.
         // Dispatched pre-clap so they are never advertised in help and cannot be
         // commander-error-mangled. They drive Claude Code's own `claude mcp` CLI

@@ -41,6 +41,8 @@ fn registry_write_roundtrip_through_pipeline() {
         // codex P2 W4: a claude row carries NO endpoint (None) — it stays absent
         // on disk; the codex endpoint round-trip is pinned in registry.rs.
         endpoint: None,
+        // scoped-ACP-CC: a healthy claude row carries no degradation latch (absent).
+        transport: None,
     };
     registry::write_entry(&paths.sessions_dir, &entry).unwrap();
 

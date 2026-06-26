@@ -92,6 +92,13 @@ pub fn run(m: &ArgMatches) -> i32 {
     if session.provider == "codex" {
         return run_codex_kill(&paths, session);
     }
+    // scoped-ACP-CC (F3 / rider-4 kill-no-leak): an acp/* row is daemon-hosted — the
+    // resident adapter pid IS the session. GROUP-reap it (the adapter + its bridge child
+    // together) via the SAME proven group ladder as codex. Placed BEFORE
+    // refuse_unknown_provider (which would otherwise refuse acp and leave both procs alive).
+    if session.provider.starts_with("acp/") {
+        return run_acp_kill(&paths, session);
+    }
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
     if let Some(code) = common::refuse_unknown_provider("stop", session) {
         return code;
@@ -595,6 +602,39 @@ fn run_codex_kill(paths: &SbPaths, session: &dispatch::model::Session) -> i32 {
         // The already-dead edge: the daemon was already gone — we tombstoned the
         // dead row (the dead-row seal). Honest about what happened.
         println!("killed {reg_name} (zmx -, pid {pid}) [daemon already dead — tombstoned]");
+    }
+    0
+}
+
+/// scoped-ACP-CC stop (F3 / rider-4 kill-no-leak): the ACP analog of [`run_codex_kill`].
+/// GROUP-reaps the resident adapter pid (= pgid) via [`kill_acp`] — reaping the adapter
+/// AND its bridge child together — gated on the ACP cmdline identity, then tombstones. No
+/// zmx/mux reap (an acp row has no pane). After this, `pgrep` shows ZERO adapter/bridge
+/// procs for the killed session (the no-leaked-procs proof).
+fn run_acp_kill(paths: &SbPaths, session: &dispatch::model::Session) -> i32 {
+    use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
+    use dispatch::resume_daemon::kill_acp;
+
+    let name = session
+        .name
+        .clone()
+        .unwrap_or_else(|| session.session_id.clone());
+    let pid = session.pid.unwrap_or(0);
+    if pid <= 0 {
+        eprintln!("sb stop: \"{name}\": acp session has no daemon pid. Nothing to kill.");
+        return 1;
+    }
+    // Capture the row BEFORE the kill (carries provider + endpoint for the tombstone).
+    let captured = read_entry(&paths.sessions_dir, pid);
+    let spawner = RealDaemonSpawner;
+    let probe = real_cmdline_probe;
+    let outcome = kill_acp(&paths.sessions_dir, pid, captured.as_ref(), &spawner, &probe);
+
+    let reg_name = session.name.clone().unwrap_or_else(|| "-".to_string());
+    if outcome.was_alive {
+        println!("killed {reg_name} (zmx -, pid {pid})");
+    } else {
+        println!("killed {reg_name} (zmx -, pid {pid}) [adapter already dead — tombstoned]");
     }
     0
 }

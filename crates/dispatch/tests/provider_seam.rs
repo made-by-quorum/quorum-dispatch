@@ -29,6 +29,7 @@ use dispatch::paths::SbPaths;
 use dispatch::provider::codex::rpc::{
     AppServerRpc, ClientInfo, InitializeResult, Notification, RpcError, SteerOutcome,
 };
+use dispatch::provider::acp::{self, AcpClient, AcpError, AcpEvent};
 use dispatch::provider::codex::CodexProvider;
 use dispatch::provider::{
     provider_for, ClaudeProvider, FixtureDaemonProvider, Hosting, InjectError, LaunchRequest,
@@ -98,6 +99,53 @@ impl AppServerRpc for FixtureRpc {
     }
 }
 
+/// A fixture [`AcpClient`] for the ACP/Claude-Code conformance run — the in-process ACP client
+/// the A3-ACP stop-condition requires (proves the queue + completion contract WITHOUT a live
+/// bridge). `&self` interior-mutability like `FixtureRpc`; NO subprocess, NO stdio. `initialize`
+/// succeeds (auth not required) so boot reaches readiness; `prompt` returns a canned turn id (the
+/// inject conformance expects it); `next_update` is quiet.
+struct FixtureAcp {
+    turn_id: String,
+    /// Audit: every prompt text seen (proves inject drove the ACP send path).
+    sent: RefCell<Vec<String>>,
+}
+
+impl FixtureAcp {
+    fn ready(turn_id: &str) -> Self {
+        Self {
+            turn_id: turn_id.to_string(),
+            sent: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl AcpClient for FixtureAcp {
+    fn initialize(&self) -> Result<acp::InitializeResult, AcpError> {
+        Ok(acp::InitializeResult {
+            protocol_version: 1,
+            agent_name: Some("@zed-industries/claude-code-acp".to_string()),
+            agent_version: Some("0.16.2".to_string()),
+            auth_required: false,
+        })
+    }
+    fn new_session(&self, _cwd: &str) -> Result<String, AcpError> {
+        Ok("acp-sess-conf-1".to_string())
+    }
+    fn prompt(&self, _session: &str, text: &str, _from: &str) -> Result<String, AcpError> {
+        self.sent.borrow_mut().push(text.to_string());
+        Ok(self.turn_id.clone())
+    }
+    fn cancel(&self, _session: &str) -> Result<(), AcpError> {
+        Ok(())
+    }
+    fn next_update(
+        &self,
+        _timeout: std::time::Duration,
+    ) -> Result<Option<AcpEvent>, AcpError> {
+        Ok(None)
+    }
+}
+
 // ===========================================================================
 // Test doubles + per-impl fixture setup.
 // ===========================================================================
@@ -150,6 +198,9 @@ struct Fixture {
     /// The codex transport contract (None for the claude/daemon lanes — they
     /// never speak app-server). Owned here so `fx()` can borrow it as `&dyn`.
     app_server: Option<FixtureRpc>,
+    /// The ACP transport contract (Some only for the acp lane — claude/daemon/codex
+    /// never speak ACP). Owned here so `fx()` can borrow it as `&dyn AcpClient`.
+    acp_client: Option<FixtureAcp>,
     /// What `provider.transcript_root(&fx)` MUST return (codex-p2-spec section
     /// 6.4): claude = projects_dir; daemon = its constructor-held root; codex =
     /// `$CODEX_HOME/sessions`. Pinned in the conformance harness for all three.
@@ -171,6 +222,7 @@ impl Fixture {
             // The conformance lane drives the believed-IDLE SEND path (turn/start);
             // the W6 steer/stale-fence ladder has its own dedicated tests below.
             codex_expected_turn_id: None,
+            acp_client: self.acp_client.as_ref().map(|c| c as &dyn AcpClient),
         }
     }
 }
@@ -232,6 +284,59 @@ fn claude_fixture() -> Fixture {
         expected_message_id: "msg-claude-1".to_string(),
         app_server: None, // claude never speaks app-server.
         // claude transcript_root == fx.paths.projects_dir (== transcript_root).
+        expected_transcript_root,
+        acp_client: None,
+    }
+}
+
+/// Build the ACP/Claude-Code fixture: a CC-shaped transcript under projects_dir (the bridge runs
+/// the REAL CC engine, so transcripts land where a normal CC session's do) + an in-process
+/// [`FixtureAcp`] client. **No pid file** — boot readiness is the ACP `initialize` handshake
+/// (proving the ACP boot path does NOT depend on a pid, R3). status raw is ACP-shaped; a claude
+/// STRING fed here → None (cross-feed). inject returns the FixtureAcp turn id.
+fn acp_fixture() -> Fixture {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    let paths = SbPaths::from_home(&home);
+    let id = "abc-123-acp".to_string();
+    let cwd = "/work/proj".to_string();
+
+    // CC-shaped JSONL under the projects dir (ACP-driven CC writes the standard CC transcript).
+    let slug = cwd.replace('/', "-");
+    let proj = paths.projects_dir.join(&slug);
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(
+        proj.join(format!("{id}.jsonl")),
+        "{\"type\":\"user\",\"cwd\":\"/work/proj\",\"timestamp\":\"2026-06-06T10:00:00.000Z\",\"message\":{\"content\":\"hi\"}}\n\
+         {\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"2026-06-06T10:00:01.000Z\"}\n",
+    )
+    .unwrap();
+
+    let transcript_root = paths.projects_dir.clone();
+    let expected_transcript_root = transcript_root.clone();
+    Fixture {
+        _tmp: tmp,
+        paths,
+        env: MapEnv::default(),
+        clock: FixedClock(0),
+        sleeper: RealSleeper,
+        mux: FixtureMux::new(),
+        relay: FakeRelay {
+            message_id: "unused-acp".to_string(),
+        },
+        transcript_root,
+        id,
+        cwd,
+        // ACP raw = the host-synthesized session-state object.
+        status_raw: serde_json::json!({"acpSessionState": "busy"}),
+        expected_status: SessionStatus::Busy,
+        // A claude registry STRING fed to the ACP impl → None (no shared parser).
+        foreign_status_raw: serde_json::json!("idle"),
+        // inject returns the FixtureAcp turn id (the ACP attributable id, not a relay msg id).
+        expected_message_id: "acp-turn-conf-1".to_string(),
+        app_server: None, // ACP never speaks app-server.
+        acp_client: Some(FixtureAcp::ready("acp-turn-conf-1")),
+        // ACP transcript_root == fx.paths.projects_dir (shared CC engine, by identity).
         expected_transcript_root,
     }
 }
@@ -295,6 +400,7 @@ fn daemon_fixture() -> (Fixture, FixtureDaemonProvider) {
         app_server: None, // the fixture-daemon uses its OWN internal turn queue.
         // The daemon's constructor-held root (pinned to the seeded tree).
         expected_transcript_root,
+        acp_client: None,
     };
     (fixture, provider)
 }
@@ -472,6 +578,7 @@ fn codex_fixture() -> Fixture {
         expected_message_id: "codex-turn-77".to_string(),
         app_server: Some(FixtureRpc::ready("codex-turn-77")),
         expected_transcript_root,
+        acp_client: None,
     }
 }
 
@@ -493,6 +600,17 @@ fn conformance_daemon() {
 fn conformance_codex() {
     let fix = codex_fixture();
     conformance(&CodexProvider, &fix);
+}
+
+/// scoped-ACP-CC (A3-ACP stop-condition (a)): the generic conformance harness runs against
+/// `AcpProvider` backed by an in-process FIXTURE AcpClient — proving the queue + completion
+/// contract (id/launch/transcript/status/resume/inject + ACP boot via `initialize`) WITHOUT a
+/// live bridge. The negative controls below (`parse_status_cross_feed_returns_none`,
+/// `daemon_pid_none_flows_through_every_method`) cover ACP too via the same shape.
+#[test]
+fn conformance_acp() {
+    let fix = acp_fixture();
+    conformance(&acp::AcpProvider, &fix);
 }
 
 // ===========================================================================
@@ -629,7 +747,7 @@ fn daemon_launch_plan_minimal_fx_consumes_no_claude_config() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let provider = FixtureDaemonProvider::ready();
     let plan = provider.launch_plan(&fx, &LaunchRequest::default());
     assert_eq!(
@@ -667,7 +785,7 @@ fn daemon_steer_stale_precondition_is_typed_error() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let key = SessionKey {
         id: "thread-1",
         name: None,
@@ -743,7 +861,7 @@ fn claude_launch_plan_matches_launch_rs_helpers() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let req = LaunchRequest {
         name: "wk".to_string(),
         cwd: Some("/work".to_string()),
@@ -820,7 +938,7 @@ fn claude_inject_preserves_relay_error_class() {
         relay_port: Some(8901),
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let key = SessionKey {
         id: "s",
         name: None,
@@ -845,7 +963,7 @@ fn claude_inject_preserves_relay_error_class() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     assert!(matches!(
         ClaudeProvider
             .inject(&fx_no_port, &key, "m", "cli")
@@ -920,7 +1038,7 @@ fn daemon_boot_unready_fails_with_handshake_detail() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let err = provider.boot_waiter(&fx).wait_ready("wk").unwrap_err();
     assert_eq!(err.phase, BootPhase::PidFile);
     assert!(
@@ -1108,7 +1226,7 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let plan = CodexProvider.launch_plan(&fx, &LaunchRequest::default());
     assert_eq!(
         plan.argv,
@@ -1141,7 +1259,7 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let plan2 = CodexProvider.launch_plan(&fx2, &LaunchRequest::default());
     assert_eq!(
         plan2.argv,
@@ -1176,7 +1294,7 @@ fn codex_inject_no_transport_when_app_server_absent() {
         relay_port: None,
         app_server: None, // no connected rpc.
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let key = SessionKey {
         id: "thread-abc",
         name: None,
@@ -1308,7 +1426,7 @@ fn ladder_fx<'a>(
         relay_port: None,
         app_server: Some(rpc),
         codex_expected_turn_id: expected,
-    }
+        acp_client: None,    }
 }
 
 #[test]
@@ -1411,8 +1529,8 @@ fn send_ladder_busy_stale_fence_falls_back_to_start_returns_id() {
 #[test]
 fn send_wait_verbs_use_send_vocabulary_only() {
     // The verb sources are the single place a codex user-facing string is minted.
-    let send_src = include_str!("../src/bin/dispatch/verbs/send_relay.rs");
-    let wait_src = include_str!("../src/bin/dispatch/verbs/wait.rs");
+    let send_src = include_str!("../src/bin/qd/verbs/send_relay.rs");
+    let wait_src = include_str!("../src/bin/qd/verbs/wait.rs");
     for (name, src) in [("send_relay.rs", send_src), ("wait.rs", wait_src)] {
         for line in src.lines() {
             // Only inspect lines that PRINT to a user (eprintln!/println!), not the

@@ -132,6 +132,18 @@ pub struct RegistryEntry {
     /// `--json` (endpoint stays OUT of the human/agent JSON surface, §9.4).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// scoped-ACP-CC (A2 §A3-ACP, the F1.1 tier-degradation field): the ONE
+    /// persisted degradation latch for the §4 fallback ladder. Absent = the
+    /// DERIVED tier applies (a healthy session needs NO field — the tier is
+    /// derived per verb from `(provider, transport-field, endpoint-alive)`);
+    /// written ONLY on degradation (e.g. `"pty"` when ACP dropped to the Mode-B
+    /// floor — `InjectError::NoTransport`). skip-None + appended LAST keeps every
+    /// existing row / tombstone / golden byte-stable (the same R1 / `provider` /
+    /// `endpoint` pattern), pinned by the absent-stays-absent round-trip test. On-disk
+    /// key is `transport` (a single lowercase word — `rename_all = "camelCase"` is a
+    /// no-op on it; pinned, not assumed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
 }
 
 impl RegistryEntry {
@@ -205,6 +217,11 @@ impl RegistryEntry {
         // evidence: removing this line reds it (the endpoint would silently vanish
         // / a whole-struct parse would drop the row).
         field!(entry.endpoint, Option<String>, "endpoint", "endpoint");
+        // scoped-ACP-CC (A2 §A3-ACP): per-field-permissive transport read. A
+        // wrong-typed `"transport": 1` DEGRADES (row survives, "transport" named)
+        // instead of dropping the whole row — same R1 discipline as provider/endpoint.
+        // The `wrong_typed_transport_number_degrades` test is the mutation evidence.
+        field!(entry.transport, Option<String>, "transport", "transport");
         // Any remaining keys are unknown fields — ignored (permissive).
 
         Some((entry, degraded))
@@ -492,6 +509,21 @@ fn file_mtime_ms(path: &Path) -> Option<i64> {
 /// On any error the tmp is best-effort removed so a crash mid-write leaves no
 /// litter. Byte-format parity (`to_string_pretty`, no trailing newline — the TS
 /// `JSON.stringify(.., null, 2)` shape) is preserved exactly.
+///
+/// # CAS-ENFORCEMENT GATE (R3d / R1 §7 inv 1 — code-review invariant)
+///
+/// `write_entry` is the row-CREATION / full-row-rebuild primitive (boot owns
+/// creation: `create_daemon` / `resume_daemon` / the `daemon_status` mint
+/// fallback). It performs NO incarnation CAS. A **status TRANSITION** of an
+/// EXISTING row MUST go through [`set_status`] (the starttime-CAS-guarded path),
+/// NEVER through a raw `write_entry` that flips the `status` field — a bare
+/// `write_entry` would let a stale incarnation stomp the current one (a LOST
+/// UPDATE under concurrency; proven RED by the R3d CONCURRENCY negative control
+/// `class_r3d_*` in `tests/faultinj.rs`). Reviewers: a new `write_entry` call that
+/// mutates `status` on an already-persisted row is a defect — route it through
+/// `set_status`. The current production `write_entry` callers
+/// (`create_daemon.rs`, `resume_daemon.rs`, `daemon_status.rs:268`) all CREATE the
+/// row; none transition status on an existing one.
 pub fn write_entry(sessions_dir: &Path, entry: &RegistryEntry) -> io::Result<()> {
     let pid = entry.pid.ok_or_else(|| {
         io::Error::new(
@@ -644,6 +676,92 @@ pub fn ensure_tombstone(sessions_dir: &Path, pid: i64, captured: Option<&Registr
     }
 }
 
+/// Outcome of a CAS-guarded tombstone (R3c-Step-2 P5.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TombstoneOutcome {
+    /// Renamed `<pid>.json` → `.tombstoned` (the row matched the expected
+    /// incarnation, OR there was a live row and no incarnation was asserted).
+    Tombstoned,
+    /// The live `<pid>.json` was absent — nothing to rename (and, for the
+    /// `ensure_*` variant, a synthesized tombstone was written if `captured`).
+    Absent,
+    /// REFUSED: the on-disk `started_at` changed since `expected_started_at` was
+    /// captured (a new incarnation reused the PID during a reconcile window).
+    /// Tombstoning it would kill a live successor — the row is left UNTOUCHED.
+    Refused { on_disk_started_at: Option<i64> },
+}
+
+/// CAS-guarded tombstone (R3c-Step-2 P5.2, R1 RF-5). Re-reads the row IMMEDIATELY
+/// before the rename and REFUSES if `started_at` changed since `expected_started_at`
+/// was captured — closing the reconcile-window race where a reused PID's NEW
+/// incarnation row would otherwise be tombstoned by a stale recovery decision.
+///
+/// `expected_started_at == None` means "no incarnation asserted" → behaves like the
+/// unconditional [`tombstone`] (the behavior-preservation contract for callers that
+/// already verified identity). The CAS window is read..rename; `fs::rename` is
+/// atomic and every writer goes through [`atomic_write`]'s tmp+rename, so the
+/// re-read never sees a torn row.
+pub fn tombstone_guarded(
+    sessions_dir: &Path,
+    pid: i64,
+    expected_started_at: Option<i64>,
+) -> TombstoneOutcome {
+    if let (Some(expected), Some(entry)) =
+        (expected_started_at, read_entry(sessions_dir, pid))
+    {
+        if let Some(disk) = entry.started_at {
+            if disk != expected {
+                return TombstoneOutcome::Refused {
+                    on_disk_started_at: Some(disk),
+                };
+            }
+        }
+    }
+    let json_path = sessions_dir.join(format!("{pid}.json"));
+    let tomb_path = sessions_dir.join(format!("{pid}.json.tombstoned"));
+    if fs::rename(&json_path, &tomb_path).is_ok() {
+        TombstoneOutcome::Tombstoned
+    } else {
+        TombstoneOutcome::Absent
+    }
+}
+
+/// As [`ensure_tombstone`], but CAS-guarded on `expected_started_at` (R3c-Step-2
+/// P5.2). Recovery Rung 4 calls THIS so a reused-PID live row is never tombstoned.
+/// With `expected_started_at == None` it is behavior-identical to [`ensure_tombstone`]
+/// (the behavior-preservation contract). A [`TombstoneOutcome::Refused`] aborts the
+/// destructive step — the caller must re-verify identity, never blind-retry.
+pub fn ensure_tombstone_guarded(
+    sessions_dir: &Path,
+    pid: i64,
+    captured: Option<&RegistryEntry>,
+    expected_started_at: Option<i64>,
+) -> TombstoneOutcome {
+    let tomb_path = sessions_dir.join(format!("{pid}.json.tombstoned"));
+    // Already tombstoned? done (idempotent — mirrors ensure_tombstone).
+    if tomb_path.exists() {
+        return TombstoneOutcome::Tombstoned;
+    }
+    match tombstone_guarded(sessions_dir, pid, expected_started_at) {
+        TombstoneOutcome::Tombstoned => TombstoneOutcome::Tombstoned,
+        TombstoneOutcome::Refused { on_disk_started_at } => {
+            TombstoneOutcome::Refused { on_disk_started_at }
+        }
+        // No live row → synthesize a tombstone from captured data (best-effort,
+        // exactly as ensure_tombstone does on the absent-live-file branch).
+        TombstoneOutcome::Absent => {
+            if let Some(captured) = captured {
+                if fs::create_dir_all(sessions_dir).is_ok() {
+                    if let Ok(json) = serde_json::to_string_pretty(captured) {
+                        let _ = fs::write(&tomb_path, json);
+                    }
+                }
+            }
+            TombstoneOutcome::Absent
+        }
+    }
+}
+
 // --- Atomic name-claim primitive (HARDENING #2 foundation, spec §5) ---
 
 /// A held name claim. Drop does NOT auto-release — call [`NameClaim::release`]
@@ -759,6 +877,67 @@ pub fn claim_payload(pid: u32, start: Option<i64>, ts: i64, name: &str) -> Strin
     }
 }
 
+/// WS-R R3a-Step-2 — build the claim payload WITH an explicit `incarnation`
+/// fence (R1 §3; resolves Open-Q #10). The `incarnation` is a monotonic counter
+/// per session-NAME (never decremented, R1 §3 inv 2): a writer holding
+/// incarnation N must not stomp a row owned by N+1.
+///
+/// BACKWARD COMPAT (the load-bearing property): incarnation `0` emits the EXACT
+/// legacy [`claim_payload`] bytes (no `"incarnation"` field). Only a non-zero
+/// incarnation appends `,"incarnation":N`. So:
+///   - an OLD claim file (no field) reads back as incarnation 0 via
+///     [`claim_incarnation`] (`serde(default)` semantics);
+///   - a fresh claim at incarnation 0 is byte-identical to the legacy writer
+///     (existing pin test + on-disk files unchanged);
+///   - the field is purely additive at the end → the existing parser (which
+///     reads `pid`/`start`/`timestamp`/`name` by key) is unaffected.
+pub fn claim_payload_with_incarnation(
+    pid: u32,
+    start: Option<i64>,
+    ts: i64,
+    name: &str,
+    incarnation: u64,
+) -> String {
+    let base = claim_payload(pid, start, ts, name);
+    if incarnation == 0 {
+        // Legacy-identical: no field for the default incarnation.
+        return base;
+    }
+    // Additive: insert before the closing brace. `base` always ends in `}`.
+    let trimmed = base.strip_suffix('}').expect("claim_payload ends with }");
+    format!(r#"{trimmed},"incarnation":{incarnation}}}"#)
+}
+
+/// WS-R R3a-Step-2 — read the `incarnation` fence from a claim payload, with
+/// `serde(default)` semantics: an ABSENT field (a legacy/pre-R3a claim file, or
+/// an unparseable blob) reads as incarnation `0`. This is the backward-compat
+/// reader the dead-holder reap + the recovery (re-)claim consult.
+pub fn claim_incarnation(payload: &[u8]) -> u64 {
+    serde_json::from_slice::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|v| v.get("incarnation").and_then(serde_json::Value::as_u64))
+        .unwrap_or(0)
+}
+
+/// WS-R R3a-Step-2 — the monotonic NEXT incarnation for a (re-)claim of `name`.
+/// Reads the prior claim file's incarnation (absent/corrupt = 0, via
+/// [`claim_incarnation`]) and returns `prev + 1`. This is the increment site
+/// (R1 §3 inv 2): every successful (re-)claim — including a dead-holder reap and
+/// a recovery Rung-4 respawn — bumps the fence so a stale writer at N cannot
+/// stomp the new incarnation at N+1. Never decremented. A missing claim file is
+/// a first claim → incarnation 1.
+pub fn next_claim_incarnation(claims_dir: &Path, name: &str) -> u64 {
+    let Some(file) = claim_file_name(name) else {
+        return 1;
+    };
+    let path = claims_dir.join(file);
+    let prev = match fs::read(&path) {
+        Ok(bytes) => claim_incarnation(&bytes),
+        Err(_) => 0, // no prior claim (or unreadable) → first incarnation.
+    };
+    prev + 1
+}
+
 /// Atomically claim `name` by creating `<claims_dir>/<encoded>.claim` with
 /// `O_EXCL` (`create_new(true)`) and writing `payload` into it.
 ///
@@ -823,30 +1002,7 @@ pub fn claim_name(
             // Dead-holder reap (F2) + recycled-pid reap (B4 item 10): only a
             // payload that PARSES and names a pid is reapable. Anything else →
             // refused, as before.
-            let parsed = serde_json::from_slice::<serde_json::Value>(&existing_payload).ok();
-            let holder_pid = parsed
-                .as_ref()
-                .and_then(|v| v.get("pid").and_then(serde_json::Value::as_i64));
-            let stale = match holder_pid {
-                // Dead holder (F2). The probe is never consulted.
-                Some(pid) if !is_alive(pid) => true,
-                // Alive pid: exec-proof identity (item 10). A claim stamped
-                // with the claimant's start is stale when the pid's CURRENT
-                // occupant started after it (beyond the kill-path slack) — a
-                // recycled pid. No `"start"` (old format) → is-alive-only
-                // fallback; probe `None` → cannot verify → honor the claim.
-                Some(pid) => match parsed
-                    .as_ref()
-                    .and_then(|v| v.get("start").and_then(serde_json::Value::as_i64))
-                {
-                    Some(claimed_start) => matches!(
-                        proc_start(pid),
-                        Some(cur) if cur > claimed_start + crate::kill::START_TIME_SLACK_MS
-                    ),
-                    None => false,
-                },
-                None => false,
-            };
+            let stale = claim_is_stale(&existing_payload, is_alive, proc_start);
             if stale {
                 // Best-effort remove (NotFound = someone else reaped first —
                 // fine, the retry create is the arbiter). Then ONE retry:
@@ -858,6 +1014,116 @@ pub fn claim_name(
             }
         }
         other => other,
+    }
+}
+
+/// Whether an existing claim's holder is DEAD or its pid was RECYCLED — the
+/// reapable conditions, shared by [`claim_name`] and [`claim_name_with_incarnation`]
+/// so both paths apply IDENTICAL reap semantics. Dead holder (F2): the pid is not
+/// alive. Recycled pid (B4 item 10): the pid is alive but its CURRENT occupant
+/// started after the claimed `"start"` (beyond [`crate::kill::START_TIME_SLACK_MS`]).
+/// An unparseable payload, no pid, an old `"start"`-less format, or an unverifiable
+/// probe (`None` on a live pid) → NOT stale (honor the claim — "cannot verify" is
+/// not "stale").
+fn claim_is_stale(
+    existing_payload: &[u8],
+    is_alive: &dyn Fn(i64) -> bool,
+    proc_start: &dyn Fn(i64) -> Option<i64>,
+) -> bool {
+    let parsed = serde_json::from_slice::<serde_json::Value>(existing_payload).ok();
+    let holder_pid = parsed
+        .as_ref()
+        .and_then(|v| v.get("pid").and_then(serde_json::Value::as_i64));
+    match holder_pid {
+        // Dead holder (F2). The probe is never consulted.
+        Some(pid) if !is_alive(pid) => true,
+        // Alive pid: exec-proof identity (item 10) — recycled iff the current
+        // occupant started after the claimed start (beyond the kill-path slack).
+        Some(pid) => match parsed
+            .as_ref()
+            .and_then(|v| v.get("start").and_then(serde_json::Value::as_i64))
+        {
+            Some(claimed_start) => matches!(
+                proc_start(pid),
+                Some(cur) if cur > claimed_start + crate::kill::START_TIME_SLACK_MS
+            ),
+            None => false,
+        },
+        None => false,
+    }
+}
+
+/// WS-R R3c item-1 — atomically claim `name` AND stamp a monotonic `incarnation`
+/// fence read INSIDE the `O_EXCL` critical section (TOCTOU-safe; R1 §3, clause 7).
+///
+/// The incarnation is **never** pre-read before the claim (which would let a
+/// concurrent (re-)claim bump it between the read and the create — the TOCTOU the
+/// fence exists to prevent). Instead it is derived AT the atomic point:
+/// - **fresh win** (the `O_EXCL` `create_new` succeeds with no prior file): there
+///   was no prior holder at the atomic instant → incarnation `1` (the monotonic
+///   base; [`next_claim_incarnation`] on the just-won empty file is `1`).
+/// - **reap-and-reclaim** (`EEXIST` → the holder is dead/recycled per
+///   [`claim_is_stale`]): the prior incarnation is read HERE, inside the section,
+///   from the file we are about to reap, via [`next_claim_incarnation`] (prev+1),
+///   BEFORE the reap rename. So a stale writer at incarnation N cannot stomp the
+///   new claim at N+1 (the name-level fence; the row-level fence is `started_at`).
+///
+/// `make_payload(incarnation)` builds the claim bytes for the assigned incarnation
+/// (callers use [`claim_payload_with_incarnation`]). Returns the claim guard AND
+/// the assigned incarnation (the respawn path records it as the successor's fence).
+/// Reap/recycle semantics are IDENTICAL to [`claim_name`]; only the payload is
+/// incarnation-stamped and computed inside the section.
+pub fn claim_name_with_incarnation(
+    claims_dir: &Path,
+    name: &str,
+    is_alive: &dyn Fn(i64) -> bool,
+    proc_start: &dyn Fn(i64) -> Option<i64>,
+    make_payload: &dyn Fn(u64) -> Vec<u8>,
+) -> Result<(NameClaim, u64), ClaimError> {
+    let safe = encode_claim_name(name).ok_or_else(|| {
+        ClaimError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "claim_name_with_incarnation: name is empty",
+        ))
+    })?;
+    fs::create_dir_all(claims_dir).map_err(ClaimError::Io)?;
+    let path = claims_dir.join(format!("{safe}.claim"));
+
+    // First attempt: a FRESH O_EXCL create. Winning it means no prior holder
+    // existed at the atomic instant → incarnation 1. The incarnation is read INSIDE
+    // the critical section (we hold the just-won exclusive file), never before it.
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut f) => {
+            // next_claim_incarnation on the empty just-won file is 1 (the base).
+            let inc = next_claim_incarnation(claims_dir, name).max(1);
+            f.write_all(&make_payload(inc)).map_err(ClaimError::Io)?;
+            return Ok((NameClaim { path }, inc));
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => { /* reap below */ }
+        Err(e) => return Err(ClaimError::Io(e)),
+    }
+
+    // EEXIST: a prior claim is present. Reap iff the holder is dead/recycled (SAME
+    // logic as claim_name). The prior incarnation is read here, INSIDE the section,
+    // from the still-present file we are about to reap.
+    let existing_payload = read_best_effort(&path);
+    if !claim_is_stale(&existing_payload, is_alive, proc_start) {
+        return Err(ClaimError::AlreadyClaimed { existing_payload });
+    }
+    // Bump the fence off the reaped holder's incarnation (prev+1), read INSIDE the
+    // section BEFORE the reap rename — the TOCTOU-safe ordering (clause 7).
+    let inc = next_claim_incarnation(claims_dir, name);
+    let _ = fs::remove_file(&path); // best-effort; the retry create is the arbiter
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut f) => {
+            f.write_all(&make_payload(inc)).map_err(ClaimError::Io)?;
+            Ok((NameClaim { path }, inc))
+        }
+        // A live racer recreated it in the reap window — we lose, as today.
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(ClaimError::AlreadyClaimed {
+            existing_payload: read_best_effort(&path),
+        }),
+        Err(e) => Err(ClaimError::Io(e)),
     }
 }
 
@@ -923,6 +1189,7 @@ mod tests {
             // existing camelCase/omit-None pins). The codex-shaped tests below
             // populate it directly.
             endpoint: None,
+            transport: None,
         }
     }
 
@@ -946,6 +1213,7 @@ mod tests {
             spawned_by: None,
             provider: Some("codex".into()),
             endpoint: Some("ws://127.0.0.1:18951".into()),
+            transport: None,
         }
     }
 
@@ -958,6 +1226,79 @@ mod tests {
         write_entry(dir.path(), &entry).unwrap();
         let back = read_entry(dir.path(), 4242).unwrap();
         assert_eq!(back, entry);
+    }
+
+    // --- R3c-Step-2 P5.2: CAS-guarded tombstone -----------------------------
+
+    /// Behavior preservation: with `expected_started_at == None`,
+    /// `tombstone_guarded` renames a live row EXACTLY like the unconditional
+    /// `tombstone` — existing identity-verified callers are unaffected.
+    #[test]
+    fn tombstone_guarded_none_expected_matches_unconditional() {
+        let dir = tempdir().unwrap();
+        write_entry(dir.path(), &full_entry()).unwrap();
+        let out = tombstone_guarded(dir.path(), 4242, None);
+        assert_eq!(out, TombstoneOutcome::Tombstoned);
+        assert!(!dir.path().join("4242.json").exists(), "live row renamed away");
+        assert!(dir.path().join("4242.json.tombstoned").exists(), "tombstone present");
+    }
+
+    /// CAS ADMITS a matching incarnation: the captured `started_at` still owns the
+    /// row → tombstone proceeds.
+    #[test]
+    fn tombstone_guarded_admits_matching_incarnation() {
+        let dir = tempdir().unwrap();
+        let entry = full_entry(); // started_at = 1_700_000_000_000
+        write_entry(dir.path(), &entry).unwrap();
+        let out = tombstone_guarded(dir.path(), 4242, Some(1_700_000_000_000));
+        assert_eq!(out, TombstoneOutcome::Tombstoned);
+        assert!(dir.path().join("4242.json.tombstoned").exists());
+    }
+
+    /// CAS REFUSES a reused PID: a NEW incarnation (different `started_at`) owns the
+    /// row now, so a stale recovery decision (captured the OLD `started_at`) must NOT
+    /// tombstone it — the live successor is left UNTOUCHED. This is the P5.2 guard.
+    #[test]
+    fn tombstone_guarded_refuses_reused_pid_live_row() {
+        let dir = tempdir().unwrap();
+        let mut entry = full_entry();
+        entry.started_at = Some(2_000_000_000_000); // the NEW incarnation on disk
+        write_entry(dir.path(), &entry).unwrap();
+
+        // Recovery captured the OLD incarnation (1_700_000_000_000) before a reconcile
+        // window reused the PID. The guard must REFUSE.
+        let out = tombstone_guarded(dir.path(), 4242, Some(1_700_000_000_000));
+        assert_eq!(
+            out,
+            TombstoneOutcome::Refused {
+                on_disk_started_at: Some(2_000_000_000_000)
+            }
+        );
+        assert!(
+            dir.path().join("4242.json").exists(),
+            "the reused-PID live row must be LEFT INTACT (not tombstoned)"
+        );
+        assert!(
+            !dir.path().join("4242.json.tombstoned").exists(),
+            "no tombstone written for a refused live row"
+        );
+    }
+
+    /// Absent live row → `Absent` (nothing to rename), and `ensure_tombstone_guarded`
+    /// still synthesizes from captured — behavior-identical to `ensure_tombstone`.
+    #[test]
+    fn ensure_tombstone_guarded_none_expected_synthesizes_like_unguarded() {
+        let dir = tempdir().unwrap();
+        // No live <pid>.json → synthesize from captured (the ensure_tombstone branch).
+        let captured = full_entry();
+        let out = ensure_tombstone_guarded(dir.path(), 4242, Some(&captured), None);
+        assert_eq!(out, TombstoneOutcome::Absent);
+        let tomb = dir.path().join("4242.json.tombstoned");
+        assert!(tomb.exists(), "synthesized tombstone present");
+        // Round-trips the captured row (same as ensure_tombstone's synthesize path).
+        let back: RegistryEntry =
+            serde_json::from_slice(&std::fs::read(&tomb).unwrap()).unwrap();
+        assert_eq!(back, captured);
     }
 
     // --- A6 §4.4 / red-team F5: backend + spawnedBy round-trip on the paths that
@@ -1241,6 +1582,57 @@ mod tests {
         // Absent stays absent across the round-trip.
         let back = read_entry(dir.path(), 4242).unwrap();
         assert_eq!(back.endpoint, None);
+        assert_eq!(back, entry);
+    }
+
+    // === scoped-ACP-CC: RegistryEntry.transport byte-stability (the same R1 /
+    // provider / endpoint discipline) ===
+
+    // A wrong-typed `"transport": 1` DEGRADES (row survives, "transport" named)
+    // instead of dropping the whole row. Mutation evidence: removing the
+    // `field!(entry.transport, ...)` line in from_value reds this.
+    #[test]
+    fn wrong_typed_transport_number_degrades() {
+        let (e, degraded) = read_blob(r#"{"pid":100,"transport":1}"#);
+        assert_eq!(e.transport, None, "wrong-typed transport degrades to None");
+        assert_eq!(e.pid, Some(100), "the row SURVIVES (sibling preserved)");
+        assert_eq!(degraded, vec!["transport"]);
+    }
+
+    // The on-disk key is the single lowercase word `transport` (NOT camelCased by
+    // `rename_all`); a populated transport round-trips and the file carries the
+    // literal `"transport"` key (pinned, not assumed).
+    #[test]
+    fn transport_on_disk_key_is_lowercase_word_and_round_trips() {
+        let dir = tempdir().unwrap();
+        let mut entry = codex_entry();
+        entry.transport = Some("pty".into()); // a degraded-to-floor row
+        write_entry(dir.path(), &entry).unwrap();
+        let text = fs::read_to_string(dir.path().join("90909.json")).unwrap();
+        assert!(text.contains("\"transport\""), "json: {text}");
+        let back = read_entry(dir.path(), 90909).unwrap();
+        assert_eq!(back, entry);
+        assert_eq!(back.transport.as_deref(), Some("pty"));
+    }
+
+    // MUTATION EVIDENCE (byte-stability): a healthy row (transport None) serializes
+    // with NO `transport` key — existing rows / tombstones / goldens stay
+    // byte-stable. `full_entry` carries transport None; the JSON must not mention
+    // `transport`, and the row round-trips absent-stays-absent. Removing the
+    // `skip_serializing_if` on the field reds this.
+    #[test]
+    fn absent_transport_stays_absent_and_byte_stable() {
+        let dir = tempdir().unwrap();
+        let entry = full_entry(); // a healthy claude row: transport None
+        assert_eq!(entry.transport, None);
+        write_entry(dir.path(), &entry).unwrap();
+        let text = fs::read_to_string(dir.path().join("4242.json")).unwrap();
+        assert!(
+            !text.contains("transport"),
+            "a None transport must NOT appear on disk (byte-stability): {text}"
+        );
+        let back = read_entry(dir.path(), 4242).unwrap();
+        assert_eq!(back.transport, None);
         assert_eq!(back, entry);
     }
 
@@ -1920,6 +2312,123 @@ mod tests {
         let v2: serde_json::Value =
             serde_json::from_str(&claim_payload(4242, None, 0, "n")).unwrap();
         assert_eq!(v2.get("start"), None, "absent shape carries no start field");
+    }
+
+    /// WS-R R3a-Step-2: the incarnation-aware writer is backward-compatible.
+    /// Incarnation 0 is byte-identical to the legacy `claim_payload` (no field),
+    /// and a non-zero incarnation appends `,"incarnation":N` before the brace.
+    #[test]
+    fn claim_payload_incarnation_is_additive_and_legacy_compatible() {
+        // Incarnation 0 => EXACT legacy bytes (no "incarnation" field).
+        assert_eq!(
+            claim_payload_with_incarnation(4242, Some(99), 42, "sess", 0),
+            claim_payload(4242, Some(99), 42, "sess"),
+            "incarnation 0 must be byte-identical to the legacy writer"
+        );
+        assert_eq!(
+            claim_payload_with_incarnation(4242, None, 42, "sess", 0),
+            claim_payload(4242, None, 42, "sess"),
+            "incarnation 0 (no start) must be byte-identical to the legacy writer"
+        );
+        // A non-zero incarnation appends the field at the end (additive).
+        assert_eq!(
+            claim_payload_with_incarnation(4242, Some(99), 42, "sess", 3),
+            r#"{"pid":4242,"start":99,"timestamp":42,"name":"sess","incarnation":3}"#
+        );
+        assert_eq!(
+            claim_payload_with_incarnation(4242, None, 42, "sess", 7),
+            r#"{"pid":4242,"timestamp":42,"name":"sess","incarnation":7}"#
+        );
+    }
+
+    /// WS-R R3a-Step-2 backward-compat control: a LEGACY claim file (no
+    /// incarnation field) reads back as incarnation 0; a new one round-trips.
+    #[test]
+    fn claim_incarnation_reads_absent_as_zero_and_roundtrips() {
+        // Legacy payload (the exact pre-R3a shape) => 0.
+        let legacy = claim_payload(4242, Some(99), 42, "sess");
+        assert_eq!(claim_incarnation(legacy.as_bytes()), 0, "legacy claim => incarnation 0");
+        // Unparseable blob => 0 (serde(default) semantics).
+        assert_eq!(claim_incarnation(b"not json"), 0, "corrupt claim => incarnation 0");
+        // A new payload round-trips its incarnation.
+        let p = claim_payload_with_incarnation(4242, Some(99), 42, "sess", 5);
+        assert_eq!(claim_incarnation(p.as_bytes()), 5);
+    }
+
+    /// WS-R R3a-Step-2: `next_claim_incarnation` is monotonic. A missing claim is
+    /// the first claim (=> 1); a prior claim at N yields N+1; a legacy claim file
+    /// (no field, reads 0) yields 1.
+    #[test]
+    fn next_claim_incarnation_is_monotonic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let claims = dir.path();
+        // No prior claim => first incarnation 1.
+        assert_eq!(next_claim_incarnation(claims, "alpha"), 1);
+        // Write a claim at incarnation 4; next must be 5.
+        let stem = claim_file_name("alpha").unwrap();
+        std::fs::write(
+            claims.join(&stem),
+            claim_payload_with_incarnation(100, Some(1), 0, "alpha", 4),
+        )
+        .unwrap();
+        assert_eq!(next_claim_incarnation(claims, "alpha"), 5);
+        // A LEGACY claim file (no incarnation field) reads 0 => next is 1.
+        std::fs::write(claims.join(&stem), claim_payload(100, Some(1), 0, "alpha")).unwrap();
+        assert_eq!(
+            next_claim_incarnation(claims, "alpha"),
+            1,
+            "a legacy claim with no incarnation field reaps to incarnation 1"
+        );
+    }
+
+    /// WS-R R3c item-1: `claim_name_with_incarnation` stamps a monotonic incarnation
+    /// fence read INSIDE the O_EXCL critical section (TOCTOU-safe, clause 7). A fresh
+    /// claim is incarnation 1; a reclaim over a DEAD holder bumps to 2 — the prior
+    /// incarnation read from the reaped file, not pre-read before the create; a live
+    /// holder refuses reclaim (no bump).
+    ///
+    /// NON-VACUITY (distinct revert seam): make the reap branch write incarnation 1
+    /// instead of `next_claim_incarnation(...)` (i.e. drop the read-INSIDE bump) →
+    /// the reclaim's incarnation-2 assertion REDs (the stale-writer name fence
+    /// becomes vacuous — a writer at N could stomp N).
+    #[test]
+    fn claim_name_with_incarnation_bumps_monotonically_inside_the_section() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let claims = dir.path();
+        // A payload builder for a given holder pid, stamping whatever incarnation
+        // the claim assigns inside the section.
+        let mk = |pid: u32| {
+            move |inc: u64| {
+                claim_payload_with_incarnation(pid, Some(1_000), 1_000, "alpha", inc).into_bytes()
+            }
+        };
+
+        // Fresh claim by a LIVE holder (pid 111) → incarnation 1.
+        let (_c1, inc1) =
+            claim_name_with_incarnation(claims, "alpha", &|p| p == 111, &|_| None, &mk(111))
+                .expect("fresh claim");
+        assert_eq!(inc1, 1, "first claim is incarnation 1");
+        let body1 = std::fs::read(claims.join("alpha.claim")).unwrap();
+        assert_eq!(claim_incarnation(&body1), 1, "incarnation 1 stamped in the file");
+
+        // The holder (pid 111) DIES → a reclaim reaps it and bumps the fence to 2,
+        // read from the reaped file INSIDE the section (NOT pre-read).
+        let (_c2, inc2) =
+            claim_name_with_incarnation(claims, "alpha", &|_p| false, &|_| None, &mk(222))
+                .expect("reclaim over dead holder");
+        assert_eq!(inc2, 2, "reclaim over a dead holder bumps the fence to 2");
+        let body2 = std::fs::read(claims.join("alpha.claim")).unwrap();
+        assert_eq!(claim_incarnation(&body2), 2, "incarnation 2 stamped after reap");
+
+        // A reclaim over a LIVE holder (pid 222) is REFUSED — the name is held, no
+        // fence bump (a live successor is never stomped).
+        match claim_name_with_incarnation(claims, "alpha", &|p| p == 222, &|_| None, &mk(333)) {
+            Err(ClaimError::AlreadyClaimed { .. }) => {}
+            other => panic!("a live holder must refuse reclaim, got {other:?}"),
+        }
+        // Still incarnation 2 (the refused reclaim wrote nothing).
+        let body3 = std::fs::read(claims.join("alpha.claim")).unwrap();
+        assert_eq!(claim_incarnation(&body3), 2, "a refused reclaim leaves the fence at 2");
     }
 
     /// B4 S3 PIN: `claim_file_name` returns the ENCODED on-disk basename — for a

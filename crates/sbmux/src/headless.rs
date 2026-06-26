@@ -53,6 +53,15 @@ pub enum Republish {
     },
     /// EOF: the child's stdout closed. Carries the in-flight turn's outcome.
     Eof(TurnOutcome),
+    /// Daemon-driven wake (R3c-Step-1): the per-session control socket received a
+    /// `WakeInbox` and asked the daemon to nudge a PARKED headless session. Injected
+    /// out-of-band via [`HeadlessReader::enqueue`] (NOT from the child's stdout), it
+    /// rides the SAME pump → sink path so the daemon-status sink advances signal-B
+    /// (`note_output`) — the observable "the daemon drove the wake" evidence — and
+    /// the socket fan-out treats it as a coalescible passthrough. Never a must-keep
+    /// (a wake is droppable under overload; the ladder's Rung-2 re-send is the
+    /// backstop).
+    Wake,
 }
 
 /// The republish sink (in-process for WP-B2a). A clean trait so WP-B2b can swap
@@ -361,6 +370,24 @@ impl HeadlessReader {
         self.breaker_fired.load(Ordering::Acquire)
     }
 
+    /// Enqueue an out-of-band [`Republish`] into the SAME bounded queue the reader
+    /// feeds (R3c-Step-1 confirmed seam, point 4). The ONLY non-reader producer; it
+    /// delegates to the private `BoundedQueue::push` (never blocks the caller). Used
+    /// by the daemon's control-socket arm to inject [`Republish::Wake`].
+    pub fn enqueue(&self, msg: Republish) {
+        self.queue.push(msg);
+    }
+
+    /// A cloneable, lock-free handle that injects a wake into this session's queue
+    /// WITHOUT borrowing the session (so the daemon's `tokio::select!` arm can clone
+    /// it under the `manager` lock, RELEASE the lock, then wake — the keystone that
+    /// keeps a real wedge from starving the select loop, R3c-Step-0 point 2).
+    pub fn wake_handle(&self) -> HeadlessWake {
+        HeadlessWake {
+            queue: self.queue.clone(),
+        }
+    }
+
     /// True while the reader thread is still draining the child (the turn is in
     /// flight). False once the reader has run to EOF/breaker — the signal the
     /// daemon's `is_alive()`/reaper use to know a headless turn has completed.
@@ -391,6 +418,26 @@ impl HeadlessReader {
             let _ = p.join();
         }
         outcome
+    }
+}
+
+/// A cloneable wake handle over a headless session's bounded queue (R3c-Step-1).
+///
+/// Obtained from [`HeadlessReader::wake_handle`] / [`crate::headless_session::
+/// HeadlessSession::wake_handle`]. Cloning is cheap (an `Arc` bump). [`Self::wake`]
+/// pushes a [`Republish::Wake`] and NEVER blocks — so the daemon clones this under
+/// the `manager` lock, releases the lock, and only THEN wakes (the no-mutex-across-
+/// the-wake keystone, R3c-Step-0 point 2).
+#[derive(Clone)]
+pub struct HeadlessWake {
+    queue: Arc<BoundedQueue>,
+}
+
+impl HeadlessWake {
+    /// Inject a [`Republish::Wake`] into the session's queue. Non-blocking,
+    /// best-effort (dropped under queue overload — the ladder re-sends).
+    pub fn wake(&self) {
+        self.queue.push(Republish::Wake);
     }
 }
 
@@ -585,6 +632,32 @@ where
         DEFAULT_QUEUE_CAP,
         DEFAULT_MAX_LINE_BYTES,
     )
+}
+
+/// R3c-Step-0 keystone (§3 R3c-0, the no-mutex-starvation guarantee — step-0 verdict
+/// point 2). The wake handle MUST be detachable from the `manager` lock so the ctrl
+/// select arm can clone it UNDER the lock, RELEASE the lock, and only THEN wake — a
+/// blocking PTY write or a wedged session can never starve the select loop while the
+/// lock is held. This pins the structural property the verdict CONFIRMED (a
+/// code-structure argument, no runtime probe warranted): BOTH wake handles are
+/// cloneable out of the manager. The revert seam is moving the wake INSIDE the lock
+/// scope (`server::handle_ctrl_op` clones then drops `mgr` BEFORE waking); holding the
+/// lock across the (blocking) wake reintroduces the starvation.
+#[cfg(test)]
+mod r3c0_keystone_tests {
+    use super::HeadlessWake;
+
+    #[test]
+    fn wake_handles_are_detachable_from_the_manager_lock() {
+        fn assert_clone_send<T: Clone + Send>() {}
+        // Headless: HeadlessWake clones (Arc bump) + is Send → clone under the lock,
+        // release, then wake.
+        assert_clone_send::<HeadlessWake>();
+        // Interactive: SharedPtyWriter (Arc<Mutex<Box<dyn Write + Send>>>) is cloneable
+        // out of the lock too — the same clone-then-release pattern.
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<crate::pty::SharedPtyWriter>();
+    }
 }
 
 #[cfg(test)]

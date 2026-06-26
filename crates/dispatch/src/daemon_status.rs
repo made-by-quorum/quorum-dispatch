@@ -26,11 +26,13 @@
 //! This module is NOT wired into the live daemon launch yet — that, plus the
 //! socket fan-out, is WP-B2b-2.
 
+use crate::progress::{ProgressRecorder, ProgressSource, TurnStartRecorder};
 use crate::registry::{self, RegistryEntry, StatusWriteOutcome};
 use sbmux::headless::{Republish, Sink};
 use sbmux::stream_json::TurnOutcome;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// Injected clock: returns "now" in epoch-ms. Boxed so the sink can carry a real
 /// `SystemTime`-backed clock in production and a fixed clock in tests.
@@ -93,6 +95,25 @@ pub struct RegistryStatusSink {
     /// One-shot guard: the row is minted on the first `Ready` only; subsequent
     /// `Ready`s (a multi-turn resume) just re-assert `busy` via `set_status`.
     minted: AtomicBool,
+    /// R3b-Step-0: the live **signal-B** tap. When `Some`, each OUTPUT `Republish`
+    /// (`Ready`/`Event`/`TurnEnd`) advances `last_output_ms` for this incarnation's
+    /// session in the shared progress producer. `Republish::Event` is the
+    /// genuinely-DISJOINT tick: it advances signal-B WITHOUT moving the registry
+    /// status or `updated_at` (note the `Event(_)` status arm writes nothing) — that
+    /// is exactly what lets a long STREAMING turn stay `Busy` (signal-B fresh) while
+    /// signal-A's turn-start timeout has fired. `None` for non-daemon / unit-test
+    /// sinks. See [`crate::progress`].
+    progress: Option<Arc<ProgressRecorder>>,
+    /// R3c item-2: the live **signal-A** tap (the standing turn-start producer). When
+    /// `Some`, a turn-START Republish (`Ready`) records the turn-start anchor and a
+    /// turn-END Republish (`TurnEnd`/`Eof`/`Breaker`) clears it, so a consumer reads a
+    /// REAL `since_turn_start_ms` for `classify_obs` (NOT a synthetic input). Fed at
+    /// the SAME points the status flips, so `turn_in_flight` aligns with `busy` by
+    /// construction. `None` for non-daemon / unit-test sinks. See [`crate::progress`].
+    turn_clock: Option<Arc<TurnStartRecorder>>,
+    /// The session_id (learned at the first `Republish::Ready` / `system-init`) — the
+    /// key the progress producer and WS-A query by. Set once per incarnation.
+    session_id: OnceLock<String>,
 }
 
 impl RegistryStatusSink {
@@ -111,6 +132,9 @@ impl RegistryStatusSink {
             mint: None,
             mint_started_at: 0,
             minted: AtomicBool::new(false),
+            progress: None,
+            turn_clock: None,
+            session_id: OnceLock::new(),
         }
     }
 
@@ -140,12 +164,68 @@ impl RegistryStatusSink {
             mint: Some(identity),
             mint_started_at: started_at,
             minted: AtomicBool::new(false),
+            progress: None,
+            turn_clock: None,
+            session_id: OnceLock::new(),
         }
     }
 
     /// A production minting sink (real wall-clock epoch-ms). See [`Self::with_mint`].
     pub fn with_mint_system_clock(sessions_dir: PathBuf, pid: i64, identity: MintIdentity) -> Self {
         Self::with_mint(sessions_dir, pid, identity, Self::system_clock())
+    }
+
+    /// R3b-Step-0: attach the shared progress producer so this sink's OUTPUT
+    /// Republishes advance **signal-B** on the live path. Builder form so the
+    /// existing constructors (and every current caller/test) compile unchanged.
+    pub fn with_progress(mut self, recorder: Arc<ProgressRecorder>) -> Self {
+        self.progress = Some(recorder);
+        self
+    }
+
+    /// R3c item-2: attach the standing **signal-A** turn-start producer so this
+    /// sink records the turn-start anchor on turn boundaries (a consumer then reads
+    /// a REAL `since_turn_start_ms` for `classify_obs`). Builder form so existing
+    /// callers/tests compile unchanged.
+    pub fn with_turn_clock(mut self, recorder: Arc<TurnStartRecorder>) -> Self {
+        self.turn_clock = Some(recorder);
+        self
+    }
+
+    /// Record a turn-START anchor (signal-A) IF a turn clock is attached and the
+    /// session_id is known. First-start-wins within a turn (the recorder dedups),
+    /// so a mid-turn re-`Ready` does not reset the anchor. Timestamped by the
+    /// injected clock (deterministic in tests); aligned with the `busy` status flip.
+    fn note_turn_started(&self) {
+        if let Some(clock) = &self.turn_clock {
+            if let Some(sid) = self.session_id.get() {
+                clock.turn_started(sid, (self.now)());
+            }
+        }
+    }
+
+    /// Clear the turn-START anchor (signal-A) on a turn boundary (idle/offline) IF a
+    /// turn clock is attached and the session_id is known. Aligned with the
+    /// status flip away from `busy`.
+    fn note_turn_ended(&self) {
+        if let Some(clock) = &self.turn_clock {
+            if let Some(sid) = self.session_id.get() {
+                clock.turn_ended(sid);
+            }
+        }
+    }
+
+    /// Record one signal-B output tick for this incarnation's session, IF a producer
+    /// is attached and the session_id is known (it is, after the first `Ready`).
+    /// Keyed on session_id (the producer's query key); timestamped by the injected
+    /// clock so tests are deterministic. Never writes registry status — this is the
+    /// surface disjoint from signal-A.
+    fn note_output(&self) {
+        if let Some(recorder) = &self.progress {
+            if let Some(sid) = self.session_id.get() {
+                recorder.record(sid, (self.now)(), ProgressSource::AcpUpdate);
+            }
+        }
     }
 
     /// The real wall-clock epoch-ms closure shared by the production constructors.
@@ -166,6 +246,10 @@ impl RegistryStatusSink {
     /// every `set_status` is a `NoRow` no-op (the boot-row-wait test's red-before).
     /// A non-minting sink (or a later `Ready`) just flips `busy`.
     fn on_ready(&self, session_id: &str) {
+        // R3b-Step-0: capture the session_id once (the progress producer's key).
+        // `system-init` (Ready) is the first event of an incarnation, so signal-B
+        // ticks on later `Event`s have a key to record under.
+        let _ = self.session_id.set(session_id.to_string());
         if let Some(identity) = &self.mint {
             if !self.minted.swap(true, Ordering::SeqCst) {
                 let now_ms = (self.now)();
@@ -249,19 +333,49 @@ impl Sink for RegistryStatusSink {
             // Producer up / first output → the turn is running. For a MINTING
             // sink (headless), the first Ready also stamps the child-pid-keyed row
             // (the daemon-mint fallback); see [`Self::on_ready`].
-            Republish::Ready { session_id } => self.on_ready(&session_id),
-            // Coalescible mid-turn output → no status move (avoid write amplification).
-            Republish::Event(_) => {}
-            // Turn complete.
-            Republish::TurnEnd(_) => self.write_status("idle"),
+            Republish::Ready { session_id } => {
+                self.on_ready(&session_id);
+                // Turn running (status → busy) → record the signal-A turn-start
+                // anchor (after on_ready set the session_id). First-start-wins.
+                self.note_turn_started();
+                // First output of the turn → advance signal-B.
+                self.note_output();
+            }
+            // Coalescible mid-turn output → NO status move (avoid write
+            // amplification) — but it IS output, so advance signal-B. This is the
+            // genuinely-disjoint tick: `last_output_ms` moves while `updated_at` /
+            // status stay frozen, which is what tells a STREAMING long turn (Busy)
+            // from a SILENT one (Wedged) even when signal-A has fired for both.
+            Republish::Event(_) => self.note_output(),
+            // Turn complete → final output instant, then flip idle. The turn is over
+            // → clear the signal-A anchor (turn_in_flight aligns with `busy`).
+            Republish::TurnEnd(_) => {
+                self.note_output();
+                self.note_turn_ended();
+                self.write_status("idle");
+            }
             // Circuit-breaker killed the child mid-turn → degraded, no clean result.
-            Republish::Breaker { .. } => self.write_status("offline"),
+            // The turn is over (no longer in flight) → clear the signal-A anchor.
+            Republish::Breaker { .. } => {
+                self.note_turn_ended();
+                self.write_status("offline");
+            }
             // EOF: clean completion → idle (idempotent re-assert); abort / no-turn
-            // → offline (fail-closed display — never leave a stale "busy").
-            Republish::Eof(outcome) => match outcome {
-                TurnOutcome::Completed => self.write_status("idle"),
-                TurnOutcome::Aborted | TurnOutcome::NoTurn => self.write_status("offline"),
-            },
+            // → offline (fail-closed display — never leave a stale "busy"). Either
+            // way the turn is over → clear the signal-A anchor.
+            Republish::Eof(outcome) => {
+                self.note_turn_ended();
+                match outcome {
+                    TurnOutcome::Completed => self.write_status("idle"),
+                    TurnOutcome::Aborted | TurnOutcome::NoTurn => self.write_status("offline"),
+                }
+            }
+            // R3c-Step-1 daemon-driven wake: the control socket nudged a parked
+            // headless session. It is not the child's output, but it advances
+            // signal-B — the observable "the daemon drove the wake" evidence (the
+            // session's progress clock moves) — WITHOUT moving status (a wake is not
+            // a turn boundary). No write amplification.
+            Republish::Wake => self.note_output(),
         }
     }
 }
@@ -339,6 +453,64 @@ mod tests {
             status(dir.path()).as_deref(),
             Some("busy"),
             "Event must not flip status"
+        );
+    }
+
+    /// R3b-Step-0 DISJOINTNESS PROOF (the keystone, at the production tap): a
+    /// mid-turn `Event` advances **signal-B** (`last_output_ms` in the progress
+    /// producer) but moves NEITHER the registry status NOR `updated_at` (signal-A's
+    /// surface). This is exactly why a STREAMING long turn stays `Busy` while a
+    /// SILENT one wedges: output advances one surface, the turn-lifecycle the other,
+    /// and they are genuinely disjoint on the LIVE path — not a test fixture.
+    #[test]
+    fn sink_event_advances_signal_b_but_not_status_or_updated_at() {
+        use crate::progress::{ProgressProducer, ProgressRecorder};
+        use std::sync::atomic::AtomicI64;
+        let dir = tempdir().unwrap();
+        boot_row(dir.path());
+        let clock = Arc::new(AtomicI64::new(1000));
+        let c2 = clock.clone();
+        let recorder = Arc::new(ProgressRecorder::new());
+        let s = RegistryStatusSink::new(
+            dir.path().to_path_buf(),
+            PID,
+            Some(T),
+            Box::new(move || c2.load(Ordering::SeqCst)),
+        )
+        .with_progress(recorder.clone());
+
+        // No output observed yet → signal-B has no reading (fail-open at the predicate).
+        assert_eq!(recorder.last_output_ms("sid-boot"), None);
+
+        // Ready (turn start) at t=2000: status→busy, signal-B records first output.
+        clock.store(2000, Ordering::SeqCst);
+        s.deliver(Republish::Ready {
+            session_id: "sid-boot".into(),
+        });
+        assert_eq!(status(dir.path()).as_deref(), Some("busy"));
+        assert_eq!(recorder.last_output_ms("sid-boot"), Some(2000));
+        let updated_after_ready = read_entry(dir.path(), PID).unwrap().updated_at;
+
+        // Mid-turn Event at a LATER t=5000: signal-B advances; status + updated_at DON'T.
+        clock.store(5000, Ordering::SeqCst);
+        s.deliver(Republish::Event(StreamEvent::Assistant {
+            session_id: "sid-boot".into(),
+            content: "tok".into(),
+        }));
+        assert_eq!(
+            recorder.last_output_ms("sid-boot"),
+            Some(5000),
+            "Event advances signal-B (last_output_ms)"
+        );
+        assert_eq!(
+            status(dir.path()).as_deref(),
+            Some("busy"),
+            "Event does NOT move status"
+        );
+        assert_eq!(
+            read_entry(dir.path(), PID).unwrap().updated_at,
+            updated_after_ready,
+            "Event does NOT move updated_at — signal-B is disjoint from signal-A's surface"
         );
     }
 

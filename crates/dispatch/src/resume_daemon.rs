@@ -157,6 +157,38 @@ pub fn kill_codex(
     KillOutcome { was_alive }
 }
 
+/// scoped-ACP-CC kill (F3 / super6 rider-4 kill-no-leak): the ACP analog of
+/// [`kill_codex`]. GROUP-reaps the resident `qd acp-daemon` adapter pid — which is the
+/// pgid OUR spawn created with `process_group(0)`, so the SIGTERM→grace→SIGKILL group
+/// ladder reaps the adapter AND its `claude-code-acp` bridge child TOGETHER (the proven
+/// S8 discipline) — then tombstones. The ONLY difference from [`kill_codex`] is the
+/// identity predicate: [`cmdline_is_our_acp_daemon`](crate::acp_residence::cmdline_is_our_acp_daemon)
+/// (the adapter marker + recorded `--listen <endpoint>`), not the codex
+/// `codex`+`app-server` match — so a reused pid running a foreign group is NOT signaled
+/// (tombstone only). This is also the de-facto UNCONDITIONAL wedge-unblock for the
+/// no-WS-R case: killing the adapter pgid tears down a wedged turn's bridge.
+pub fn kill_acp(
+    sessions_dir: &std::path::Path,
+    pid: i64,
+    captured: Option<&RegistryEntry>,
+    spawner: &dyn DaemonSpawner,
+    cmdline_probe: &CmdlineProbe,
+) -> KillOutcome {
+    let endpoint = captured.and_then(|e| e.endpoint.as_deref());
+    let was_alive = pid > 0
+        && is_pid_alive(pid as i32)
+        && crate::acp_residence::cmdline_is_our_acp_daemon(cmdline_probe(pid).as_deref(), endpoint);
+    if was_alive {
+        // GROUP-addressed reap by the recorded pgid (= the adapter pid). Reaps the
+        // adapter + bridge child together; the identity guard guarantees it is OURS.
+        spawner.kill(pid);
+    }
+    if pid > 0 {
+        ensure_tombstone(sessions_dir, pid, captured);
+    }
+    KillOutcome { was_alive }
+}
+
 // ===========================================================================
 // RESUME (deliverable B).
 // ===========================================================================
@@ -481,7 +513,7 @@ fn try_spawn_and_connect<'a>(
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-    };
+        acp_client: None,    };
     let req = LaunchRequest {
         name: params.name.clone(),
         cwd: Some(cwd.to_string()),
@@ -599,6 +631,8 @@ fn finish_revive(
         spawned_by: None,
         provider: Some("codex".to_string()),
         endpoint: Some(endpoint.to_string()),
+        // scoped-ACP-CC: a resumed healthy daemon row carries no degradation latch.
+        transport: None,
     };
     if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);

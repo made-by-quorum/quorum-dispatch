@@ -144,6 +144,14 @@ impl HeadlessSession {
         self.hub.subscribe()
     }
 
+    /// A cloneable wake handle for the daemon's control-socket arm (R3c-Step-1).
+    /// The arm clones this under the `manager` lock, releases the lock, then calls
+    /// [`crate::headless::HeadlessWake::wake`] — so the wake never holds the lock
+    /// (the no-starvation keystone, R3c-Step-0 point 2).
+    pub fn wake_handle(&self) -> crate::headless::HeadlessWake {
+        self.reader.wake_handle()
+    }
+
     /// The session name.
     pub fn name(&self) -> &str {
         &self.name

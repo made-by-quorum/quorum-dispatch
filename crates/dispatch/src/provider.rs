@@ -37,6 +37,7 @@ use crate::model::SessionStatus;
 use crate::paths::SbPaths;
 use crate::relay::{RelayContract, RelayError};
 
+pub mod acp;
 pub mod codex;
 pub mod fixture;
 
@@ -194,6 +195,14 @@ pub struct ProviderFx<'a> {
     /// contortion is kept out of the verb AND the trait). None for the
     /// claude/fixture lanes.
     pub codex_expected_turn_id: Option<&'a str>,
+    /// The ACP transport CONTRACT (ADD-5 pattern, the `app_server` precedent): a
+    /// CONNECTED `&dyn AcpClient` the verb layer hands in. CONSUMED BY:
+    /// `AcpProvider::inject` (enqueue on the long-lived host's SC-1 queue →
+    /// `session/prompt`). None for the claude/codex/fixture lanes (they never speak
+    /// ACP), mirroring `app_server`. The trait never holds a raw endpoint/socket —
+    /// the long-lived per-session ACP host (`provider/acp/client.rs`) owns the
+    /// connection + the SC-1 queue + the SC-5 single-reader; this is the borrow of it.
+    pub acp_client: Option<&'a dyn crate::provider::acp::AcpClient>,
 }
 
 impl<'a> ProviderFx<'a> {
@@ -344,6 +353,11 @@ pub fn provider_for(id: &str) -> Option<&'static dyn Provider> {
         // updates to list codex) live in the bin verb layer
         // (src/bin/dispatch/verbs/lifecycle.rs:138 + :155 — NOT touched here).
         "codex" => Some(&codex::CODEX_PROVIDER),
+        // scoped-ACP-CC: the Claude Code ACP adapter is CLI-bootable. This SUPERSEDES A2
+        // §A3-ACP's "gated off CLI boot until a bridge exists" — Pete's directive supplies the
+        // official `claude-code-acp` bridge (STEP-0 GREEN, confirmed faithful on this box), so
+        // the Mode-B→Mode-A switch A2 deferred for CC is now live. codex/pi/opencode stay deferred.
+        "acp/claude-code" => Some(&acp::ACP_CC_PROVIDER),
         _ => None,
     }
 }

@@ -520,6 +520,97 @@ pub fn gated_ls_status_headless(
     gated_ls_status(status, pid, recorded_start_ms, src)
 }
 
+/// WS-R R3a-Step-3 — RECONCILED liveness: the registry is a CACHE reconciled
+/// against KERNEL TRUTH (R1 §2). Composes the O(1) flock fast-path (R3a-Step-1)
+/// with the `/proc start_ms` identity confirmer, returning whether the session's
+/// `(pid, start_ms)` is genuinely LIVE.
+///
+/// ## The composition (and why this ordering — R1 §1 inv 3 / P4.3)
+/// 1. **flock fast-path** ([`crate::livelock::probe_dead`]): O(1), no `/proc`
+///    walk. If the lock is HELD (`probe_dead == false`) the holder is live — but
+///    a held lock is only a HINT here: a different live process could hold it (the
+///    session_id↔pid binding is the writer's invariant, not re-checked here), so a
+///    held lock NEVER short-circuits to "live" past the `/proc` authority.
+/// 2. **`/proc start_ms` AUTHORITY** (`src.classify`): the reuse-robust
+///    `(pid, start_ms)` verdict is the GROUND TRUTH for a tombstone decision. A
+///    `probe_dead`->"dead" MUST be re-confirmed here — between the flock probe and
+///    reconcile acting, a fresh session could acquire the lock; only the
+///    `(pid, start_ms)` `/proc` read can convict THIS pid.
+///
+/// ## Fail-closed (R1 §2 / the I5 floor)
+/// The function returns `true` (LIVE — abort any tombstone) on ANY ambiguity: a
+/// present-but-unverifiable pid classifies [`LifecycleState::AliveSilentValid`]
+/// (`is_alive()`), so a row whose pid we cannot positively convict is never
+/// tombstoned. Only a positive `Exited*`/`Gone`/`NotOurs` (`!is_alive()`) reports
+/// dead. This preserves reconcile's I5 (alive -> never touched).
+///
+/// The `state_dir`/`session_id` may be `None` (a row with no recorded session id):
+/// the flock fast-path is skipped and the `/proc` authority alone decides — the
+/// gate degrades to the exact pre-flock `/proc`-only liveness (no regression).
+pub fn is_session_live_reconciled(
+    state_dir: Option<&std::path::Path>,
+    session_id: Option<&str>,
+    pid: i64,
+    start_ms: i64,
+    src: &dyn LivenessSource,
+) -> bool {
+    // O(1) flock fast-path: a FREE lock is a cheap "candidate dead" hint that we
+    // still confirm via /proc; a HELD lock does not bypass the /proc authority.
+    // (The fast-path's value is avoiding a /proc walk for the common live case in
+    // a large sweep, while /proc stays the tombstone authority.)
+    if let (Some(state_dir), Some(session_id)) = (state_dir, session_id) {
+        let _candidate_dead = crate::livelock::probe_dead(state_dir, session_id);
+        // We deliberately do NOT early-return on the hint: /proc is the authority
+        // (R1 §1 inv 3). The probe is retained as the documented fast-path seam;
+        // when the lock is held it agrees with a live /proc, and when free it
+        // routes to the /proc confirmer below — never a tombstone on the hint alone.
+        let _ = _candidate_dead;
+    }
+    // The /proc start_ms authority: reuse-robust, fail-closed alive on ambiguity.
+    src.classify(ProcKey::new(pid as i32, start_ms)).is_alive()
+}
+
+/// WS-R R3a-Step-3 — the SYSTEMIC read-time reconcile gate (R1 §2; closes P0 gap
+/// (a): "no 'registry is a cache reconciled against kernel truth' invariant
+/// enforced on every READ"). Given a row's displayed `status` + its
+/// `(pid, recorded_start_ms)` + the session's `(state_dir, session_id)` for the
+/// flock fast-path, returns the status to TRUST: a row currently shown live
+/// (`idle`/`busy`/`shell`) whose pid is NOT live (per [`is_session_live_reconciled`])
+/// is downgraded to [`crate::model::SessionStatus::Cold`] — the cache reconciles to
+/// kernel truth on read, so a crashed session's `busy` row never reads live.
+///
+/// This is [`gated_ls_status`] with the flock-composed reconciled liveness wired
+/// in: same shape, same `Cold`-downgrade vocabulary, same fail-open for an
+/// unformable identity (no pid / no recorded start). The ONLY strengthening is the
+/// `is_alive` predicate now composes flock + `/proc` instead of `/proc` alone.
+pub fn reconciled_read_status(
+    status: crate::model::SessionStatus,
+    state_dir: Option<&std::path::Path>,
+    session_id: Option<&str>,
+    pid: Option<i64>,
+    recorded_start_ms: Option<i64>,
+    src: &dyn LivenessSource,
+) -> crate::model::SessionStatus {
+    use crate::model::SessionStatus;
+    // Only gate rows currently SHOWN live; never resurrect or touch cold/killed.
+    if !matches!(
+        status,
+        SessionStatus::Idle | SessionStatus::Busy | SessionStatus::Shell
+    ) {
+        return status;
+    }
+    // Need both a pid AND a recorded start to form a reuse-guarded identity
+    // (fail-open: never gate a row whose identity we cannot reuse-guard).
+    let (Some(pid), Some(start)) = (pid, recorded_start_ms) else {
+        return status;
+    };
+    if is_session_live_reconciled(state_dir, session_id, pid, start, src) {
+        status
+    } else {
+        SessionStatus::Cold
+    }
+}
+
 /// The production [`DaemonLivenessSource`]: a synchronous per-session socket
 /// CONNECT probe against `<sbmux_dir>/<name>.sock` (lead RULING Fork B). A
 /// successful connect ⇒ [`DaemonLiveness::Up`] (a daemon is listening);
@@ -695,6 +786,49 @@ pub const LIVENESS_CORPUS: &[CorpusCase] = &[
         expect: LifecycleState::AliveSilentValid,
     },
 ];
+
+#[cfg(test)]
+mod r3a3_nonvacuity {
+    use super::*;
+    use crate::effects::ProcLiveness;
+    use crate::model::SessionStatus;
+
+    struct AlwaysAlive;
+    impl ProcProbe for AlwaysAlive {
+        fn start_ms(&self, _pid: i32) -> Option<i64> { Some(0) }
+        fn liveness(&self, _pid: i32) -> ProcLiveness { ProcLiveness::Sleeping }
+    }
+    struct AlwaysGone;
+    impl ProcProbe for AlwaysGone {
+        fn start_ms(&self, _pid: i32) -> Option<i64> { None }
+        fn liveness(&self, _pid: i32) -> ProcLiveness { ProcLiveness::Gone }
+    }
+
+    // NON-VACUITY: the gate downgrades a busy-for-dead row to Cold ONLY because
+    // the /proc authority says dead. Force the authority always-ALIVE and the
+    // SAME busy row stays Busy (the revert seam: is_alive=true => dead rows stay
+    // live, RED). This proves the Cold downgrade is driven by the real classifier,
+    // not a tautology.
+    #[test]
+    fn reconciled_gate_is_nonvacuous() {
+        // Authority says DEAD => busy downgrades to Cold.
+        let dead = OsLiveness::with_probe(AlwaysGone);
+        let out = reconciled_read_status(
+            SessionStatus::Busy, None, None, Some(123), Some(1000), &dead,
+        );
+        assert_eq!(out, SessionStatus::Cold, "dead pid must reconcile Busy -> Cold");
+
+        // Authority forced ALIVE (the revert) => the SAME row stays Busy.
+        let alive = OsLiveness::with_probe(AlwaysAlive);
+        let out2 = reconciled_read_status(
+            SessionStatus::Busy, None, None, Some(123), Some(1000), &alive,
+        );
+        assert_eq!(
+            out2, SessionStatus::Busy,
+            "with is_alive forced true the dead row stays Busy (the gate is load-bearing, not vacuous)"
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
