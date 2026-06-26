@@ -190,22 +190,27 @@ pub fn kill_acp(
 }
 
 /// Item 3 RESUME — the alive-vs-revive decision for an acp (daemon-hosted) row: the
-/// ACP analog of [`resume_codex`]'s AlreadyRunning gate, and THE distinct (R-c) revert
-/// seam. A row is "already running" (→ clean no-op, NO second adapter) ONLY when its
-/// recorded pid is alive AND that pid's live `/proc` cmdline is OUR acp adapter for the
-/// recorded `--listen <endpoint>` (defeats PID reuse — a recycled pid running something
-/// else fails this) AND the endpoint is reachable (an S4 ws connect succeeds). Anything
-/// else (pid dead / tombstoned / identity-fail / endpoint unreachable) → revive.
+/// ACP analog of [`resume_codex`]'s AlreadyRunning gate (mirrored 1:1), and THE distinct
+/// (R-c) revert seam. A row is "already running" (→ clean no-op, NO second adapter) ONLY
+/// when its recorded pid is alive AND an endpoint is recorded AND that pid's live `/proc`
+/// cmdline is OUR acp adapter carrying the recorded `--listen <endpoint>` (defeats PID
+/// reuse — a recycled pid running something else fails this). Anything else (pid dead /
+/// tombstoned / identity-fail / no endpoint) → revive.
 ///
-/// Pure (pid-alive via [`is_pid_alive`], the cmdline probe, and the endpoint-reachable
-/// probe are all injected) so a unit pins both arms. REVERTING this so it always returns
-/// `false` makes `resume` on a genuinely-LIVE acp row spawn a SECOND adapter (double
-/// live-row) — exactly the hazard the oracle reverts this seam to catch.
+/// NO reachability CONNECT probe (deliberately — the codex gate has none either): the
+/// resident [`serve`] loop is single-connection, so a connect against a genuinely-ALIVE
+/// adapter that is camped in another client's long `wait` would TIME OUT and be misread
+/// as dead → resume would revive a live session and DOUBLE-SPAWN an adapter (the R-c/R-d
+/// hazard). `cmdline_is_our_acp_daemon` already confirms the adapter is serving the
+/// recorded endpoint, so pid-alive ∧ identity is the faithful, hazard-free liveness.
+///
+/// Pure (pid-alive via [`is_pid_alive`] + the injected cmdline probe) so a unit pins both
+/// arms. REVERTING this to always-`false` makes `resume` on a LIVE acp row spawn a SECOND
+/// adapter — exactly the hazard the oracle reverts this seam to catch.
 pub fn acp_resume_is_alive(
     current_pid: Option<i64>,
     current_endpoint: Option<&str>,
     cmdline_probe: impl Fn(i64) -> Option<String>,
-    endpoint_reachable: impl Fn(&str) -> bool,
 ) -> bool {
     let endpoint_set = current_endpoint.map(|e| !e.is_empty()).unwrap_or(false);
     let pid = current_pid.filter(|&p| p != 0);
@@ -213,12 +218,10 @@ pub fn acp_resume_is_alive(
     if !(pid_alive && endpoint_set) {
         return false;
     }
-    let identity_ok = crate::acp_residence::cmdline_is_our_acp_daemon(
+    crate::acp_residence::cmdline_is_our_acp_daemon(
         pid.and_then(&cmdline_probe).as_deref(),
         current_endpoint,
-    );
-    let reachable = current_endpoint.map(&endpoint_reachable).unwrap_or(false);
-    identity_ok && reachable
+    )
 }
 
 // ===========================================================================
@@ -1751,51 +1754,42 @@ mod tests {
     // Item 3 RESUME (acp): the alive-vs-revive (R-c) decision seam.
     // ====================================================================
 
-    /// ALIVE acp row (our pid + matching cmdline for the recorded endpoint + the
-    /// endpoint reachable) → `acp_resume_is_alive` is TRUE → the verb no-ops (NO
-    /// second adapter). Uses OUR OWN pid (guaranteed alive). REVERTING the gate to
-    /// always-`false` flips this assert → resume would revive (double-spawn) a live row.
+    /// ALIVE acp row (our pid + matching cmdline carrying the recorded endpoint) →
+    /// `acp_resume_is_alive` is TRUE → the verb no-ops (NO second adapter). Uses OUR OWN
+    /// pid (guaranteed alive). REVERTING the gate to always-`false` flips this assert →
+    /// resume would revive (double-spawn) a live row.
     #[test]
     fn acp_resume_alive_row_is_already_running() {
         let ep = "ws://127.0.0.1:18991";
         let my_pid = std::process::id() as i64;
-        let alive = acp_resume_is_alive(
-            Some(my_pid),
-            Some(ep),
-            |_p| Some(format!("/usr/bin/qd acp-daemon --listen {ep} --cwd /w")),
-            |_e| true, // endpoint reachable
-        );
-        assert!(alive, "an alive, identity-matched, reachable acp row is AlreadyRunning");
+        let alive = acp_resume_is_alive(Some(my_pid), Some(ep), |_p| {
+            Some(format!("/usr/bin/qd acp-daemon --listen {ep} --cwd /w"))
+        });
+        assert!(alive, "an alive, identity-matched acp row is AlreadyRunning");
     }
 
     /// The revive arms — each independently forces `false` (→ revive, never a false
-    /// no-op): (a) dead pid, (b) reused pid whose cmdline is foreign, (c) endpoint
-    /// unreachable, (d) no endpoint recorded.
+    /// no-op): (a) dead pid, (b) reused pid whose cmdline is foreign, (c) no endpoint.
     #[test]
     fn acp_resume_revives_when_not_truly_alive() {
         let ep = "ws://127.0.0.1:18992";
         let my_pid = std::process::id() as i64;
-        // (a) dead pid (a very large unlikely pid) → not alive.
-        assert!(!acp_resume_is_alive(Some(2_000_000_001), Some(ep), |_p| Some(
-            format!("qd acp-daemon --listen {ep}")
-        ), |_e| true));
+        // (a) dead pid (a very large unlikely pid) → not alive → revive.
+        assert!(!acp_resume_is_alive(Some(2_000_000_001), Some(ep), |_p| Some(format!(
+            "qd acp-daemon --listen {ep}"
+        ))));
         // (b) live pid but FOREIGN cmdline (pid reuse) → identity fails → revive.
-        assert!(!acp_resume_is_alive(
-            Some(my_pid),
-            Some(ep),
-            |_p| Some("/usr/bin/some-unrelated --serve".to_string()),
-            |_e| true
-        ));
-        // (c) live + ours, but endpoint UNREACHABLE → revive (stale endpoint).
-        assert!(!acp_resume_is_alive(
-            Some(my_pid),
-            Some(ep),
-            |_p| Some(format!("qd acp-daemon --listen {ep}")),
-            |_e| false
-        ));
+        assert!(!acp_resume_is_alive(Some(my_pid), Some(ep), |_p| Some(
+            "/usr/bin/some-unrelated --serve".to_string()
+        )));
+        // (c) live + ours cmdline but a DIFFERENT endpoint (the row's ep not on cmdline)
+        //     → identity fails → revive (stale/mismatched endpoint).
+        assert!(!acp_resume_is_alive(Some(my_pid), Some(ep), |_p| Some(
+            "qd acp-daemon --listen ws://127.0.0.1:19999".to_string()
+        )));
         // (d) no endpoint recorded → never drivable → revive.
         assert!(!acp_resume_is_alive(Some(my_pid), None, |_p| Some(
             "qd acp-daemon".to_string()
-        ), |_e| true));
+        )));
     }
 }

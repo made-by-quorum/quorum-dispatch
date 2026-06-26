@@ -401,16 +401,19 @@ fn render_table_human_with(
 
 /// (L) Item 3 — the pure 3-way acp Status classification (THE distinct (L) revert seam),
 /// derived from the LIVE primary probe (never the stale stored status):
-///   - pid not alive                              → "stopped"     (red, like killed)
-///   - pid alive ∧ our adapter ∧ endpoint reachable → "live"      (cyan, like idle)
-///   - pid alive but identity-fail / unreachable  → "dead-endpoint" (dim, like cold)
-/// REVERTING the wiring to read `s.status` (the stored field) instead of these live
-/// probes shows a stale "idle"/"busy" on a dead/reused acp pid — the FM-L1 wrong-data
-/// the oracle reverts this seam to catch.
-fn acp_status_classify(pid_alive: bool, identity_ok: bool, reachable: bool) -> (&'static str, SessionStatus) {
+///   - pid not alive                       → "stopped"      (red, like killed)
+///   - pid alive ∧ our adapter for the ep  → "live"         (cyan, like idle)
+///   - pid alive but identity-fail (reuse) → "dead-endpoint" (dim, like cold)
+/// Identity is `cmdline_is_our_acp_daemon` (the live cmdline carries the recorded
+/// `--listen <endpoint>`), the SAME liveness the resume gate uses — NO reachability
+/// connect (it would misread a busy-but-alive adapter as dead AND can never crash ls on
+/// a dead endpoint). REVERTING the wiring to read `s.status` (the stored field) instead
+/// shows a stale "idle"/"busy" on a dead/reused acp pid — the FM-L1 wrong-data the
+/// oracle reverts this seam to catch.
+fn acp_status_classify(pid_alive: bool, identity_ok: bool) -> (&'static str, SessionStatus) {
     if !pid_alive {
         ("stopped", SessionStatus::Killed)
-    } else if identity_ok && reachable {
+    } else if identity_ok {
         ("live", SessionStatus::Idle)
     } else {
         ("dead-endpoint", SessionStatus::Cold)
@@ -419,11 +422,10 @@ fn acp_status_classify(pid_alive: bool, identity_ok: bool, reachable: bool) -> (
 
 /// (L) Item 3 — the acp Status override for ONE row (None for a non-acp row). Reads the
 /// LIVE primary truth: adapter pid alive (`is_pid_alive`) + `cmdline_is_our_acp_daemon`
-/// identity over the re-read `--listen <endpoint>` + endpoint reachability (an S4 ws
-/// connect). Degrades cleanly — a dead/stopped acp row never crashes ls (connect to a
-/// dead endpoint just returns Err → not reachable → "stopped"/"dead-endpoint").
+/// identity over the re-read `--listen <endpoint>`. Pure `/proc` reads — degrades cleanly
+/// (a dead/stopped acp row reads "stopped"/"dead-endpoint"; ls NEVER touches the endpoint
+/// so it cannot crash on a dead one).
 fn acp_human_status(s: &Session, sessions_dir: &std::path::Path) -> Option<(String, SessionStatus)> {
-    use std::time::Duration;
     if !s.provider.starts_with("acp/") {
         return None;
     }
@@ -441,11 +443,7 @@ fn acp_human_status(s: &Session, sessions_dir: &std::path::Path) -> Option<(Stri
         ),
         _ => false,
     };
-    let reachable = endpoint
-        .as_deref()
-        .map(|ep| dispatch::provider::acp::AcpConnection::connect(ep, Duration::from_millis(500)).is_ok())
-        .unwrap_or(false);
-    let (text, variant) = acp_status_classify(pid_alive, identity_ok, reachable);
+    let (text, variant) = acp_status_classify(pid_alive, identity_ok);
     Some((text.to_string(), variant))
 }
 
@@ -922,14 +920,13 @@ mod tests {
     /// The pure (L) seam: the 3-way classification from the LIVE probe.
     #[test]
     fn acp_status_classify_is_three_way() {
-        // pid not alive → stopped (red/killed), regardless of identity/reach.
-        assert_eq!(super::acp_status_classify(false, true, true), ("stopped", SessionStatus::Killed));
-        assert_eq!(super::acp_status_classify(false, false, false), ("stopped", SessionStatus::Killed));
-        // alive + ours + reachable → live (cyan/idle).
-        assert_eq!(super::acp_status_classify(true, true, true), ("live", SessionStatus::Idle));
-        // alive but identity-fail OR unreachable → dead-endpoint (dim/cold).
-        assert_eq!(super::acp_status_classify(true, false, true), ("dead-endpoint", SessionStatus::Cold));
-        assert_eq!(super::acp_status_classify(true, true, false), ("dead-endpoint", SessionStatus::Cold));
+        // pid not alive → stopped (red/killed), regardless of identity.
+        assert_eq!(super::acp_status_classify(false, true), ("stopped", SessionStatus::Killed));
+        assert_eq!(super::acp_status_classify(false, false), ("stopped", SessionStatus::Killed));
+        // alive + our adapter for the recorded endpoint → live (cyan/idle).
+        assert_eq!(super::acp_status_classify(true, true), ("live", SessionStatus::Idle));
+        // alive but identity-fail (reused pid) → dead-endpoint (dim/cold).
+        assert_eq!(super::acp_status_classify(true, false), ("dead-endpoint", SessionStatus::Cold));
     }
 
     /// `acp_human_status`: a non-acp row → None (byte-identical stored path). An acp row

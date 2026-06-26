@@ -681,8 +681,8 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
 /// [`run_codex_resume`] 1:1, substituting `session/load` (the ACP resume primitive,
 /// driven by the load-mode adapter) for `thread/resume`:
 ///   - resumability gate (no sessionId / no jsonl → nothing to resume),
-///   - ALIVE acp row (pid alive ∧ OUR cmdline ∧ endpoint reachable) → AlreadyRunning
-///     no-op, ZERO mutation, NO second adapter (the [`acp_resume_is_alive`] (R-c) seam),
+///   - ALIVE acp row (pid alive ∧ OUR cmdline carries the recorded `--listen`) →
+///     AlreadyRunning no-op, ZERO mutation, NO second adapter (the (R-c) seam),
 ///   - else REVIVE: spawn a fresh resident adapter in LOAD mode (`--load-session <id>`,
 ///     detached `process_group(0)`, the SAME create spawn path), confirm it re-loaded
 ///     the SAME sessionId, then rewrite the row (NEW pid + NEW endpoint, SAME sessionId)
@@ -692,7 +692,6 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     use dispatch::acp_residence::{build_adapter_argv, connect_ready};
     use dispatch::create_daemon::{real_alloc_port, real_cmdline_probe, DaemonSpawner, RealDaemonSpawner};
     use dispatch::effects::Clock;
-    use dispatch::provider::acp::AcpConnection;
     use dispatch::resume_daemon::acp_resume_is_alive;
     use std::time::Duration;
 
@@ -731,15 +730,12 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
         .and_then(|e| e.endpoint)
         .filter(|s| !s.is_empty());
 
-    // Case 1: ALREADY ALIVE → clean no-op, ZERO mutation, NO second adapter. Identity +
-    // reachability probed live (defeats PID reuse / a stale endpoint). The (R-c) seam.
+    // Case 1: ALREADY ALIVE → clean no-op, ZERO mutation, NO second adapter. pid-alive ∧
+    // identity (the cmdline carries the recorded `--listen <endpoint>`), mirroring the
+    // codex gate — NO reachability connect (it would misread a busy-but-alive adapter,
+    // camped in another client's wait, as dead and double-spawn). The (R-c) seam.
     let probe = real_cmdline_probe;
-    let reachable = |ep: &str| -> bool {
-        AcpConnection::connect(ep, Duration::from_millis(500))
-            .map(|c| c.status_session_id().ok().flatten().is_some())
-            .unwrap_or(false)
-    };
-    if acp_resume_is_alive(session.pid, current_endpoint.as_deref(), probe, reachable) {
+    if acp_resume_is_alive(session.pid, current_endpoint.as_deref(), probe) {
         println!("{}", acp_already_running_line(&name));
         return 0;
     }
