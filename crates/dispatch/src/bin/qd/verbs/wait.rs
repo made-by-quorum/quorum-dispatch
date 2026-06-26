@@ -529,6 +529,14 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
                     return 1;
                 }
                 eprintln!(" done");
+                // FINDING #2 PART 2 — VERIFY-THE-BRIDGE (cold-path, one-time): if this is
+                // the FIRST wait after a resume (a marker exists for the row's pid),
+                // confirm from PRIMARY source that the post-resume turn CONTINUED the SAME
+                // bridge JSONL — a fork-on-load is FAILED LOUD. Gated on the marker so a
+                // normal wait pays only one cheap stat; a non-resume wait does nothing.
+                if let Some(code) = verify_post_resume_if_marked(&paths, &session) {
+                    return code; // fork detected → fail loud (nonzero); else proceed.
+                }
                 usage_wait(&session.session_id, session.name.as_deref());
                 return 0;
             }
@@ -539,6 +547,50 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
                 eprintln!(" channel closed");
                 return 1;
             }
+        }
+    }
+}
+
+/// FINDING #2 PART 2 — the cold-path VERIFY-THE-BRIDGE consumer. Returns `Some(exit)`
+/// ONLY on a detected fork (fail loud, nonzero); `None` to proceed (Continued, or an
+/// Unconfirmed that emits a LOUD degraded-confidence warning but does not fail the turn).
+/// One-time: the marker is consumed (removed) whatever the verdict.
+fn verify_post_resume_if_marked(
+    paths: &dispatch::paths::SbPaths,
+    session: &dispatch::model::Session,
+) -> Option<i32> {
+    use dispatch::resume_daemon::{
+        read_resume_verify_marker, resume_verify_marker_path, verify_post_resume_continuation,
+        ResumeContinuation,
+    };
+    let pid = session.pid.filter(|&p| p != 0)?;
+    let marker_path = resume_verify_marker_path(&paths.sessions_dir, pid);
+    let marker = read_resume_verify_marker(&marker_path)?; // absent → normal wait (one stat).
+    // Bounded retry for the JSONL flush lag (eventual-consistency vs the wire terminal).
+    let verdict = verify_post_resume_continuation(&paths.projects_dir, &marker, 8, 250);
+    let _ = std::fs::remove_file(&marker_path); // one-time: consume the marker.
+    match verdict {
+        ResumeContinuation::Continued => None, // faithful continuation — proceed.
+        ResumeContinuation::Forked(other) => {
+            eprintln!(
+                " FAITHFULNESS FAILURE: the post-resume turn did NOT continue session {} \
+                 — the bridge forked on load (the turn landed in {other}). The resumed \
+                 conversation is NOT continuous; treat this resume as failed.",
+                marker.session_id
+            );
+            Some(1)
+        }
+        ResumeContinuation::Unconfirmed => {
+            // AMBIGUOUS (super7 stance): do NOT silently pass, do NOT fail a good turn —
+            // a LOUD degraded-confidence warning, then proceed (exit 0).
+            eprintln!(
+                " WARNING (degraded confidence): could not confirm on disk that the \
+                 post-resume turn continued session {} (no JSONL growth and no fork \
+                 detected within the retry budget). The turn completed; continuation is \
+                 UNVERIFIED.",
+                marker.session_id
+            );
+            None
         }
     }
 }

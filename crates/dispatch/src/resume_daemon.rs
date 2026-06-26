@@ -285,6 +285,170 @@ pub fn acquire_resume_claim(
 }
 
 // ===========================================================================
+// Item 3 FINDING #2 PART 2 — production VERIFY-THE-BRIDGE post-resume check.
+// ===========================================================================
+//
+// Converts resume from TRUST-the-bridge to VERIFY-the-bridge: after a revive AND the
+// FIRST post-resume turn, read the REQUESTED-sessionId's bridge CC JSONL ON DISK (the
+// PRIMARY source — never the adapter's cached id echo, which is the Finding #2 vacuity)
+// and confirm the post-resume turn CONTINUED the SAME file. A bridge fork-on-load (the
+// turn landing in a DIFFERENT/NEW session file) is DETECTED and surfaced as a resume
+// FAILURE. Cold-path: one-time, gated by a marker the resume drops + the first wait
+// consumes; ZERO steady-state per-turn work beyond a single marker `stat`.
+
+/// The verdict of the post-resume continuation check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeContinuation {
+    /// The requested-sessionId JSONL grew — the post-resume turn CONTINUED the SAME
+    /// conversation. Faithful.
+    Continued,
+    /// The requested JSONL did NOT grow but a DIFFERENT/NEW session file did — the bridge
+    /// FORKED on load (the turn landed elsewhere). Carries the forked file's name. FAIL.
+    Forked(String),
+    /// Neither confirmed within the retry budget (a read/timing hiccup) — AMBIGUOUS.
+    /// Must NOT silently pass (no false-faithful) and must NOT fail a good turn (no
+    /// false-loss) → the verb emits a LOUD degraded-confidence signal.
+    Unconfirmed,
+}
+
+/// The PURE non-vacuous core (the revert/simulate-fork control rules against THIS): given
+/// whether the requested file grew and whether a foreign session file received the turn,
+/// classify. A SIMULATED fork (`requested_grew=false`, `forked_into=Some`) → `Forked`.
+pub fn classify_post_resume_continuation(
+    requested_grew: bool,
+    forked_into: Option<String>,
+) -> ResumeContinuation {
+    if requested_grew {
+        ResumeContinuation::Continued
+    } else if let Some(f) = forked_into {
+        ResumeContinuation::Forked(f)
+    } else {
+        ResumeContinuation::Unconfirmed
+    }
+}
+
+/// The post-resume verify marker (sidecar `<sessions_dir>/<pid>.resume-verify`): dropped
+/// by `run_acp_resume` after a revive, consumed ONCE by the first post-resume wait.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeVerifyMarker {
+    /// The resumed sessionId — the file that MUST grow if the resume is faithful.
+    pub session_id: String,
+    /// The session cwd (→ the bridge's project dir, where a fork-on-load would write).
+    pub cwd: Option<String>,
+    /// Line count of `<session_id>.jsonl` at revive time (the baseline to grow beyond).
+    pub baseline_lines: usize,
+    /// The `*.jsonl` basenames present in the project dir at revive — a file NOT in this
+    /// set appearing with content = the fork target.
+    pub baseline_files: Vec<String>,
+}
+
+/// `<sessions_dir>/<pid>.resume-verify` — the marker path keyed by the resumed adapter pid.
+pub fn resume_verify_marker_path(sessions_dir: &std::path::Path, pid: i64) -> std::path::PathBuf {
+    sessions_dir.join(format!("{pid}.resume-verify"))
+}
+
+/// Write the marker (best-effort JSON). A write failure is surfaced to the caller.
+pub fn write_resume_verify_marker(
+    path: &std::path::Path,
+    marker: &ResumeVerifyMarker,
+) -> std::io::Result<()> {
+    let v = serde_json::json!({
+        "session_id": marker.session_id,
+        "cwd": marker.cwd,
+        "baseline_lines": marker.baseline_lines,
+        "baseline_files": marker.baseline_files,
+    });
+    std::fs::write(path, serde_json::to_string(&v).unwrap_or_default())
+}
+
+/// Read the marker, or `None` if absent/unparseable (a non-resume wait → no marker).
+pub fn read_resume_verify_marker(path: &std::path::Path) -> Option<ResumeVerifyMarker> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(ResumeVerifyMarker {
+        session_id: v.get("session_id")?.as_str()?.to_string(),
+        cwd: v.get("cwd").and_then(|c| c.as_str()).map(str::to_string),
+        baseline_lines: v.get("baseline_lines").and_then(|n| n.as_u64()).unwrap_or(0) as usize,
+        baseline_files: v
+            .get("baseline_files")
+            .and_then(|a| a.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .unwrap_or_default(),
+    })
+}
+
+/// Count non-empty lines in a JSONL file (0 if unreadable).
+fn jsonl_line_count(path: &std::path::Path) -> usize {
+    std::fs::read_to_string(path)
+        .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0)
+}
+
+/// The project dir the bridge writes for this session (from cwd; falls back to the dir of
+/// the found requested file).
+fn project_dir_for(projects_dir: &std::path::Path, marker: &ResumeVerifyMarker) -> Option<std::path::PathBuf> {
+    if let Some(cwd) = marker.cwd.as_deref() {
+        let d = projects_dir.join(crate::jsonl::cwd_to_project_path(cwd));
+        if d.is_dir() {
+            return Some(d);
+        }
+    }
+    crate::jsonl::find_jsonl_path(projects_dir, &marker.session_id, marker.cwd.as_deref())
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+}
+
+/// A session `*.jsonl` in the project dir that is NOT the requested one, NOT in the
+/// revive-time baseline set, and has content → the fork-on-load target. `None` = no fork.
+fn forked_session_file(projects_dir: &std::path::Path, marker: &ResumeVerifyMarker) -> Option<String> {
+    let dir = project_dir_for(projects_dir, marker)?;
+    let want_self = format!("{}.jsonl", marker.session_id);
+    for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".jsonl") || name.starts_with("agent-") || name == want_self {
+            continue;
+        }
+        if marker.baseline_files.contains(&name) {
+            continue; // present already at revive — not the fork target
+        }
+        // a NEW session file with content → the turn landed here (fork-on-load).
+        if jsonl_line_count(&entry.path()) > 0 {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// VERIFY-THE-BRIDGE (the I/O wrapper around the pure classify; injectable `projects_dir`
+/// + a `retries`/`sleep_ms` bound for the JSONL flush lag — eventual-consistency vs the
+/// wire terminal). Reads the REQUESTED-sessionId JSONL ON DISK (primary source). Returns
+/// as soon as a definitive verdict is reached; on a persistent non-confirmation it returns
+/// `Unconfirmed` (the verb then emits the loud degraded signal — never silent-pass, never
+/// session-kill). Bounded ⇒ no unbounded hang.
+pub fn verify_post_resume_continuation(
+    projects_dir: &std::path::Path,
+    marker: &ResumeVerifyMarker,
+    retries: u32,
+    sleep_ms: u64,
+) -> ResumeContinuation {
+    for attempt in 0..=retries {
+        let requested = crate::jsonl::find_jsonl_path(projects_dir, &marker.session_id, marker.cwd.as_deref());
+        let requested_grew = requested
+            .as_ref()
+            .map(|p| jsonl_line_count(p) > marker.baseline_lines)
+            .unwrap_or(false);
+        let forked_into = if requested_grew { None } else { forked_session_file(projects_dir, marker) };
+        let verdict = classify_post_resume_continuation(requested_grew, forked_into);
+        // A definitive verdict (Continued/Forked) returns immediately; Unconfirmed retries
+        // for the flush lag, then gives up loudly.
+        if !matches!(verdict, ResumeContinuation::Unconfirmed) || attempt == retries {
+            return verdict;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+    }
+    ResumeContinuation::Unconfirmed
+}
+
+// ===========================================================================
 // RESUME (deliverable B).
 // ===========================================================================
 
@@ -1902,19 +2066,24 @@ mod tests {
             eprintln!("flock(1) absent — skipping the process-death reclaim repro");
             return;
         }
+        use std::os::unix::process::CommandExt;
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         // The lock file path MUST match acquire_resume_claim's (sessionId.resume.lock).
         let lock = dir.join("sess-z.resume.lock");
         std::fs::File::create(&lock).unwrap();
-        // A holder subprocess: take an EXCLUSIVE flock on the lock file, then sleep.
+        // A holder subprocess in its OWN process group: `flock` takes an EXCLUSIVE lock,
+        // then runs `sleep` (a child that inherits the lock fd). We kill the whole GROUP
+        // so BOTH die and the inherited fd closes → the OS releases the lock.
         let mut holder = std::process::Command::new("flock")
             .arg("-x")
             .arg(&lock)
             .arg("-c")
             .arg("sleep 30")
+            .process_group(0)
             .spawn()
             .expect("spawn flock holder");
+        let pgid = holder.id() as i32;
         // Wait until the holder actually owns the lock (our claim LOSES).
         let mut held = false;
         for _ in 0..100 {
@@ -1927,9 +2096,10 @@ mod tests {
             }
         }
         assert!(held, "while the holder lives, a concurrent claim LOSES (atomic)");
-        // KILL the holder mid-claim → the OS releases the flock → reclaim must succeed.
-        holder.kill().ok();
-        holder.wait().ok();
+        // KILL the holder GROUP mid-claim (flock + its sleep child) → the OS releases the
+        // flock once every fd holding it is closed → a later resume must RECLAIM.
+        unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        holder.wait().ok(); // reap the flock parent (no zombie).
         let mut reclaimed = false;
         for _ in 0..100 {
             if acquire_resume_claim(dir, "sess-z").unwrap().is_some() {
@@ -1941,6 +2111,96 @@ mod tests {
         assert!(
             reclaimed,
             "after the claim-holder process DIES, the next resume RECLAIMS (self-healing — never bricked)"
+        );
+    }
+
+    // ====================================================================
+    // FINDING #2 PART 2 — verify-the-bridge post-resume continuation.
+    // ====================================================================
+
+    /// The PURE non-vacuous core (the simulate-fork control): a fork (requested did NOT
+    /// grow, a foreign file received the turn) classifies `Forked`; growth → `Continued`;
+    /// neither → `Unconfirmed`. REVERT the classifier to always-`Continued` → the Forked
+    /// arm REDs (the vacuity the oracle catches).
+    #[test]
+    fn classify_post_resume_continuation_is_non_vacuous() {
+        assert_eq!(classify_post_resume_continuation(true, None), ResumeContinuation::Continued);
+        assert_eq!(
+            classify_post_resume_continuation(true, Some("other.jsonl".into())),
+            ResumeContinuation::Continued,
+            "growth wins even if a sibling file also moved"
+        );
+        assert_eq!(
+            classify_post_resume_continuation(false, Some("fork-abc.jsonl".into())),
+            ResumeContinuation::Forked("fork-abc.jsonl".into()),
+            "no growth + a foreign file got the turn = FORK"
+        );
+        assert_eq!(
+            classify_post_resume_continuation(false, None),
+            ResumeContinuation::Unconfirmed
+        );
+    }
+
+    /// The marker round-trips (write → read) — sessionId/cwd/baseline preserved.
+    #[test]
+    fn resume_verify_marker_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = resume_verify_marker_path(tmp.path(), 4242);
+        let m = ResumeVerifyMarker {
+            session_id: "sess-1".into(),
+            cwd: Some("/w/p".into()),
+            baseline_lines: 3,
+            baseline_files: vec!["sess-1.jsonl".into()],
+        };
+        write_resume_verify_marker(&path, &m).unwrap();
+        assert_eq!(read_resume_verify_marker(&path), Some(m));
+        // absent marker → None (a non-resume wait).
+        assert_eq!(read_resume_verify_marker(&tmp.path().join("nope.resume-verify")), None);
+    }
+
+    /// VERIFY-THE-BRIDGE over PRIMARY source (planted JSONL on disk), all three verdicts.
+    /// (1) NON-VACUOUS: it reads the ACTUAL requested-sessionId file (never a cached echo),
+    /// and the SIMULATED-FORK case (requested flat, a NEW file with the turn) → `Forked`.
+    #[test]
+    fn verify_post_resume_continuation_reads_disk_all_verdicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path();
+        let cwd = "/w/proj";
+        let dir = projects.join(crate::jsonl::cwd_to_project_path(cwd)); // "-w-proj"
+        std::fs::create_dir_all(&dir).unwrap();
+        let sid = "sess-resume";
+        let reqfile = dir.join(format!("{sid}.jsonl"));
+        // baseline: 1 line in the requested file at revive.
+        std::fs::write(&reqfile, "{\"type\":\"user\"}\n").unwrap();
+        let marker = ResumeVerifyMarker {
+            session_id: sid.into(),
+            cwd: Some(cwd.into()),
+            baseline_lines: 1,
+            baseline_files: vec![format!("{sid}.jsonl")],
+        };
+
+        // CONTINUED: the requested file GREW (post-resume turn appended).
+        std::fs::write(&reqfile, "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n").unwrap();
+        assert_eq!(
+            verify_post_resume_continuation(projects, &marker, 0, 0),
+            ResumeContinuation::Continued
+        );
+
+        // FORK: requested back to baseline (no growth) + a NEW session file got the turn.
+        std::fs::write(&reqfile, "{\"type\":\"user\"}\n").unwrap();
+        let forkfile = dir.join("forked-xyz.jsonl");
+        std::fs::write(&forkfile, "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n").unwrap();
+        assert_eq!(
+            verify_post_resume_continuation(projects, &marker, 0, 0),
+            ResumeContinuation::Forked("forked-xyz.jsonl".into()),
+            "no growth + a NEW file with content = fork-on-load DETECTED"
+        );
+
+        // UNCONFIRMED: requested flat, the fork file removed (nothing grew anywhere).
+        std::fs::remove_file(&forkfile).unwrap();
+        assert_eq!(
+            verify_post_resume_continuation(projects, &marker, 0, 0),
+            ResumeContinuation::Unconfirmed
         );
     }
 }

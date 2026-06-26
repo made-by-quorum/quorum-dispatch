@@ -873,10 +873,61 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
 
     // Consume the prior tombstone (`<old_pid>.json.tombstoned`) so no dangling tombstone
     // / double live-row survives (R-b). Best-effort: a missing tombstone is fine (a row
-    // stopped a different way), and the new live row is already authoritative.
+    // stopped a different way), and the new live row is already authoritative. Also drop
+    // any stale resume-verify marker keyed by the OLD pid (cleanup).
     if let Some(old_pid) = session.pid.filter(|&p| p != 0) {
         let tomb = paths.sessions_dir.join(format!("{old_pid}.json.tombstoned"));
         let _ = std::fs::remove_file(&tomb);
+        let _ = std::fs::remove_file(dispatch::resume_daemon::resume_verify_marker_path(
+            &paths.sessions_dir,
+            old_pid,
+        ));
+    }
+
+    // FINDING #2 PART 2 — drop a VERIFY-THE-BRIDGE marker: record the requested JSONL's
+    // baseline (line count + the project dir's current session-file set) so the FIRST
+    // post-resume wait can confirm the turn CONTINUED the SAME bridge JSONL (fork-on-load
+    // detection) from PRIMARY source. Best-effort: a marker-write failure does not fail
+    // the resume (the turn still works; we just lose the one-time verification).
+    {
+        use dispatch::resume_daemon::{
+            resume_verify_marker_path, write_resume_verify_marker, ResumeVerifyMarker,
+        };
+        let requested = dispatch::jsonl::find_jsonl_path(
+            &paths.projects_dir,
+            &session.session_id,
+            session.cwd.as_deref(),
+        );
+        let baseline_lines = requested
+            .as_ref()
+            .map(|p| {
+                std::fs::read_to_string(p)
+                    .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        // The project dir's current *.jsonl basenames (the fork-detection baseline).
+        let baseline_files: Vec<String> = session
+            .cwd
+            .as_deref()
+            .map(|cwd| paths.projects_dir.join(dispatch::jsonl::cwd_to_project_path(cwd)))
+            .into_iter()
+            .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                (n.ends_with(".jsonl") && !n.starts_with("agent-")).then_some(n)
+            })
+            .collect();
+        let marker = ResumeVerifyMarker {
+            session_id: session.session_id.clone(),
+            cwd: session.cwd.clone(),
+            baseline_lines,
+            baseline_files,
+        };
+        let _ = write_resume_verify_marker(
+            &resume_verify_marker_path(&paths.sessions_dir, spawned.pid),
+            &marker,
+        );
     }
 
     println!("{}", acp_revived_line(&name, spawned.pid, &endpoint));
