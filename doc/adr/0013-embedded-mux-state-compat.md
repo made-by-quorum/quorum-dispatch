@@ -8,7 +8,7 @@
 C1 flips the engine's `Mux` backend to embedded qrmux behind `SB_MUX` (default `embedded`;
 `SB_MUX=zmx` = the escape hatch, test-carried). Pre-flip sessions live in the zmx world
 (sockets under zmx dirs; registry rows written by Claude Code). ADD-14 (Pete): the engine
-never WRITES literal /tmp. Rule 9: Rust sb never touches real state until C2 — this ADR
+never WRITES literal /tmp. Rule 9: Rust qd never touches real state until C2 — this ADR
 RULES the migration story; C2 executes it.
 
 ## Decisions
@@ -25,7 +25,7 @@ visibility feature is a C2 decision WITH Pete (a `--json` contract surface, ADD-
 ### 2. Embedded state dir (ADD-14-compliant)
 
 Engine resolution `resolve_qrmux_dir`: `$XDG_RUNTIME_DIR/qrmux` else `<sbHome>/mux` where
-`sbHome = SB_HOME || $HOME/.sb` (the engine's `SbPaths::from_home_env` seam). NO /tmp tier.
+`sbHome = SB_HOME || $HOME/.quorum/dispatch` (the engine's `SbPaths::from_home_env` seam). NO /tmp tier.
 sun_path-length guard at resolve with a named remedy (set XDG_RUNTIME_DIR or shorten
 SB_HOME). The engine-resolved dir is the single source of truth: passed per-call into the
 qrmux client ops AND propagated to the daemon via `server --socket-dir` argv — daemon binds
@@ -45,7 +45,7 @@ registry row (Claude Code writes `<pid>.json` post-boot; engine writes only kill
 tombstones), so there is no honest write seam — a pre-boot stub row would race Claude's
 write. Lane membership in C1 derives from which mux's world contains the session (already
 backend-scoped by decision 1). **C2 carry:** stamp `backend` when the marks/lineage flow
-(A6/sbx) owns the write, or at cutover migration.
+(A6/qb) owns the write, or at cutover migration.
 
 ### 4. Migration story (C2 executes)
 
@@ -73,7 +73,7 @@ unchanged.
   dialogs under fullscreen apps). Documented in PROTOCOL.md.
 - **D17 (--model passthrough):** assessed KEEP (engine content-free; claude rejects
   unknown models loudly) — Pete-visible at the C1 gate, not silently lead-ruled.
-- **Hidden `qrmux-server` subcommand (M4fix):** the sb binary is also the embedded daemon
+- **Hidden `qrmux-server` subcommand (M4fix):** the qd binary is also the embedded daemon
   (single-binary; pre-clap dispatch so `--help`/exit surfaces are structurally untouched).
   The embedded launcher passes `ServerLaunchSpec { current_exe(), ["qrmux-server"] }`;
   standalone qrmux keeps `current_exe() server`. Added after the Lima-lane cold-start find

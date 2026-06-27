@@ -1,6 +1,6 @@
-//! sbx 0.1 punch-list B2, item 3 — REPRO + MECHANISM PINS for the
-//! `sb send:pty --wait` intermittent EMPTY capture while a reply exists.
-//! Spec: ~/work/ws/switchboard/sbx/punch/b2-relay-spec.md.
+//! qb 0.1 punch-list B2, item 3 — REPRO + MECHANISM PINS for the
+//! `qd send:pty --wait` intermittent EMPTY capture while a reply exists.
+//! Spec: ~/work/ws/switchboard/qb/punch/b2-relay-spec.md.
 //!
 //! ## The diagnosed mechanism family (phase 1): COMPLETION OUTRUNS THE TRANSCRIPT
 //! The --wait loop decides Complete from TWO UNSYNCHRONIZED sources read

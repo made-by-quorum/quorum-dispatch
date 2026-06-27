@@ -1,6 +1,6 @@
-//! Punch B5 item 2 (orc-ruled C1+D) — bin-level pins for the `sb ls --live`
+//! Punch B5 item 2 (orc-ruled C1+D) — bin-level pins for the `qd ls --live`
 //! scripting surface and the default view's loud truncation trailer, driving
-//! the REAL `sb` binary against a JAILED HOME (L9a / ADD-4 discipline; harness
+//! the REAL `qd` binary against a JAILED HOME (L9a / ADD-4 discipline; harness
 //! mirrors info_json.rs — integration test binaries cannot import each other,
 //! duplication is the sanctioned shape).
 //!
@@ -12,7 +12,7 @@
 //!   query — the start render-flag precedent). Pinned at the bin boundary here;
 //!   cli.rs unit-pins the clap ArgumentConflict kind.
 //! - The DEFAULT view (no --all/--live/no valid -n), when its cap (20) drops
-//!   eligible rows, prints `… N more (sb ls --all)` on STDERR in text modes;
+//!   eligible rows, prints `… N more (qd ls --all)` on STDERR in text modes;
 //!   `--json` NEVER carries it. N = total-eligible − shown.
 //! - Existing default-cap + `--all` behavior is unchanged (D is additive on the
 //!   over-cap case only): at/under cap → no trailer, stdout bytes untouched.
@@ -47,7 +47,7 @@ fn registry_row(
 struct Jail {
     home: PathBuf,
     zmx: PathBuf,
-    // WP-D (engsol S-1): `sb ls` now liveness-GATES each live row on the WP-A
+    // WP-D (engsol S-1): `qd ls` now liveness-GATES each live row on the WP-A
     // starttime classifier (a dead/zombie/gone/reused pid is downgraded to
     // `cold`). So a LIVE-status fixture row must be backed by a REAL, alive pid
     // or the gate would correctly drop it. Each live row spawns a guarded child
@@ -85,7 +85,7 @@ impl Jail {
     /// Spawn a guarded, long-lived child and return its `(pid, started_at_ms)`.
     /// WP-D: a live registry row must be backed by a real alive pid (with a
     /// starttime within the classifier's 120s reuse-slack of the real one) or
-    /// `sb ls` gates it to `cold`. The recorded start is **wall-clock now** — the
+    /// `qd ls` gates it to `cold`. The recorded start is **wall-clock now** — the
     /// exact PRODUCTION shape (the registry `startedAt` is the registration
     /// timestamp ≈ process start), and within 120s of the `proc_start_ms` the gate
     /// reads at `ls` time. (Reading `proc_start_ms` of the just-forked child here
@@ -168,7 +168,7 @@ impl Jail {
             .env_remove("SB_HOME")
             .env_remove("SB_MUX")
             .output()
-            .expect("spawn sb");
+            .expect("spawn qd");
         (
             out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -412,7 +412,7 @@ fn live_with_all_rejects_at_parse() {
 }
 
 /// D trailer: the over-cap DEFAULT view announces what the cap dropped —
-/// `… N more (sb ls --all)` on STDERR (stdout pipelines stay clean), with
+/// `… N more (qd ls --all)` on STDERR (stdout pipelines stay clean), with
 /// N = total-eligible − shown (25 live + 3 cold eligible = 28 − 20 = 8).
 #[test]
 fn default_over_cap_prints_trailer_on_stderr() {
@@ -426,11 +426,11 @@ fn default_over_cap_prints_trailer_on_stderr() {
     let (code, out, err) = j.run(&["ls", "--table"]);
     assert_eq!(code, 0, "stderr: {err}");
     assert_eq!(
-        err, "… 8 more (sb ls --all)\n",
+        err, "… 8 more (qd ls --all)\n",
         "exact trailer line, count = eligible − shown"
     );
     assert!(
-        !out.contains("more (sb ls --all)"),
+        !out.contains("more (qd ls --all)"),
         "trailer is stderr-only; stdout bytes unchanged: {out}"
     );
 }
@@ -471,14 +471,14 @@ fn no_trailer_at_cap_or_on_flagged_views() {
     assert_eq!(err, "", "explicit -n is the user's own cap: no trailer");
 }
 
-/// Bare `sb` (the default action IS `ls`) participates in the WP-B7 PIECE 1
-/// surface auto-flip exactly as `sb ls` does. An agent/pipe caller (this harness
+/// Bare `qd` (the default action IS `ls`) participates in the WP-B7 PIECE 1
+/// surface auto-flip exactly as `qd ls` does. An agent/pipe caller (this harness
 /// pipes stdout) auto-detects to the JSON machine surface, which carries NO
 /// trailer (the `… N more` affordance is the human-table surface only). The
 /// table-surface trailer for the over-cap default view is pinned by
 /// `default_over_cap_prints_trailer_on_stderr` (via `--table`, the surface a human
-/// reaches at a TTY). There is no `--table` to inject on the BARE `sb` form (the
-/// flag lives on the `ls` subcommand), so the faithful bare-`sb` coverage is: the
+/// reaches at a TTY). There is no `--table` to inject on the BARE `qd` form (the
+/// flag lives on the `ls` subcommand), so the faithful bare-`qd` coverage is: the
 /// default action flips to JSON and stays trailer-free.
 #[test]
 fn bare_sb_default_action_flips_to_json_no_trailer() {
@@ -488,14 +488,14 @@ fn bare_sb_default_action_flips_to_json_no_trailer() {
     assert_eq!(code, 0, "stderr: {err}");
     assert_eq!(
         err, "",
-        "bare `sb` (agent/pipe) is the JSON surface: no trailer"
+        "bare `qd` (agent/pipe) is the JSON surface: no trailer"
     );
     // The default action reached the JSON surface — the over-cap view is the
     // 20-row capped machine array (clean, parseable, trailer-free).
     assert_eq!(
         rows(&out).len(),
         20,
-        "bare `sb` default action → capped JSON: {out}"
+        "bare `qd` default action → capped JSON: {out}"
     );
 }
 
@@ -515,13 +515,13 @@ fn prefix_over_cap_trailer_counts_total_not_prefix_scoped() {
     assert!(!out.contains("cold"), "prefix filters the listing: {out}");
     // ...but the trailer count is the TOTAL pre-prefix drop, not the lv-scoped one.
     assert_eq!(
-        err, "… 8 more (sb ls --all)\n",
+        err, "… 8 more (qd ls --all)\n",
         "trailer reports total dropped (pre-prefix), the documented behavior"
     );
 }
 
 /// WP-B7 PIECE 1 — the table→JSON render-surface AUTO-FLIP, pinned at the bin
-/// boundary. This harness PIPES stdout (no TTY), so `sb ls` auto-detects the AGENT
+/// boundary. This harness PIPES stdout (no TTY), so `qd ls` auto-detects the AGENT
 /// surface. PROVES, all in one place:
 ///   (1) the agent/pipe DEFAULT is now JSON (the flip) — a bare `ls` parses as a
 ///       JSON array, with NO human-table header;
@@ -531,7 +531,7 @@ fn prefix_over_cap_trailer_counts_total_not_prefix_scoped() {
 ///   (3) explicit `--json` is unchanged (the override still wins);
 ///   (4) `--table --short` is the agent short-text ESCAPE HATCH — a short TABLE
 ///       (one name per line), NOT JSON (`--short` is a content modifier that
-///       composes with the `--table` surface; sb-supervisor-11-ratified).
+///       composes with the `--table` surface; qd-supervisor-11-ratified).
 /// MUTATION EVIDENCE: reverting the `run_inner` wiring to the raw `--json` flag
 /// (pre-flip) reds assertion (1) — a bare `ls` would emit the human table, not a
 /// JSON array (captured red-before in the WP-B7 build record).

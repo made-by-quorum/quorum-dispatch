@@ -1,5 +1,5 @@
-//! P0 `sb info <target> --json` (spec-w8-info-json) — bin-level golden pins
-//! driving the REAL `sb` binary against a JAILED HOME (L9a / ADD-4 discipline;
+//! P0 `qd info <target> --json` (spec-w8-info-json) — bin-level golden pins
+//! driving the REAL `qd` binary against a JAILED HOME (L9a / ADD-4 discipline;
 //! harness mirrors p0_qafix.rs for the forged-registry rows — integration test
 //! binaries cannot import each other, duplication is the sanctioned shape).
 //!
@@ -124,11 +124,11 @@ impl Jail {
             .args(args)
             .env("HOME", &self.home)
             .env("ZMX_DIR", &self.zmx)
-            // The ids store resolves SB_HOME || <home>/.sb — pin to the jail.
+            // The ids store resolves SB_HOME || <home>/.quorum/dispatch — pin to the jail.
             .env_remove("SB_HOME")
             .env_remove("SB_MUX")
             .output()
-            .expect("spawn sb");
+            .expect("spawn qd");
         (
             out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&out.stdout).into_owned(),

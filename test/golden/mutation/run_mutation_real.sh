@@ -12,13 +12,13 @@
 #      scenario RE-RUN with a deliberate divergence whose effect lands in a
 #      NEVER-normalized field (exit code, per ADR-0003), compared against the
 #      recorded golden — verify MUST catch it. (Driven by the sibling
-#      divergent_invocation.sh helper when a pinned sb is available; otherwise the
+#      divergent_invocation.sh helper when a pinned qd is available; otherwise the
 #      already-captured divergent trace under mutation/divergent/ is replayed.)
 #   C. R2 STUB-SEAM NEGATIVE CONTROLS (rider R2, BINDING): stub misbehaviours
 #      injected through the stub's STUB_* seams (withheld/delayed PID file, missing
 #      JSONL reply, dead relay /health) — the recorder/comparator OUTPUT must CHANGE
 #      and verify must CATCH each. A contract row insensitive to its stub input is
-#      vacuous gold. (Driven in-jail when a pinned sb + stub are available; the
+#      vacuous gold. (Driven in-jail when a pinned qd + stub are available; the
 #      seam EFFECT on the observable surface is always asserted here from the
 #      captured seam-on vs seam-off outputs under mutation/r2-seams/.)
 #

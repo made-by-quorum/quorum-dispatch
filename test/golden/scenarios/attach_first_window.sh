@@ -3,7 +3,7 @@
 # 0b DELTA-STRENGTH W3.5: the attach-INITIATING capture (new row).
 #
 # WHAT (red-team M1, binding): boot a stub session, drive a deterministic backlog,
-# then initiate a REAL `sb attach` UNDER A PTY (scn_capture_pty), capture the FIRST
+# then initiate a REAL `qd attach` UNDER A PTY (scn_capture_pty), capture the FIRST
 # ~1KB of attach output, and DETACH CLEANLY (ctrl-\, zmx's per-client detach — never
 # a kill). This is the attach-INITIATING capture; B3 ruled only attach-SPANNING out
 # (a full attach session spanning resize/repaint), not the first window.
@@ -53,7 +53,7 @@ scn_run() {
     scn_sb_target send:pty "$name" "EMIT $SCN_SENTINEL_K" >/dev/null 2>&1
     sleep 2
 
-    # Initiate a REAL `sb attach` under a PTY; capture the first window; DETACH
+    # Initiate a REAL `qd attach` under a PTY; capture the first window; DETACH
     # CLEANLY via ctrl-\ (0x1c = base64 HA==) injected ~3s in (zmx's per-client
     # detach — leaves the session ALIVE). Capture ~6s of output.
     #

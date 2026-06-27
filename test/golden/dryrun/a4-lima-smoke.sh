@@ -8,17 +8,17 @@
 # (zero auth) to prove the create/boot/send/went-busy path on Linux/aarch64
 # against real zmx -- the A2 row-8 precedent. In-jail, hermetic HOME.
 #
-# Args: $1 = repo dir in VM, $2 = sb binary in VM, $3 = (unused).
+# Args: $1 = repo dir in VM, $2 = qd binary in VM, $3 = (unused).
 set -u
 REPO="${1:-/tmp/wt-a4-lead}"
-SB_BIN="${2:-/tmp/sb-vm-target/debug/sb}"
+SB_BIN="${2:-/tmp/qd-vm-target/debug/qd}"
 cd "$REPO" || { echo "FATAL: no repo at $REPO"; exit 1; }
 export JAIL_SB_CMD="$SB_BIN"
 export JAIL_ZMX_CMD="$(command -v zmx)"
 . test/golden/lib/jail.sh
 
 echo "=== ENV ==="; uname -m; uname -s; hostname
-echo "sb=$SB_BIN  zmx=$JAIL_ZMX_CMD  claude=$(claude --version 2>&1 | head -1)"
+echo "qd=$SB_BIN  zmx=$JAIL_ZMX_CMD  claude=$(claude --version 2>&1 | head -1)"
 
 echo
 echo "=== REAL-CLAUDE-ON-LINUX: NAMED EXCLUSION ==="
@@ -58,7 +58,7 @@ WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"
 NAME="${JAIL_PREFIX}lima"
 
 echo
-echo "=== CREATE: sb new (fake claude) ==="
+echo "=== CREATE: qd new (fake claude) ==="
 ( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" \
     "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) > "$JAIL_ROOT/o" 2> "$JAIL_ROOT/e"
 code=$?
@@ -71,14 +71,14 @@ for f in "$HOME/.claude/sessions"/*.json; do [ -f "$f" ] || continue; grep -q "$
 echo "  pidfile: ${pf:-NONE}"
 
 echo
-echo "=== SEND:PTY (real send via the built sb) + observe went-busy ==="
+echo "=== SEND:PTY (real send via the built qd) + observe went-busy ==="
 wrapper_pid="$(jail_zmx list 2>/dev/null | grep "$NAME" | sed -n 's/.*pid=\([0-9]*\).*/\1/p')"
 # find the fake-claude child to signal it busy on submit
 fake_pid="$(pgrep -f "$NAME" 2>/dev/null | while read p; do grep -q fake-claude /proc/$p/cmdline 2>/dev/null && echo $p; done | head -1)"
-# NOTE: sb send:pty needs the session's zmxName in the registry row; the fake
+# NOTE: qd send:pty needs the session's zmxName in the registry row; the fake
 # claude does not write one, so we use the raw zmx send primitive (A2 row-8
 # precedent) to land the marker -- this exercises the real zmx PTY path on Linux.
-# (The full sb send:pty path is covered live on macOS, boot 1.)
+# (The full qd send:pty path is covered live on macOS, boot 1.)
 out="$(jail_zmx send "$NAME" "LIMA_PTY_MARKER" 2>&1)"; src=$?
 echo "  raw zmx send rc=$src out=[$out]"
 # nudge the fake to busy (emulating a turn start) so went-busy is observable on Linux
@@ -90,7 +90,7 @@ echo "  marker in scrollback:"
 jail_zmx history "$NAME" 2>/dev/null | perl -pe 's/\e\[[0-9;?]*[ -\/]*[@-~]//g; s/\r//g' 2>/dev/null | grep -i LIMA_PTY_MARKER | head -2 | sed 's/^/    /'
 
 echo
-echo "=== RSS ==="; ps -eo pid,rss,comm 2>/dev/null | grep -iE "zmx|sb|fake-claude|sleep" | grep -v grep | head -8 | sed 's/^/  /'
+echo "=== RSS ==="; ps -eo pid,rss,comm 2>/dev/null | grep -iE "zmx|qd|fake-claude|sleep" | grep -v grep | head -8 | sed 's/^/  /'
 
 echo
 echo "=== KILL (in-jail, real zmx) ==="

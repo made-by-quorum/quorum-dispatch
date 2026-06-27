@@ -2,9 +2,9 @@
 # macOS fake-claude bonus: real zmx + fake claude (zero real-claude boot) — an
 # extra create/kill cycle hardening row 2 on macOS. NOT a real-claude boot.
 set -u
-WT=/home/u/work/sb-rust/.claude/worktrees/agent-acfec16fb3b5c3375
+WT=/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 jail_establish || { echo FATAL; exit 1; }

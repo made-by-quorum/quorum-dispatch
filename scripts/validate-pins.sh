@@ -2,10 +2,10 @@
 #
 # validate-pins.sh — MANUAL pre-tag gate for extensions.toml (plan 0001 child C).
 #
-# WHY: `include_str!` only bakes the pin STRING into the `sb` binary; it cannot
+# WHY: `include_str!` only bakes the pin STRING into the `qd` binary; it cannot
 # prove a remote ref exists or builds. This script is the honest check: it
 # clones/fetches each pinned ref and confirms (a) the commit exists on the named
-# repo and (b) it builds. Run it BEFORE tagging an `sb` release. There is NO CI
+# repo and (b) it builds. Run it BEFORE tagging an `qd` release. There is NO CI
 # wiring (out of scope, plan §"Out of scope"); this is a human-run gate.
 #
 # It lives OUTSIDE crates/ on purpose: it must name the deploy concepts the
@@ -27,7 +27,7 @@ if [ ! -f "$manifest" ]; then
 fi
 
 # Tiny reader for the flat `[section]` + `key = "value"` subset (matches the
-# engine-side parser in crates/sb/src/extensions.rs). Bash 3.2 floor: no
+# engine-side parser in crates/qd/src/extensions.rs). Bash 3.2 floor: no
 # associative arrays.
 read_pin() {
     # $1 = section, $2 = key
@@ -43,8 +43,8 @@ read_pin() {
     ' "$manifest"
 }
 
-sbx_repo="$(read_pin sbx repo)"
-sbx_rev="$(read_pin sbx rev)"
+sbx_repo="$(read_pin qb repo)"
+sbx_rev="$(read_pin qb rev)"
 plugins_repo="$(read_pin plugins repo)"
 plugins_rev="$(read_pin plugins rev)"
 
@@ -79,8 +79,8 @@ check_ref_exists() {
     fi
     git -C "$tmp/repo" checkout --quiet "$rev"
     echo "validate-pins: $label — building $rev (cargo build --release)"
-    if [ "$label" = "sbx" ]; then
-        # sbx is a single-bin crate (NOT a workspace) — plain `cargo build` works.
+    if [ "$label" = "qb" ]; then
+        # qb is a single-bin crate (NOT a workspace) — plain `cargo build` works.
         if ! ( cd "$tmp/repo" && cargo build --release --quiet ); then
             echo "validate-pins: FAIL — $label: $rev does not build" >&2
             fail=1
@@ -90,7 +90,7 @@ check_ref_exists() {
     fi
 }
 
-check_ref_exists "sbx" "$sbx_repo" "$sbx_rev"
+check_ref_exists "qb" "$sbx_repo" "$sbx_rev"
 
 # The plugins repo is consumed RAW (no build step — plugins/core is documentation
 # + roles + skills, no Cargo crate). Validate existence + the marketplace shape.

@@ -335,13 +335,13 @@ fn stray_short_code(session_id: &str) -> String {
 
 // --- info --json (P0 spec-w8) ---
 
-/// P0 `sb info <target> --json`: ONE json object for the RESOLVED session — the
+/// P0 `qd info <target> --json`: ONE json object for the RESOLVED session — the
 /// point-resolution surface bond joins against (liveness/names/ids), promised to
 /// P1 as this EXACT field list. Shape follows the `ls --json` conventions:
 /// camelCase keys; `sbId`/`sbIdPrefix` ABSENT (not null) when the session has
 /// no mapped stable id. That absence is a LIFECYCLE state, not an error
-/// (B5 item 12 doc note, accepted r2): ids are minted at `sb start` and bound
-/// at boot-confirm, and `sb ls` lazily backfills pre-existing sessions — so a
+/// (B5 item 12 doc note, accepted r2): ids are minted at `qd start` and bound
+/// at boot-confirm, and `qd ls` lazily backfills pre-existing sessions — so a
 /// session can legitimately surface here BEFORE its id exists
 /// (absent-until-minted; resolution stays engine-side per spec §3). Consumers
 /// must treat a missing `sbId` as "not yet minted". Unlike the ls rows, `name`
@@ -493,7 +493,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 // --- info ---
 
-/// Port of the `sb info` text body (status.ts:621-660). Literal column alignment
+/// Port of the `qd info` text body (status.ts:621-660). Literal column alignment
 /// copied from the TS source; conditional lines emitted only when present.
 ///
 /// `now_ms` is the injected clock (for the `relativeTime` suffix on Last active).

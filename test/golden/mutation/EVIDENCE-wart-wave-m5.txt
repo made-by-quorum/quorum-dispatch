@@ -20,7 +20,7 @@
   [PASS] w8-accept-chunked      exit 0 verified (intact chunked delivery not punished)
 PASS=9 FAIL=0
 
-== RUN B: pre-wiring sb @ f18fd69 + new fakerepl (expect exactly w8-trunc FAIL: silent exit-0 despite truncation) ==
+== RUN B: pre-wiring qd @ f18fd69 + new fakerepl (expect exactly w8-trunc FAIL: silent exit-0 despite truncation) ==
   exit=0
   [PASS] accept-run1            exit 0 + 'Prompt delivered to' marker
   exit=0

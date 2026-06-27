@@ -21,9 +21,9 @@
 //! TS fix-wave fix A — acceptance-keyed verify-then-CR submit discipline.
 //!
 //! Evidence: doc/log/2026-05-29_p0-spike.md §F1 + FINDING-E1 (P0 spike).
-//! Contract: doc/spec/sb-spawn-contract.md §4 SUBMIT DISCIPLINE block.
+//! Contract: doc/spec/qd-spawn-contract.md §4 SUBMIT DISCIPLINE block.
 //!
-//! `sb new -p` and `sb send:pty` deliver a prompt as a SINGLE PTY write of
+//! `qd new -p` and `qd send:pty` deliver a prompt as a SINGLE PTY write of
 //! `message + "\r"`. A large single write (≳~400 chars on the test setup) — and,
 //! on a freshly-booted session, sometimes even a short one (FINDING-E1) — is
 //! caught by paste-burst detection so its trailing `\r` is absorbed as a literal
@@ -41,7 +41,7 @@
 //!    still-running response as "not submitted" and fire a stray CR into a busy
 //!    session — the exact spurious empty turn this rule prevents.
 //!  - NEVER send a CR to a session that is already busy (raw `zmx send` does not
-//!    refuse a busy session the way `sb send` does — commands/send.ts:94 — so the
+//!    refuse a busy session the way `qd send` does — commands/send.ts:94 — so the
 //!    busy guard is explicit here).
 //!  - NEVER blanket-CR: on a prompt that already submitted, a second CR injects a
 //!    second submit → a spurious empty turn. At most ONE CR, only when not busy.
@@ -552,7 +552,7 @@ pub trait DeliverDeps {
 /// bounded retries. Port of `deliverPrompt`
 /// (qa/hardening@3dd9f1e:src/commands/lifecycle.ts:302-345).
 ///
-/// `timeout_s` defaults to 15 (TS `timeoutSec = 15`, lifecycle.ts:303); `sb new
+/// `timeout_s` defaults to 15 (TS `timeoutSec = 15`, lifecycle.ts:303); `qd new
 /// -p` calls it with NO override (lifecycle.ts:921) → per-round post_cr = 12.5s
 /// (N9 — do NOT wire send:pty's 120s here).
 ///
@@ -895,7 +895,7 @@ pub fn payload_needs_verify(message: &str) -> bool {
 /// transcript, slice past `offset`, parse, collect user-record texts in file
 /// order. Error semantics match the M5 wiring contract:
 ///   - file ABSENT/unreadable → `Err` (resolution failed this poll; re-polled —
-///     on the `sb new -p` path the transcript may not exist yet);
+///     on the `qd new -p` path the transcript may not exist yet);
 ///   - file SHRANK below `offset`, or `offset` off a char boundary → `Err`
 ///     (integrity; re-reading from byte 0 could match an OLD record — the same
 ///     wrong-anchor class the --wait loop fails loud on);
@@ -1001,7 +1001,7 @@ pub trait VerifyDeps {
     ///
     /// `Err(reason)` = transcript/offset resolution failed THIS poll (the file
     /// shrank past the offset, the session_id is not yet resolvable on the
-    /// `sb new -p` path, etc.). NOT terminal — the loop re-polls; only if EVERY
+    /// `qd new -p` path, etc.). NOT terminal — the loop re-polls; only if EVERY
     /// read errors through the budget does the outcome become `SourceUnavailable`.
     fn read_user_texts(&self) -> Result<Vec<String>, String>;
     /// Sleep `ms` (the 500ms poll; seamed so tests run instantly).

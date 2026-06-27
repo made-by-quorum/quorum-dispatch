@@ -1,5 +1,5 @@
 //! Shared P0 jail-test scaffolding (spec-w9-simplify S3): the built-binary
-//! locators + the fakerepl jail-belt dir scaffold + the jailed `sb` runner
+//! locators + the fakerepl jail-belt dir scaffold + the jailed `qd` runner
 //! shared by `p0_id_matrix.rs` and `p0_qafix.rs` ONLY. The pre-existing gated
 //! suites (ack2_gate / ack3_* / c1_gate / …) keep their sanctioned inline
 //! copies — do NOT point them here.
@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The REAL `sb` binary under test.
+/// The REAL `qd` binary under test.
 pub fn sb_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
@@ -121,7 +121,7 @@ pub fn establish_jail(base: &Path, tag: &str) -> JailScaffold {
     }
 }
 
-/// Run `sb <args>` fully jailed (`env_clear` + the jail env contract):
+/// Run `qd <args>` fully jailed (`env_clear` + the jail env contract):
 /// HOME/SB_HOME/XDG_RUNTIME_DIR/TMPDIR/ZMX_DIR off the scaffold, PATH =
 /// fakerepl's dir + `/usr/bin:/bin`, TERM, and `claude_bin` as CLAUDE_BIN.
 /// `extra` pairs land LAST (per-launch fakerepl identity knobs).
@@ -149,7 +149,7 @@ pub fn run_sb_jailed(
     for (k, v) in extra {
         cmd.env(k, v);
     }
-    let out = cmd.output().expect("spawn sb");
+    let out = cmd.output().expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),

@@ -30,7 +30,7 @@
 //! # Durability posture (spec §4.1, red-team F8)
 //!
 //! Event/usage lines are small (sub-`PIPE_BUF`) → an `O_APPEND` single write is
-//! atomic for THEM. `sb mark` payloads above `PIPE_BUF` can interleave under
+//! atomic for THEM. `qd mark` payloads above `PIPE_BUF` can interleave under
 //! concurrency — a documented v1 limitation (fresh surface, no TS counterpart).
 //! Append failures on usage/create lines are NON-FATAL (the caller warns to
 //! stderr and leaves the verb's exit code unchanged) — telemetry must never break

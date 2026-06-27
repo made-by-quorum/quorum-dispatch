@@ -1,5 +1,5 @@
 //! ACK-3 e2e INJECTION MATRIX (ack3-spec §2-§4) — five fault-injection rows
-//! (M1-M5) + negative twins driving the REAL `sb` binary over the embedded
+//! (M1-M5) + negative twins driving the REAL `qd` binary over the embedded
 //! `qrmux` daemon with `fakerepl` as Claude, asserting BOTH event streams (the
 //! engine file at `<SB_HOME>/state/sessions/<key>.events.jsonl` and the daemon
 //! file at `<XDG_RUNTIME_DIR>/qrmux/events/<session>.daemon.<epoch>.jsonl`),
@@ -14,8 +14,8 @@
 //!
 //! `ensure_server_running_with` spawns the daemon WITHOUT `env_clear`, so
 //! `QRMUX_FAULT_*` passed as run_sb extras reaches the daemon process; the fault
-//! layer reads its env ONCE at daemon start. The arming `sb` call IS the
-//! session-creating one, and `sb start`'s boot waiter writes an Enter ("\r")
+//! layer reads its env ONCE at daemon start. The arming `qd` call IS the
+//! session-creating one, and `qd start`'s boot waiter writes an Enter ("\r")
 //! through the SAME session — so every daemon fault carries
 //! `QRMUX_FAULT_MATCH_SHA256=<content sha>` (the AND-filter lets the boot "\r"
 //! pass). M1/M2/M3 use SINGLE-CHUNK contents so the FRAME sha the daemon matches
@@ -129,7 +129,7 @@ impl Jail {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let base = PathBuf::from("/tmp/sb-ack3mat");
+        let base = PathBuf::from("/tmp/qd-ack3mat");
         let root = base.join("sbrg-runs").join(format!("{tag}-{nanos}"));
         let home = root.join("home");
         let xdg = base.join(format!("x-{tag}-{nanos}"));
@@ -269,11 +269,11 @@ fn walk(dir: &Path, f: &mut dyn FnMut(&Path)) -> std::io::Result<()> {
 }
 
 // ===========================================================================
-// sb driver (ack2_gate run_sb, duplicated)
+// qd driver (ack2_gate run_sb, duplicated)
 // ===========================================================================
 
 fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String, Duration) {
-    // WP-B-CS-1 (D2): `sb start` now auto-detects the driver, and this harness pipes
+    // WP-B-CS-1 (D2): `qd start` now auto-detects the driver, and this harness pipes
     // stdio (`cmd.output()`), so a bare start would be a non-TTY caller → the HEADLESS
     // surface (and a no-`-p` start would even hit Fork B's refuse-no-prompt). These
     // recovery-matrix tests exercise the INTERACTIVE create + -p delivery, so force
@@ -313,7 +313,7 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
         cmd.env(k, v);
     }
     let start = Instant::now();
-    let out = cmd.output().expect("spawn sb");
+    let out = cmd.output().expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -496,7 +496,7 @@ fn drive_m1(jail: &Jail, name: &str) -> (String, String, i32, String, String) {
     let (msg, canary) = row_message(1, 0);
     let sha = sha256_hex(msg.as_bytes());
     let mut env = jail.fakerepl_env(name);
-    // Arm the daemon BEFORE the first sb call (env read once at daemon start).
+    // Arm the daemon BEFORE the first qd call (env read once at daemon start).
     env.push(("QRMUX_FAULT_DROP_FRAMES", "send-input".to_string()));
     env.push(("QRMUX_FAULT_SESSION", name.to_string()));
     env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
@@ -1287,7 +1287,7 @@ fn daemon_kind_disposition(e: &DaemonEvent) -> Option<Delegation> {
     }
 }
 
-/// Resolve a source file relative to the crate manifest dir (crates/sb).
+/// Resolve a source file relative to the crate manifest dir (crates/qd).
 fn repo_path(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

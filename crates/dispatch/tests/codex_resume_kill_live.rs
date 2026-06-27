@@ -27,7 +27,7 @@
 //! JAIL (rule 9 + ADD-4/14): own HOME/CODEX_HOME/XDG_*/TMPDIR under
 //! `CARGO_TARGET_TMPDIR` (workspace tree, never /tmp); ports via the real allocator
 //! (ephemeral, OUTSIDE 8900-9000); the OpenRouter key read from the RUNNER's
-//! `$HOME/.sb/config.toml`, exported into the jail env ONLY (never written to a jail
+//! `$HOME/.quorum/dispatch/config.toml`, exported into the jail env ONLY (never written to a jail
 //! file, never on disk). GROUP-scoped SIGTERM→grace→SIGKILL cleanup (instance-
 //! addressed by the recorded pgid — the W4 launcher-orphan finding) + no-survivor
 //! belts after BOTH the kill and the revive cleanup.
@@ -72,7 +72,7 @@ impl Env for JailEnv {
     }
 }
 
-/// Read `openrouter-key` from the RUNNER's `$HOME/.sb/config.toml` (the only place
+/// Read `openrouter-key` from the RUNNER's `$HOME/.quorum/dispatch/config.toml` (the only place
 /// the real key lives — never an env var on disk, never a jail file).
 fn openrouter_key() -> String {
     let home = std::env::var("HOME").expect("HOME set for the live lane");
@@ -82,7 +82,7 @@ fn openrouter_key() -> String {
             .join("dispatch")
             .join("config.toml"),
     )
-    .expect("runner ~/.sb/config.toml exists for the live lane");
+    .expect("runner ~/.quorum/dispatch/config.toml exists for the live lane");
     for line in cfg.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix("openrouter-key") {
@@ -94,7 +94,7 @@ fn openrouter_key() -> String {
             }
         }
     }
-    panic!("openrouter-key not found in ~/.sb/config.toml — the live turn needs it");
+    panic!("openrouter-key not found in ~/.quorum/dispatch/config.toml — the live turn needs it");
 }
 
 /// Build the jail tree under CARGO_TARGET_TMPDIR (workspace tree, never /tmp).
@@ -301,7 +301,7 @@ fn codex_resume_kill_live_jailed_e2e() {
     let endpoint = out.endpoint.clone();
     let create_pid = out.pid;
 
-    // P0 QA (spec-w4-qa A1, codex empirical pin): create minted a stable sbx id
+    // P0 QA (spec-w4-qa A1, codex empirical pin): create minted a stable qb id
     // and BOUND it to the REAL thread uuid (mint-unbound → bind-after-thread/start).
     let ids_at_create = dispatch::idstore::fold(&ids_path);
     let sbx_id_at_create = ids_at_create
@@ -311,7 +311,7 @@ fn codex_resume_kill_live_jailed_e2e() {
         .expect("create bound a stable id to the live thread uuid");
     assert!(
         dispatch::idstore::is_valid_id(&sbx_id_at_create),
-        "well-formed sbx id: {sbx_id_at_create:?}"
+        "well-formed qb id: {sbx_id_at_create:?}"
     );
 
     // A reaper that always kills the CURRENT live daemon pid (updated across the
@@ -324,7 +324,7 @@ fn codex_resume_kill_live_jailed_e2e() {
         let rpc = WsAppServer::connect(&endpoint, std::time::Duration::from_secs(5))
             .expect("send: connect the daemon");
         let client = ClientInfo {
-            name: "sb-manager".to_string(),
+            name: "qd-manager".to_string(),
             title: None,
             version: "0".to_string(),
         };
@@ -388,7 +388,7 @@ fn codex_resume_kill_live_jailed_e2e() {
         let connected = WsAppServer::connect(&endpoint, std::time::Duration::from_secs(5)).ok();
         if let Some(c) = &connected {
             let client = ClientInfo {
-                name: "sb-manager".to_string(),
+                name: "qd-manager".to_string(),
                 title: None,
                 version: "0".to_string(),
             };
@@ -530,13 +530,13 @@ fn codex_resume_kill_live_jailed_e2e() {
     assert_eq!(new_row.provider.as_deref(), Some("codex"));
 
     // P0 QA (spec-w4-qa A1, codex empirical pin): thread id preserved ⇒ SAME
-    // sbx id after the revive — mint_or_get keyed by the thread uuid rode
+    // qb id after the revive — mint_or_get keyed by the thread uuid rode
     // through; the revive minted NO second id.
     let ids_at_revive = dispatch::idstore::fold(&ids_path);
     assert_eq!(
         ids_at_revive.by_session.get(&thread_id),
         Some(&sbx_id_at_create),
-        "codex resume → SAME sbx id (the A1 matrix row, codex column)"
+        "codex resume → SAME qb id (the A1 matrix row, codex column)"
     );
     assert_eq!(
         ids_at_revive.by_id.len(),
@@ -551,7 +551,7 @@ fn codex_resume_kill_live_jailed_e2e() {
         let rpc = WsAppServer::connect(&new_endpoint, std::time::Duration::from_secs(5))
             .expect("drivable: connect the revived daemon");
         let client = ClientInfo {
-            name: "sb-manager".to_string(),
+            name: "qd-manager".to_string(),
             title: None,
             version: "0".to_string(),
         };

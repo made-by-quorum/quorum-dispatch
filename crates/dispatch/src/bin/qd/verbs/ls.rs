@@ -1,4 +1,4 @@
-//! `sb ls` (alias `list`) + the default action — REAL (A1 registry+codes+render+
+//! `qd ls` (alias `list`) + the default action — REAL (A1 registry+codes+render+
 //! join). Ported from index.ts:36-172.
 //!
 //! Options: `-a/--all`, `--live`, `--json`, `--short`, `--prefix <prefix>`,
@@ -18,7 +18,7 @@
 //!   the named-only filter — UNNAMED live sessions appear (a scripting
 //!   consumer wanting live sessions shouldn't have unnamed ones hidden).
 //! - Truncation trailer — when the capped DEFAULT view (no `--all`, no `--live`,
-//!   no valid `-n`) drops eligible rows, print `… N more (sb ls --all)` to
+//!   no valid `-n`) drops eligible rows, print `… N more (qd ls --all)` to
 //!   STDERR in text modes. `--json` NEVER carries it (machine surface stays
 //!   clean); stderr keeps piped text-mode stdout clean too.
 
@@ -31,11 +31,11 @@ use dispatch::render;
 
 use super::common;
 
-/// Emit a fully-built `sb ls` stdout payload, exiting CLEANLY on a broken pipe
+/// Emit a fully-built `qd ls` stdout payload, exiting CLEANLY on a broken pipe
 /// instead of letting `println!`/`print!` PANIC (engine-hardening item 20).
 ///
-/// `sb ls --json` is a machine surface the supervisor's watcher parses. The
-/// payload is rendered WHOLE in memory first (render → to_pretty), so sb is
+/// `qd ls --json` is a machine surface the supervisor's watcher parses. The
+/// payload is rendered WHOLE in memory first (render → to_pretty), so qd is
 /// never the source of mid-document corruption. The one remaining hazard is the
 /// WRITE: when the downstream consumer closes the pipe early — a `| head`, or a
 /// monitor that times out under load and stops reading — the underlying write
@@ -65,14 +65,14 @@ fn emit_or_pipe_exit(payload: &str) {
         }
         // Any other write failure on this surface is still a hard error — never
         // swallow it into a success exit (the partial-as-success trap).
-        eprintln!("sb ls: failed writing output: {e}");
+        eprintln!("qd ls: failed writing output: {e}");
         std::process::exit(141);
     }
 }
 
-/// Default action: bare `sb` runs `ls` with no flags (index.ts:202-204). The
+/// Default action: bare `qd` runs `ls` with no flags (index.ts:202-204). The
 /// render surface is the WP-B7 PIECE 1 auto-detect (agent/pipe ⇒ JSON, human/TTY
-/// ⇒ table) — a bare `sb | cat` from an agent now yields the machine surface.
+/// ⇒ table) — a bare `qd | cat` from an agent now yields the machine surface.
 pub fn run_default() -> i32 {
     run_inner(
         false,
@@ -103,7 +103,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     )
 }
 
-/// WP-B7 PIECE 1 — resolve whether `sb ls` emits the JSON machine surface vs. the
+/// WP-B7 PIECE 1 — resolve whether `qd ls` emits the JSON machine surface vs. the
 /// human table, from the explicit surface selectors (`--json`/`--table`) and the
 /// auto-detected driver. `--json` ⇒ JSON; `--table` ⇒ table (forces the human
 /// surface even for an agent caller, via `DriverOverride::Interactive`); neither ⇒
@@ -115,7 +115,7 @@ pub fn run(m: &ArgMatches) -> i32 {
 /// branch applies AFTER this surface decision, so `--table --short` yields a short
 /// TABLE (the agent escape hatch to short text), while an agent's bare `--short`
 /// auto-flips to JSON and `--short` stays inert under JSON exactly as `--json
-/// --short` does today (sb-supervisor-11-ratified, charge amend rider).
+/// --short` does today (qd-supervisor-11-ratified, charge amend rider).
 fn resolve_emit_json(json_flag: bool, table_flag: bool) -> bool {
     use crate::driver::{ls_render_mode, resolve_driver_real, DriverOverride, LsRender};
     let over = if table_flag {
@@ -165,7 +165,7 @@ fn run_inner(
         Err(code) => return code,
     };
 
-    // WP-D part (a) — LIVENESS-GATE the `sb ls` render: a row shown live whose pid
+    // WP-D part (a) — LIVENESS-GATE the `qd ls` render: a row shown live whose pid
     // is classified NOT-alive by the WP-A starttime classifier (zombie/gone/exited,
     // or a reused pid) is downgraded to `cold` (stop showing a dead/zombie/gone pid
     // as live; stop counting zombies alive). RENDER-path ONLY — acting verbs keep
@@ -233,11 +233,11 @@ fn run_inner(
     // everywhere, so it can truncate and warrants the same loud trailer) —
     // and only when the cap actually dropped eligible rows. Emitted on stderr
     // in TEXT modes after the listing; never on --json. NOTE: capped_out is
-    // counted PRE-prefix, so `sb ls --prefix wk` over cap reports the TOTAL
+    // counted PRE-prefix, so `qd ls --prefix wk` over cap reports the TOTAL
     // dropped, not the wk-scoped count — internally consistent (the --all
     // remedy is also prefix-less).
     let trailer = (!all && !live && valid_limit.is_none() && capped_out > 0)
-        .then(|| format!("… {capped_out} more (sb ls --all)"));
+        .then(|| format!("… {capped_out} more (qd ls --all)"));
 
     // P0 wave-1 LAZY MINT (the backfill path for pre-existing sessions): any
     // session with a provider session_id but no mapped stable id gets one
@@ -254,7 +254,7 @@ fn run_inner(
                     &dispatch::effects::RealClock,
                 ) {
                     Ok(id) => s.sb_id = Some(id),
-                    Err(e) => eprintln!("sb ls: {e}"),
+                    Err(e) => eprintln!("qd ls: {e}"),
                 }
             }
         }
@@ -367,21 +367,21 @@ fn run_inner(
     0
 }
 
-/// Shared table render for `sb live`'s refresh loop (status.ts renderTable).
-/// `sb live` KEEPS the full wide (12-col) table — only the default `sb ls` /
-/// bare `sb` human path was narrowed to 4 columns (W3). Do NOT route live
+/// Shared table render for `qd live`'s refresh loop (status.ts renderTable).
+/// `qd live` KEEPS the full wide (12-col) table — only the default `qd ls` /
+/// bare `qd` human path was narrowed to 4 columns (W3). Do NOT route live
 /// through `render_table_human`.
 pub fn render_table_for_live(sessions: &[Session]) -> String {
     render_table(sessions)
 }
 
-/// The DEFAULT human table for `sb ls` and bare `sb` (W3, reworked P0 wave-1):
+/// The DEFAULT human table for `qd ls` and bare `qd` (W3, reworked P0 wave-1):
 /// 5 columns, `Name | Id | Status | Last active | Tokens`, narrow enough for
-/// mobile. Agents use `--json`; `sb live` keeps the wide `render_table`.
+/// mobile. Agents use `--json`; `qd live` keeps the wide `render_table`.
 /// The `Id` column shows the STABLE id's shortest-unique prefix (min 2 chars)
 /// among the listed sessions (idstore.rs — the addressable handle, replacing
 /// the retired rotating 3-char code); id-less sessions show `---` as codes
-/// did. Tokens reuse `fmt::format_tokens` (the SAME formatter `sb info` + the
+/// did. Tokens reuse `fmt::format_tokens` (the SAME formatter `qd info` + the
 /// wide table use: `0` → "0", `1500` → "1.5k") and are RIGHT-aligned (it's a
 /// number); a zero-token session renders the natural "0" (no new sentinel).
 /// ANSI-aware widths/padding (widths from VISIBLE/plain length), matching the
@@ -447,10 +447,10 @@ fn acp_human_status(s: &Session, sessions_dir: &std::path::Path) -> Option<(Stri
     Some((text.to_string(), variant))
 }
 
-/// Maximum visible characters for the Name column in the human (`sb ls`) table.
+/// Maximum visible characters for the Name column in the human (`qd ls`) table.
 /// Longer names are truncated to `NAME_COL_MAX - 1` chars + `…` (one character
 /// ellipsis), so the displayed cell is always ≤ NAME_COL_MAX visible chars.
-/// Does NOT affect the wide table used by `sb live`.
+/// Does NOT affect the wide table used by `qd live`.
 const NAME_COL_MAX: usize = 16;
 
 /// `render_table_human` with the clock seam (`now`) injected — the pure core,
@@ -520,7 +520,7 @@ fn render_table_human_at_with(
                 .map(|ms| relative_time(ms, now))
                 .unwrap_or_else(|| "-".to_string());
 
-            // Tokens: the SAME existing occupancy number `sb info` / `--json`
+            // Tokens: the SAME existing occupancy number `qd info` / `--json`
             // surface, via the SAME formatter (`fmt::format_tokens`); zero renders
             // the natural "0". Right-aligned (it's a number).
             let tokens_cell = Cell::plain_right(format_tokens(s.tokens));
@@ -645,7 +645,7 @@ fn render_table(sessions: &[Session]) -> String {
         dispatch::effects::RealClock.now_ms()
     };
     // P0 wave-2 addendum: the wide table's handle column is the STABLE id's
-    // shortest-unique prefix (the same treatment `sb ls` got) — the rotating
+    // shortest-unique prefix (the same treatment `qd ls` got) — the rotating
     // 3-char code is retired from display.
     let prefixes = dispatch::idstore::prefix_map(sessions);
 
@@ -1065,7 +1065,7 @@ mod tests {
 
     #[test]
     fn human_table_renders_token_counts_and_zero() {
-        // Tokens use fmt::format_tokens (the SAME formatter `sb info` uses) and a
+        // Tokens use fmt::format_tokens (the SAME formatter `qd info` uses) and a
         // zero-token session renders the natural "0" — no new sentinel.
         let out = render_table_human_at(&fixtures(), NOW_MS);
         let plain: String = out.lines().map(strip_ansi).collect::<Vec<_>>().join("\n");
@@ -1178,7 +1178,7 @@ mod tests {
         assert_golden("ls-human.txt", &out);
     }
 
-    /// P0 wave-2 addendum: the WIDE table (`sb live`) shows the stable Id
+    /// P0 wave-2 addendum: the WIDE table (`qd live`) shows the stable Id
     /// column (shortest-unique prefix), not the retired Code column.
     #[test]
     fn wide_table_shows_stable_id_not_code() {

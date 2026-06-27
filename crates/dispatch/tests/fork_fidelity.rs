@@ -1,6 +1,6 @@
 //! WP-B5-iii — BINDING FIDELITY GATE (obl charge rider 2 / §Q4-FOLLOWUP).
 //!
-//! Proves sb's Mechanism-S seed (`fork_seed` copy/rekey) is EQUIVALENT to claude's
+//! Proves qd's Mechanism-S seed (`fork_seed` copy/rekey) is EQUIVALENT to claude's
 //! NATIVE `claude --resume <parent> --fork-session` output for the SAME parent,
 //! normalized ONLY for the new session id + the appended turn. The oracle is a
 //! REAL native fork (not a synthetic/hand-written expected file). NON-VACUOUS +
@@ -34,7 +34,7 @@ impl Sandbox {
         if !Path::new(CLAUDE_BIN).exists() || !Path::new(LIVE_CREDS).exists() {
             return None;
         }
-        let root = std::env::temp_dir().join(format!("sb-forkfid-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("qd-forkfid-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let config = root.join("config");
         let work = root.join("work");
@@ -418,14 +418,14 @@ fn all_msg_session_ids_eq(records: &[Value], id: &str) -> bool {
 #[test]
 #[ignore = "real-claude; run explicitly with --ignored"]
 fn fidelity_gate_sb_seed_equals_native_fork_session() {
-    let Some(sbx) = Sandbox::create() else {
+    let Some(qb) = Sandbox::create() else {
         eprintln!("SKIP fidelity_gate: claude binary or credentials absent");
         return;
     };
     let u1 = "11111111-1111-4111-8111-111111111111";
 
     // 1. Parent: one completed turn under a known session id.
-    let _ = sbx.claude(&[
+    let _ = qb.claude(&[
         "--strict-mcp-config",
         "-p",
         "The secret word is BANANA. Reply with exactly: PARENT_OK",
@@ -434,12 +434,12 @@ fn fidelity_gate_sb_seed_equals_native_fork_session() {
         "--output-format",
         "json",
     ]);
-    let parent_path = sbx.projects_slug_dir().join(format!("{u1}.jsonl"));
+    let parent_path = qb.projects_slug_dir().join(format!("{u1}.jsonl"));
     let parent_text = std::fs::read_to_string(&parent_path).expect("parent transcript");
     let parent_md5_before = parent_text.clone();
 
     // 2. ORACLE — REAL native `--resume <u1> --fork-session` of the SAME parent.
-    let native_result = sbx.claude(&[
+    let native_result = qb.claude(&[
         "--strict-mcp-config",
         "-p",
         "Reply with exactly: FORK_OK",
@@ -452,7 +452,7 @@ fn fidelity_gate_sb_seed_equals_native_fork_session() {
     let native_uuid = session_id_of(&native_result);
     assert_ne!(native_uuid, u1, "native fork mints a distinct id");
     let native_text =
-        std::fs::read_to_string(sbx.projects_slug_dir().join(format!("{native_uuid}.jsonl")))
+        std::fs::read_to_string(qb.projects_slug_dir().join(format!("{native_uuid}.jsonl")))
             .expect("native fork transcript");
 
     // Parent left byte-untouched by the native fork (sanity on the oracle).
@@ -462,7 +462,7 @@ fn fidelity_gate_sb_seed_equals_native_fork_session() {
         "native fork must not mutate the parent"
     );
 
-    // 3. sb's Mechanism-S seed of the SAME parent (the artifact under test).
+    // 3. qd's Mechanism-S seed of the SAME parent (the artifact under test).
     let parent_recs = dispatch::fork_seed::parse_records(&parent_text);
     let resolved =
         dispatch::fork_seed::resolve(&parent_recs, dispatch::fork_seed::ForkPoint::Latest)
@@ -470,7 +470,7 @@ fn fidelity_gate_sb_seed_equals_native_fork_session() {
     let seed_recs =
         dispatch::fork_seed::rekey_truncate(&parent_recs, resolved.boundary_idx, "FORK");
 
-    // 4. STRUCTURAL EQUIVALENCE (sessionId removed): the sb seed's message DAG ==
+    // 4. STRUCTURAL EQUIVALENCE (sessionId removed): the qd seed's message DAG ==
     //    the native fork's COPIED message DAG. native = copy(parent) + the appended
     //    FORK_OK turn, so we take only as many message records as the parent had
     //    (the appended turn is excluded). FULL — no dropped/reordered/mutated record.
@@ -491,18 +491,18 @@ fn fidelity_gate_sb_seed_equals_native_fork_session() {
     let native_prefix = &native_struct[..parent_struct.len()];
     assert_eq!(
         seed_struct, *native_prefix,
-        "FIDELITY: sb seed message DAG must equal native --fork-session's copied DAG"
+        "FIDELITY: qd seed message DAG must equal native --fork-session's copied DAG"
     );
     assert_eq!(
         seed_struct, parent_struct,
-        "sb seed is a faithful copy of the parent DAG (no drop/reorder/mutate)"
+        "qd seed is a faithful copy of the parent DAG (no drop/reorder/mutate)"
     );
 
-    // 4b. REKEY completeness: every sb seed message record is re-keyed to the fork
+    // 4b. REKEY completeness: every qd seed message record is re-keyed to the fork
     //     id; native re-keyed its copied DAG to ITS new id (the same faithful re-key).
     assert!(
         all_msg_session_ids_eq(&seed_recs, "FORK"),
-        "every sb seed message record re-keyed to the fork id (no parent-id leak)"
+        "every qd seed message record re-keyed to the fork id (no parent-id leak)"
     );
     let native_prefix_recs: Vec<Value> = native_recs
         .iter()
@@ -538,7 +538,7 @@ fn fidelity_gate_sb_seed_equals_native_fork_session() {
     );
 
     eprintln!(
-        "FIDELITY GATE PASS: sb seed ({} msg records) == native --fork-session copied DAG \
+        "FIDELITY GATE PASS: qd seed ({} msg records) == native --fork-session copied DAG \
          (full, no drop/reorder); both faithfully re-keyed; parent untouched; teeth (leak reds \
          rekey, drop reds structure) both fire.",
         seed_struct.len()
@@ -552,14 +552,14 @@ fn obl2_in_flight_tool_guard_drops_unsafe_tail() {
     // an in-flight `tool_use` (no `tool_result`) auto-executes the pending tool
     // (the DANGER, FORK-IDENTITY-SPEC §5 end-state 3) — and prove the engine guard
     // (Mechanism-S `resolve(Latest)` retreats to the last completed turn) drops it,
-    // so a fork comes up quiescent. RED (raw) → tool runs; GREEN (sb seed) → it does
+    // so a fork comes up quiescent. RED (raw) → tool runs; GREEN (qd seed) → it does
     // not. Real claude, isolated HOME.
-    let Some(sbx) = Sandbox::create() else {
+    let Some(qb) = Sandbox::create() else {
         eprintln!("SKIP obl2: claude binary or credentials absent");
         return;
     };
     let u1 = "21111111-1111-4111-8111-111111111111";
-    let _ = sbx.claude(&[
+    let _ = qb.claude(&[
         "--strict-mcp-config",
         "-p",
         "Reply with exactly: PARENT_OK",
@@ -568,7 +568,7 @@ fn obl2_in_flight_tool_guard_drops_unsafe_tail() {
         "--output-format",
         "json",
     ]);
-    let parent_path = sbx.projects_slug_dir().join(format!("{u1}.jsonl"));
+    let parent_path = qb.projects_slug_dir().join(format!("{u1}.jsonl"));
     let parent_recs =
         dispatch::fork_seed::parse_records(&std::fs::read_to_string(&parent_path).unwrap());
     let last_uuid = parent_recs
@@ -577,7 +577,7 @@ fn obl2_in_flight_tool_guard_drops_unsafe_tail() {
         .find_map(|r| r.get("uuid").and_then(|u| u.as_str()).map(str::to_string))
         .expect("a parent record uuid");
 
-    let marker = sbx.work.join("INFLIGHT_MARKER");
+    let marker = qb.work.join("INFLIGHT_MARKER");
     let cmd = format!("printf RAN > {}", marker.display());
 
     // Build an in-flight transcript: the parent (re-keyed to U_INF) + an UNANSWERED
@@ -598,7 +598,7 @@ fn obl2_in_flight_tool_guard_drops_unsafe_tail() {
             "stop_reason": "tool_use"
         }
     }));
-    sbx.place_transcript(u_inf, &inflight);
+    qb.place_transcript(u_inf, &inflight);
 
     // GUARD (deterministic): Mechanism-S resolve(Latest) on the in-flight transcript
     // RETREATS to the last completed turn (drops the tool_use tail) + reports §5a.
@@ -619,15 +619,15 @@ fn obl2_in_flight_tool_guard_drops_unsafe_tail() {
     let seed = dispatch::fork_seed::rekey_truncate(&inflight, resolved.boundary_idx, u_seed);
     assert!(
         !dispatch::fork_seed::to_jsonl(&seed).contains("toolu_inflight1"),
-        "guard: the sb seed must NOT contain the in-flight tool_use"
+        "guard: the qd seed must NOT contain the in-flight tool_use"
     );
-    sbx.place_transcript(u_seed, &seed);
+    qb.place_transcript(u_seed, &seed);
 
-    // GUARD (real claude, NON-VACUOUS): resuming the sb SEED runs the requested
+    // GUARD (real claude, NON-VACUOUS): resuming the qd SEED runs the requested
     // turn (proves it genuinely resumed — SEED_OK in the result) and does NOT
     // auto-execute any pending tool (the in-flight tail was dropped → no marker).
     let _ = std::fs::remove_file(&marker);
-    let seed_result = sbx.claude(&[
+    let seed_result = qb.claude(&[
         "--strict-mcp-config",
         "--dangerously-skip-permissions",
         "-p",
@@ -639,11 +639,11 @@ fn obl2_in_flight_tool_guard_drops_unsafe_tail() {
     ]);
     assert!(
         seed_result.contains("SEED_OK"),
-        "non-vacuous: the sb seed actually resumed (ran the turn): {seed_result}"
+        "non-vacuous: the qd seed actually resumed (ran the turn): {seed_result}"
     );
     assert!(
         !marker.exists(),
-        "GUARD: the sb seed (in-flight tail dropped) must NOT auto-execute the pending tool"
+        "GUARD: the qd seed (in-flight tail dropped) must NOT auto-execute the pending tool"
     );
 
     eprintln!(
@@ -679,14 +679,14 @@ fn obl2_real_in_flight_tail_no_silent_autoexec_guard_drops_it() {
     // source retreats + drops the tail + resumes clean. EXERCISED + logged (NOT
     // hard-asserted, since claude re-decides non-deterministically): the `-p
     // continue` re-decision path. See WP-B5iii-OBL2-FINDINGS.md.
-    let Some(sbx) = Sandbox::create() else {
+    let Some(qb) = Sandbox::create() else {
         eprintln!("SKIP obl2-real: claude binary or credentials absent");
         return;
     };
     let u1 = "41111111-1111-4111-8111-111111111111";
 
     // 1. CAPTURE a REAL in-flight tail (race a live blocking Bash tool_use + SIGKILL).
-    let captured = sbx.capture_in_flight(u1);
+    let captured = qb.capture_in_flight(u1);
     let tool_id = ends_in_flight_tool_id(&captured)
         .expect("the captured transcript ends on an UNANSWERED tool_use (real in-flight tail)");
     let cmd = tool_use_command(&captured, &tool_id)
@@ -706,8 +706,8 @@ fn obl2_real_in_flight_tail_no_silent_autoexec_guard_drops_it() {
     //    The §7.2-(ii) safety result: the real provider resume of the real in-flight
     //    tail does NOT execute the pending tool.
     let u_eof = "42111111-1111-4111-8111-111111111111";
-    sbx.place_rekeyed(&captured, u_eof);
-    let (eof_marker, eof_after) = sbx.resume_probe(
+    qb.place_rekeyed(&captured, u_eof);
+    let (eof_marker, eof_after) = qb.resume_probe(
         u_eof,
         "eof",
         &[
@@ -731,7 +731,7 @@ fn obl2_real_in_flight_tail_no_silent_autoexec_guard_drops_it() {
         captured.len()
     );
     let eof_recs = dispatch::fork_seed::parse_records(
-        &std::fs::read_to_string(sbx.projects_slug_dir().join(format!("{u_eof}.jsonl"))).unwrap(),
+        &std::fs::read_to_string(qb.projects_slug_dir().join(format!("{u_eof}.jsonl"))).unwrap(),
     );
     assert!(
         ends_in_flight_tool_id(&eof_recs).is_some(),
@@ -744,8 +744,8 @@ fn obl2_real_in_flight_tail_no_silent_autoexec_guard_drops_it() {
     //    is REACHABLE as a re-decision (it WAS reproduced in spikes), just not a
     //    silent auto-continue and not deterministic.
     let u_cont = "43111111-1111-4111-8111-111111111111";
-    sbx.place_rekeyed(&captured, u_cont);
-    let (cont_marker, _) = sbx.resume_probe(
+    qb.place_rekeyed(&captured, u_cont);
+    let (cont_marker, _) = qb.resume_probe(
         u_cont,
         "cont",
         &["-p", "continue", "--output-format", "json"],
@@ -782,17 +782,17 @@ fn obl2_real_in_flight_tail_no_silent_autoexec_guard_drops_it() {
     let seed_jsonl = dispatch::fork_seed::to_jsonl(&seed);
     assert!(
         !seed_jsonl.contains(&tool_id),
-        "guard: the sb seed must NOT contain the in-flight tool_use id {tool_id}"
+        "guard: the qd seed must NOT contain the in-flight tool_use id {tool_id}"
     );
     assert!(
         !seed_jsonl.contains("\"tool_use\""),
-        "guard: the sb seed carries no tool_use block at all"
+        "guard: the qd seed carries no tool_use block at all"
     );
-    sbx.place_transcript(u_seed, &seed);
+    qb.place_transcript(u_seed, &seed);
 
     // 5. The GUARDED fork resumes CLEAN (non-vacuous, SEED_OK) with NO auto-exec —
     //    the pending tool never reached the fork. Uses the engine's `-p` launch path.
-    let (seed_marker, _) = sbx.resume_probe(
+    let (seed_marker, _) = qb.resume_probe(
         u_seed,
         "seed",
         &[
@@ -803,7 +803,7 @@ fn obl2_real_in_flight_tail_no_silent_autoexec_guard_drops_it() {
         ],
         40,
     );
-    let seed_out = std::fs::read_to_string(sbx.root.join("seed.out")).unwrap_or_default();
+    let seed_out = std::fs::read_to_string(qb.root.join("seed.out")).unwrap_or_default();
     assert!(
         seed_out.contains("SEED_OK"),
         "non-vacuous: the guarded seed actually resumed (ran the turn): {seed_out}"

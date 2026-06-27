@@ -6,7 +6,7 @@
 `.claude/worktrees/agent-a31427c91d46a58ac`, Bash run from there only — ADD-10).
 **Tip:** `c7ff21e` (origin/main, the merged A4 two-write delivery — verified
 `git log -1` before booting). **Host:** brano, arm64/Darwin. **claude (macOS
-jail):** 2.1.163. **zmx:** 0.6.0. **sb binary:** built from this worktree via
+jail):** 2.1.163. **zmx:** 0.6.0. **qd binary:** built from this worktree via
 `scripts/build-lock.sh` (0.1.0, debug).
 
 Raw per-row bytes: `a4-r6-bytes.txt` (both boots accumulate there). Driver:
@@ -14,7 +14,7 @@ Raw per-row bytes: `a4-r6-bytes.txt` (both boots accumulate there). Driver:
 
 ## Hypothesis under test
 
-From sb-orc-3's TS-side live verification: the merged two-write delivery is NOT
+From qd-orc-3's TS-side live verification: the merged two-write delivery is NOT
 sufficient at large sizes. A ≥4KB single PTY write can **WHOLESALE-DROP** — the
 PTY input buffer (~4096B) overflows before the reader drains; the composer ends
 **EMPTY** and the JSONL user-record delta is **0**. This is a mode DISTINCT from
@@ -57,7 +57,7 @@ REAL-HOME BELT held). All green → boots proceeded.
 | 1 | send:pty idle (BOOT 1) | 8223 | **1** | **DELIVERED** | yes | 0 |
 | 2 | send:pty idle (BOOT 1) | 16416 | **0** | **EMPTY-DROPPED** | no | 0 (+WARNING) |
 | 3 | send:pty idle (BOOT 2, recovered bisect) | 12320 | **0** | **EMPTY-DROPPED** | no | 0 (+WARNING) |
-| 4 | `sb new -p` create (BOOT 2) | 16421 | **1** | **DELIVERED** | yes (status=busy) | **0** ("Prompt delivered") |
+| 4 | `qd new -p` create (BOOT 2) | 16421 | **1** | **DELIVERED** | yes (status=busy) | **0** ("Prompt delivered") |
 
 ### Row 1 — 8KB send:pty: DELIVERED
 
@@ -87,10 +87,10 @@ threshold on the send:pty idle path is **below 12KB** — the 8KB-DELIVERED /
 meant to run inside BOOT 1; it was recovered on BOOT 2's already-warm session at
 ZERO extra boot cost.)
 
-### Row 4 — 16KB `sb new -p` create path: DELIVERED (exit 0, NOT a drop)
+### Row 4 — 16KB `qd new -p` create path: DELIVERED (exit 0, NOT a drop)
 
 **The create path does NOT drop the same 16KB the send:pty path drops.**
-`sb new -p` returned **exit 0**, stdout `Started detached session …` +
+`qd new -p` returned **exit 0**, stdout `Started detached session …` +
 **`Prompt delivered to …`**, no stderr. The create session went to status=busy,
 DELTA=1, and its zmx history showed the FULL payload in the composer —
 `R6_CREATE16…_START`, the `日本語café☕` UTF-8, and `…_END` all present — with
@@ -116,7 +116,7 @@ fresh-boot drain timing) got the 16KB accepted. So the live create-path drop at
   stuck-in-composer mode.
 - **8KB DELIVERS clean** on the same path (delta 1, went busy, full UTF-8 intact).
   The live drop boundary is in the **8KB–12KB** interval (≤12KB drops, 8KB holds).
-- **The `sb new -p` create path DELIVERED 16KB** (exit 0 / Accepted / delta 1 /
+- **The `qd new -p` create path DELIVERED 16KB** (exit 0 / Accepted / delta 1 /
   full payload in composer). The drop did **not** reproduce there on this boot;
   the create path's bounded-retry remediation (and/or fresh-boot timing)
   succeeded. **Exit 10 (Stalled) was NOT produced** — the predicted
@@ -149,7 +149,7 @@ fresh-boot drain timing) got the 16KB accepted. So the live create-path drop at
 ## Boots / belt accounting
 
 - **Boots spent (macOS real-claude): 2** — BOOT 1 (sendpty: warm-up + 8KB + 16KB)
-  and BOOT 2 (create: warm-up + 12KB recovered bisect + 16KB `sb new -p`). Within
+  and BOOT 2 (create: warm-up + 12KB recovered bisect + 16KB `qd new -p`). Within
   the ≤2 budget. Zero pre-boot failures (pre-verification caught nothing).
 - **REAL-HOME BELT: 731 → 731 HOLDS on BOTH boots**, zero leaked prefixed rows.
   Clean trap-protected teardown via jail primitives; post-run sweep confirmed zero
@@ -189,8 +189,8 @@ multibyte sequence across chunks).
 `git fetch origin && git reset --hard origin/main`; Bash run from there only —
 ADD-10). **Tip:** `37881b1` — **PR #13 chunked delivery merged** (verified
 `git log -1` before booting; the chunking fix is commit `60fe8a7`). **Host:**
-brano, arm64/Darwin. **claude (macOS jail):** 2.1.165. **sb binary:** built from
-this worktree via `scripts/build-lock.sh cargo build -p sb` (0.1.0, debug).
+brano, arm64/Darwin. **claude (macOS jail):** 2.1.165. **qd binary:** built from
+this worktree via `scripts/build-lock.sh cargo build -p qd` (0.1.0, debug).
 
 Raw per-row bytes: `a4-r7-bytes.txt`. Driver: `a4-r7-probe.sh` (ported EXACTLY
 from `a4-r6-probe.sh` sendpty mode; hardcoded to the two R6-failure sizes 12KB +

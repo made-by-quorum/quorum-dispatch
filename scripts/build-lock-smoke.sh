@@ -9,14 +9,14 @@
 # before the other's ENTER. Interleaving (ENTER A, ENTER B) means the lock failed.
 #
 # Hermetic: uses its own SB_RUST_LOCK_DIR under a mktemp dir; never touches
-# a real ~/.sb-rust.
+# a real ~/.quorum/dispatch-rust.
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCK_SH="$SCRIPT_DIR/build-lock.sh"
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/sb-rust-locksmoke.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/qd-rust-locksmoke.XXXXXX")"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 

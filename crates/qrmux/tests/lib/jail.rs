@@ -4,7 +4,7 @@
 //! integration tests. Per ADD-4 and spec ground rule 3:
 //!
 //! Every daemon/test runs under a per-run hermetic environment: own HOME (load-bearing
-//! for sb's registry), SB_HOME, ZMX_DIR, XDG_CONFIG/DATA/STATE/RUNTIME_DIR, TMPDIR,
+//! for qd's registry), SB_HOME, ZMX_DIR, XDG_CONFIG/DATA/STATE/RUNTIME_DIR, TMPDIR,
 //! relay port, socket prefix. Daemon sockets live ONLY at $XDG_RUNTIME_DIR/qrmux/.
 //!
 //! Jail setup:
@@ -421,7 +421,7 @@ fn is_production_path(val: &str, real_home: &Path) -> bool {
     // Explicitly forbid patterns that indicate real system paths
     let forbidden_patterns = [
         real_home_str.as_ref(),
-        &format!("{}/.sb", real_home_str),
+        &format!("{}/.quorum/dispatch", real_home_str),
         &format!("{}/.quorum/dispatch", real_home_str),
         &format!("{}/.claude", real_home_str),
         &format!("{}/.config", real_home_str),

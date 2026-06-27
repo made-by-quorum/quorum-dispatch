@@ -401,8 +401,8 @@ mod tests {
     #[test]
     fn cwd_slug_replaces_all_slashes() {
         assert_eq!(
-            cwd_to_project_path("/home/u/work/sb-rust"),
-            "-Users-eric-work-sb-rust"
+            cwd_to_project_path("/home/u/work/qd-rust"),
+            "-Users-eric-work-qd-rust"
         );
     }
 

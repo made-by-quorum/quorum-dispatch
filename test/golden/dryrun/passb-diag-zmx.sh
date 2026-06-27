@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # passb-diag-zmx.sh — drive `zmx run` by hand inside a jail to isolate whether
-# the failure is zmx-level or sb-level. DEV-TIME EVIDENCE / DRYRUN-NOT-ORACLE.
+# the failure is zmx-level or qd-level. DEV-TIME EVIDENCE / DRYRUN-NOT-ORACLE.
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DIAG="$HERE/dryrun/passb-diag"

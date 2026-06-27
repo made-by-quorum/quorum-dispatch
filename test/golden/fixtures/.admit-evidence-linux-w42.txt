@@ -11,9 +11,9 @@
 === zmx-dir-resolution ===
 [admit]   platform macos: hash-pairing OK (normalized=resolution.txt, rawA+rawB matched)
 [admit]   platform linux: hash-pairing OK (normalized=resolution-linux.txt, rawA+rawB matched)
-[admit] ADMITTED zmx-dir-resolution -> /home/u/work/sb-rust/.claude/worktrees/agent-a9384fd1f459819b6/test/golden/fixtures/zmx-dir-resolution (pin 8c59ec456fe82780fd75d8afb5fe48dc72e10bc8, 2 normalized expectation(s), platforms: macos linux)
+[admit] ADMITTED zmx-dir-resolution -> /home/u/work/qd-rust/.claude/worktrees/agent-a9384fd1f459819b6/test/golden/fixtures/zmx-dir-resolution (pin 8c59ec456fe82780fd75d8afb5fe48dc72e10bc8, 2 normalized expectation(s), platforms: macos linux)
 
 === termios-report ===
 [admit]   platform macos: hash-pairing OK (normalized=report.txt, rawA+rawB matched)
 [admit]   platform linux: hash-pairing OK (normalized=report-linux.txt, rawA+rawB matched)
-[admit] ADMITTED termios-report -> /home/u/work/sb-rust/.claude/worktrees/agent-a9384fd1f459819b6/test/golden/fixtures/termios-report (pin 8c59ec456fe82780fd75d8afb5fe48dc72e10bc8, 2 normalized expectation(s), platforms: macos linux)
+[admit] ADMITTED termios-report -> /home/u/work/qd-rust/.claude/worktrees/agent-a9384fd1f459819b6/test/golden/fixtures/termios-report (pin 8c59ec456fe82780fd75d8afb5fe48dc72e10bc8, 2 normalized expectation(s), platforms: macos linux)

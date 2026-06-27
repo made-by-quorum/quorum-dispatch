@@ -21,7 +21,7 @@
 //! JAIL (rule 9 + ADD-4/14): own HOME/CODEX_HOME/XDG_*/TMPDIR under
 //! `CARGO_TARGET_TMPDIR` (inside the workspace tree — literal /tmp is radioactive);
 //! ports via the real allocator (ephemeral, OUTSIDE 8900-9000); the OpenRouter key
-//! is read from the RUNNER's `$HOME/.sb/config.toml` and exported into the jail env
+//! is read from the RUNNER's `$HOME/.quorum/dispatch/config.toml` and exported into the jail env
 //! ONLY (never written to a jail file, never on disk). GROUP-scoped
 //! SIGTERM→grace→SIGKILL cleanup (instance-addressed by the recorded pgid, the W4
 //! launcher-orphan finding) + a no-survivor belt.
@@ -63,7 +63,7 @@ impl Env for JailEnv {
     }
 }
 
-/// Read `openrouter-key` from the RUNNER's `$HOME/.sb/config.toml` (the only place
+/// Read `openrouter-key` from the RUNNER's `$HOME/.quorum/dispatch/config.toml` (the only place
 /// the real key lives — never an env var on disk, never a jail file). Returns the
 /// raw key string. Panics if absent (the live lane needs a real turn).
 fn openrouter_key() -> String {
@@ -74,7 +74,7 @@ fn openrouter_key() -> String {
             .join("dispatch")
             .join("config.toml"),
     )
-    .expect("runner ~/.sb/config.toml exists for the live lane");
+    .expect("runner ~/.quorum/dispatch/config.toml exists for the live lane");
     for line in cfg.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix("openrouter-key") {
@@ -87,7 +87,7 @@ fn openrouter_key() -> String {
             }
         }
     }
-    panic!("openrouter-key not found in ~/.sb/config.toml — the live turn needs it");
+    panic!("openrouter-key not found in ~/.quorum/dispatch/config.toml — the live turn needs it");
 }
 
 /// Build the jail tree under CARGO_TARGET_TMPDIR (workspace tree, never /tmp).
@@ -277,7 +277,7 @@ fn codex_send_wait_live_jailed_e2e() {
         let rpc = WsAppServer::connect(&endpoint, std::time::Duration::from_secs(5))
             .expect("send: connect the daemon");
         let client = ClientInfo {
-            name: "sb-manager".to_string(),
+            name: "qd-manager".to_string(),
             title: None,
             version: "0".to_string(),
         };
@@ -353,7 +353,7 @@ fn codex_send_wait_live_jailed_e2e() {
         let connected = WsAppServer::connect(&endpoint, std::time::Duration::from_secs(5)).ok();
         if let Some(c) = &connected {
             let client = ClientInfo {
-                name: "sb-manager".to_string(),
+                name: "qd-manager".to_string(),
                 title: None,
                 version: "0".to_string(),
             };

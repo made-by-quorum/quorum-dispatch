@@ -12,11 +12,11 @@ with the rider below)
 
 ## Context
 
-The TS `sb config set` is **broken in headless / agent contexts**. The inbox bug
+The TS `qd config set` is **broken in headless / agent contexts**. The inbox bug
 (`doc/inbox/2026-06-04-config-set-keychain-headless.md` in the TS repo, filed
-2026-06-04 by sb-rust-plan) captured the live failure:
+2026-06-04 by qd-rust-plan) captured the live failure:
 
-> **Two-arg form** (`sb config set openrouter-key <value>`): keychain backend
+> **Two-arg form** (`qd config set openrouter-key <value>`): keychain backend
 > selected, then write fails: `keychain write failed (exit 36) — security:
 > SecKeychainItemCreateFromContent (<default>): User interaction is not
 > allowed.` The keychain probe says "available" but the keychain is LOCKED in
@@ -30,7 +30,7 @@ agent/SSH session inherits a locked login keychain; `security
 add-generic-password` then fails with OSStatus **-25308**
 (`errSecInteractionNotAllowed`), whose CLI text is `User interaction is not
 allowed`. The TS has no fallback, so the secret cannot be stored at all — the
-documented workaround is `SB_SECRET_BACKEND=file sb config set <key> <value>`.
+documented workaround is `SB_SECRET_BACKEND=file qd config set <key> <value>`.
 
 The inbox bug explicitly routes the fix to the A5 Rust port: "the Rust port must
 implement locked-keychain fallback, and its gate should include a
@@ -66,7 +66,7 @@ use `SB_SECRET_BACKEND=file`). This is the security-conservative reading.
 **Env-forced keychain + locked on a GET — diagnostic-stderr-only divergence
 (orc-2 ruling `relay-1780639217973-4`, "middle path c").** A GET cannot fail
 loud the way a SET does without breaking presence-probing scripts (a great many
-operators run `sb config get <key>` purely to branch on set/not-set). So under
+operators run `qd config get <key>` purely to branch on set/not-set). So under
 env-forced `SB_SECRET_BACKEND=keychain` + the detected locked signature on a
 GET:
 
@@ -105,7 +105,7 @@ no-interaction signature triggers fallback.
 
 **Per-operation fallback covers INFO reads too.** `secret_backend_info`'s
 keys-set enumeration does a per-key `get`; under a lock each `get` hits the
-signature and falls back to a file read. Consequences for `sb config path`:
+signature and falls back to a file read. Consequences for `qd config path`:
 
 - The `Backend:` line reports the **SELECTION** (`keychain`) — that is the host's
   configured tier, and reporting `file` would hide the locked-keychain reality.
@@ -124,7 +124,7 @@ This rider is MANDATORY per the orc-2 design approval.
 **(a) File-backend permission posture.** The fallback file backend enforces
 `chmod 600` on **every write** — both create and update — via the
 `write_secrets_table` chmod call (`0d0fa9e:src/secrets.ts:131-133`, ported in
-`crates/sb/src/secrets.rs`). The production `write_file` closure additionally
+`crates/qd/src/secrets.rs`). The production `write_file` closure additionally
 creates the file `O_CREAT | mode 0600` up front, so there is no window where the
 file exists group/other-readable. This is asserted in the gate rows G-C1
 (headless file round-trip) and G-C3 (the locked-keychain fallback write), and in
@@ -137,7 +137,7 @@ line. The delta:
 
 | | keychain-at-rest | file-at-rest (the fallback) |
 |---|---|---|
-| Storage | OS-encrypted keychain DB | plaintext in `~/.sb/config.toml` |
+| Storage | OS-encrypted keychain DB | plaintext in `~/.quorum/dispatch/config.toml` |
 | Access gate | keychain unlock (login password / Touch ID) | filesystem ACL only (`0600`, owner-only) |
 | At-rest protection | encrypted; useless without unlock | readable by anyone who can read the file as the owner (root, a compromised process running as the user, an unencrypted-disk image, a backup) |
 
@@ -147,8 +147,8 @@ unlock gate. The fallback exists because the alternative — the TS status quo �
 that the secret **cannot be stored at all** in a headless context, which pushes
 users to the strictly-worse `export OPENROUTER_API_KEY=...` in shell rc files
 (world-history, often committed). The notice line
-(`sb config: keychain locked (headless?) — falling back to file backend
-(~/.sb/config.toml).`) makes the downgrade visible at the moment it happens, and
+(`qd config: keychain locked (headless?) — falling back to file backend
+(~/.quorum/dispatch/config.toml).`) makes the downgrade visible at the moment it happens, and
 env precedence (`OPENROUTER_API_KEY` always wins) means an operator who wants the
 secret to live only in process memory can still do so.
 
@@ -165,8 +165,8 @@ secret to live only in process memory can still do so.
      distinguish absent from inaccessible.
   2. `config set` non-TTY no-value → loud exit 1 (A5 §3.3; TS attempts the
      hidden prompt and breaks under zmx — inbox bug #1). Message:
-     `sb config set: stdin is not a TTY; pass the value as an argument or use
-     SB_SECRET_BACKEND=file sb config set <key> <value>.`
+     `qd config set: stdin is not a TTY; pass the value as an argument or use
+     SB_SECRET_BACKEND=file qd config set <key> <value>.`
 
 - The notice is **additive output** vs TS — golden shapes that compare `config
   set` / `config path` stderr under a locked keychain account for it.

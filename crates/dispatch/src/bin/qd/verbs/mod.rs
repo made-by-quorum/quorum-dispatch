@@ -1,6 +1,6 @@
 //! Verb dispatch + the REAL backends (spec §3). One module per verb group; this
 //! file routes a parsed clap `ArgMatches` to the right backend, and the default
-//! action (bare `sb` → ls, index.ts:202-204) when no subcommand matched.
+//! action (bare `qd` → ls, index.ts:202-204) when no subcommand matched.
 
 mod bootstrap;
 mod common;
@@ -33,7 +33,7 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         Some(("attach", _)) => stubs::run_attach_retired(),
         Some(("connect", m)) => connect::run(m),
         Some(("resume", m)) => resume::run(m),
-        // P0 W1 (sbx spec-cli §11): start/stop are the lifecycle verbs — same
+        // P0 W1 (qb spec-cli §11): start/stop are the lifecycle verbs — same
         // backends as the old new/kill (renamed, not forked). new/kill are
         // RETIRED erroring stubs (helpful error, exit 1, never touch state).
         Some(("start", m)) => lifecycle::run_new(m),

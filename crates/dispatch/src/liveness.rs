@@ -259,7 +259,7 @@ pub const STUCK_THRESHOLD_MS: i64 = 300_000;
 
 /// The (B) readiness-augmented [`LivenessSource`]: wraps an inner source (the
 /// [`OsLiveness`]) and OVERLAYS the daemon headless-stream + relay/bond ledger
-/// signals onto its OS verdict. Additive — new consumers (e.g. the `sb ls`
+/// signals onto its OS verdict. Additive — new consumers (e.g. the `qd ls`
 /// readiness facet) call [`Self::classify_obs`]; old consumers keep calling the
 /// base [`LivenessSource::classify`] (which delegates to `inner`, unchanged).
 ///
@@ -382,7 +382,7 @@ pub const DEATH_CONFIRM_PROBES: usize = 3;
 /// the first probe → ~350ms worst case to confirm an honest death).
 pub const DEATH_CONFIRM_BACKOFF_MS: [u64; 2] = [100, 250];
 
-/// WP-D part (a) — the `sb ls` LIVENESS GATE, as a pure per-row decision: given a
+/// WP-D part (a) — the `qd ls` LIVENESS GATE, as a pure per-row decision: given a
 /// joined row's displayed `status` + its `(pid, recorded_start_ms)` + a
 /// classifier, return the status to DISPLAY. A row currently in the LIVE status
 /// set (`idle`/`busy`/`shell`) whose pid is classified NOT-alive (zombie/gone/
@@ -397,7 +397,7 @@ pub const DEATH_CONFIRM_BACKOFF_MS: [u64; 2] = [100, 250];
 ///   `AliveSilentValid`) keeps the row's exact status — a quiet-but-alive session
 ///   is NEVER hidden.
 ///
-/// **Scope (deliberate):** this is the `sb ls` RENDER gate ONLY — the caller
+/// **Scope (deliberate):** this is the `qd ls` RENDER gate ONLY — the caller
 /// applies it to the joined view it is about to display. It does NOT live in the
 /// shared `join_sessions`, so ACTING verbs (send/wait/kill/resolve) keep the raw
 /// registry status and are unaffected (gating their resolve would wrongly refuse a
@@ -430,7 +430,7 @@ pub fn gated_ls_status(
 }
 
 /// WP-B5-ii-a guarantee (ii) — the per-session DAEMON-liveness signal for a
-/// HEADLESS row's `sb ls` render gate. The daemon-liveness verdict the lead RULING
+/// HEADLESS row's `qd ls` render gate. The daemon-liveness verdict the lead RULING
 /// (Fork B) fixes as a per-session `<dir>/<name>.sock` CONNECT probe (the
 /// ECONNREFUSED-class analog already used by `qrmux::client::discovery`'s
 /// `probe_socket` and `create_daemon`'s endpoint check).
@@ -455,7 +455,7 @@ pub trait DaemonLivenessSource {
     fn daemon_liveness(&self, name: &str) -> DaemonLiveness;
 }
 
-/// WP-B5-ii-a guarantee (ii) — the `sb ls` HEADLESS DAEMON-DOWN render gate,
+/// WP-B5-ii-a guarantee (ii) — the `qd ls` HEADLESS DAEMON-DOWN render gate,
 /// composed BEFORE the claude-pid [`gated_ls_status`] and taking PRECEDENCE over
 /// it (lead RULING §"the (ii) gate composition").
 ///
@@ -480,9 +480,9 @@ pub trait DaemonLivenessSource {
 ///   claude-pid gate — never hide a row whose daemon we cannot probe (mirrors
 ///   `gated_ls_status`'s fail-open when the reuse-guard identity is unformable).
 ///
-/// **Scope (deliberate, mirrors [`gated_ls_status`]):** the `sb ls` RENDER gate
+/// **Scope (deliberate, mirrors [`gated_ls_status`]):** the `qd ls` RENDER gate
 /// ONLY — ACTING verbs (send/wait/kill/resolve) keep the raw registry status, and
-/// this does NOT live in shared `join_sessions`. `sb wait`'s own daemon-down
+/// this does NOT live in shared `join_sessions`. `qd wait`'s own daemon-down
 /// behavior is guarantee (iii) (the wait/poll state machine), NOT this render gate.
 ///
 /// **Fix-shaped mutation (red-before for (ii)):** drop the daemon-liveness gate
@@ -652,9 +652,9 @@ impl DaemonLivenessSource for SocketDaemonLiveness {
     }
 }
 
-/// WP-B-CS-2 — the `sb ls` READINESS FACET (S-B rulings D3: `ready`/`silent`/
+/// WP-B-CS-2 — the `qd ls` READINESS FACET (S-B rulings D3: `ready`/`silent`/
 /// `stuck`). A coarse, ADDITIVE projection of the full [`LifecycleState`] onto the
-/// three-value facet the `sb ls` surface carries ALONGSIDE (never instead of) the
+/// three-value facet the `qd ls` surface carries ALONGSIDE (never instead of) the
 /// `status` field. It answers "is the producer confirmed ready, merely alive, or
 /// diagnostically stuck" — a readiness axis distinct from idle/busy status:
 ///
@@ -689,7 +689,7 @@ impl Readiness {
     }
 }
 
-/// Map a [`LifecycleState`] to its `sb ls` readiness facet (`None` for not-alive).
+/// Map a [`LifecycleState`] to its `qd ls` readiness facet (`None` for not-alive).
 pub fn readiness_facet(state: LifecycleState) -> Option<Readiness> {
     match state {
         LifecycleState::AliveReady => Some(Readiness::Ready),
@@ -1059,7 +1059,7 @@ mod tests {
     /// WP-E hardening (real OS): a FRESHLY-spawned, sub-second-old child probed
     /// against a registry-shaped recorded start (wall-clock `now` at "registration")
     /// classifies ALIVE — never `NotOurs`. This is the newborn that WP-D flagged
-    /// flashing `cold` in `sb ls`: `ps -o etime=` of a <1s process can misparse
+    /// flashing `cold` in `qd ls`: `ps -o etime=` of a <1s process can misparse
     /// `proc_start_ms` to a garbage start far from the recorded one, which the
     /// identity arm would read as a reused pid. With the `start_from_etime` range
     /// guard a garbage read becomes `None` ⇒ the fail-closed "assume ours" path ⇒
@@ -1115,7 +1115,7 @@ mod tests {
         assert!(p99 < 250_000, "p99 {p99}us exceeds 250ms budget");
     }
 
-    // ===================== WP-D `sb ls` liveness gate =====================
+    // ===================== WP-D `qd ls` liveness gate =====================
 
     use crate::model::SessionStatus;
 
@@ -1133,7 +1133,7 @@ mod tests {
     /// `Cold`. The "fix-shaped mutation" is the gate's own else-branch — returning
     /// `status` instead of `Cold` (i.e. NOT downgrading) keeps the sticky `busy` =
     /// the live false-"alive" bug; this assertion is exactly what reds under that
-    /// mutation. (The end-to-end consumer red/green over the real `sb ls` binary —
+    /// mutation. (The end-to-end consumer red/green over the real `qd ls` binary —
     /// a real pid transitioning alive→reaped — is the integration test
     /// `wpd_ls_liveness_gate.rs`.)
     #[test]
@@ -1358,7 +1358,7 @@ mod tests {
     }
 
     /// CONCURRENCY/LOAD (§6 DoD #5, k≥2) + LATENCY on the gate's render path: gate
-    /// k≥2 live rows in one `sb ls` (the per-row OS classify the ls verb runs).
+    /// k≥2 live rows in one `qd ls` (the per-row OS classify the ls verb runs).
     /// Two real child pids both classify alive (recorded start == live start →
     /// never gated); p50/p99 of gating all k rows is PRINTED. Cost is k sequential
     /// `ps` forks — generous budget; `ls` is not a hot loop.
@@ -1587,7 +1587,7 @@ mod tests {
         );
     }
 
-    /// WP-B-CS-2 — the `sb ls` readiness facet maps the full state machine onto
+    /// WP-B-CS-2 — the `qd ls` readiness facet maps the full state machine onto
     /// the D3 triad (ready/silent/stuck), and is `None` for every not-alive state
     /// (those rows are gated Cold). FALSE-POSITIVE guard: only `AliveReady` is
     /// `ready` and only `Stuck` is `stuck` (gated by `is_diagnostic_stuck`); every

@@ -1,7 +1,7 @@
-// C1 M6 gate rows — included into c1_gate.rs. Each row drives the REAL `sb`
+// C1 M6 gate rows — included into c1_gate.rs. Each row drives the REAL `qd`
 // binary, writes a verdict + raw artifacts, and tears its jail down.
 
-/// `sb ls --json` emits a TOP-LEVEL JSON ARRAY of session objects (render.rs).
+/// `qd ls --json` emits a TOP-LEVEL JSON ARRAY of session objects (render.rs).
 /// Parse it into the rows vec.
 fn parse_ls_json(stdout: &str) -> Vec<serde_json::Value> {
     serde_json::from_str::<serde_json::Value>(stdout)
@@ -181,7 +181,7 @@ fn g_sel() {
 }
 
 // ===========================================================================
-// G-E — NEW. Escape hatch WORKS: full chain through `sb` under SB_MUX=zmx,
+// G-E — NEW. Escape hatch WORKS: full chain through `qd` under SB_MUX=zmx,
 // jailed, REAL zmx binary, jailed ZMX_DIR.
 // ===========================================================================
 
@@ -235,9 +235,9 @@ fn g_e() {
     let zmx_dir = jail.root.join("zmxdir");
     std::fs::create_dir_all(&zmx_dir).unwrap();
 
-    // Drive the chain through `sb` under SB_MUX=zmx with ZMX_DIR jailed.
+    // Drive the chain through `qd` under SB_MUX=zmx with ZMX_DIR jailed.
     let env: &[(&str, &str)] = &[("SB_MUX", "zmx"), ("CLAUDE_BIN", "/bin/cat")];
-    // create: `sb start` under zmx. We cannot boot real claude; use a fake-claude
+    // create: `qd start` under zmx. We cannot boot real claude; use a fake-claude
     // that writes the row + execs cat (zmx hosts the pty).
     let app = "cat";
     let fake = write_fake_claude(&jail, app);
@@ -246,25 +246,25 @@ fn g_e() {
     create_env.push(("CLAUDE_BIN", &fake_s));
     create_env.push(("SB_FAKE_NAME", "ge-sess"));
     create_env.push(("ZMX_DIR", zmx_dir.to_str().unwrap()));
-    // Ensure zmx is on PATH for the sb child.
+    // Ensure zmx is on PATH for the qd child.
     let path_with_zmx = format!("{}:/usr/bin:/bin", zmx.parent().unwrap().display());
     create_env.push(("PATH", &path_with_zmx));
 
     let (c_new, o_new, e_new) = run_sb_env(&jail, &["start", "ge-sess"], &create_env);
     detail.push_str(&format!(
-        "sb start (zmx): exit={c_new}\n  stdout: {}\n  stderr: {}\n",
+        "qd start (zmx): exit={c_new}\n  stdout: {}\n  stderr: {}\n",
         o_new.trim(),
         e_new.trim()
     ));
 
-    // list/send/kill via sb under zmx.
+    // list/send/kill via qd under zmx.
     let mut q_env = env.to_vec();
     q_env.push(("ZMX_DIR", zmx_dir.to_str().unwrap()));
     q_env.push(("PATH", &path_with_zmx));
     let (c_ls, o_ls, _e) = run_sb_env(&jail, &["ls", "--json"], &q_env);
     let listed = o_ls.contains("ge-sess");
     detail.push_str(&format!(
-        "sb ls (zmx): exit={c_ls}, lists ge-sess={listed}\n"
+        "qd ls (zmx): exit={c_ls}, lists ge-sess={listed}\n"
     ));
 
     // --- POSITIVE CONTROL IN-LANE (FIX C): DURING the live chain (session up,
@@ -310,7 +310,7 @@ fn g_e() {
     //     escape hatch must NOT have stood up an embedded daemon as a side effect.
     //     With the per-session split there is no shared `qrmux.sock` to check — a
     //     stray embedded daemon would bind `<name>.sock`, so we assert the engine-
-    //     resolved embedded dir holds NO `*.sock` leaf at all (and no sb daemon). -
+    //     resolved embedded dir holds NO `*.sock` leaf at all (and no qd daemon). -
     let embedded_dir = jail.resolved_dir();
     let no_embedded_socket = std::fs::read_dir(&embedded_dir)
         .map(|rd| {
@@ -323,7 +323,7 @@ fn g_e() {
         .unwrap_or(true); // missing dir = no sockets
     let no_embedded_daemon = !sb_daemon_present_for(&embedded_dir);
     detail.push_str(&format!(
-        "QRMUX ABSENT IN-LANE: no *.sock leaf at engine embedded dir {} = {no_embedded_socket}; no sb qrmux-server bound to it = {no_embedded_daemon}\n",
+        "QRMUX ABSENT IN-LANE: no *.sock leaf at engine embedded dir {} = {no_embedded_socket}; no qd qrmux-server bound to it = {no_embedded_daemon}\n",
         embedded_dir.display()
     ));
 
@@ -332,7 +332,7 @@ fn g_e() {
 
     let (c_kill, _o, e_k) = run_sb_env(&jail, &["stop", "--force", "ge-sess"], &q_env);
     detail.push_str(&format!(
-        "sb stop (zmx): exit={c_kill}\n  stderr: {}\n",
+        "qd stop (zmx): exit={c_kill}\n  stderr: {}\n",
         e_k.trim()
     ));
 
@@ -369,7 +369,7 @@ fn which(name: &str) -> Option<PathBuf> {
 }
 
 // ===========================================================================
-// G-CRUD — NEW. Full chain under embedded default; 8 verbs through real sb
+// G-CRUD — NEW. Full chain under embedded default; 8 verbs through real qd
 // verbs; ls --json coherent; keystone engine-resolved dir == daemon socket dir;
 // A14-1 belt + armed negative control at teardown.
 // ===========================================================================
@@ -402,13 +402,13 @@ fn g_crud() {
     ));
     ok &= keystone_ok;
 
-    // CREATE (verb 1: run_detached): the same primitive `sb start` drives, running a
-    // sentinel-emitting shell. Forge the live registry row so sb verbs see it live.
+    // CREATE (verb 1: run_detached): the same primitive `qd start` drives, running a
+    // sentinel-emitting shell. Forge the live registry row so qd verbs see it live.
     let sess = mux_create(&jail, &dir, name, "echo CRUD_SENTINEL_42; exec cat");
     forge_registry_row(&jail, name, sess.pid as u32);
     detail.push_str(&format!("CREATE: mux session {name} pid {}\n", sess.pid));
 
-    // LIST (verbs 2/3: list + list_raw via `sb ls --json`): coherent JSON, session
+    // LIST (verbs 2/3: list + list_raw via `qd ls --json`): coherent JSON, session
     // present with zmxName + socketDir tagged to the engine-resolved dir.
     let (c_ls, o_ls, e_ls) = run_sb(&jail, &["ls", "--json"]);
     let sessions = parse_ls_json(&o_ls);
@@ -424,24 +424,24 @@ fn g_crud() {
             })
             .unwrap_or(false);
     detail.push_str(&format!(
-        "LIST: sb ls --json exit={c_ls}, row present+tagged={ls_ok}\n  stderr: {}\n",
+        "LIST: qd ls --json exit={c_ls}, row present+tagged={ls_ok}\n  stderr: {}\n",
         e_ls.trim()
     ));
     ok &= ls_ok;
 
-    // SEND (verb 4: send) + HISTORY (verb 5: history): `sb send:pty` writes to the
+    // SEND (verb 4: send) + HISTORY (verb 5: history): `qd send:pty` writes to the
     // session AND reads history on the wait/extract path. We send a marker and
     // assert the engine send path acks (exit 0). `cat` echoes input to its own
     // stdout, so the marker lands in history.
     let (c_send, _o_s, e_s) = run_sb(&jail, &["send:pty", name, "CRUD_ECHO_MARKER"]);
     let send_ok = c_send == 0;
     detail.push_str(&format!(
-        "SEND: sb send:pty exit={c_send}\n  stderr: {}\n",
+        "SEND: qd send:pty exit={c_send}\n  stderr: {}\n",
         e_s.trim()
     ));
     ok &= send_ok;
 
-    // HISTORY (verb 5) via the engine mux history (the path `sb send:pty` uses):
+    // HISTORY (verb 5) via the engine mux history (the path `qd send:pty` uses):
     // assert the create sentinel is in scrollback.
     let mux = mux_for(&jail);
     let mut hist = String::new();
@@ -458,38 +458,38 @@ fn g_crud() {
     ));
     ok &= hist_ok;
 
-    // ATTACH (verb 6) + DETACH + REATTACH through `sb connect` over a PTY
+    // ATTACH (verb 6) + DETACH + REATTACH through `qd connect` over a PTY
     // (the attach verb is a retired stub since STATE 22; same attach mechanic).
     let mut att = SbAttach::spawn(&jail, name, 80, 24);
     let attached = att.wait_for("CRUD_SENTINEL_42", 4000) || att.is_alive();
-    detail.push_str(&format!("ATTACH: sb connect alive/replayed={attached}\n"));
+    detail.push_str(&format!("ATTACH: qd connect alive/replayed={attached}\n"));
     att.detach();
     // The daemon + session survive the detach (reattach must work).
     let mut att2 = SbAttach::spawn(&jail, name, 80, 24);
     let reattached = att2.is_alive();
-    detail.push_str(&format!("REATTACH: second sb connect alive={reattached}\n"));
+    detail.push_str(&format!("REATTACH: second qd connect alive={reattached}\n"));
     att2.detach();
     ok &= attached && reattached;
 
-    // WAIT (verb 7): `sb wait` on the live idle session reports idle, exit 0.
+    // WAIT (verb 7): `qd wait` on the live idle session reports idle, exit 0.
     let (c_wait, o_wait, _e) = run_sb(&jail, &["wait", name]);
     let wait_ok = c_wait == 0 && o_wait.contains("idle");
     detail.push_str(&format!(
-        "WAIT: sb wait exit={c_wait}, idle reported={wait_ok}\n"
+        "WAIT: qd wait exit={c_wait}, idle reported={wait_ok}\n"
     ));
     ok &= wait_ok;
 
-    // KILL (verb 8): `sb stop --force` reaps the session via the engine mux.
+    // KILL (verb 8): `qd stop --force` reaps the session via the engine mux.
     let (c_kill, _o, e_k) = run_sb(&jail, &["stop", "--force", name]);
     let kill_ok = c_kill == 0;
     detail.push_str(&format!(
-        "KILL: sb stop --force exit={c_kill}\n  stderr: {}\n",
+        "KILL: qd stop --force exit={c_kill}\n  stderr: {}\n",
         e_k.trim()
     ));
     ok &= kill_ok;
 
     // A14-1 BELT (R-F): the engine-resolved dir must NOT be a literal-/tmp-ROOT
-    // qrmux/sb path; it must sit under the jailed XDG runtime dir.
+    // qrmux/qd path; it must sit under the jailed XDG runtime dir.
     let belt_ok = !is_tmp_root_qrmux_path(&dir) && dir.starts_with(&jail.xdg_runtime);
     detail.push_str(&format!(
         "A14-1 BELT: engine dir not /tmp-root qrmux path AND under jail XDG = {belt_ok} (dir {})\n",
@@ -510,7 +510,7 @@ fn g_crud() {
     jail.teardown();
 
     let verdict = if ok {
-        "G-CRUD VERDICT: PASS — keystone dir==socket; 8 verbs via sb (create/list/list_raw/send/history/attach/wait/kill); ls --json coherent; A14-1 belt + armed neg-control"
+        "G-CRUD VERDICT: PASS — keystone dir==socket; 8 verbs via qd (create/list/list_raw/send/history/attach/wait/kill); ls --json coherent; A14-1 belt + armed neg-control"
     } else {
         "G-CRUD VERDICT: FAIL"
     };
@@ -518,7 +518,7 @@ fn g_crud() {
     assert!(ok, "G-CRUD failed:\n{detail}");
 }
 
-/// The ADD-14 belt predicate (R-F), SCOPED to qrmux*/sb-shaped names at the /tmp
+/// The ADD-14 belt predicate (R-F), SCOPED to qrmux*/qd-shaped names at the /tmp
 /// ROOT — the production defaults an un-de-/tmp'd resolver would emit. Mirrors
 /// tests/embedded_mux_live.rs::is_tmp_root_qrmux_path (same scoping rationale).
 fn is_tmp_root_qrmux_path(dir: &Path) -> bool {
@@ -528,23 +528,23 @@ fn is_tmp_root_qrmux_path(dir: &Path) -> bool {
     };
     let first = rest.split('/').next().unwrap_or("");
     first == "qrmux"
-        || first == "sb"
+        || first == "qd"
         || first
             .strip_prefix("qrmux-")
             .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
         || first
-            .strip_prefix("sb-")
+            .strip_prefix("qd-")
             .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
 }
 
 // ===========================================================================
-// G-ALT — ADOPTED-shape. vim/less altscreen through `sb connect` (embedded):
+// G-ALT — ADOPTED-shape. vim/less altscreen through `qd connect` (embedded):
 // ADR-0004 invariants: render-during, restore-equivalence, altscreen-replay
 // (REVERSED 2026-06-10 from no-altscreen-leak: the renderer now replays the
 // absorbed alt-screen state per client — ?1049h on attach into a fullscreen
 // app, ?1049l when it exits — so phone terminals track the inner app's
 // buffer; doc/inbox/2026-06-10-qrmux-phone-scroll-regression.md).
-// (Merge note: #51 side wrote `sb attach`; the verb is `sb connect` since
+// (Merge note: #51 side wrote `qd attach`; the verb is `qd connect` since
 // STATE 22 — phase side's rename kept.)
 // ===========================================================================
 
@@ -627,7 +627,7 @@ fn g_alt() {
     jail.teardown();
 
     let verdict = if ok {
-        "G-ADOPTED G-ALT VERDICT: PASS — render-during + altscreen-replay (1049h/l ride-through + clean main-screen reattach) + restore-equivalence through sb connect (ADR-0004, reversed 2026-06-10)"
+        "G-ADOPTED G-ALT VERDICT: PASS — render-during + altscreen-replay (1049h/l ride-through + clean main-screen reattach) + restore-equivalence through qd connect (ADR-0004, reversed 2026-06-10)"
     } else {
         "G-ALT VERDICT: FAIL"
     };
@@ -1289,20 +1289,20 @@ fn g_neg() {
 
 // ===========================================================================
 // G-COLDSTART — NEW (C1 M4fix). The gate hole M4/M6 missed: production embedded
-// `sb start` COLD-START — NO pre-spawned daemon. Drives the real `sb start` under
+// `qd start` COLD-START — NO pre-spawned daemon. Drives the real `qd start` under
 // embedded default and asserts SB ITSELF auto-launched the qrmux daemon (via the
-// hidden `sb qrmux-server` entry, NOT the broken `current_exe() server`). Plus a
+// hidden `qd qrmux-server` entry, NOT the broken `current_exe() server`). Plus a
 // MUTATION CONTROL: sever the launch wiring (point the daemon program at a
 // nonexistent binary) → the SAME cold-start path MUST RED.
 //
 // PRE-SPAWN-FREE (ADD-8 grep-clean): the arm asserts the daemon is ABSENT at
-// start (no socket, no sb-daemon process at the resolved dir) and never calls
-// start_daemon(). The FIRST `sb start` must stand the daemon up end to end.
+// start (no socket, no qd-daemon process at the resolved dir) and never calls
+// start_daemon(). The FIRST `qd start` must stand the daemon up end to end.
 // ===========================================================================
 
-/// Is an `sb qrmux-server` daemon process bound to `dir` alive? Greps `ps` for
+/// Is an `qd qrmux-server` daemon process bound to `dir` alive? Greps `ps` for
 /// the embedded daemon entry argv carrying this socket dir. (The daemon is the
-/// `sb` binary re-execed as `sb qrmux-server --socket-dir <dir>`.)
+/// `qd` binary re-execed as `qd qrmux-server --socket-dir <dir>`.)
 fn sb_daemon_present_for(dir: &Path) -> bool {
     let out = Command::new("/bin/ps").args(["-axo", "args="]).output();
     let Ok(o) = out else { return false };
@@ -1312,7 +1312,7 @@ fn sb_daemon_present_for(dir: &Path) -> bool {
     })
 }
 
-/// Reap any `sb qrmux-server` daemon bound to `dir` (cold-start teardown: the
+/// Reap any `qd qrmux-server` daemon bound to `dir` (cold-start teardown: the
 /// daemon SB launched is parented to init via setsid, so no guard owns it).
 fn reap_sb_daemons_for(dir: &Path) {
     let out = Command::new("/bin/ps").args(["-axo", "pid=,args="]).output();
@@ -1344,14 +1344,14 @@ fn g_coldstart() {
     let name = "cold-sess";
 
     // --- PRE-SPAWN-FREE PRECONDITION (asserted, not assumed) -----------------
-    // No PER-SESSION socket at the engine-resolved dir; no sb daemon bound to it.
-    // The arm NEVER calls start_daemon — the first `sb start` must stand the
+    // No PER-SESSION socket at the engine-resolved dir; no qd daemon bound to it.
+    // The arm NEVER calls start_daemon — the first `qd start` must stand the
     // per-session daemon up (WS-C M3b: it binds `<name>.sock`, not `qrmux.sock`).
     let socket = dir.join(format!("{name}.sock"));
     let pre_no_socket = !socket.exists();
     let pre_no_daemon = !sb_daemon_present_for(&dir);
     detail.push_str(&format!(
-        "PRE-SPAWN-FREE: no socket at {} = {pre_no_socket}; no sb daemon bound = {pre_no_daemon}\n",
+        "PRE-SPAWN-FREE: no socket at {} = {pre_no_socket}; no qd daemon bound = {pre_no_daemon}\n",
         socket.display()
     ));
     ok &= pre_no_socket && pre_no_daemon;
@@ -1360,24 +1360,24 @@ fn g_coldstart() {
     let fake_s = fake.to_string_lossy().into_owned();
     let create_env: &[(&str, &str)] = &[("CLAUDE_BIN", &fake_s), ("SB_FAKE_NAME", name)];
 
-    // --- COLD START: the FIRST `sb start` under embedded default. SB must launch
+    // --- COLD START: the FIRST `qd start` under embedded default. SB must launch
     //     the daemon itself (no pre-spawn). End-to-end success = exit 0. --------
     let (c_new, o_new, e_new) = run_sb_env(&jail, &["start", name], create_env);
     let new_ok = c_new == 0;
     detail.push_str(&format!(
-        "COLD-START sb start: exit={c_new} (want 0)\n  stdout: {}\n  stderr: {}\n",
+        "COLD-START qd start: exit={c_new} (want 0)\n  stdout: {}\n  stderr: {}\n",
         o_new.trim(),
         e_new.trim()
     ));
     ok &= new_ok;
 
     // --- ASSERT SB AUTO-LAUNCHED THE DAEMON ----------------------------------
-    // Socket now exists at the engine-resolved dir AND an `sb qrmux-server`
+    // Socket now exists at the engine-resolved dir AND an `qd qrmux-server`
     // daemon bound to it is alive — proves SB (not the test) stood it up.
     let post_socket = socket.exists();
     let post_daemon = sb_daemon_present_for(&dir);
     detail.push_str(&format!(
-        "AUTO-LAUNCH: socket present at engine dir={post_socket}; sb qrmux-server daemon bound={post_daemon}\n"
+        "AUTO-LAUNCH: socket present at engine dir={post_socket}; qd qrmux-server daemon bound={post_daemon}\n"
     ));
     ok &= post_socket && post_daemon;
 
@@ -1407,12 +1407,12 @@ fn g_coldstart() {
 
     // --- MUTATION CONTROL: sever the launch wiring → cold start MUST RED ------
     // Point the embedded daemon program at a NONEXISTENT binary. The SAME cold-
-    // start path (fresh jail, no pre-spawn) must now FAIL: `sb start` cannot launch
+    // start path (fresh jail, no pre-spawn) must now FAIL: `qd start` cannot launch
     // the daemon, so create errors AND no daemon comes up. If this passed, the
     // positive arm above would be vacuous.
     let jail_m = Jail::establish("coldstart-mut");
     let dir_m = jail_m.resolved_dir();
-    let bogus = jail_m.root.join("no-such-sb-daemon-binary");
+    let bogus = jail_m.root.join("no-such-qd-daemon-binary");
     let bogus_s = bogus.to_string_lossy().into_owned();
     let fake_m = write_fake_claude(&jail_m, "cat");
     let fake_m_s = fake_m.to_string_lossy().into_owned();
@@ -1430,7 +1430,7 @@ fn g_coldstart() {
     let combined_m = format!("{}\n{}", o_mut, e_mut).to_lowercase();
     let names_embedded = combined_m.contains("embedded") && combined_m.contains("qrmux");
     detail.push_str(&format!(
-        "MUTATION CONTROL (severed launch program={}): sb start exit={c_mut} (want nonzero), no socket={}, error names embedded qrmux daemon={names_embedded}\n  stderr: {}\n",
+        "MUTATION CONTROL (severed launch program={}): qd start exit={c_mut} (want nonzero), no socket={}, error names embedded qrmux daemon={names_embedded}\n  stderr: {}\n",
         bogus.display(),
         !mut_socket.exists(),
         e_mut.trim()
@@ -1442,7 +1442,7 @@ fn g_coldstart() {
     jail.teardown();
 
     let verdict = if ok {
-        "G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `sb start` cold-start: SB auto-launched the daemon via `sb qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error"
+        "G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `qd start` cold-start: SB auto-launched the daemon via `qd qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error"
     } else {
         "G-COLDSTART VERDICT: FAIL"
     };
@@ -1456,12 +1456,12 @@ fn g_coldstart() {
 // A jailed embedded world with >=2 live sessions; SIGKILL the qrmux daemon, then
 // assert the engine verbs all DEGRADE LOUDLY (defined, bounded, no hang / no
 // panic / no corruption):
-//   - `sb ls`            : succeeds, sessions surface as NON-mux-live registry
+//   - `qd ls`            : succeeds, sessions surface as NON-mux-live registry
 //                          rows (no zmxName) — NOT a panic / corruption.
-//   - `sb send:pty <v>`  : LOUD exit 1, the embedded backend-named "no live
+//   - `qd send:pty <v>`  : LOUD exit 1, the embedded backend-named "no live
 //                          qrmux session" text (the engine's not-live wording).
-//   - `sb attach <v>`    : LOUD exit 1, bounded (timeout-guarded), no hang.
-// Then a FRESH `sb start` RELAUNCHES the daemon cold (the run_detached/attach
+//   - `qd attach <v>`    : LOUD exit 1, bounded (timeout-guarded), no hang.
+// Then a FRESH `qd start` RELAUNCHES the daemon cold (the run_detached/attach
 // auto-launch path) and the new session is usable (send + kill).
 //
 // BLAST-RADIUS TRUTH (recorded empirically): the per-session child processes

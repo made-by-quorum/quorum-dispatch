@@ -65,7 +65,7 @@ chmod +x "$MUT_STUB"
 # ---------------------------------------------------------------------------
 echo "=== mutation_hang: MUTATED run (never-busy wedge) ==="
 MUT_LOG="$MUT_DIR/mutated.log"
-CLAUDE_BIN_OVERRIDE="$MUT_STUB" SB_BIN="${SB_BIN:-$WT/target/debug/sb}" \
+CLAUDE_BIN_OVERRIDE="$MUT_STUB" SB_BIN="${SB_BIN:-$WT/target/debug/qd}" \
   ZMX_BIN="${ZMX_BIN:-}" bash "$HARNESS" >"$MUT_LOG" 2>&1
 MUT_RC=$?
 echo "--- mutated harness output (tail) ---"
@@ -108,7 +108,7 @@ fi
 echo
 echo "=== mutation_hang: CONTROL run (unmutated stub) ==="
 CTL_LOG="$MUT_DIR/control.log"
-SB_BIN="${SB_BIN:-$WT/target/debug/sb}" ZMX_BIN="${ZMX_BIN:-}" \
+SB_BIN="${SB_BIN:-$WT/target/debug/qd}" ZMX_BIN="${ZMX_BIN:-}" \
   bash "$HARNESS" >"$CTL_LOG" 2>&1
 CTL_RC=$?
 echo "--- control harness output (tail) ---"

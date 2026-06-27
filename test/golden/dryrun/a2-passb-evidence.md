@@ -1,8 +1,8 @@
 # A2 pass-(b) closure replay — evidence (sbr-pa2-lead2)
 
-Date: Fri Jun 5 10:23-10:29 EDT 2026 (system `date`). SUT: Rust `sb` built from
+Date: Fri Jun 5 10:23-10:29 EDT 2026 (system `date`). SUT: Rust `qd` built from
 main @ 7c8482d11f18300d993bf4dfdc62fb748952d2f1 (debug,
-`scripts/build-lock.sh cargo build -p sb`, worktree `~/work/wt-a2-passb`,
+`scripts/build-lock.sh cargo build -p qd`, worktree `~/work/wt-a2-passb`,
 binary sha256 783ea96436210322…). Verification basis: post-merge CI on main
 @ 7c8482d = run 27019996043 (success) + the local verify.sh replays below.
 All replays serial (host memory WARN-2). Jail: rule 9 + ADD-4 hermetic env via
@@ -14,7 +14,7 @@ Invocation per row (from this worktree's test/golden):
 
     TMPDIR=/tmp SB_UNDER_TEST=$SB JAIL_SB_CMD=$SB \
       ./verify.sh --scenario scenarios/<row>.sh
-    # $SB = ~/work/wt-a2-passb/target/debug/sb
+    # $SB = ~/work/wt-a2-passb/target/debug/qd
 
 ## Row results (A2-owned corpus rows, verify.sh true exit codes)
 
@@ -32,7 +32,7 @@ Verbatim run log appended at the bottom of this file.
 ## Linux rows (TMPDIR-collapse + Bug-D XDG_RUNTIME_DIR tiers) — covered at this exact SHA
 
 NOT re-run here (memory WARN-2; redundant Lima cargo). A1 pass-(b) replayed
-`zmx_dir_resolution_linux.sh` in-VM (Lima sbtest, aarch64) against a Rust sb
+`zmx_dir_resolution_linux.sh` in-VM (Lima sbtest, aarch64) against a Rust qd
 built IN-VM from main @ 7c8482d — the same SHA this closure pins — TODAY
 10:13-10:17 EDT, verify.sh PASS with stub provenance OK against
 RECORDED-FROM.linux. That one scenario carries BOTH Linux-only matrix rows.
@@ -52,7 +52,7 @@ the preflight.rs unit matrix.
 The M1 journal note "pass (b) re-records [the zmx-help fixture] against the
 pin" was executed as a CHECK, and the check found drift:
 
-- `crates/sb/src/preflight.rs` `ZMX_060_HELP` claims to be "The REAL zmx 0.6.0
+- `crates/qd/src/preflight.rs` `ZMX_060_HELP` claims to be "The REAL zmx 0.6.0
   `--help` output". Live capture (brano, 2026-06-05, all of `--help`/`-h`/
   `help` identical): **110 lines** — the fixture froze only the first ~20
   (header + Commands block); the live output continues with Attach/History/
@@ -139,14 +139,14 @@ granted and executed on this branch:
 Matrix-text only; the row stays out of the green gate / never auto-globbed.
 
 **Ruling 2 — F-A2b-1 fixture re-record, on-branch (A4 close-clean precedent):**
-`crates/sb/src/preflight.rs` `ZMX_060_HELP` replaced with the FULL 110-line
+`crates/qd/src/preflight.rs` `ZMX_060_HELP` replaced with the FULL 110-line
 live `zmx --help` capture (2026-06-05, /opt/homebrew/bin/zmx 0.6.0), as a raw
 string asserted byte-identical to the capture at splice time. Capture-quality
 fix, NOT version drift: the Cellar binary mtime is 2026-05-16 — unchanged
 since before the original 2026-06-04 capture, which had frozen only the first
 ~20 lines AND encoded one backslash on the detach line where live zmx emits
 two (`ctrl+\\`, zmx's own help-string escaping — the named escaping artifact).
-Test-only diff. Proof: `cargo test -p sb` full suite green post-change (incl.
+Test-only diff. Proof: `cargo test -p qd` full suite green post-change (incl.
 `real_060_help_advertises_send` now parsing the full help, 14/14 preflight
 tests); fmt + clippy -D warnings clean.
 

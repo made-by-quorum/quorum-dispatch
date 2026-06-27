@@ -1,4 +1,4 @@
-//! REAL `sb gc` backend (spec §5.2; TS `commands/gc.ts`).
+//! REAL `qd gc` backend (spec §5.2; TS `commands/gc.ts`).
 //!
 //! The pure deciders (age-gating, candidate classification, trash naming, purge
 //! gating) live in `dispatch::gc`; this verb drives the fs scan, the trash move (copy
@@ -22,7 +22,7 @@ use dispatch::gc::{
 use dispatch::paths::SbPaths;
 use dispatch::registry::{get_tombstoned_entries, read_entries};
 
-/// `sb gc` — mutually-exclusive modes, then the default scan→trash run.
+/// `qd gc` — mutually-exclusive modes, then the default scan→trash run.
 pub fn run(m: &ArgMatches) -> i32 {
     let dry_run = m.get_flag("dry-run");
     let list_trash = m.get_flag("list-trash");
@@ -45,7 +45,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("sb gc: HOME is not set — cannot resolve the trash dirs.");
+            eprintln!("qd gc: HOME is not set — cannot resolve the trash dirs.");
             return 1;
         }
     };
@@ -172,7 +172,7 @@ fn gc_run(home: &Path, env: &RealEnv, clock: &RealClock, dry_run: bool) -> i32 {
         }
     }
     println!(
-        "\n{moved} item{} moved to trash. Use `sb gc --list-trash` to see, `sb gc --recover <name>` to restore.",
+        "\n{moved} item{} moved to trash. Use `qd gc --list-trash` to see, `qd gc --recover <name>` to restore.",
         if moved == 1 { "" } else { "s" }
     );
     0
@@ -366,7 +366,7 @@ fn recover_mode(query: &str, cc: &Path, oc: &Path, home: &Path) -> i32 {
     }
     if matches.is_empty() {
         eprintln!("No trash item matching \"{query}\".");
-        eprintln!("Run `sb gc --list-trash` to see available items.");
+        eprintln!("Run `qd gc --list-trash` to see available items.");
         return 1;
     }
     if matches.len() > 1 {

@@ -331,7 +331,7 @@ impl RelayState {
     /// `resolvedReplies.get(messageId)`, a non-destructive read; the entry is
     /// only deleted by the 5-min `setTimeout` (server.ts:200). buffer_reply
     /// writes the buffer FIRST unconditionally (server.ts:198-201 "retrieve from
-    /// here regardless") precisely so a `sb send:relay --wait` client whose
+    /// here regardless") precisely so a `qd send:relay --wait` client whose
     /// long-poll connection drops can RE-GET `/replies/<id>` IDEMPOTENTLY within
     /// the 5-min window. A consuming read would make the cached branch
     /// single-shot: if the first `/replies` HTTP response is lost on the wire,

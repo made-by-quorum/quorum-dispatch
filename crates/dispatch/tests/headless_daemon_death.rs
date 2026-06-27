@@ -3,26 +3,26 @@
 //! headless daemon-kill rather than the retired shared-daemon `c1_gate_inc::rows::
 //! g_daemonkill` topology, which asserted a DIFFERENT, superseded blast-radius).
 //!
-//! Drives the REAL `sb` binary end-to-end against a JAILED HOME (the
-//! `headless_cli_addressability` pattern): `sb start --headless` mints a row via a
+//! Drives the REAL `qd` binary end-to-end against a JAILED HOME (the
+//! `headless_cli_addressability` pattern): `qd start --headless` mints a row via a
 //! real per-session qrmux daemon, ONLY `claude` is faked (a fixture script via
 //! `CLAUDE_BIN` that HOLDS busy for a long window). We then SIGKILL the OWNING
-//! per-session daemon (`sb qrmux-server --session <name>`) while the fixture is
+//! per-session daemon (`qd qrmux-server --session <name>`) while the fixture is
 //! still in its busy sleep — so the claude child is ORPHANED but STILL ALIVE (the
 //! daemon spawns claude on a PIPE, not a controlling PTY, so the daemon's death
 //! does not hang up the child; it survives, reparented, until its next write). That
 //! is the exact stale-busy precondition the three guarantees must survive.
 //!
-//! `#[ignore]` (spawns real `sb` subprocesses + a detached daemon + sleeps), run:
+//! `#[ignore]` (spawns real `qd` subprocesses + a detached daemon + sleeps), run:
 //!   cargo test -p dispatch --test headless_daemon_death -- --ignored --nocapture
 //!
 //! Proves the three §7.5/R2 daemon-death guarantees, each fail-CLOSED:
-//!  (i)   CONTROL FAILS CLOSED — `sb wait` NEVER returns " done" after the daemon
+//!  (i)   CONTROL FAILS CLOSED — `qd wait` NEVER returns " done" after the daemon
 //!        dies (no false-done); it exits status-only via timeout/session-exited.
-//!  (ii)  STATUS reads daemon-down, NOT stale-busy — `sb ls --json` renders the row
+//!  (ii)  STATUS reads daemon-down, NOT stale-busy — `qd ls --json` renders the row
 //!        `cold` once the daemon is down, EVEN THOUGH the orphan claude pid is still
 //!        alive AND the raw registry row on disk is still the stale `busy`.
-//!  (iii) `sb wait` does NOT hang — it returns within a hard wall-clock bound via
+//!  (iii) `qd wait` does NOT hang — it returns within a hard wall-clock bound via
 //!        one of its three typed exits (Timeout/SessionExited), never blocking past
 //!        the deadline.
 
@@ -103,7 +103,7 @@ impl Jail {
             .env_remove("SB_MUX")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .output()
-            .expect("spawn sb")
+            .expect("spawn qd")
     }
 }
 
@@ -133,7 +133,7 @@ fn proc_cmdline(pid: i64) -> String {
 }
 
 /// Find the OWNING per-session daemon pid by scanning `/proc` for the embedded
-/// daemon entry `sb qrmux-server … --session <SESSION>` (daemon.rs). Returns the
+/// daemon entry `qd qrmux-server … --session <SESSION>` (daemon.rs). Returns the
 /// first match; `None` if no such process exists (already dead).
 fn find_daemon_pid(session: &str) -> Option<i64> {
     for entry in std::fs::read_dir("/proc").ok()? {
@@ -169,27 +169,27 @@ fn kill9(pid: i64) {
 }
 
 #[test]
-#[ignore = "spawns real sb subprocesses + a detached daemon + sleeps; run explicitly with --ignored --nocapture"]
+#[ignore = "spawns real qd subprocesses + a detached daemon + sleeps; run explicitly with --ignored --nocapture"]
 fn daemon_death_fails_closed_control_status_wait() {
     let root = tempfile::tempdir().unwrap();
     let j = jail(root.path(), 60); // long busy window — assertions run while the orphan is alive
     let sessions_dir = j.sessions_dir();
 
-    // --- sb start --headless --------------------------------------------------
+    // --- qd start --headless --------------------------------------------------
     let start = j.run(&["start", SESSION, "--headless", "-p", "hi"]);
     let s_out = String::from_utf8_lossy(&start.stdout);
     let s_err = String::from_utf8_lossy(&start.stderr);
     assert_eq!(
         start.status.code(),
         Some(0),
-        "sb start: stdout={s_out} stderr={s_err}"
+        "qd start: stdout={s_out} stderr={s_err}"
     );
     assert!(
         s_out.contains("Launched headless session"),
         "launch ack; stdout={s_out}"
     );
 
-    // --- poll `sb ls --json` until the minted row is busy; capture child pid ---
+    // --- poll `qd ls --json` until the minted row is busy; capture child pid ---
     let deadline = Instant::now() + Duration::from_secs(8);
     let (pid, busy_row) = loop {
         assert!(
@@ -276,7 +276,7 @@ fn daemon_death_fails_closed_control_status_wait() {
         "[ii] daemon-down → ls status=cold (raw registry still busy, orphan pid {pid} alive): PASS"
     );
 
-    // === (iii) `sb wait` does NOT hang + (i) CONTROL FAILS CLOSED (no false-done) ===
+    // === (iii) `qd wait` does NOT hang + (i) CONTROL FAILS CLOSED (no false-done) ===
     let wait_start = Instant::now();
     let w = j.run(&["wait", SESSION, "--timeout", "3"]);
     let elapsed = wait_start.elapsed();
@@ -285,12 +285,12 @@ fn daemon_death_fails_closed_control_status_wait() {
     // (iii) bounded: a 3s wait must return well within a generous hard bound (no hang).
     assert!(
         elapsed < Duration::from_secs(20),
-        "(iii) sb wait must not hang past its deadline — took {elapsed:?}"
+        "(iii) qd wait must not hang past its deadline — took {elapsed:?}"
     );
     // (i) no false-done: it must NOT report " done" / exit 0-as-done after the daemon died.
     assert!(
         !w_err.contains(" done") && !w_out.contains(" done"),
-        "(i) sb wait must NEVER report done after daemon death (no false-done); out={w_out} err={w_err}"
+        "(i) qd wait must NEVER report done after daemon death (no false-done); out={w_out} err={w_err}"
     );
     // It exits via a typed status-only exit (timeout or session-exited), exit != 0.
     assert_ne!(
@@ -303,7 +303,7 @@ fn daemon_death_fails_closed_control_status_wait() {
         "(iii) wait exits via a typed exit (timeout/session-exited); err={w_err}"
     );
     println!(
-        "[i+iii] sb wait returned in {elapsed:?} via{} (no false-done, no hang): PASS",
+        "[i+iii] qd wait returned in {elapsed:?} via{} (no false-done, no hang): PASS",
         w_err.trim_end()
     );
 

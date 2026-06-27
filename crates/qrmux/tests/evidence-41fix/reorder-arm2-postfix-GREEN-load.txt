@@ -11,7 +11,7 @@
 # ============================================================================
 === CR-3 POST-FIX @ reorder-work 2bd1b91 (NEW exit order: unlink-before-wait) ===
 date: 2026-06-07T03:35:02Z
-binary: /home/u/work/sb-rust/.claude/worktrees/agent-ac127d20247bf4c0d/target/debug/deps/wsc_41fix-5c5c76232839d008
+binary: /home/u/work/qd-rust/.claude/worktrees/agent-ac127d20247bf4c0d/target/debug/deps/wsc_41fix-5c5c76232839d008
 test: arm2_history_reply_survives_reaper_teardown (post-fix, anti-vacuity; LOST-REPLY tooth unchanged)
 load: 12 yes-spinner background procs (pids: 49677 49678 49679 49680 49681 49682 49684 49685 49686 49687 49688 49689)
 loadavg at start: load averages: 6.76 7.11 7.34

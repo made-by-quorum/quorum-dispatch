@@ -1,20 +1,20 @@
 # RECORDED-FROM pin=8c59ec4 (verified-diff-carry from 0d0fa9e; proof exec/a5-grec-pin-carry-proof.md; orc-3 ruling relay-1780671157930-19) verb=config backend=file (fake key, masked+reveal)
-$ sb config path (no key set)
+$ qd config path (no key set)
 Backend:     file
 Config file: <SB_HOME>/config.toml
 Keys set:    (none)
-$ sb config set openrouter-key <FAKE>
-sb config: warning -- passing a secret on the command line may leave it in your shell history. Prefer `sb config set openrouter-key` (hidden prompt).
+$ qd config set openrouter-key <FAKE>
+qd config: warning -- passing a secret on the command line may leave it in your shell history. Prefer `qd config set openrouter-key` (hidden prompt).
 Stored openrouter-key (backend: file).
-$ sb config get openrouter-key (masked)
+$ qd config get openrouter-key (masked)
 openrouter-key: ••••0000
-$ sb config get openrouter-key --reveal
+$ qd config get openrouter-key --reveal
 openrouter-key: sk-or-FAKE-0000
-$ sb config path (key set)
+$ qd config path (key set)
 Backend:     file
 Config file: <SB_HOME>/config.toml
 Keys set:    openrouter-key
-$ sb config unset openrouter-key
+$ qd config unset openrouter-key
 Unset openrouter-key.
-$ sb config get openrouter-key (after unset)
+$ qd config get openrouter-key (after unset)
 openrouter-key: not set.

@@ -2,12 +2,12 @@
 === A4 R7 LIVE CONFIRM (12KB + 16KB send:pty idle on the FIXED binary) ===
   date: 2026-06-05 07:24:31 EDT
   worktree: /home/u/work/wt-a4-lead  | tip: 37881b1 Merge pull request #13 from private-org/fix/a4-chunked-delivery
-  binary: /home/u/work/wt-a4-lead/target/debug/sb (0.1.0)
+  binary: /home/u/work/wt-a4-lead/target/debug/qd (0.1.0)
 === REAL-HOME BELT before: 734 ===
   credentials seeded: yes
 
-=== sb new (real claude) ===
-  sb new exit=0 : Started detached session "sbrg-209801780658671170-r7"
+=== qd new (real claude) ===
+  qd new exit=0 : Started detached session "sbrg-209801780658671170-r7"
   claude version in jail: 2.1.165
   resolution belt: sbrg-209801780658671170-r7 resolves uniquely in-jail (OK)
 

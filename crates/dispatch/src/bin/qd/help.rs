@@ -4,7 +4,7 @@
 //! capture (`test/golden/dryrun/a3-cli/NN-help-*.txt`) MINUS its single trailing
 //! newline — clap's `override_help` re-adds exactly one `\n` when it renders
 //! (verified), so the emitted bytes match the capture byte-for-byte. Commander
-//! layout (`Usage: sb <verb>|<alias> [options] <args>`, `display help for
+//! layout (`Usage: qd <verb>|<alias> [options] <args>`, `display help for
 //! command`, `ls|list` alias style, no `Arguments:` section) is reproduced by
 //! hand-writing the string rather than fighting clap's template (spec §2:
 //! "where templates can't reproduce a byte, hand-write the help string
@@ -13,7 +13,7 @@
 
 // B5 item 2 (additive, orc-ruled C1+D): `--live` + the trailer note extend the
 // TS-era corpus capture (the same sanctioned shape as info's `--json` line).
-pub const LS: &str = r####"Usage: sb ls|list [options]
+pub const LS: &str = r####"Usage: qd ls|list [options]
 
 List Claude Code sessions (use --json for scripting)
 
@@ -31,15 +31,15 @@ Options:
   -h, --help           display help for command
 
 When the default view's cap (20) hides sessions, a trailer on stderr says how
-many: "… N more (sb ls --all)" (the count is total dropped, not narrowed by
---prefix). Scripting tip: `sb ls --live --json` is the uncapped live-session
+many: "… N more (qd ls --all)" (the count is total dropped, not narrowed by
+--prefix). Scripting tip: `qd ls --live --json` is the uncapped live-session
 surface (--json never carries the trailer).
 "####;
 
 // P0 start-surface rework (STATE 22 ruling): `attach` is RETIRED — erroring
-// stub pointing at `sb connect` (humans) / `sb send:relay` (agents); see
+// stub pointing at `qd connect` (humans) / `qd send:relay` (agents); see
 // verbs/stubs.rs for the pinned stderr line.
-pub const ATTACH: &str = r####"Usage: sb attach [options]
+pub const ATTACH: &str = r####"Usage: qd attach [options]
 
 (retired — use connect)
 
@@ -51,13 +51,13 @@ Options:
 // text describes the provider/liveness matrix in human terms (no `zmx`/mux
 // internals leak to the user — the daemon/cold wording matches what the verb
 // actually prints).
-pub const CONNECT: &str = r####"Usage: sb connect [options] <session>
+pub const CONNECT: &str = r####"Usage: qd connect [options] <session>
 
 Get into a session — the one verb for "take me there".
 
 For a live Claude session this opens an interactive terminal. A cold Claude
-session prints how to revive it (`sb resume <session>`). A codex session is
-daemon-hosted (no terminal): it points you at `sb send:relay` / `sb resume`.
+session prints how to revive it (`qd resume <session>`). A codex session is
+daemon-hosted (no terminal): it points you at `qd send:relay` / `qd resume`.
 
 Options:
   --alt-screen  Fullscreen (alt-screen) rendering if this connect revives the
@@ -66,16 +66,16 @@ Options:
   -h, --help    display help for command
 "####;
 
-pub const RESUME: &str = r####"Usage: sb resume [options] <session>
+pub const RESUME: &str = r####"Usage: qd resume [options] <session>
 
 Revive a cold session to a DRIVABLE state (agent-facing).
 
 `resume` is the AGENT verb: it relaunches a cold session and brings it back to a
-state you can drive with `sb send:relay <session> <text>`. It is non-TTY safe —
+state you can drive with `qd send:relay <session> <text>`. It is non-TTY safe —
 codex (daemon-hosted) sessions revive with NO interactive attach tail at all, and
 the claude path's detached mode (`--no-attach`) leaves the session running in the
 background without taking over your terminal. Humans who want to land inside a
-session interactively should use `sb connect <session>` instead.
+session interactively should use `qd connect <session>` instead.
 
 Options:
   --no-zmx           Don't wrap in a zmx session
@@ -87,11 +87,11 @@ Options:
   -h, --help         display help for command
 "####;
 
-// P0 W1 (sbx spec-cli §11): `stop` is today's `kill`, renamed — same backend
+// P0 W1 (qb spec-cli §11): `stop` is today's `kill`, renamed — same backend
 // (dual-reap + verify-gone + tombstone). W3 (ADD-15, wart-wave): the
 // confirmation prompt is removed; --force stays parse-accepted as a deprecated
 // no-op (see verbs/kill.rs W3 note).
-pub const STOP: &str = r####"Usage: sb stop [options] <session>
+pub const STOP: &str = r####"Usage: qd stop [options] <session>
 
 Stop a session
 
@@ -101,22 +101,22 @@ Options:
   -h, --help   display help for command
 "####;
 
-// P0 W1 (sbx spec-cli §11): `kill` is RETIRED — erroring stub pointing at
-// `sb stop` (see verbs/stubs.rs; the exact stderr line is pinned there).
-pub const KILL: &str = r####"Usage: sb kill [options]
+// P0 W1 (qb spec-cli §11): `kill` is RETIRED — erroring stub pointing at
+// `qd stop` (see verbs/stubs.rs; the exact stderr line is pinned there).
+pub const KILL: &str = r####"Usage: qd kill [options]
 
-(retired — use sb stop)
+(retired — use qd stop)
 
 Options:
   -h, --help  display help for command
 "####;
 
-// P0 W1 (sbx spec-cli §11): `start` is today's `new`, renamed — same backend
+// P0 W1 (qb spec-cli §11): `start` is today's `new`, renamed — same backend
 // (lifecycle::run_new), same options + exit contract.
 // P0 start-surface rework (STATE 21 ruling): `--resume` removed (redundant with
 // the resume verb); `--fork <session>` is now valued — a new participant forked
 // from an existing transcript. The model line below is the ruled wording.
-pub const START: &str = r####"Usage: sb start [options] <name> [claudeArgs...]
+pub const START: &str = r####"Usage: qd start [options] <name> [claudeArgs...]
 
 Create a new session (Claude Code in zmx, or OpenCode server)
 
@@ -146,17 +146,17 @@ Exit codes (with -p, for external composition — see doc/PROTOCOL.md, ADR 0008)
   1   Any other failure (create/boot error, or the PID file vanished after boot).
 "####;
 
-// P0 W1 (sbx spec-cli §11): `new` is RETIRED — erroring stub pointing at
-// `sb start` (see verbs/stubs.rs; the exact stderr line is pinned there).
-pub const NEW: &str = r####"Usage: sb new [options]
+// P0 W1 (qb spec-cli §11): `new` is RETIRED — erroring stub pointing at
+// `qd start` (see verbs/stubs.rs; the exact stderr line is pinned there).
+pub const NEW: &str = r####"Usage: qd new [options]
 
-(retired — use sb start)
+(retired — use qd start)
 
 Options:
   -h, --help  display help for command
 "####;
 
-pub const RECONCILE: &str = r####"Usage: sb reconcile [options]
+pub const RECONCILE: &str = r####"Usage: qd reconcile [options]
 
 Detect and repair drift across registry / zmx / process (idempotent)
 
@@ -165,7 +165,7 @@ Options:
   -h, --help  display help for command
 "####;
 
-pub const SEND: &str = r####"Usage: sb send [options]
+pub const SEND: &str = r####"Usage: qd send [options]
 
 (moved) Use send:pty, send:relay, or send:http
 
@@ -189,10 +189,10 @@ Channels:
               OpenCode sessions.
 
 Pick the channel that matches how you want to communicate.
-Run "sb send:pty --help", "sb send:relay --help", or "sb send:http --help" for details.
+Run "qd send:pty --help", "qd send:relay --help", or "qd send:http --help" for details.
 "####;
 
-pub const SEND_PTY: &str = r####"Usage: sb send:pty [options] <session> <message>
+pub const SEND_PTY: &str = r####"Usage: qd send:pty [options] <session> <message>
 
 Send a message via zmx PTY (types into the session's terminal)
 
@@ -239,7 +239,7 @@ Best for: Multi-turn conversation, dialogue, back-and-forth exchanges where
 you need to see the full response text including tool calls and thinking.
 "####;
 
-pub const SEND_RELAY: &str = r####"Usage: sb send:relay [options] <session> <message>
+pub const SEND_RELAY: &str = r####"Usage: qd send:relay [options] <session> <message>
 
 Send a message via the relay HTTP endpoint
 
@@ -286,7 +286,7 @@ any communication where reliability matters more than seeing full response
 details.
 "####;
 
-pub const SEND_HTTP: &str = r####"Usage: sb send:http [options] <session> <message>
+pub const SEND_HTTP: &str = r####"Usage: qd send:http [options] <session> <message>
 
 Send a message to an OpenCode session via HTTP API
 
@@ -321,7 +321,7 @@ Best for: Sending tasks to OpenCode sessions, cross-provider messaging,
 scripted interactions with OpenCode.
 "####;
 
-pub const RELAY: &str = r####"Usage: sb relay [options]
+pub const RELAY: &str = r####"Usage: qd relay [options]
 
 (moved) Use send:relay instead
 
@@ -329,7 +329,7 @@ Options:
   -h, --help  display help for command
 "####;
 
-pub const WHOAMI: &str = r####"Usage: sb whoami|name [options]
+pub const WHOAMI: &str = r####"Usage: qd whoami|name [options]
 
 Print the current session's name and ID
 
@@ -344,7 +344,7 @@ Options:
 // session transitions from busy to idle") — sanctioned, normalized in the a3
 // comparator, divergence row. send:pty --wait stays the documented per-message
 // attribution path (already stated in SEND_PTY help at the pin).
-pub const WAIT: &str = r####"Usage: sb wait [options] <session>
+pub const WAIT: &str = r####"Usage: qd wait [options] <session>
 
 Block until the session's current turn completes (status- and transcript-keyed)
 
@@ -353,7 +353,7 @@ Options:
   -h, --help           display help for command
 "####;
 
-pub const LIVE: &str = r####"Usage: sb live [options]
+pub const LIVE: &str = r####"Usage: qd live [options]
 
 Live-updating session list — type a 3-char code to connect
 
@@ -365,7 +365,7 @@ Options:
 // B5 item 12 (doc note, accepted r2): the --json sbId absent-until-minted
 // contract is surfaced here — behavior is unchanged and pinned by
 // tests/info_json.rs (info_json_unmapped_sb_id_golden / mapped_live_golden).
-pub const INFO: &str = r####"Usage: sb info [options] <session>
+pub const INFO: &str = r####"Usage: qd info [options] <session>
 
 Detailed view of a single session
 
@@ -374,12 +374,12 @@ Options:
   -h, --help  display help for command
 
 --json: the sbId/sbIdPrefix keys are ABSENT until the session's stable id is
-minted (ids are minted at `sb start` and bound at boot-confirm; `sb ls` lazily
+minted (ids are minted at `qd start` and bound at boot-confirm; `qd ls` lazily
 backfills pre-existing sessions). Treat a missing sbId as "not yet minted",
 not as an error — resolution stays engine-side.
 "####;
 
-pub const GC: &str = r####"Usage: sb gc [options]
+pub const GC: &str = r####"Usage: qd gc [options]
 
 Prune stale sessions and sidecars to recoverable trash
 
@@ -393,18 +393,18 @@ Options:
 
 // NET-NEW (2026-06-09 ruling): the eval-init shell integration. The wrapper
 // body ships in the binary (see dispatch::shell_init module docs); the rc file
-// carries one stable line, so the wrapper can never drift from what `sb new`
+// carries one stable line, so the wrapper can never drift from what `qd new`
 // accepts (the retired TS bootstrap baked the wrapper into rc files, and the
 // baked copies fossilized when the engine's CLI moved).
-pub const INIT: &str = r####"Usage: sb init [options] <shell>
+pub const INIT: &str = r####"Usage: qd init [options] <shell>
 
 Print shell integration for <shell> (bash, zsh, or fish): a `claude` wrapper
-that routes a bare interactive launch into a tracked sb session, plus the
+that routes a bare interactive launch into a tracked qd session, plus the
 ZMX_DIR pin. Evaluate it from your shell's rc file:
 
-  bash   ~/.bashrc:                     eval "$(sb init bash)"
-  zsh    ~/.zshrc:                      eval "$(sb init zsh)"
-  fish   ~/.config/fish/conf.d/sb.fish: sb init fish | source
+  bash   ~/.bashrc:                     eval "$(qd init bash)"
+  zsh    ~/.zshrc:                      eval "$(qd init zsh)"
+  fish   ~/.config/fish/conf.d/qd.fish: qd init fish | source
 
 The wrapper passes management subcommands (config, login, mcp, ...), headless
 runs (-p/--print), --version/--help, and non-TTY launches straight through to
@@ -414,7 +414,7 @@ Environment (read by the emitted wrapper at call time):
   SB_CLAUDE_WRAPPER_FLAGS  Extra flags (whitespace-split) injected on
                            passthrough REAL launches (headless / non-TTY /
                            inside-zmx) — never on management subcommands or
-                           --version/--help. sb-routed launches take their
+                           --version/--help. qd-routed launches take their
                            flags from the engine launcher (SB_CLAUDE_FLAGS /
                            config / defaults) instead.
   CLAUDE_NO_ZMX            Set to disable routing entirely (always passthrough).
@@ -424,12 +424,12 @@ Options:
 "####;
 
 // Engine-truthful (A5 §4.3 + named divergence §9 item 3): the Rust engine ships
-// via cargo or Homebrew, NOT `bun install -g`. `sb update` detects the install
-// channel from the running exe path (Cellar/brew prefix → `brew upgrade sb`;
-// ~/.cargo/bin → `cargo install --git <repo> --locked sb`) and re-runs it.
-pub const UPDATE: &str = r####"Usage: sb update [options]
+// via cargo or Homebrew, NOT `bun install -g`. `qd update` detects the install
+// channel from the running exe path (Cellar/brew prefix → `brew upgrade qd`;
+// ~/.cargo/bin → `cargo install --git <repo> --locked qd`) and re-runs it.
+pub const UPDATE: &str = r####"Usage: qd update [options]
 
-Self-update sb via the detected install channel (Homebrew or cargo). The channel
+Self-update qd via the detected install channel (Homebrew or cargo). The channel
 is inferred from the running executable's path; an undeterminable channel exits 1
 with manual-reinstall guidance.
 
@@ -437,7 +437,7 @@ Options:
   -h, --help  display help for command
 "####;
 
-pub const PING: &str = r####"Usage: sb ping [options] [session]
+pub const PING: &str = r####"Usage: qd ping [options] [session]
 
 Classify session liveness (drop-in for the legacy monitor.sh): exit 0=done
 1=stuck 2=active 3=error 4=ambiguous. Use --prefix to sweep all sessions by name
@@ -449,14 +449,14 @@ Options:
   -h, --help         display help for command
 "####;
 
-/// Top-level `sb --help` (rows 01/02). Built from corpus 01 with the spawn
-/// line removed (sanctioned divergence — sbx, parked) and the bootstrap
+/// Top-level `qd --help` (rows 01/02). Built from corpus 01 with the spawn
+/// line removed (sanctioned divergence — qb, parked) and the bootstrap
 /// description replaced with the engine-only one-liner (spec §3 row 17; the
 /// harness normalizes this line per the orc bootstrap-help ruling). config +
 /// survey ARE listed (they dispatch pre-clap but appear in the command list).
 /// P0 start-surface rework (STATE 21 ruling): the start/resume/connect model
 /// line is a further sanctioned divergence (spec-w7-start-surface D1).
-pub const TOP: &str = r####"Usage: sb [options] [command]
+pub const TOP: &str = r####"Usage: qd [options] [command]
 
 Claude Sessions — manage Claude Code sessions
 
@@ -473,8 +473,8 @@ Commands:
   resume [options] <session>                Resume a dead session (wraps in zmx by default)
   start [options] <name> [claudeArgs...]    Create a new session (Claude Code in zmx, or OpenCode server)
   stop [options] <session>                  Stop a session
-  kill [options]                            (retired — use sb stop)
-  new [options]                             (retired — use sb start)
+  kill [options]                            (retired — use qd stop)
+  new [options]                             (retired — use qd start)
   reconcile [options]                       Detect and repair drift across registry / zmx / process (idempotent)
   send                                      (moved) Use send:pty, send:relay, or send:http
   send:pty [options] <session> <message>    Send a message via zmx PTY (types into the session's terminal)
@@ -486,10 +486,10 @@ Commands:
   live [options]                            Live-updating session list — type a 3-char code to connect
   info <session>                            Detailed view of a single session
   gc [options]                              Prune stale sessions and sidecars to recoverable trash
-  init <shell>                              Print shell integration (claude wrapper) — add `eval "$(sb init bash)"` to your rc file
-  bootstrap                                 Set up sb's local data directory under ~/.sb (idempotent)
-  update                                    Self-update sb via the detected install channel (Homebrew or cargo).
+  init <shell>                              Print shell integration (claude wrapper) — add `eval "$(qd init bash)"` to your rc file
+  bootstrap                                 Set up qd's local data directory under ~/.quorum/dispatch (idempotent)
+  update                                    Self-update qd via the detected install channel (Homebrew or cargo).
   ping [options] [session]                  Classify session liveness (drop-in for the legacy monitor.sh): exit 0=done 1=stuck 2=active 3=error 4=ambiguous. Use --prefix to sweep all sessions by name prefix.
   survey                                    Fan an artifact out to a panel of LLMs via OpenRouter and collect responses (the panel-review / panel-ideate mechanic). Requires OPENROUTER_API_KEY.
-  config                                    Manage stored secrets (e.g. `sb config set openrouter-key`). Tiered backend: macOS Keychain when available, else a chmod-600 ~/.sb/config.toml. Env var overrides.
+  config                                    Manage stored secrets (e.g. `qd config set openrouter-key`). Tiered backend: macOS Keychain when available, else a chmod-600 ~/.quorum/dispatch/config.toml. Env var overrides.
 "####;

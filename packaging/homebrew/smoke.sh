@@ -5,7 +5,7 @@
 # the environment at formula-parse time, so the smoke path is: generate a
 # CONCRETE formula from dispatch.rb with a file:// URL + real sha256 of a local
 # `git archive` tarball, install it, `brew test` it, then UNINSTALL (the
-# installed binary must never linger where it could shadow the org's TS sb on
+# installed binary must never linger where it could shadow the org's TS qd on
 # someone's PATH — rule 9: Rust dispatch never points at real state until C2).
 #
 # Usage: bash packaging/homebrew/smoke.sh   (from the repo root)
@@ -14,8 +14,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-TAR=/tmp/sb-rust-brew-smoke.tar.gz
-git archive --prefix=sb-rust/ -o "$TAR" HEAD
+TAR=/tmp/qd-rust-brew-smoke.tar.gz
+git archive --prefix=qd-rust/ -o "$TAR" HEAD
 SHA="$(shasum -a 256 "$TAR" | awk '{print $1}')"
 echo "[smoke] tarball $TAR sha256=$SHA"
 

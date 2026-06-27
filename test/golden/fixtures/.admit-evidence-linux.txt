@@ -8,4 +8,4 @@
 #
 [admit]   platform macos: hash-pairing OK (normalized=resolution.txt, rawA+rawB matched)
 [admit]   platform linux: hash-pairing OK (normalized=resolution-linux.txt, rawA+rawB matched)
-[admit] ADMITTED zmx-dir-resolution -> /home/u/work/sb-rust/test/golden/fixtures/zmx-dir-resolution (pin 0d0fa9ed4800efb1309eca2311345c48af2c4932, 2 normalized expectation(s), platforms: macos linux)
+[admit] ADMITTED zmx-dir-resolution -> /home/u/work/qd-rust/test/golden/fixtures/zmx-dir-resolution (pin 0d0fa9ed4800efb1309eca2311345c48af2c4932, 2 normalized expectation(s), platforms: macos linux)

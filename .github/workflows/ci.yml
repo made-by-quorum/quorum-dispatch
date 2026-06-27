@@ -101,8 +101,8 @@ jobs:
       # A7: mutation-REAL — same teeth against the committed golden corpus. HERMETIC
       # (verified): it replays the in-tree fixtures/ + the committed divergent/ and
       # r2-seams/ captures; the live-boot paths (divergent_invocation / in-jail stub
-      # seams) are only taken when a pinned sb is present, else the recorded capture
-      # is replayed — so CI (no pinned sb) runs fully from committed state and FAILS
+      # seams) are only taken when a pinned qd is present, else the recorded capture
+      # is replayed — so CI (no pinned qd) runs fully from committed state and FAILS
       # LOUDLY if a capture is missing rather than booting. Measured locally: ~3.7s.
       # Belt floored at 2min.
       - name: mutation (real corpus)
@@ -127,5 +127,5 @@ jobs:
         shell: bash
         timeout-minutes: 5
         env:
-          SB_BIN: ${{ github.workspace }}/target/debug/sb
+          SB_BIN: ${{ github.workspace }}/target/debug/qd
         run: bash test/golden/scenarios/bootstrap_output_audit.sh

@@ -118,7 +118,7 @@ check_python_floor || exit 64
 # red-team M5). jail_establish sets SB_RUST_LOCK_DIR to a jail-internal dir, which
 # would defeat the host-wide mutex; we snapshot the HOST value (or its default)
 # here, while $HOME is still the real home. ----------------------------------
-JAIL_HOST_LOCK_DIR="${SB_RUST_LOCK_DIR:-$HOME/.sb-rust}"
+JAIL_HOST_LOCK_DIR="${SB_RUST_LOCK_DIR:-$HOME/.quorum/dispatch-rust}"
 export JAIL_HOST_LOCK_DIR
 BUILD_LOCK="$REPO_TOP/scripts/build-lock.sh"
 
@@ -211,14 +211,14 @@ main() {
             printf 'trap "jail_teardown 2>/dev/null || true" EXIT INT TERM\n'
             # §S substrate: stub-backed rows install the deterministic stub as the
             # jail's `claude` binary (re-exports a jail-rooted CLAUDE_BIN) so the
-            # pinned-TS sb boots/drives the stub, not a real Claude. Runs AFTER
+            # pinned-TS qd boots/drives the stub, not a real Claude. Runs AFTER
             # jail_establish (needs JAIL_ROOT) and BEFORE scn_run.
             if [ "${SCN_STUB_BACKED:-}" = "1" ]; then
                 printf '. "$HERE/lib/stub_claude/stub_install.sh"\n'
                 printf 'stub_install || { printf "[record] stub install failed\\n" >&2; exit 3; }\n'
             fi
             printf 'export SB_UNDER_TEST=%q\n' "$sut"
-            printf 'export JAIL_SB_CMD=%q\n' "${JAIL_SB_CMD:-sb}"
+            printf 'export JAIL_SB_CMD=%q\n' "${JAIL_SB_CMD:-qd}"
             printf 'SCN_OUT="$JAIL_ROOT/rec.raw"\n'
             printf '. %q\n' "$scn"
             printf 'scn_run\n'

@@ -58,9 +58,9 @@ detects "high-entropy" "blob=Zk9Qm2Xa7Bd4Lp1Rn8Vc3Tg6Wj5Yh0Fs2Du4Ie7Ko9Mq1"
 # --- 2. FALSE-POSITIVE: tokenized fixture content ----------------------------
 clean "tokens" "session sbrg-<RUNID>-sess pid=<PID> port <RELAY_PORT> at <TS> under <SB_HOME>/x"
 clean "json-empty" '{"sessions":[],"version":1}'
-clean "help-text" "Usage: sb ls [--json] [--short]   list sessions in the registry"
+clean "help-text" "Usage: qd ls [--json] [--short]   list sessions in the registry"
 clean "hex-sha"   "commit 0d0fa9ed4800efb1309eca2311345c48af2c4932 (lowercase hex, no mix)"
-clean "path"      "/home/u/work/sb-rust/.claude/worktrees/agent-a4a08f94818f5f3fb/test"
+clean "path"      "/home/u/work/qd-rust/.claude/worktrees/agent-a4a08f94818f5f3fb/test"
 clean "doc-prefix" "We scan for sk-or- and sk-ant- prefixes plus AKIA AWS keys and ghp_ tokens."
 
 # --- 3. FALSE-POSITIVE: the existing committed dryrun captures ----------------

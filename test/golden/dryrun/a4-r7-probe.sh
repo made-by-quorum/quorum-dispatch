@@ -27,7 +27,7 @@
 set -u
 WT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -117,10 +117,10 @@ addrow(){ ROWS="${ROWS}$1
 
 NAME="${JAIL_PREFIX}r7"
 log ""
-log "=== sb new (real claude) ==="
+log "=== qd new (real claude) ==="
 ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 code=$?
-log "  sb new exit=$code : $(cat "$JAIL_ROOT/o")"
+log "  qd new exit=$code : $(cat "$JAIL_ROOT/o")"
 [ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; head -5 "$JAIL_ROOT/e"|sed 's/^/    /'|tee -a "$EV"; }
 if [ "$code" != 0 ]; then log "!!! BOOT FAILED — capturing + stop"; jail_zmx history "$NAME" 2>/dev/null|strip|tail -20|sed 's/^/  /'|tee -a "$EV"; exit 1; fi
 ws "$NAME" idle 30 || log "  WARN not idle after boot (status=$(status_of "$NAME"))"

@@ -287,12 +287,12 @@ fn detector_sigkill_is_observably_dead() {
 /// foreign one. Proves the concurrency detector exercises the real guard.
 #[test]
 fn detector_cas_rejects_foreign_incarnation() {
-    let sb = Sandbox::new();
+    let qd = Sandbox::new();
     let pid = 424242; // synthetic row pid; CAS is pure over the row, no live proc needed.
-    sb.write_busy_row(pid, /*started_at*/ 1000, /*updated_at*/ 1000);
+    qd.write_busy_row(pid, /*started_at*/ 1000, /*updated_at*/ 1000);
 
     // The current incarnation (started_at=1000) writes → Written.
-    let ok = registry::set_status(sb.path(), pid as i64, Some(1000), "idle", now_ms())
+    let ok = registry::set_status(qd.path(), pid as i64, Some(1000), "idle", now_ms())
         .expect("set_status");
     assert!(
         matches!(ok, StatusWriteOutcome::Written),
@@ -300,7 +300,7 @@ fn detector_cas_rejects_foreign_incarnation() {
     );
 
     // A foreign incarnation (expected started_at=2000 != disk) → Rejected.
-    let rej = registry::set_status(sb.path(), pid as i64, Some(2000), "busy", now_ms())
+    let rej = registry::set_status(qd.path(), pid as i64, Some(2000), "busy", now_ms())
         .expect("set_status");
     assert!(
         matches!(rej, StatusWriteOutcome::Rejected { .. }),
@@ -392,13 +392,13 @@ fn detector_pid_reuse_is_not_ours() {
 /// scale (N capped at 16 per the plan's tested ceiling).
 #[test]
 fn detector_concurrency_cas_admits_one_incarnation() {
-    let sb = Sandbox::new();
+    let qd = Sandbox::new();
     let pid = 535353;
     let disk_started_at = 1000;
-    sb.write_busy_row(pid, disk_started_at, 1000);
+    qd.write_busy_row(pid, disk_started_at, 1000);
 
     const N: usize = 16;
-    let dir = sb.path().to_path_buf();
+    let dir = qd.path().to_path_buf();
     let mut handles = Vec::new();
     for i in 0..N {
         let dir = dir.clone();
@@ -427,7 +427,7 @@ fn detector_concurrency_cas_admits_one_incarnation() {
     assert_eq!(written, N / 2, "exactly the matching-incarnation racers are Written");
     assert_eq!(rejected, N / 2, "every foreign-incarnation racer is Rejected");
     // The final on-disk row is still parseable (no torn read).
-    let row = sb.read_row(pid).expect("row parseable after the race");
+    let row = qd.read_row(pid).expect("row parseable after the race");
     assert_eq!(row.started_at, Some(disk_started_at), "incarnation stamp preserved");
 }
 
@@ -437,8 +437,8 @@ fn detector_concurrency_cas_admits_one_incarnation() {
 #[test]
 fn detector_concurrency_claim_name_admits_one() {
     use dispatch::registry::{claim_name, ClaimError};
-    let sb = Sandbox::new();
-    let claims_dir = sb.path().join("claims");
+    let qd = Sandbox::new();
+    let claims_dir = qd.path().join("claims");
     std::fs::create_dir_all(&claims_dir).expect("mkdir claims");
 
     const N: usize = 16;
@@ -542,12 +542,12 @@ fn detector_ram_spike_is_cgroup_capped() {
 #[cfg(feature = "faultinj")]
 #[test]
 fn class1_registry_drift_crash_red() {
-    let sb = Sandbox::new();
+    let qd = Sandbox::new();
     let mut v = Victim::spawn("idle");
     let pid = v.pid;
     let start = v.start_ms.expect("victim start_ms");
     // The daemon stamped a busy row when the turn began.
-    sb.write_busy_row(pid, start, now_ms());
+    qd.write_busy_row(pid, start, now_ms());
 
     // CRASH: SIGKILL the victim. Kernel truth is now DEAD.
     v.sigkill_and_reap();
@@ -557,7 +557,7 @@ fn class1_registry_drift_crash_red() {
     );
 
     // --- The drift: what does the registry CACHE say, with NO reconcile? ---
-    let row = sb.read_row(pid).expect("row still present");
+    let row = qd.read_row(pid).expect("row still present");
     let cached_status = row.status.as_deref().unwrap_or("");
 
     // Non-vacuous, REAL-code evidence of the drift: the LIVE registry directory
@@ -567,7 +567,7 @@ fn class1_registry_drift_crash_red() {
     // runs that reconcile. This is exactly P0 gap (a): drift detection is
     // per-call (manual `reconcile`), not systemic on read.
     let os = OsLiveness::new();
-    let busy_for_dead: Vec<_> = sb
+    let busy_for_dead: Vec<_> = qd
         .live_rows()
         .into_iter()
         .filter(|r| {
@@ -582,7 +582,7 @@ fn class1_registry_drift_crash_red() {
     // tombstone for the crashed pid — proving the row is genuine drift, not a
     // benign row. But this reconcile only runs when invoked manually; a status
     // READ never triggers it.
-    let rows = sb.live_rows();
+    let rows = qd.live_rows();
     let rows_for_pred = rows.clone();
     let is_alive = move |p: i64| {
         let st = rows_for_pred
@@ -624,7 +624,7 @@ fn class1_registry_drift_crash_red() {
     // We model "the systemic read-time reconcile" as: does the engine, on a bare
     // status read, hide the busy for a dead pid? Baseline: NO (the row is read
     // verbatim). The fix wires a kernel-truth gate here.
-    let reconciled_to_kernel_truth = baseline_read_time_reconcile_says_not_busy(&sb, pid, start);
+    let reconciled_to_kernel_truth = baseline_read_time_reconcile_says_not_busy(&qd, pid, start);
     assert!(
         reconciled_to_kernel_truth,
         "REGISTRY DRIFT REPRODUCED (RED): crashed pid {pid} still reads status={cached_status:?} \
@@ -646,7 +646,7 @@ fn class1_registry_drift_crash_red() {
 /// path), this helper is replaced by a call into that real gate and returns true
 /// for a dead pid → the gate goes GREEN.
 #[cfg(feature = "faultinj")]
-fn baseline_read_time_reconcile_says_not_busy(sb: &Sandbox, pid: i32, start: i64) -> bool {
+fn baseline_read_time_reconcile_says_not_busy(qd: &Sandbox, pid: i32, start: i64) -> bool {
     // R3a-Step-3 LANDED: the helper now calls the REAL systemic read-time
     // reconcile gate (`liveness::reconciled_read_status`), which composes the
     // flock fast-path + the `/proc start_ms` authority into the `is_alive`
@@ -661,7 +661,7 @@ fn baseline_read_time_reconcile_says_not_busy(sb: &Sandbox, pid: i32, start: i64
     // must fail). The flock fast-path is exercised by the livelock unit tests +
     // the CRASH-with-surviving-child path; here the `/proc` authority is the
     // load-bearing reconcile that flips this RED gate GREEN.
-    let raw = sb
+    let raw = qd
         .read_row(pid)
         .and_then(|r| r.status)
         .and_then(|s| dispatch::model::SessionStatus::parse(&s))
@@ -956,8 +956,8 @@ fn class3_enqueue_does_not_wake_red() {
 
     // The state dir + the session identity (the victim's pid stands in for the
     // session_id; control_sock_path keys on session_id → <state_dir>/control/<id>.sock).
-    let sb = Sandbox::new();
-    let state_dir = sb.path();
+    let qd = Sandbox::new();
+    let state_dir = qd.path();
     let session_id = pid.to_string();
     let ctrl_path = control_sock_path(state_dir, &session_id);
 
@@ -1053,10 +1053,10 @@ fn class3_enqueue_does_not_wake_red() {
 fn class3_wake_falls_back_when_no_servicer() {
     use dispatch::control_sock::{control_sock_path, wake_inbox, WakeOutcome};
 
-    let sb = Sandbox::new();
+    let qd = Sandbox::new();
     // The canonical path, but NO servicer is bound (models killing the daemon's ctrl
     // reader): the file is absent → ENOENT, so no always-serviced fd is draining.
-    let ctrl_path = control_sock_path(sb.path(), "no-servicer");
+    let ctrl_path = control_sock_path(qd.path(), "no-servicer");
     match wake_inbox(&ctrl_path) {
         WakeOutcome::PtyFallback { reason } => {
             assert!(
@@ -1087,15 +1087,15 @@ fn class_r3c2_cas_tombstone_refuses_reused_pid_live_row() {
     // Recovery decided to kill pid P at incarnation A (started_at = OLD). During the
     // reconcile window the PID was reaped + reused: a NEW incarnation B now owns P's
     // row (started_at = NEW). Model the post-reuse on-disk state — the live successor.
-    let sb = Sandbox::new();
+    let qd = Sandbox::new();
     let pid = 4242;
     let old_started = 1_700_000_000_000;
     let new_started = 2_000_000_000_000;
-    sb.write_busy_row(pid, new_started, new_started);
+    qd.write_busy_row(pid, new_started, new_started);
 
     // GREEN: the guard, fed the STALE captured incarnation (A), REFUSES — the live
     // successor row is left intact.
-    let guarded = tombstone_guarded(sb.path(), pid as i64, Some(old_started));
+    let guarded = tombstone_guarded(qd.path(), pid as i64, Some(old_started));
     assert_eq!(
         guarded,
         TombstoneOutcome::Refused {
@@ -1104,7 +1104,7 @@ fn class_r3c2_cas_tombstone_refuses_reused_pid_live_row() {
         "GREEN: CAS-guarded tombstone REFUSES the reused-PID live row (P5.2)"
     );
     assert!(
-        sb.read_row(pid).is_some(),
+        qd.read_row(pid).is_some(),
         "the reused-PID live successor row must survive the refused tombstone"
     );
 
@@ -1113,13 +1113,13 @@ fn class_r3c2_cas_tombstone_refuses_reused_pid_live_row() {
     // it — the catastrophe the guard prevents. Verdict-INEQUALITY (Tombstoned vs
     // Refused) proves the guard is load-bearing and non-vacuous.
     assert!(
-        tombstone(sb.path(), pid as i64),
+        tombstone(qd.path(), pid as i64),
         "REVERT DEMONSTRATION (RED): the un-guarded tombstone renames the reused-PID \
          LIVE row away — exactly the lost-successor bug the CAS guard closes. Reverting \
          tombstone_guarded → tombstone re-reds the guard."
     );
     assert!(
-        sb.read_row(pid).is_none(),
+        qd.read_row(pid).is_none(),
         "the bare tombstone destroyed the live successor row (the reverted-fix failure)"
     );
 }
@@ -1140,16 +1140,16 @@ fn class_r3c2_coordinator_crash_mid_rung4_does_not_rekill_successor() {
     // A coordinator crashed mid-Rung-4: it had minted a successor (phase=Confirming,
     // new_session_id recorded) and carried 2 prior confirmed failures. Persist that
     // durable row, then model the RESTART by reading it back.
-    let sb = Sandbox::new();
+    let qd = Sandbox::new();
     let mut row = RecoveryRow::cold("sess-wedged");
     row.ladder_state = LadderState::Running(Rung::Respawn);
     row.phase = Phase::Confirming;
     row.new_session_id = Some("sess-successor".into());
     row.consecutive_failures = 2;
-    write_recovery_row(sb.path(), &row).expect("persist recovery row");
+    write_recovery_row(qd.path(), &row).expect("persist recovery row");
 
     // RESTART: a fresh coordinator reads the durable row.
-    let restored = read_recovery_row(sb.path(), "sess-wedged").expect("row survives restart");
+    let restored = read_recovery_row(qd.path(), "sess-wedged").expect("row survives restart");
 
     // GREEN (a): the incarnation fence says the successor is healthy → SuccessorHealthy
     // (clear, do NOTHING). The healthy successor is NOT re-killed.
@@ -1724,9 +1724,9 @@ fn class_r3c2_rung4_destructive_isolated_victim() {
 
     // ---- (A) HAPPY PATH: kill + fresh successor confirmed within budget ------
     let (mut victim_child, vpid, vstart) = spawn_victim_in_cgroup("--wedge");
-    let sb = Sandbox::new();
+    let qd = Sandbox::new();
     let old_started = vstart.unwrap_or(1);
-    sb.write_busy_row(vpid, old_started, old_started);
+    qd.write_busy_row(vpid, old_started, old_started);
     let old = Identity {
         pid: vpid,
         start_ms: vstart.unwrap_or(0),
@@ -1736,7 +1736,7 @@ fn class_r3c2_rung4_destructive_isolated_victim() {
     // The successor victim's pid is captured by the spawn seam (cgroup-isolated). We
     // also exercise the item-1 incarnation-into-respawn-claim: the respawn claims the
     // recovered NAME with a bumped incarnation read INSIDE the O_EXCL section.
-    let claims = sb.path().join("claims");
+    let claims = qd.path().join("claims");
     let successor_pid_slot = std::cell::Cell::new(0_i32);
     let successor_child_slot: std::cell::RefCell<Option<Child>> = std::cell::RefCell::new(None);
     let real_kill = |pid: i32| dispatch::recovery::rung1_pidfd_signal(pid, libc::SIGKILL);
@@ -1773,8 +1773,8 @@ fn class_r3c2_rung4_destructive_isolated_victim() {
 
     let budget = Duration::from_secs(10); // « the ~96s Rung::Respawn budget (bounded for the test)
     let out = execute_rung4(
-        sb.path(),
-        sb.path(),
+        qd.path(),
+        qd.path(),
         RecoveryRow::cold("victim-sess"),
         &old,
         Some(old_started),
@@ -1809,11 +1809,11 @@ fn class_r3c2_rung4_destructive_isolated_victim() {
     );
     // Its row was CAS-tombstoned (the live <pid>.json is gone).
     assert!(
-        sb.read_row(vpid).is_none(),
+        qd.read_row(vpid).is_none(),
         "the old victim row must be CAS-tombstoned by Rung-4"
     );
     assert!(
-        sb.path().join(format!("{vpid}.json.tombstoned")).exists(),
+        qd.path().join(format!("{vpid}.json.tombstoned")).exists(),
         "a tombstone file marks the terminated old identity"
     );
     // Rung-4 is destructive (the cap authorizes it only for a signal-B-live wedge).
@@ -1845,11 +1845,11 @@ fn class_r3d_concurrency_cas_no_lost_update_red() {
     const N: usize = 16; // the plan's tested concurrency ceiling
 
     // ---- (A) THE FIX: N concurrent set_status racers → 0 lost updates ---------
-    let sb = Sandbox::new();
+    let qd = Sandbox::new();
     let pid = 909090;
-    sb.write_busy_row(pid, CUR, CUR); // current incarnation, status=busy
+    qd.write_busy_row(pid, CUR, CUR); // current incarnation, status=busy
 
-    let dir = sb.path().to_path_buf();
+    let dir = qd.path().to_path_buf();
     let mut handles = Vec::new();
     for i in 0..N {
         let dir = dir.clone();
@@ -1873,7 +1873,7 @@ fn class_r3d_concurrency_cas_no_lost_update_red() {
         }
     }
     // No torn read: the row is still parseable after the race.
-    let row = sb.read_row(pid).expect("row parseable after the race (atomic rename, no torn read)");
+    let row = qd.read_row(pid).expect("row parseable after the race (atomic rename, no torn read)");
 
     // LOAD-BEARING path-A assertion (CAS-SENSITIVE): the CAS returned `Rejected` for
     // every foreign-incarnation racer. This is the real path-A guard — drop the CAS

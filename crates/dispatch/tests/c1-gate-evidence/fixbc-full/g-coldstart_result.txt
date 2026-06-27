@@ -1,15 +1,15 @@
-G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `sb new` cold-start: SB auto-launched the daemon via `sb qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error
+G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `qd new` cold-start: SB auto-launched the daemon via `qd qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error
 
-PRE-SPAWN-FREE: no socket at /tmp/sb-c1gate-runs/coldstart-1780716379354431000/x/qrmux/qrmux.sock = true; no sb daemon bound = true
-COLD-START sb new: exit=0 (want 0)
+PRE-SPAWN-FREE: no socket at /tmp/qd-c1gate-runs/coldstart-1780716379354431000/x/qrmux/qrmux.sock = true; no qd daemon bound = true
+COLD-START qd new: exit=0 (want 0)
   stdout: Started detached session "cold-sess"
   stderr: 
-AUTO-LAUNCH: socket present at engine dir=true; sb qrmux-server daemon bound=true
+AUTO-LAUNCH: socket present at engine dir=true; qd qrmux-server daemon bound=true
 CHAIN ls: exit=0, lists cold-sess=true
 CHAIN send:pty: exit=0
   stderr: WARNING: Message sent to "cold-sess" but session did not go busy — it may be stuck unsubmitted in the composer.
 CHAIN kill: exit=0
   stderr: 
-MUTATION CONTROL (severed launch program=/tmp/sb-c1gate-runs/coldstart-mut-1780716397211999000/no-such-sb-daemon-binary): sb new exit=1 (want nonzero), no socket=true, error names embedded qrmux daemon=true
-  stderr: sb new: the embedded qrmux daemon failed to launch (embedded mux: create_detached: No such file or directory (os error 2)). No session was created.
+MUTATION CONTROL (severed launch program=/tmp/qd-c1gate-runs/coldstart-mut-1780716397211999000/no-such-qd-daemon-binary): qd new exit=1 (want nonzero), no socket=true, error names embedded qrmux daemon=true
+  stderr: qd new: the embedded qrmux daemon failed to launch (embedded mux: create_detached: No such file or directory (os error 2)). No session was created.
 

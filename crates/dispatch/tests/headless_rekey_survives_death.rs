@@ -8,14 +8,14 @@
 //! respawned daemon performs no re-write — the §H.6 starttime-CAS forbids it from
 //! clobbering a foreign incarnation's row anyway).
 //!
-//! This drives the REAL `sb` binary against a JAILED HOME with a real per-session
+//! This drives the REAL `qd` binary against a JAILED HOME with a real per-session
 //! qrmux daemon (ONLY `claude` is faked; the fixture HOLDS busy so the claude child
 //! stays alive across the kill+respawn — the live orphan). We:
 //!   start --headless → mint the child-pid row → SIGKILL the owning daemon (orphan
 //!   claude stays alive, row persists) → RESPAWN the daemon → assert EXACTLY ONE
 //!   row, the SAME child-pid `<P>.json` (same pid + sessionId + sbId; NOT a
 //!   daemon-pid row, NOT a duplicate), its pid the LIVE orphan claude child, and it
-//!   is still RESOLVABLE by `sb ls`/`sb connect` by id AND name.
+//!   is still RESOLVABLE by `qd ls`/`qd connect` by id AND name.
 //!
 //!   cargo test -p dispatch --test headless_rekey_survives_death -- --ignored --nocapture
 //!
@@ -98,7 +98,7 @@ impl Jail {
         self.xdg.join("qrmux")
     }
     fn run(&self, args: &[&str]) -> std::process::Output {
-        self.cmd(args).output().expect("spawn sb")
+        self.cmd(args).output().expect("spawn qd")
     }
     fn cmd(&self, args: &[&str]) -> Command {
         let mut c = Command::new(sb_bin());
@@ -114,7 +114,7 @@ impl Jail {
         c
     }
     /// Respawn the per-session daemon exactly as the embedder spec does:
-    /// `sb qrmux-server --socket-dir <qrmux_dir> --session <name>`, detached.
+    /// `qd qrmux-server --socket-dir <qrmux_dir> --session <name>`, detached.
     fn respawn_daemon(&self) -> std::process::Child {
         self.cmd(&[
             "qrmux-server",
@@ -207,7 +207,7 @@ fn live_row_files(sessions_dir: &Path, name: &str) -> Vec<(i64, serde_json::Valu
 }
 
 #[test]
-#[ignore = "spawns real sb subprocesses + a detached daemon + SIGKILL/respawn + sleeps; run explicitly with --ignored --nocapture"]
+#[ignore = "spawns real qd subprocesses + a detached daemon + SIGKILL/respawn + sleeps; run explicitly with --ignored --nocapture"]
 fn rekey_survives_daemon_kill_and_respawn() {
     let root = tempfile::tempdir().unwrap();
     let j = jail(root.path(), 60);
@@ -219,7 +219,7 @@ fn rekey_survives_daemon_kill_and_respawn() {
     assert_eq!(
         start.status.code(),
         Some(0),
-        "sb start --headless exits 0; stderr={}",
+        "qd start --headless exits 0; stderr={}",
         String::from_utf8_lossy(&start.stderr)
     );
 
@@ -333,7 +333,7 @@ fn rekey_survives_daemon_kill_and_respawn() {
         "the surviving row keeps its recorded sessionId"
     );
 
-    // --- still RESOLVABLE by `sb ls`/`sb connect` by id AND name ----------------
+    // --- still RESOLVABLE by `qd ls`/`qd connect` by id AND name ----------------
     let ls2 = j.run(&["ls", "--json"]);
     let ls2_out = String::from_utf8_lossy(&ls2.stdout);
     let ls2_row = ls_find(&ls2_out, SESSION).expect("row still listed by name after respawn");
@@ -353,7 +353,7 @@ fn rekey_survives_daemon_kill_and_respawn() {
         let c_err = String::from_utf8_lossy(&c.stderr);
         assert!(
             !c_err.contains("No session matching"),
-            "sb connect by {label} must RESOLVE the surviving row (not 'No session matching'); \
+            "qd connect by {label} must RESOLVE the surviving row (not 'No session matching'); \
              stderr={c_err}"
         );
         println!("[connect {label}] resolved (code={:?})", c.status.code());

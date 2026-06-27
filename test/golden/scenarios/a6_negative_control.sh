@@ -12,11 +12,11 @@
 #           ONLY; nothing else, laundering guard per spec §7 G-A1) and byte-diff.
 #
 # Row set (ported surfaces, NO --via, NO ANTHROPIC_* set):
-#   r1 new        — sb new <name> (stub CLAUDE_BIN), stdout+stderr+exit
-#   r2 ls         — sb ls
-#   r3 ls-short   — sb ls --all --short
-#   r4 ls-json    — sb ls --json
-#   r5 info       — sb info <name>
+#   r1 new        — qd new <name> (stub CLAUDE_BIN), stdout+stderr+exit
+#   r2 ls         — qd ls
+#   r3 ls-short   — qd ls --all --short
+#   r4 ls-json    — qd ls --json
+#   r5 info       — qd info <name>
 #
 # Determinism: fixed session name, fixed stub sessionId/startedAt; the remaining
 # volatile bytes (pid, jail paths, timestamps) are exactly the recorded

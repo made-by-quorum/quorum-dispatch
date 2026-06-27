@@ -4,7 +4,7 @@
 #
 # THE PANEL'S POINT (P4 / rider R2): without a RECORDED failure-shape fixture for a
 # withheld JSONL reply, an engine that fabricated a reply (or swallowed the
-# no-reply as success-with-text) would be undetectable. This row RECORDS sb's
+# no-reply as success-with-text) would be undetectable. This row RECORDS qd's
 # HONEST OUTCOME when the counterpart appends the USER record but WITHHOLDS the
 # assistant reply.
 #
@@ -13,11 +13,11 @@
 # the user record + transitions busy→idle but NEVER appends the assistant pair
 # (stub_claude.py:586-594).
 #
-# THE RECORDED SHAPE (R4-honest — what sb ACTUALLY does, not a fabricated timeout):
+# THE RECORDED SHAPE (R4-honest — what qd ACTUALLY does, not a fabricated timeout):
 # `send:pty --wait` anchors on the user record (findUserAnchor, utils.ts:341-346),
 # the status reaches idle so decideWait returns "complete" (utils.ts:359-365) — the
 # wait COMPLETES (it does NOT time out), and the from-anchor extraction finds NO
-# assistant text, so sb prints the literal `(no text response)` to STDOUT and exits
+# assistant text, so qd prints the literal `(no text response)` to STDOUT and exits
 # 0 (send.ts:316-365). This IS the failure shape: a withheld reply surfaces as the
 # `(no text response)` sentinel with the JSONL carrying the user record but no
 # assistant record. (Recording note: WITHHOLD_JSONL produces NO `--wait` timeout

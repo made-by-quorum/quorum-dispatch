@@ -1,6 +1,6 @@
 //! punch item 8 (b3-kill-spec) LIVE PINS — the descendant-tree kill leg.
 //!
-//! `sb stop`'s per-pid ladder (zmx pane + wrapper pid + claude pid) left
+//! `qd stop`'s per-pid ladder (zmx pane + wrapper pid + claude pid) left
 //! claude's GRANDCHILDREN running (P2 panel-unanimous). The shipped fix is the
 //! descendant-tree leg: snapshot the claude pid's ppid-descendants while the
 //! tree is intact, stamp each with `(pid, start-time)` (exec-proof identity),

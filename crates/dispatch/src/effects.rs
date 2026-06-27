@@ -113,7 +113,7 @@ pub trait ProcessTable {
     /// nonzero result is treated as dead. That is correct for ESRCH (no such
     /// process) but CONFLATES EPERM — the pid EXISTS but belongs to another
     /// user (alive-but-unsignalable) — with death. Known TS-parity limitation
-    /// (utils.ts:380-388 has the same shape), kept deliberately: sb sessions
+    /// (utils.ts:380-388 has the same shape), kept deliberately: qd sessions
     /// are same-uid by construction, so EPERM needs a foreign-uid pid reuse to
     /// arise (punch B5 item 13 doc). An errno-aware probe exists where the
     /// distinction is load-bearing: relay_server's `pid_alive`
@@ -405,7 +405,7 @@ const PS_SPAWN_RETRY_BACKOFF_MS: u64 = 25;
 /// recorded start; a garbage value lands far outside [`crate::kill::START_TIME_SLACK_MS`]
 /// and is read as a reused pid ([`crate::liveness::LifecycleState::NotOurs`]) —
 /// misclassifying a NEWBORN session as a stranger, which flashes it `cold` in
-/// `sb ls`. An out-of-range start is therefore treated as UNKNOWN (`None`), so the
+/// `qd ls`. An out-of-range start is therefore treated as UNKNOWN (`None`), so the
 /// classifier takes its EXISTING fail-closed path ("start unreadable while present
 /// ⇒ assume ours ⇒ ALIVE") — the correct, conservative reading. It is NEVER
 /// trusted as a real start.
@@ -531,7 +531,7 @@ pub fn is_pid_alive(pid: i32) -> bool {
 /// alive).
 ///
 /// Targets the PID ONLY — never the process group, so a session killing itself
-/// doesn't take sb down with it (utils.ts:391-392). This PID-only discipline is
+/// doesn't take qd down with it (utils.ts:391-392). This PID-only discipline is
 /// L10 groundwork: kill/gc/reconcile act on specific PIDs, never patterns/groups.
 ///
 /// `grace_ms` (default 3000) is the SIGTERM→SIGKILL grace window. It is machine-
@@ -680,7 +680,7 @@ pub enum ProcLiveness {
 
 /// EFFECT (WP-A #4): the program-agnostic OS liveness reading for `pid`,
 /// keyed for the lifecycle classifier. On Linux reads `/proc/<pid>/stat`
-/// (the memo's mandated cross-process observer source — `sb` is NOT claude's
+/// (the memo's mandated cross-process observer source — `qd` is NOT claude's
 /// parent, so `waitpid` is unavailable); elsewhere falls back to `ps -o stat=`.
 /// A non-positive pid is [`ProcLiveness::Gone`].
 ///

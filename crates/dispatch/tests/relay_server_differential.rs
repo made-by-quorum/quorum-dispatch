@@ -1,5 +1,5 @@
 //! §4b M5b DIFFERENTIAL + CROSS-COMPAT harness — drives BOTH the legacy bun
-//! relay server (`~/work/cc-relay/server.ts`) AND the native Rust `sb relay:serve`
+//! relay server (`~/work/cc-relay/server.ts`) AND the native Rust `qd relay:serve`
 //! through the SAME scenario script via the SAME frozen `CcRelay` client (HTTP) +
 //! subprocess JSON-RPC (MCP stdio), asserting EQUIVALENT OBSERVABLE behavior.
 //!
@@ -33,7 +33,7 @@
 //! ~/.claude or ~/work/cc-relay.
 //!
 //! ## RAII reap guard (non-negotiable)
-//! Every spawned process (bun or sb) is killed on Drop — including on panic-unwind
+//! Every spawned process (bun or qd) is killed on Drop — including on panic-unwind
 //! and early-return — so no relay process leaks into the fleet after the suite.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -799,8 +799,8 @@ fn run_core_scenario(kind: RelayKind) {
         "[{kind:?}] NOT-DELIVERED must carry fresh-message guidance, got: {nd_text}"
     );
     assert!(
-        nd_text.contains("sb send:relay"),
-        "[{kind:?}] guidance must name sb send:relay, got: {nd_text}"
+        nd_text.contains("qd send:relay"),
+        "[{kind:?}] guidance must name qd send:relay, got: {nd_text}"
     );
 
     // ── H. Loop belt (P-E4) ─────────────────────────────────────────────────

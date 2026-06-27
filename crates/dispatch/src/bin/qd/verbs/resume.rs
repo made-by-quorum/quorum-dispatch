@@ -1,4 +1,4 @@
-//! REAL `sb resume` backend (spec §5.3; TS `commands/lifecycle.ts:408-530`).
+//! REAL `qd resume` backend (spec §5.3; TS `commands/lifecycle.ts:408-530`).
 //!
 //! Relaunch a COLD session in zmx (by default). The pure preflight deciders live
 //! in `dispatch::resume`; this verb drives the live effects:
@@ -42,21 +42,21 @@ use super::common::resolve_or_die;
 /// byte-identical to the pre-m-4 form (it printed the waiter's `String` directly;
 /// now it prints `failure.detail`). The contract: prefix + the waiter detail.
 fn resume_boot_unconfirmed_line(detail: &str) -> String {
-    format!("sb resume: session launched but did not confirm ready: {detail}")
+    format!("qd resume: session launched but did not confirm ready: {detail}")
 }
 
 /// W2 send-pointer: the codex-resume success lines point the agent at the WORKING
-/// channel, `sb send:relay` (bare `sb send` is a moved stub; `send:pty` has no pane
+/// channel, `qd send:relay` (bare `qd send` is a moved stub; `send:pty` has no pane
 /// for a daemon-hosted codex session). Factored so the EXACT pointer is pinned by a
 /// unit test (mirrors `resume_boot_unconfirmed_line`).
 fn codex_already_running_line(name: &str) -> String {
-    format!("session \"{name}\" is running; send to it with: sb send:relay {name} <text>")
+    format!("session \"{name}\" is running; send to it with: qd send:relay {name} <text>")
 }
 
 fn codex_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
     format!(
         "resumed codex session \"{name}\" (daemon pid {pid}, {endpoint}); \
-         send to it with: sb send:relay {name} <text>"
+         send to it with: qd send:relay {name} <text>"
     )
 }
 
@@ -64,7 +64,7 @@ fn codex_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
 /// drivable RIGHT NOW; resume is a success no-op (NO second adapter, ZERO row mutation).
 /// Mirrors `codex_already_running_line`; pinned by a unit test.
 fn acp_already_running_line(name: &str) -> String {
-    format!("session \"{name}\" is already alive; send to it with: sb send:relay {name} <text>")
+    format!("session \"{name}\" is already alive; send to it with: qd send:relay {name} <text>")
 }
 
 /// Item 3 RESUME (acp) — the revived line. The resident adapter was re-spawned in
@@ -72,11 +72,11 @@ fn acp_already_running_line(name: &str) -> String {
 fn acp_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
     format!(
         "resumed acp session \"{name}\" (adapter pid {pid}, {endpoint}); \
-         send to it with: sb send:relay {name} <text>"
+         send to it with: qd send:relay {name} <text>"
     )
 }
 
-/// `sb resume <session>` — cold-session relaunch.
+/// `qd resume <session>` — cold-session relaunch.
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
     // D3 (Fork A): `--no-zmx` / `--no-attach` are the dropped interactive/PTY
@@ -92,7 +92,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("sb resume: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd resume: HOME is not set — cannot resolve the session state dir.");
             return 1;
         }
     };
@@ -120,7 +120,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // structurally honest. NOTE: spec §2 carries no OC exclusion — the real ground
     // is the A1 join design.
     if session.provider == "opencode" {
-        eprintln!("sb resume: OpenCode resume is not supported in the Rust engine (parked).");
+        eprintln!("qd resume: OpenCode resume is not supported in the Rust engine (parked).");
         return 1;
     }
     // codex P2 W7 (codex-p2-spec §7.6; ADD-26(2)): a codex row is DAEMON-hosted —
@@ -163,7 +163,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     }
     if let Some(pid) = common::alive_pid_for_id(&paths.sessions_dir, &session.session_id) {
         eprintln!(
-            "sb resume: session \"{}\" is already alive (PID {pid}). Use \"sb connect\" instead.",
+            "qd resume: session \"{}\" is already alive (PID {pid}). Use \"qd connect\" instead.",
             session.name.as_deref().unwrap_or(&session.session_id)
         );
         return 1;
@@ -178,7 +178,7 @@ pub fn run(m: &ArgMatches) -> i32 {
         // resume — "still alive" would be a false statement of fact. The gate's
         // LOGIC is unchanged (anything non-Cold refuses, exit 1); only this arm's
         // message states the true condition. Genuinely-alive statuses keep the
-        // byte-pinned pointer (now `sb connect` — attach retired, STATE 22).
+        // byte-pinned pointer (now `qd connect` — attach retired, STATE 22).
         // (Join structure note: a killed session WHOSE
         // TRANSCRIPT EXISTS surfaces as a ColdJsonl row — Cold, resumable, never
         // here; the Killed branch emits only sids no transcript row claimed. The
@@ -187,14 +187,14 @@ pub fn run(m: &ArgMatches) -> i32 {
             && (session.session_id.is_empty() || session.jsonl_path.is_none())
         {
             eprintln!(
-                "sb resume: session \"{}\" was stopped and has no resumable transcript — \
+                "qd resume: session \"{}\" was stopped and has no resumable transcript — \
                  nothing to resume.",
                 session.name.as_deref().unwrap_or(query)
             );
             return 1;
         }
         eprintln!(
-            "Session is still alive (status: {}). Use \"sb connect\" instead.",
+            "Session is still alive (status: {}). Use \"qd connect\" instead.",
             session.status.as_str()
         );
         return 1;
@@ -222,20 +222,20 @@ pub fn run(m: &ArgMatches) -> i32 {
         return 1;
     }
 
-    // --- D3 (WP-B-CS-1, Fork A): sb resume is an AGENT verb — ALWAYS headless. ---
+    // --- D3 (WP-B-CS-1, Fork A): qd resume is an AGENT verb — ALWAYS headless. ---
     // FULL REPLACEMENT of the zmx/PTY relaunch + interactive attach: route to the
     // per-session qrmux daemon's LaunchHeadless with resume_session_id = the
     // session's provider id, so the revived session rides the headless stream-json
     // channel (the §6.0 intent — an agent-driven session is NOT on a PTY/zmx
     // surface). The live-ownership lock / id-collision / must-be-cold / cwd
     // preflight ABOVE is preserved (non-negotiable). There is NO `--interactive`
-    // escape here, even at a TTY: a human re-entering a session is `sb connect`
-    // (WP-B-CS-2), not `sb resume` (`driver::resume_is_headless` documents the
+    // escape here, even at a TTY: a human re-entering a session is `qd connect`
+    // (WP-B-CS-2), not `qd resume` (`driver::resume_is_headless` documents the
     // always-headless decision; the resolver is intentionally not consulted).
     //
     // GUARDRAIL 1 (do not orphan-rot): the native-interactive zmx/PTY revive
     // helpers (`prepare_claude_resume_env` / `run_detached_revive` / `revive_claude`)
-    // are NOT dead and need NO `#[allow(dead_code)]` — `sb connect` already calls
+    // are NOT dead and need NO `#[allow(dead_code)]` — `qd connect` already calls
     // `revive_claude` (connect.rs:65 → it uses both other helpers), and WP-B-CS-2's
     // turn-boundary cutover reuses exactly that native-TUI revive+attach. They are
     // KEPT in place (+ their unit tests stay green), never deleted.
@@ -255,14 +255,14 @@ pub fn run(m: &ArgMatches) -> i32 {
     // which ignores the driver — wiring it HERE (not hard-coding `true`) means a
     // regression that makes resume driver-conditional is caught at this call site,
     // not just in the unit test. resolve_driver_real may read Human at a TTY; the
-    // policy overrides it (resume is never interactive — that is `sb connect`).
+    // policy overrides it (resume is never interactive — that is `qd connect`).
     if !crate::driver::resume_is_headless(crate::driver::resolve_driver_real(
         crate::driver::DriverOverride::None,
         &env,
     )) {
         // Structurally unreachable today; the honest fall-through if the policy ever
         // flips — refuse rather than silently mis-route to a retired interactive path.
-        eprintln!("sb resume: internal: resume I/O policy is not headless — use \"sb connect\".");
+        eprintln!("qd resume: internal: resume I/O policy is not headless — use \"qd connect\".");
         return 1;
     }
 
@@ -289,7 +289,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     ) {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("sb resume: {e}");
+            eprintln!("qd resume: {e}");
             1
         }
     }
@@ -334,7 +334,7 @@ fn prepare_claude_resume_env(
         match dispatch::idstore::mint_or_get(&ids_path, session_id, session_name, &RealClock) {
             Ok(id) => id,
             Err(e) => {
-                eprintln!("sb {verb}: could not mint a stable session id: {e}");
+                eprintln!("qd {verb}: could not mint a stable session id: {e}");
                 return Err(1);
             }
         };
@@ -348,7 +348,7 @@ fn prepare_claude_resume_env(
     let env_pairs = launch_env_pairs(backend_env, Some(sb_id), render);
     let env_unsets = dispatch::launch::render_env_unsets(render);
     if let Err(e) = write_session_env_file_with_unsets(home, zmx_name, &env_pairs, &env_unsets) {
-        eprintln!("sb {verb}: failed to write session env file: {e}");
+        eprintln!("qd {verb}: failed to write session env file: {e}");
         return Err(1);
     }
     let env_prefix = session_env_prefix(home, zmx_name, &env_pairs, &env_unsets);
@@ -371,7 +371,7 @@ fn revive_launch_failed_line(stderr: &str) -> String {
 }
 
 fn revive_zmx_missing_line() -> String {
-    "sb resume: could not launch zmx (is it installed and on PATH?).".to_string()
+    "qd resume: could not launch zmx (is it installed and on PATH?).".to_string()
 }
 
 fn run_detached_revive(
@@ -471,7 +471,7 @@ pub fn revive_claude(
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("sb connect: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd connect: HOME is not set — cannot resolve the session state dir.");
             return Err(1);
         }
     };
@@ -502,7 +502,7 @@ pub fn revive_claude(
     let flags = claude_flags(&env, &config_toml);
     let Some(provider_impl) = dispatch::provider::provider_for(&session.provider) else {
         eprintln!(
-            "sb connect: unknown provider \"{}\" — this engine supports: claude-code.",
+            "qd connect: unknown provider \"{}\" — this engine supports: claude-code.",
             session.provider
         );
         return Err(1);
@@ -541,7 +541,7 @@ pub fn revive_claude(
             match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
-                    eprintln!("sb connect: {msg}");
+                    eprintln!("qd connect: {msg}");
                     return Err(1);
                 }
             }
@@ -575,7 +575,7 @@ pub fn revive_claude(
 }
 
 /// codex P2 W7 (codex-p2-spec §7.6; ADD-26(2)) — the codex RESUME path at the verb
-/// layer. A codex row is a daemon-hosted protocol thread; `sb resume` for it is
+/// layer. A codex row is a daemon-hosted protocol thread; `qd resume` for it is
 /// revive-to-DRIVABLE with NO interactive-attach tail (agents have no TTY — attach
 /// is SEVERED). ALL revive logic lives in [`dispatch::resume_daemon`]; this is the thin
 /// glue: resolve the row's CURRENT pid/endpoint (endpoint is NOT on the
@@ -596,7 +596,7 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
         Ok(p) => p,
         Err(code) => return code,
     };
-    // The revived daemon's stdout/stderr log root: `<sb_home>/.sb/log` (codex-p2-spec
+    // The revived daemon's stdout/stderr log root: `<sb_home>/.quorum/dispatch/log` (codex-p2-spec
     // §3.2), resolved off the injected home so a jailed HOME points the log into the
     // jail (L9a) — identical to the W4 create path's resolution.
     let log_dir = paths.home.join(".quorum").join("dispatch").join("log");
@@ -657,8 +657,8 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
     match resume_codex(&deps, &params) {
         Ok(ResumeOutcome::AlreadyRunning) => {
             // Drivable RIGHT NOW — a success no-op. NO attach (severed): tell the
-            // agent to send to it. (Do NOT print "use sb attach".) W2: the pointer
-            // is `sb send:relay` — bare `sb send` is a moved stub and `send:pty` has
+            // agent to send to it. (Do NOT print "use qd attach".) W2: the pointer
+            // is `qd send:relay` — bare `qd send` is a moved stub and `send:pty` has
             // no pane for a codex daemon; `send:relay` is the working agent channel.
             println!("{}", codex_already_running_line(&name));
             0
@@ -669,14 +669,14 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("sb resume: \"{name}\": {e}");
+            eprintln!("qd resume: \"{name}\": {e}");
             e.exit_code()
         }
     }
 }
 
 /// scoped-ACP-CC Item 3 — the acp RESUME path at the verb layer. An acp/* row is a
-/// daemon-hosted resident adapter (+ its `claude-code-acp` bridge); `sb resume` for it
+/// daemon-hosted resident adapter (+ its `claude-code-acp` bridge); `qd resume` for it
 /// is revive-to-DRIVABLE with NO interactive attach (agents have no TTY). Mirrors
 /// [`run_codex_resume`] 1:1, substituting `session/load` (the ACP resume primitive,
 /// driven by the load-mode adapter) for `thread/resume`:
@@ -704,7 +704,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("sb resume: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd resume: HOME is not set — cannot resolve the session state dir.");
             return 1;
         }
     };
@@ -715,7 +715,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     // (the bridge's CC store the load reads). Either missing → nothing to resume.
     if session.session_id.is_empty() || session.jsonl_path.is_none() {
         eprintln!(
-            "sb resume: session \"{name}\" was stopped and has no resumable transcript — \
+            "qd resume: session \"{name}\" was stopped and has no resumable transcript — \
              nothing to resume."
         );
         return 1;
@@ -754,13 +754,13 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
         Ok(Some(claim)) => claim, // WON — held until end of fn (drop releases the flock).
         Ok(None) => {
             eprintln!(
-                "sb resume: \"{name}\": another resume of this session is already in \
+                "qd resume: \"{name}\": another resume of this session is already in \
                  progress — refusing (no double-spawn). Try again once it completes."
             );
             return 1;
         }
         Err(e) => {
-            eprintln!("sb resume: \"{name}\": could not take the resume claim lock: {e}");
+            eprintln!("qd resume: \"{name}\": could not take the resume claim lock: {e}");
             return 1;
         }
     };
@@ -771,7 +771,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     let port = match real_alloc_port() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("sb resume: \"{name}\": acp port allocation failed: {e}");
+            eprintln!("qd resume: \"{name}\": acp port allocation failed: {e}");
             return 1;
         }
     };
@@ -779,7 +779,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("sb resume: \"{name}\": cannot resolve own executable for acp adapter: {e}");
+            eprintln!("qd resume: \"{name}\": cannot resolve own executable for acp adapter: {e}");
             return 1;
         }
     };
@@ -800,7 +800,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     let spawned = match spawner.spawn_detached(&argv, &[], &cwd, &log_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("sb resume: \"{name}\": acp adapter spawn failed: {e}");
+            eprintln!("qd resume: \"{name}\": acp adapter spawn failed: {e}");
             return 1;
         }
     };
@@ -811,7 +811,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
         Ok(c) => c,
         Err(e) => {
             spawner.kill(spawned.pid);
-            eprintln!("sb resume: \"{name}\": {e} (see {})", log_path.display());
+            eprintln!("qd resume: \"{name}\": {e} (see {})", log_path.display());
             return 1;
         }
     };
@@ -832,7 +832,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
         drop(conn);
         spawner.kill(spawned.pid);
         eprintln!(
-            "sb resume: \"{name}\": the endpoint is serving a DIFFERENT acp session \
+            "qd resume: \"{name}\": the endpoint is serving a DIFFERENT acp session \
              ({established:?} != {:?}) — refusing (wrong/stale adapter, not our row).",
             session.session_id
         );
@@ -865,7 +865,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
         spawner.kill(spawned.pid);
         eprintln!(
-            "sb resume: \"{name}\": revived the acp adapter but its registry row could not \
+            "qd resume: \"{name}\": revived the acp adapter but its registry row could not \
              be written ({e}); the adapter was stopped."
         );
         return 1;
@@ -1130,32 +1130,32 @@ mod tests {
         );
     }
 
-    /// W2 send-pointer: the codex-resume success lines MUST name `sb send:relay`
-    /// (the working agent channel), NOT bare `sb send` (a moved stub) and NOT
+    /// W2 send-pointer: the codex-resume success lines MUST name `qd send:relay`
+    /// (the working agent channel), NOT bare `qd send` (a moved stub) and NOT
     /// `send:pty` (no pane for a daemon-hosted session). `--wait` is NOT mentioned
-    /// (codex ignores it). Pinned so a regression to `sb send` reds here.
+    /// (codex ignores it). Pinned so a regression to `qd send` reds here.
     #[test]
     fn codex_resume_success_lines_point_at_send_relay() {
         let running = codex_already_running_line("wk");
         assert_eq!(
             running,
-            "session \"wk\" is running; send to it with: sb send:relay wk <text>"
+            "session \"wk\" is running; send to it with: qd send:relay wk <text>"
         );
         let revived = codex_revived_line("wk", 4242, "ws://127.0.0.1:18951");
         assert_eq!(
             revived,
             "resumed codex session \"wk\" (daemon pid 4242, ws://127.0.0.1:18951); \
-             send to it with: sb send:relay wk <text>"
+             send to it with: qd send:relay wk <text>"
         );
         for line in [&running, &revived] {
             assert!(
-                line.contains("sb send:relay wk"),
+                line.contains("qd send:relay wk"),
                 "names send:relay: {line}"
             );
-            // The bare `sb send <name>` stub must NOT be the pointer.
+            // The bare `qd send <name>` stub must NOT be the pointer.
             assert!(
                 !line.contains("send wk"),
-                "must not point at bare `sb send`: {line}"
+                "must not point at bare `qd send`: {line}"
             );
             assert!(
                 !line.contains("send:pty"),
@@ -1165,24 +1165,24 @@ mod tests {
         }
     }
 
-    /// Item 3 (acp) resume success lines name `sb send:relay` (the working agent
-    /// channel), NOT bare `sb send` / `send:pty` (no pane for a daemon-hosted session).
+    /// Item 3 (acp) resume success lines name `qd send:relay` (the working agent
+    /// channel), NOT bare `qd send` / `send:pty` (no pane for a daemon-hosted session).
     /// Mirrors `codex_resume_success_lines_point_at_send_relay`.
     #[test]
     fn acp_resume_success_lines_point_at_send_relay() {
         let running = acp_already_running_line("wk");
         assert_eq!(
             running,
-            "session \"wk\" is already alive; send to it with: sb send:relay wk <text>"
+            "session \"wk\" is already alive; send to it with: qd send:relay wk <text>"
         );
         let revived = acp_revived_line("wk", 4242, "ws://127.0.0.1:18951");
         assert_eq!(
             revived,
             "resumed acp session \"wk\" (adapter pid 4242, ws://127.0.0.1:18951); \
-             send to it with: sb send:relay wk <text>"
+             send to it with: qd send:relay wk <text>"
         );
         for line in [&running, &revived] {
-            assert!(line.contains("sb send:relay wk"), "names send:relay: {line}");
+            assert!(line.contains("qd send:relay wk"), "names send:relay: {line}");
             assert!(!line.contains("send:pty"), "no send:pty for a daemon: {line}");
             assert!(!line.contains("--wait"), "acp ignores --wait: {line}");
         }
@@ -1190,8 +1190,8 @@ mod tests {
 
     /// codex P1 W4 (codex-p1-spec section 7.1): the resume argv fragment the verb
     /// now routes through `provider.resume_args(key, fork)` is BYTE-IDENTICAL to the
-    /// verb's PRE-REWIRE hand-built `vec!["--resume", session.session_id]`. `sb
-    /// resume` always passes `fork=false` (fork is a `sb new` concept, cli.rs:165-
+    /// verb's PRE-REWIRE hand-built `vec!["--resume", session.session_id]`. `qd
+    /// resume` always passes `fork=false` (fork is a `qd new` concept, cli.rs:165-
     /// 169 — there is no resume fork flag), so the fragment is exactly `["--resume",
     /// <id>]`. We also pin the fork=true shape to prove the trait carries the
     /// correct `--fork-session` form even though this verb never requests it.
@@ -1221,7 +1221,7 @@ mod tests {
         );
 
         // fork=true carries the claude `--fork-session` shape (not exercised by
-        // this verb, but the trait must keep it for `sb new --fork` parity).
+        // this verb, but the trait must keep it for `qd new --fork` parity).
         assert_eq!(
             provider.resume_args(&key, true),
             vec![
@@ -1338,7 +1338,7 @@ mod tests {
         );
         assert_eq!(
             revive_zmx_missing_line(),
-            "sb resume: could not launch zmx (is it installed and on PATH?)."
+            "qd resume: could not launch zmx (is it installed and on PATH?)."
         );
     }
 
@@ -1352,16 +1352,16 @@ mod tests {
         // Idle-phase detail (boot.rs run_idle_phase wording).
         assert_eq!(
             resume_boot_unconfirmed_line("session \"wk\" did not reach idle status within timeout"),
-            "sb resume: session launched but did not confirm ready: \
+            "qd resume: session launched but did not confirm ready: \
              session \"wk\" did not reach idle status within timeout"
         );
         // PID-file-phase detail (boot.rs run_pid_phase wording).
         assert_eq!(
             resume_boot_unconfirmed_line(
-                "PID file for \"wk\" did not appear within 40000ms — sb connect wk to inspect"
+                "PID file for \"wk\" did not appear within 40000ms — qd connect wk to inspect"
             ),
-            "sb resume: session launched but did not confirm ready: \
-             PID file for \"wk\" did not appear within 40000ms — sb connect wk to inspect"
+            "qd resume: session launched but did not confirm ready: \
+             PID file for \"wk\" did not appear within 40000ms — qd connect wk to inspect"
         );
     }
 }

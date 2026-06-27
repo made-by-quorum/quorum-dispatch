@@ -19,7 +19,7 @@ Supervision cannot fix this — PTY masters die with the process.
 One server process per SESSION (the zmx-parity shape, and the shape B2 actually
 specced):
 
-- **Topology:** `sb qrmux-server --socket-dir <dir> --session <name>` (--session
+- **Topology:** `qd qrmux-server --socket-dir <dir> --session <name>` (--session
   REQUIRED; the per-dir multi-session mode is retired). Capacity-1 enforced by
   identity: every session-addressed verb checks `name == self.session`.
 - **Naming (no third resolution scheme):** dir resolution is UNCHANGED (two-tier
@@ -49,7 +49,7 @@ specced):
   QRMUX_TEST_SHARED seam).
 - Cold-start race class multiplies → per-session G-COLDSTART-N arms (same-session
   race, cross-session burst, claim-timeout, create-vs-teardown, teardown-grace rows).
-- Measured (release build, gate evidence crates/sb/tests/c1-gate-evidence/wsc-m5/):
+- Measured (release build, gate evidence crates/qd/tests/c1-gate-evidence/wsc-m5/):
   data plane p95 0.88–0.95× of the shared baseline under saturating load (split is
   FASTER), zero timeouts; idle rent ~2.2MB/daemon flat through N=20 (Σ44MB) — the
   accept-the-rent disposition, measurement-vindicated. macOS RSS double-counts shared

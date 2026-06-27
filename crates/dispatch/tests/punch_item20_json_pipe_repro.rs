@@ -1,12 +1,12 @@
-//! Engine-hardening item 20 — `sb ls --json` must NOT panic-and-truncate when
+//! Engine-hardening item 20 — `qd ls --json` must NOT panic-and-truncate when
 //! its downstream pipe closes early ("stream-complete-or-error, never a silent
 //! partial document").
 //!
-//! THE BUG THIS PINS (red against pre-fix code): `sb ls --json` emits its
+//! THE BUG THIS PINS (red against pre-fix code): `qd ls --json` emits its
 //! payload with `println!`, which PANICS when the underlying write hits
 //! `BrokenPipe` (exit 101 + a Rust backtrace note on stderr) while a PARTIAL
 //! JSON document is already on stdout. The supervisor's watcher parses
-//! `sb ls --json`; under load a consumer that closes the pipe early (a `| head`,
+//! `qd ls --json`; under load a consumer that closes the pipe early (a `| head`,
 //! or a monitor that times out and stops reading) gets a truncated document and
 //! — if it does not check the exit code — reads it as truth. Corrupt is worse
 //! than wrong.
@@ -27,7 +27,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// The built `sb` binary next to the test exe (`<target>/debug/sb`).
+/// The built `qd` binary next to the test exe (`<target>/debug/qd`).
 fn sb_binary() -> PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
     let mut dir = exe
@@ -35,10 +35,10 @@ fn sb_binary() -> PathBuf {
         .and_then(std::path::Path::parent)
         .expect("target/debug")
         .to_path_buf();
-    dir.push("sb");
+    dir.push("qd");
     assert!(
         dir.exists(),
-        "sb binary not found at {dir:?} — build it first: \
+        "qd binary not found at {dir:?} — build it first: \
          scripts/build-lock.sh cargo build -p dispatch --bin dispatch"
     );
     dir
@@ -46,7 +46,7 @@ fn sb_binary() -> PathBuf {
 
 /// Seed a hermetic HOME whose registry holds `n` forged session rows. `n` is
 /// chosen so `ls --all --json` exceeds the kernel pipe buffer (~64KB), so an
-/// early-closing reader provably leaves sb mid-write (the EPIPE the bug
+/// early-closing reader provably leaves qd mid-write (the EPIPE the bug
 /// panicked on).
 fn seed_home(n: usize) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
@@ -71,8 +71,8 @@ fn seed_home(n: usize) -> PathBuf {
     root
 }
 
-/// Spawn `sb ls --all --json`, read a few bytes, close the read end, and report
-/// (exit_code, stderr). Closing the pipe while sb still has bytes to write is
+/// Spawn `qd ls --all --json`, read a few bytes, close the read end, and report
+/// (exit_code, stderr). Closing the pipe while qd still has bytes to write is
 /// exactly the broken-pipe condition.
 fn run_with_early_close(home: &PathBuf) -> (Option<i32>, String) {
     let mut child = Command::new(sb_binary())
@@ -85,19 +85,19 @@ fn run_with_early_close(home: &PathBuf) -> (Option<i32>, String) {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn sb ls --all --json");
+        .expect("spawn qd ls --all --json");
 
-    // Read a little, then DROP the read end -> sb's next write hits EPIPE.
+    // Read a little, then DROP the read end -> qd's next write hits EPIPE.
     let mut stdout = child.stdout.take().unwrap();
     let mut sip = [0u8; 64];
     let n = stdout.read(&mut sip).unwrap_or(0);
     assert!(
         n > 0,
-        "expected sb to write some JSON before we close the pipe"
+        "expected qd to write some JSON before we close the pipe"
     );
     drop(stdout);
 
-    let status = child.wait().expect("wait sb");
+    let status = child.wait().expect("wait qd");
     let mut err = String::new();
     if let Some(mut e) = child.stderr.take() {
         let _ = e.read_to_string(&mut err);
@@ -116,7 +116,7 @@ fn ls_json_broken_pipe_exits_clean_not_panic() {
     // pipe") with the generic panic exit code 101. The fix must eliminate BOTH.
     assert!(
         !err.contains("panicked"),
-        "sb ls --json panicked on a broken pipe instead of exiting cleanly \
+        "qd ls --json panicked on a broken pipe instead of exiting cleanly \
          (item 20 — a machine surface must not crash-dump on EPIPE).\nstderr:\n{err}"
     );
     assert_eq!(

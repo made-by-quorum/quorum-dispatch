@@ -178,7 +178,7 @@ pub fn resolve_session_with_liveness<'a>(
     }
 
     // --- c) Exact name match — prefer the unique LIVE exact-match over cold
-    // tombstones (NEW-1; contract A header / §5). sb does not enforce name
+    // tombstones (NEW-1; contract A header / §5). qd does not enforce name
     // uniqueness and keeps cold tombstones indefinitely, so a name shared by one
     // live session and ≥1 cold record must resolve to the LIVE one for all
     // addressing (info / send:pty / wait / kill / the spawned principal's /goal).
@@ -302,7 +302,7 @@ fn parse_int_prefix(s: &str) -> Option<i64> {
 
 // --- Live-id-collision preflight (Pete feedback #6: duplicate session ids) -----
 //
-// sb does NOT mint its own session id — `Session.session_id` IS the provider's id
+// qd does NOT mint its own session id — `Session.session_id` IS the provider's id
 // (claude's session UUID / codex's thread_id). Uniqueness therefore rides on (a)
 // the provider minting fresh on fork (claude: `--fork-session`) and (b) the engine
 // never re-registering a LIVE id under a second row.
@@ -843,8 +843,8 @@ mod tests {
         // hides this (collapses to one row); the preflight must surface BOTH so
         // resume refuses loudly instead of silently picking a survivor.
         let alive = vec![
-            row("orc-13-uuid", "sb-rust-orc-13", 100),
-            row("orc-13-uuid", "sb-rust-orc-13", 200),
+            row("orc-13-uuid", "qd-rust-orc-13", 100),
+            row("orc-13-uuid", "qd-rust-orc-13", 200),
         ];
         match detect_live_id_collision("orc-13-uuid", &alive) {
             LiveIdCollision::Collision(rows) => {

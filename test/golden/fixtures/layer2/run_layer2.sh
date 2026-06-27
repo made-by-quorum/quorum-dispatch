@@ -33,7 +33,7 @@ FAIL=0
 ok()   { PASS=$((PASS + 1)); printf 'ok   %s\n' "$1"; }
 bad()  { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$1"; }
 
-# Establish a jail so all temp state is hermetic (even though these don't touch sb).
+# Establish a jail so all temp state is hermetic (even though these don't touch qd).
 if ! jail_establish; then
     printf '[layer2] jail refused — aborting\n' >&2
     exit 3

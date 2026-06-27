@@ -1,4 +1,4 @@
-//! WP-B-CS-2 — the HUMAN / observe command surface (`sb connect` against a
+//! WP-B-CS-2 — the HUMAN / observe command surface (`qd connect` against a
 //! headless agent-driven session). The PURE, seam-testable core: it consumes the
 //! daemon's `ServerMsg::Republish*` CONTROL FACTS and never the agent's assistant
 //! text, models the read-only dashboard STATE, the 1/2/3 action menu, the
@@ -19,7 +19,7 @@
 //! content arm reds [`tests::no_assistant_text_path`].
 //!
 //! ## B5 boundary
-//! A LIVE headless `sb start` writes no addressable registry row yet (B5, Fork C
+//! A LIVE headless `qd start` writes no addressable registry row yet (B5, Fork C
 //! ratified — `lifecycle.rs` "launched-but-not-yet-addressable until B5"). So the
 //! connect dispatch ([`connect_dispatch`]) keys on a [`TargetMode`] DISCRIMINANT,
 //! proven here with SYNTHETIC values; B5 populates the discriminant from the real
@@ -86,7 +86,7 @@ impl DashboardState {
         match msg {
             ServerMsg::RepublishReady { session_id } => {
                 self.ready = true;
-                // Ready ⇒ a turn is underway (sb wait's SubState presumes Busy on
+                // Ready ⇒ a turn is underway (qd wait's SubState presumes Busy on
                 // subscribe — the producer republishes Ready at turn start).
                 self.in_turn = true;
                 self.session_id = Some(session_id.clone());
@@ -173,8 +173,8 @@ impl DashboardState {
 // The 1 / 2 / 3 action menu (S-B rulings — the headless-target menu)
 // ===========================================================================
 
-/// The well-labelled action menu offered when `sb connect` lands on a headless
-/// (agent-driven) target (S-B-COMMAND-SURFACE-RULINGS §"sb connect").
+/// The well-labelled action menu offered when `qd connect` lands on a headless
+/// (agent-driven) target (S-B-COMMAND-SURFACE-RULINGS §"qd connect").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuChoice {
     /// 1 — send a message via relay (async, non-disruptive; the agent stays
@@ -279,7 +279,7 @@ pub struct CutoverGate {
 }
 
 impl CutoverGate {
-    /// A gate that starts mid-turn (the common case: `sb connect` lands on a
+    /// A gate that starts mid-turn (the common case: `qd connect` lands on a
     /// session whose turn is already in flight). Use [`Self::default`] for an
     /// idle-start gate.
     pub fn in_turn() -> Self {
@@ -356,10 +356,10 @@ impl CutoverGate {
 // Connect dispatch discriminant (B5-deferred live row population)
 // ===========================================================================
 
-/// How a resolved `sb connect` target is hosted / driven — the discriminant the
-/// dispatch branches on (S-B rulings §"sb connect": mode auto-follows the target).
+/// How a resolved `qd connect` target is hosted / driven — the discriminant the
+/// dispatch branches on (S-B rulings §"qd connect": mode auto-follows the target).
 /// B5 populates this from the real registry row (live headless addressability);
-/// today it is a SYNTHETIC value, since a headless `sb start` writes no addressable
+/// today it is a SYNTHETIC value, since a headless `qd start` writes no addressable
 /// row yet (lifecycle.rs defers identity to B5). The renderer + cutover primitive
 /// are proven against synthetic frames regardless.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,7 +375,7 @@ pub enum TargetMode {
     Cold,
 }
 
-/// The action `sb connect` takes for a resolved target — the pure decision keyed
+/// The action `qd connect` takes for a resolved target — the pure decision keyed
 /// on [`TargetMode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectAction {
@@ -387,7 +387,7 @@ pub enum ConnectAction {
     ReviveThenAttach,
 }
 
-/// `sb connect`'s mode dispatch (S-B rulings): the human verb's I/O follows the
+/// `qd connect`'s mode dispatch (S-B rulings): the human verb's I/O follows the
 /// target. A pure discriminant decision — coherent without B5's row shape, so it
 /// is built + tested now (synthetic `TargetMode`), and B5 only has to feed the
 /// real discriminant in.
@@ -399,7 +399,7 @@ pub fn connect_dispatch(mode: TargetMode) -> ConnectAction {
     }
 }
 
-/// The `entrypoint` discriminant a headless `sb start` stamps on its registry row
+/// The `entrypoint` discriminant a headless `qd start` stamps on its registry row
 /// (WP-B5-i). This is the row field [`resolve_target_mode`] keys on to route a
 /// live agent-driven session into observe; the daemon-mint side
 /// (`daemon_status::MintIdentity`) writes it. Interactive rows leave `entrypoint`
@@ -407,7 +407,7 @@ pub fn connect_dispatch(mode: TargetMode) -> ConnectAction {
 /// the resolver cannot drift.
 pub const HEADLESS_ENTRYPOINT: &str = "headless";
 
-/// WP-B5-i — the LIVE `sb connect` resolver (the deferred B-CS-2 wiring): map a
+/// WP-B5-i — the LIVE `qd connect` resolver (the deferred B-CS-2 wiring): map a
 /// resolved registry row to its [`TargetMode`] from the row's hosting/mode
 /// discriminant + liveness, so `connect` routes a target by what it actually is.
 ///

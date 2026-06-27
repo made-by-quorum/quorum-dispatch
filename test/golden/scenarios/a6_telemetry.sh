@@ -2,26 +2,26 @@
 # test/golden/scenarios/a6_telemetry.sh — A6 D3 telemetry GATE driver (impl-B).
 #
 # Drives the spec §7 G-A3 (fault-model) + G-A6 (opaque-payload / usage / dirty-
-# state) rows fully JAILED, against the sb-under-test binary. Every sb invocation
+# state) rows fully JAILED, against the qd-under-test binary. Every qd invocation
 # runs through the jail env (jail_sb) and touches ONLY the jail HOME/SB_HOME — the
-# `sb mark`/`ls`/`info` engine invocations with stub state are sanctioned (spec:
+# `qd mark`/`ls`/`info` engine invocations with stub state are sanctioned (spec:
 # they touch only jail HOME/SB_HOME). No real sessions are created.
 #
 # Per-row PASS/FAIL + a SUMMARY footer. Bash 3.2 floor (macOS): no assoc arrays,
 # no ${var,,}, no mapfile. jail_establish/teardown with an EXIT trap.
 #
 # Usage:  bash test/golden/scenarios/a6_telemetry.sh
-# Env:    SB_BIN (sb-under-test; default target/debug/sb)
+# Env:    SB_BIN (qd-under-test; default target/debug/qd)
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 cd "$REPO_ROOT" || { echo "FATAL: cannot cd to repo root"; exit 1; }
 
-SB_BIN="${SB_BIN:-$REPO_ROOT/target/debug/sb}"
-[ -x "$SB_BIN" ] || { echo "FATAL: sb binary missing: $SB_BIN (build it first)"; exit 2; }
+SB_BIN="${SB_BIN:-$REPO_ROOT/target/debug/qd}"
+[ -x "$SB_BIN" ] || { echo "FATAL: qd binary missing: $SB_BIN (build it first)"; exit 2; }
 
-# Point the jail's sb-under-test at our binary BEFORE sourcing jail.sh.
+# Point the jail's qd-under-test at our binary BEFORE sourcing jail.sh.
 export JAIL_SB_CMD="$SB_BIN"
 
 # shellcheck source=test/golden/lib/jail.sh
@@ -43,7 +43,7 @@ RUNID="a6tel-$$"
 jail_establish "$RUNID" || { echo "FATAL: jail_establish failed"; exit 3; }
 trap 'jail_teardown' EXIT
 
-# The marks file the engine writes to (SB_HOME-honored, same as `sb mark`).
+# The marks file the engine writes to (SB_HOME-honored, same as `qd mark`).
 MARKS="$SB_HOME/state/marks.jsonl"
 SESSIONS_DIR="$HOME/.claude/sessions"
 mkdir -p "$SB_HOME/state" "$SESSIONS_DIR"
@@ -60,11 +60,11 @@ seed_registry() {
 }
 
 # ===========================================================================
-# G-A6a — `sb mark` appends a payload line AND a usage line (spec §4.1). The
+# G-A6a — `qd mark` appends a payload line AND a usage line (spec §4.1). The
 # opaque payload carries an INNER "event" key + org vocabulary; it must round-
 # trip verbatim and NOT collide with engine event lines.
 # ===========================================================================
-hdr "G-A6a sb mark: payload line + usage line, opaque inner event key"
+hdr "G-A6a qd mark: payload line + usage line, opaque inner event key"
 seed_registry 999001 "${JAIL_PREFIX}alpha" "sid-alpha"
 : > "$MARKS"  # start clean
 jail_sb mark "${JAIL_PREFIX}alpha" '{"event":"create","on_behalf_of":"lead","backend":"SPOOF"}' >/dev/null 2>&1
@@ -75,7 +75,7 @@ mark_line="$(countf '"payload"' "$MARKS")"
 usage_line="$(countf '"event":"usage"' "$MARKS")"
 usage_verb="$(grep '"event":"usage"' "$MARKS" 2>/dev/null | grep -c '"verb":"mark"' 2>/dev/null; true)"
 # The inner "event":"create" + "backend":"SPOOF" stayed INSIDE the payload object
-# (no TOP-LEVEL create event line was emitted by `sb mark`). A line-level grep
+# (no TOP-LEVEL create event line was emitted by `qd mark`). A line-level grep
 # can't tell a NESTED "event":"create" from a top-level one, so parse each line's
 # TOP-LEVEL "event" key with python and count those equal to "create".
 spoof_top="$(python3 - "$MARKS" <<'PY'
@@ -153,7 +153,7 @@ fi
 # ===========================================================================
 # G-A3b — RESTART/DIRTY fault model (spec §7 G-A3, red-team F8). Fixture-
 # constructed faults: TORN trailing line, MISSING file, EMPTY file. The fold
-# stays deterministic + identical ignoring the torn tail; `sb mark` append still
+# stays deterministic + identical ignoring the torn tail; `qd mark` append still
 # works onto a dirty file.
 # ===========================================================================
 hdr "G-A3b dirty-state: torn tail / missing / empty — fold + append survive"
@@ -167,7 +167,7 @@ torn_info="$(jail_sb info "${JAIL_PREFIX}delta" 2>/dev/null)"
 torn_rc=$?
 torn_ok="$(counts "$torn_info" 'Backend:.*be-delta')"
 
-# (2) `sb mark` appends onto the torn file → still works (non-fatal, whole lines).
+# (2) `qd mark` appends onto the torn file → still works (non-fatal, whole lines).
 jail_sb mark "${JAIL_PREFIX}delta" '{"k":1}' >/dev/null 2>&1
 append_rc=$?
 
@@ -195,13 +195,13 @@ fi
 
 # ===========================================================================
 # G-A6b — kill -9 SUPPORTING row (spec §7 G-A3, red-team F8). A driver loops
-# `sb mark` (sub-PIPE_BUF lines); kill -9 it mid-stream → marks.jsonl contains
+# `qd mark` (sub-PIPE_BUF lines); kill -9 it mid-stream → marks.jsonl contains
 # only WHOLE lines plus at most one torn tail; the fold stays green (no panic).
 # ===========================================================================
-hdr "G-A6b kill -9 a sb-mark loop driver → whole lines + ≤1 torn tail, fold green"
+hdr "G-A6b kill -9 a qd-mark loop driver → whole lines + ≤1 torn tail, fold green"
 seed_registry 999005 "${JAIL_PREFIX}epsilon" "sid-epsilon"
 : > "$MARKS"
-# Background loop firing `sb mark` (sub-PIPE_BUF lines). The subshell INHERITS the
+# Background loop firing `qd mark` (sub-PIPE_BUF lines). The subshell INHERITS the
 # jailed HOME/SB_HOME exported by jail_establish, so every append lands in the
 # jail MARKS file. We kill -9 the LOOP PID directly (tracked via $!) — we do NOT
 # touch jail_register_pid (it requires <pid> <name>; a 1-arg call trips set -u and

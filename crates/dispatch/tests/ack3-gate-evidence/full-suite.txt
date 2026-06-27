@@ -1,7 +1,7 @@
 # ACK-3 full-suite evidence (ADD-17 local-gate protocol)
 # Lead: sbr-ack3-lead | 2026-06-06 12:48-12:54 EDT | worktree: wt-ack3-lead
 # Tip: 0d4b6c5 (phase/ack-3) | base: main c1d96a3
-# Prebuild: scripts/build-lock.sh cargo build -p qrmux --bin qrmux -p fakerepl -p sb
+# Prebuild: scripts/build-lock.sh cargo build -p qrmux --bin qrmux -p fakerepl -p qd
 # Command: scripts/build-lock.sh cargo test --workspace   (exit code 0)
 # Note: one interleaved-output artifact at the g2 multi-process re-exec child
 # (events_test_child re-execs the lib test binary with a filter; its result line
@@ -16,11 +16,11 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/dirty_state_corpus.rs (target/debug/deps/dirty_state_corpus-c31b8b2be1e13b72)
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-     Running unittests src/lib.rs (target/debug/deps/sb-ff09826e6b9891de)
+     Running unittests src/lib.rs (target/debug/deps/qd-ff09826e6b9891de)
 test result: okok. 1 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out; finished in 0.02stest submit::tests::idle_two_write_with_chunks_then_cr_order ... ok
 test result: ok. 693 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
-     Running unittests src/bin/sb/main.rs (target/debug/deps/sb-81e39c9a1b8ff5a2)
+     Running unittests src/bin/qd/main.rs (target/debug/deps/qd-81e39c9a1b8ff5a2)
 test result: ok. 90 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
      Running tests/ack2_gate.rs (target/debug/deps/ack2_gate-88295801f3d041d7)
 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.99s
@@ -72,15 +72,15 @@ test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.81s
    Doc-tests golden
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-   Doc-tests sb
+   Doc-tests qd
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
    Doc-tests qrmux
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-# ANNOTATION: the sb lib line above was mangled by the g2 re-exec child's
+# ANNOTATION: the qd lib line above was mangled by the g2 re-exec child's
 # interleaved output ('okok… 692 filtered out'). Clean re-run of that one
 # suite (same tip, 12:57 EDT):
-# Command: scripts/build-lock.sh cargo test -p sb --lib
+# Command: scripts/build-lock.sh cargo test -p qd --lib
 test result: test sendpty::tests::wait_loop_timeout_anchored_vs_unanchored ... okok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out; finished in 0.02s
 test result: ok. 693 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s

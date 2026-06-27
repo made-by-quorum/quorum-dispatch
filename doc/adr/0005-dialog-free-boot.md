@@ -5,7 +5,7 @@
 
 ## Context
 
-TS `sb new` cannot gate its popup-dismiss Enter on the PID registry file, because
+TS `qd new` cannot gate its popup-dismiss Enter on the PID registry file, because
 the dev-channels consent popup appears BEFORE Claude Code writes that file. Its
 workaround (`lifecycle.ts:184-248`) is a blind-Enter loop: from 2s after spawn,
 send `\r` every ~2s into the session PTY until the PID file appears, rationalized
@@ -32,7 +32,7 @@ sanctioned, deliberate NON-PARITY with TS:
 2. **Dialogs are answered only by the delegated-consent answerer** (boot.rs, M3):
    opt-in per NAMED dialog, CONTENT-MATCHED against the ANSI-stripped zmx-screen
    tail, `\r` sent ONCE, re-read verify, ≤1 retry, then FAIL LOUD with
-   `sb attach <name>` guidance. An unmatched dialog is NEVER answered.
+   `qd attach <name>` guidance. An unmatched dialog is NEVER answered.
 3. **Known dialogs are pre-accepted as state, not keystrokes**, where claude
    supports it: `.claude.json` `hasCompletedOnboarding`,
    `bypassPermissionsModeAccepted`, per-project `hasTrustDialogAccepted`
@@ -44,7 +44,7 @@ sanctioned, deliberate NON-PARITY with TS:
 - 0b comparator: boot-trace rows are judged by the boot-readiness EVENT class
   (ADR 0004), not keystroke-sequence parity; the corpus records TS's Enters as
   the divergence baseline.
-- A boot gated by a dialog sb does not know BLOCKS LOUDLY instead of being
+- A boot gated by a dialog qd does not know BLOCKS LOUDLY instead of being
   silently clicked through. This is a deliberate behavior change: worse
   "it boots anyway" ergonomics, strictly better consent integrity.
 - A4 (submit/wait) inherits the event-keyed readiness; the full exit contract
@@ -52,7 +52,7 @@ sanctioned, deliberate NON-PARITY with TS:
 
 ## Addendum (eng-lane item 2, 2026-06-12) — folder-trust is now a VETTED named entry
 
-**Status:** Accepted (Pete-ruled 2026-06-12, in sb-supervisor's session; board
+**Status:** Accepted (Pete-ruled 2026-06-12, in qd-supervisor's session; board
 STATE 132). REVISES the §2 disposition of the folder-trust dialog ONLY.
 
 The original ADR used the folder-trust dialog as the cautionary example of TS's

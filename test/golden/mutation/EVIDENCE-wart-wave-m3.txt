@@ -1,7 +1,7 @@
 # WART-WAVE M3 DIFFERENTIAL EVIDENCE — W6+W7 content-keyed wait (ADD-15)
 # date: 2026-06-06T00:59:30Z
 #
-# THE CLAIM: pre-fix 'sb wait' times out on the W6 window (turn starts+ends
+# THE CLAIM: pre-fix 'qd wait' times out on the W6 window (turn starts+ends
 # inside one poll interval -> every status poll reads idle); post-fix it
 # completes via the transcript end_turn record. RED-pre-fix is STRUCTURAL:
 # the pre-fix deps trait has NO transcript channel — no input exists by

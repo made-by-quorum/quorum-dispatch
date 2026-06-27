@@ -1,6 +1,6 @@
 #!/bin/bash
 # a2-live-row4.sh — A2 gate row 4 (spec §11.5 configured-flag half): dev-channels
-# consent dialog appears, the BUILT sb's EventBootWaiter answers it (≤2 sends),
+# consent dialog appears, the BUILT qd's EventBootWaiter answers it (≤2 sends),
 # session reaches ready. boot B = real-claude #3 of 3.
 #
 # DEFAULT flags (NO SB_CLAUDE_FLAGS override) → built-in default carries
@@ -11,9 +11,9 @@
 # If the channels gate does NOT open in-jail (feature-flag drift), record
 # BLOCKED-ENV with the probe-3 evidence — NOT failed.
 set -u
-WT=/home/u/work/sb-rust/.claude/worktrees/agent-acfec16fb3b5c3375
+WT=/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -35,7 +35,7 @@ printf '{"hasCompletedOnboarding": true, "bypassPermissionsModeAccepted": true, 
     "$GB_FLAGS" "$WORKDIR" "$RESOLVED_WORKDIR" > "$HOME/.claude.json"
 
 NAME="${JAIL_PREFIX}cfg"
-echo "=== sb new with DEFAULT flags (dev-channels ON → consent dialog expected) ==="
+echo "=== qd new with DEFAULT flags (dev-channels ON → consent dialog expected) ==="
 echo "    (NO SB_CLAUDE_FLAGS override → built-in default flags)"
 ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/cfg-out.txt" 2> "$JAIL_ROOT/cfg-err.txt"

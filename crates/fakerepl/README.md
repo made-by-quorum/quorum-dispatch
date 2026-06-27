@@ -8,7 +8,7 @@ wall-clock-keyed decisions beyond a single 50ms burst-gap constant. Load
 variation comes from the *harness* varying env knobs per iteration, never from
 anything random inside this binary.
 
-It is driven by the Level-1 gate in `crates/sb/tests/fakerepl_gate.rs`.
+It is driven by the Level-1 gate in `crates/qd/tests/fakerepl_gate.rs`.
 
 ## Contract surface
 
@@ -119,11 +119,11 @@ jail-shaped but SB_HOME elsewhere) is refused.
 ## Locating the binary from the gate test
 
 `fakerepl` is a *different* crate, so `CARGO_BIN_EXE_fakerepl` is unavailable to
-`sb`'s tests. `cargo test --workspace` builds all workspace binaries first, so
+`qd`'s tests. `cargo test --workspace` builds all workspace binaries first, so
 `<target>/<profile>/fakerepl` exists. The gate derives `<target>/<profile>` from
 the running test exe (`.../target/<profile>/deps/<testbin>`) — robust to
 debug/release and a custom `CARGO_TARGET_DIR`. If absent (e.g. `cargo test -p
-sb` without a prior workspace build) it shells out to `cargo build -p fakerepl`
+qd` without a prior workspace build) it shells out to `cargo build -p fakerepl`
 once.
 
 ## MEASURED constants (W7 — measured, not assumed)

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # test/golden/scenarios/a6_mixed_fleet.sh — A6 G-A4: mixed-fleet interop.
 #
-# The PINNED TS sb (8c59ec4, staged by prep_pinned_ts.sh, bun-driven) must still
+# The PINNED TS qd (8c59ec4, staged by prep_pinned_ts.sh, bun-driven) must still
 # ls / resolve / gc a RUST-created session whose registry entry + marks stream
 # carry the NEW A6 fields (backend / spawnedBy). Runs fully IN-JAIL: both engines
 # see the SAME jailed HOME (TS keys its registry off homedir() — ADD-4), so the
 # org's real state is never touched.
 #
 # Rows:
-#   r1  Rust `sb new` (stub claude writes its entry WITH backend+spawnedBy —
+#   r1  Rust `qd new` (stub claude writes its entry WITH backend+spawnedBy —
 #       the A1-field tolerance surface) → marks.jsonl gains create+usage lines.
 #   r2  TS `ls` sees the session; exit 0; output mentions the name.
 #   r3  TS `info <name>` resolves it; exit 0 (field TOLERANCE: no crash/parse-drop).
@@ -26,10 +26,10 @@ REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 WT="$REPO_ROOT"
-SB_BIN="${SB_BIN:-$WT/target/debug/sb}"
+SB_BIN="${SB_BIN:-$WT/target/debug/qd}"
 TS_DIR="${TS_DIR:-/tmp/a6-ts-pin}"
 BUN_BIN="${BUN_BIN:-$(command -v bun || echo "$HOME/.bun/bin/bun")}"
-[ -x "$SB_BIN" ] || { echo "FATAL: sb binary missing: $SB_BIN"; exit 1; }
+[ -x "$SB_BIN" ] || { echo "FATAL: qd binary missing: $SB_BIN"; exit 1; }
 [ -f "$TS_DIR/src/index.ts" ] || { echo "FATAL: pinned TS clone missing: $TS_DIR (run prep_pinned_ts.sh)"; exit 1; }
 [ -x "$BUN_BIN" ] || { echo "FATAL: bun not found"; exit 1; }
 # Anti-drift belt: the clone must BE at the pin.
@@ -111,7 +111,7 @@ echo "--- r5: kill stub -> TS gc traverses dead-session state w/ A6 fields ---"
 # entries — its candidates are garbage FILES (cc-jsonl / existing tombstones /
 # oc-sidecars / oc-logs; gc.ts:30 candidate types, :93-97 live-set by pid, :215-221
 # tombstone SCAN — consumes, never creates). The registry-entry→tombstone transform
-# is sb kill/reconcile, NOT gc. So "TS gc tombstones the entry and the fields
+# is qd kill/reconcile, NOT gc. So "TS gc tombstones the entry and the fields
 # survive THAT transform" is not an exercisable path at pin. This row asserts what
 # TS gc ACTUALLY does over dead-session state carrying A6 fields: exits 0, no
 # crash, no corruption of the entry. The TS-driven entry-TRANSFORM of an

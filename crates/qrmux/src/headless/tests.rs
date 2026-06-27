@@ -634,8 +634,8 @@ fn real_isolated_claude_pong() {
         .unwrap_or_else(|_| "/home/u/.claude/.credentials.json".to_string());
 
     // Build the isolated sandbox (the lib.sh contract, minimal inline form).
-    let sbx = tempfile::tempdir().expect("mktemp sandbox");
-    let root = sbx.path();
+    let qb = tempfile::tempdir().expect("mktemp sandbox");
+    let root = qb.path();
     let home = root.join("home");
     let config = root.join("config");
     let work = root.join("work");
@@ -748,7 +748,7 @@ fn real_isolated_claude_pong() {
 // `launch.rs` golden). qrmux stays pure — it never resolves flags itself.
 
 /// The three flags the interactive (A) PTY path injects (launch.rs DEFAULT_FLAGS).
-/// Carried here as already-resolved daemon data — NOT imported from crates/sb.
+/// Carried here as already-resolved daemon data — NOT imported from crates/qd.
 fn relay_flags() -> Vec<String> {
     vec![
         "--dangerously-skip-permissions".to_string(),

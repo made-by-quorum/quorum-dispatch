@@ -19,10 +19,10 @@ dialog-free-boot, so this lands as 0008. Same artifact, same content. RENUMBERED
 
 ## Context
 
-The 0b golden oracle measures the sb ENGINE, not Claude. Contract-bearing rows
+The 0b golden oracle measures the qd ENGINE, not Claude. Contract-bearing rows
 (boot-readiness, send:pty queue-to-busy + JSONL `--wait`, history, attach/detach/
 reattach, relay-health, buildClaudeCmd, zmx-dir resolution) are recorded by driving
-the pinned-TS sb (PIN `0d0fa9ed4800efb1309eca2311345c48af2c4932`, zmx 0.6.0) against
+the pinned-TS qd (PIN `0d0fa9ed4800efb1309eca2311345c48af2c4932`, zmx 0.6.0) against
 a spec-faithful DETERMINISTIC counterpart stub (`test/golden/lib/stub_claude/`), NOT
 a real Claude and NOT the dryrun fake. The orchestrator RATIFIED §S with four riders
 (R1 stub-pinning, R2 stub-seam negative control, R3 this ADR, R4 recorded-exclusions
@@ -43,14 +43,14 @@ realism. REALISM is owned by SEPARATE instruments (orc ruling adopted into §S R
 |------------|------|-------------------------------|
 | **A4 real-Claude ×20 smoke** | submit discipline / `--wait` against a REAL Claude REPL, ×20 | Real paste-burst + boot timing; the stub is deterministic by design, so it cannot surface real-timing flakes. |
 | **A7 cross-machine acceptance** | full SBQA battery (SBQA_SRC-swapped) + cross-machine spawn on real hardware | Real zmx/Claude on a second machine; this oracle runs on brano + Lima only. |
-| **C2 dogfood** | the org running on the Rust sb for real work | Emergent real-world behavior no fixture can pre-script. |
+| **C2 dogfood** | the org running on the Rust qd for real work | Emergent real-world behavior no fixture can pre-script. |
 
 Rationale (orc): byte/semantic parity against a symmetric counterpart is the cheap,
 complete, deterministic test of the engine's contract; realism is a DIFFERENT
 question answered by instruments that pay the cost of real non-determinism. Keeping
 them separate is why this oracle can be deterministic (double-record byte-identical)
 without laundering fake behavior into the gold — the stub implements ONLY the
-surfaces sb reads, each derived from pinned-TS source.
+surfaces qd reads, each derived from pinned-TS source.
 
 Why not real Claude HERE: (1) API token cost ×N gate runs; (2) credentials would be
 copied into the JAILED HOME — a jail-design violation (ADD-4: HOME is load-bearing
@@ -69,7 +69,7 @@ sha in its RECORDED-FROM + MATCH-PROOF (R1). Stub identity at recording:
 | Row (stub-backed) | Stub behaviors it relies on | Pinned-TS citation |
 |-------------------|-----------------------------|--------------------|
 | **new / boot-readiness** | popup render + blind-Enter dismiss (stub #2); PID file `~/.claude/sessions/<pid>.json` name-matched, status idle (stub #3/#4) | lifecycle.ts:177-235 (blind-Enter loop), :135-175 (findPidFile/readPidStatus); session.ts:64-75 (PidEntry) |
-| **send:pty paste-burst (queue-to-busy + --wait)** | idle↔busy status (stub #4); busy-HOLD so sb observes `busy` → send-queue (stub #6); JSONL user+assistant pair, exact user-record text for the anchor (stub #5); JSONL-at-boot so `--wait` finds the file | utils.ts:297-299 (decideSendPty), :341-346 (findUserAnchor), :359-365 (decideWait); send.ts:128, :154-294; submit.ts:87-114 |
+| **send:pty paste-burst (queue-to-busy + --wait)** | idle↔busy status (stub #4); busy-HOLD so qd observes `busy` → send-queue (stub #6); JSONL user+assistant pair, exact user-record text for the anchor (stub #5); JSONL-at-boot so `--wait` finds the file | utils.ts:297-299 (decideSendPty), :341-346 (findUserAnchor), :359-365 (decideWait); send.ts:128, :154-294; submit.ts:87-114 |
 | **relay-health** | child relay server binds `$SB_RELAY_PORT`; sidecar `{sessionId,port,pid,status}`; GET /health; POST /message → `{message_id}`; relay child PID under claude PID (ls-join) (stub #7/#8) | session.ts:148-212 (sidecar + /health + RelayHealth), :845-873,922 (ls join by PID-parentage); send.ts:414-426 (/message) |
 | **history / attach-detach-reattach** | SBLINE backlog generator emits N numbered rows to the PTY while DETACHED → zmx retains them server-side (stub backlog) | EMPIRICAL-RESULTS.md (zmx server-VT retention, L6); send.ts:146 (zmx history) |
 | **buildClaudeCmd** | stub dumps its received launch argv → the exact flags buildClaudeCmd produced | utils.ts:507-513 (buildClaudeCmd), :226-227 (CLAUDE_FLAGS const), :258-271 (--name) |
@@ -77,13 +77,13 @@ sha in its RECORDED-FROM + MATCH-PROOF (R1). Stub identity at recording:
 
 Fidelity boundary (sanctioned): the stub implements ONLY these surfaces. It does NOT
 model real Claude inference, tool use, thinking blocks, ANSI repaint fidelity, or
-multi-turn beyond what a row drives — none of which sb OBSERVES on the recorded rows.
+multi-turn beyond what a row drives — none of which qd OBSERVES on the recorded rows.
 A divergence in any UN-modeled surface is out of this oracle's scope by construction
 (it is a realism question — section (a)).
 
 ### (c) Blind-Enter (boot-readiness keys on the EVENT, not the keystroke)
 
-The pinned TS `sb new` STILL dismisses the dev-channels popup with a blind-Enter loop
+The pinned TS `qd new` STILL dismisses the dev-channels popup with a blind-Enter loop
 (`lifecycle.ts:177-235`, CONFIRMED unfixed at the pin: from 2s after spawn it sends
 `\r` into the session PTY at intervals until the PID file appears, rationalized
 :211 as "harmless"). It is NOT harmless — the Enters are untargeted and would accept
@@ -138,9 +138,9 @@ Named inline recording modes:
 | `STUB_COUNT_PRE_PID_STDIN` (W2.3) | new-session-trace (W3.3, P2) | exposes the pre-PID-file stdin char count via the boot-stats sidecar; the row asserts it is `0` by stub construction (independent of TS blind-Enter timing). | **LANDED** (W3a) — set inline in `new_session_trace.sh` scn_run; documentary stamp in RECORDED-FROM. |
 | `STUB_NO_QUEUE` (W2.1) | send-pty-paste-burst (W3.1, P3) | removes the stub's TTY-buffer queueing so a busy-queued message lands iff the engine delivered it. | **MUTATION-ONLY CONTROL** (orc-4 ruling 14:50 EDT) — demoted from a recording mode: it is NEVER set on the corpus; it drives the committed mutation-real control (mutation/r2-seams/no_queue_burst.trace) that MUST flip the strengthened busy row RED (the busy-window burst is discarded). |
 | `STUB_RAW_STDIN` (W3.1, v1.8.1) | send-pty-chunked-idle (W3.1, P3) | at startup flips the stub PTY stdin termios to RAW (tty.setcbreak, clears ICANON/ECHO) so the cooked-mode canonical-line bound (macOS MAX_CANON=1024) does NOT cap the chunked-IDLE >=4KB write — the stub then reads like real Claude's raw-mode TUI. | **LANDED** (W3.1, orc-4 Option C ruling) — set inline in `send_pty_chunked_idle.sh` scn_run; documentary `recording_mode=STUB_RAW_STDIN=1` in RECORDED-FROM. DORMANT default (PTY stays COOKED; the W3.7/P10 termios row's cooked icanon=1/echo=1 default is byte-identical, replay-verified in .restamp-evidence-w31.txt). |
-| `STUB_WITHHOLD_PID` (R2/W3.4a) | neg-boot-timeout (W3.4a, P4) | the stub renders the popup, consumes the dismiss CR, then HOLDS OPEN without ever writing the PID file; sb's readiness wait fails. Recorded sb FAILURE SHAPE: rc=1 + readiness-timeout stderr token + no PID file. | **LANDED** (W3b) — set inline in `neg_boot_timeout.sh` scn_run; documentary stamp in RECORDED-FROM. |
+| `STUB_WITHHOLD_PID` (R2/W3.4a) | neg-boot-timeout (W3.4a, P4) | the stub renders the popup, consumes the dismiss CR, then HOLDS OPEN without ever writing the PID file; qd's readiness wait fails. Recorded qd FAILURE SHAPE: rc=1 + readiness-timeout stderr token + no PID file. | **LANDED** (W3b) — set inline in `neg_boot_timeout.sh` scn_run; documentary stamp in RECORDED-FROM. |
 | `STUB_WITHHOLD_JSONL` (R2/W3.4b) | neg-wait-no-reply (W3.4b, P4) | the stub appends the user record + reaches idle but withholds the assistant reply; `send:pty --wait` completes (not a timeout) and prints `(no text response)`, rc 0. Records the R4-honest no-reply shape. | **LANDED** (W3b) — set inline in `neg_wait_no_reply.sh` scn_run; documentary stamp in RECORDED-FROM. |
-| `STUB_DEAD_HEALTH` (R2/W3.4c) | neg-relay-unhealthy (W3.4c, P4) | the stub's /health answers 503 status=dead while the sidecar stays present. Records that the engine's ls-join is SIDECAR-DRIVEN + HEALTH-INDEPENDENT (no sb surface consumes /health for the relay at the pin — flagged spec-premise divergence). | **LANDED** (W3b) — set inline in `neg_relay_unhealthy.sh` scn_run; documentary stamp in RECORDED-FROM. |
+| `STUB_DEAD_HEALTH` (R2/W3.4c) | neg-relay-unhealthy (W3.4c, P4) | the stub's /health answers 503 status=dead while the sidecar stays present. Records that the engine's ls-join is SIDECAR-DRIVEN + HEALTH-INDEPENDENT (no qd surface consumes /health for the relay at the pin — flagged spec-premise divergence). | **LANDED** (W3b) — set inline in `neg_relay_unhealthy.sh` scn_run; documentary stamp in RECORDED-FROM. |
 | `STUB_TWO_STAGE_PID_WRITE` (W2.2/W3.4d, P11) | neg-two-stage-tolerance (W3.4d, P4) | every PID write lands DIRECT in two stages (partial prefix + ~1500ms gap + complete), bypassing the atomic rename. Records the engine's read-tolerance OUTCOME ONLY (boot reaches idle, ls never crashes, session visible after) — never the racy partial state. | **LANDED** (W3b) — set inline in `neg_two_stage_tolerance.sh` scn_run; documentary stamp in RECORDED-FROM. |
 
 ## Addendum (2026-06-05, 0b DELTA-STRENGTH W3.1 RULED): chunked-path coverage
@@ -205,34 +205,34 @@ coverage per section (a)'s parity-vs-realism split. No silent overclaim: this or
 proves the engine's chunked-delivery CONTRACT (zero loss across chunks) deterministically;
 real-timing chunked realism is A4's.
 
-## Addendum (2026-06-15, WP-B7): the `sb ls` render-surface flip + `sb resume` always-headless + the a3-cli `ls --help` re-mint
+## Addendum (2026-06-15, WP-B7): the `qd ls` render-surface flip + `qd resume` always-headless + the a3-cli `ls --help` re-mint
 
 WP-B7 reconciles three ratified golden-deltas that earlier WPs deferred. Each is a
 NAMED, intentional divergence from the recorded corpus — never a silent mask.
 
-### (B7-1) `sb ls` table→JSON render-surface auto-flip (behavioral)
+### (B7-1) `qd ls` table→JSON render-surface auto-flip (behavioral)
 
-`sb ls` (and the bare `sb` default action) now AUTO-DETECTS its render surface by
+`qd ls` (and the bare `qd` default action) now AUTO-DETECTS its render surface by
 the WP-B-CS-1 driver doctrine (*I/O follows who drives*): an agent/pipe caller
 (non-TTY, or a Claude-session env marker) gets the **JSON** machine surface; a
 human at a TTY gets the **table**. `--json` and the net-new `--table` are the two
 explicit overrides on that one surface axis (`--table` forces the human table even
 for an agent; `conflicts_with` `--json` only). `--short` stays a CONTENT modifier,
-subordinate to the surface decision (so an agent `sb ls --short` auto-flips to JSON
+subordinate to the surface decision (so an agent `qd ls --short` auto-flips to JSON
 exactly as `--json --short` does today; `--table --short` is the agent short-text
 escape hatch). This DELIBERATELY diverges from the old always-table piped default.
 Authoring change: `driver::ls_render_mode` wired into `verbs/ls.rs::run_inner`
-(sb-supervisor-9-endorsed, sb-supervisor-11-ratified). The cargo-floor `ls`
+(qd-supervisor-9-endorsed, qd-supervisor-11-ratified). The cargo-floor `ls`
 text-mode tests that asserted table output for agent/pipe callers were ADAPTED
 (inject `--table` to preserve the text-surface assertion, or re-assert the JSON
 shape) — coverage preserved, not masked (`punch_b5_ls_live.rs`, `p0_id_matrix.rs`).
 
-### (B7-2) `sb resume` always-headless (a5-lifecycle / a5rec_resume golden delta)
+### (B7-2) `qd resume` always-headless (a5-lifecycle / a5rec_resume golden delta)
 
-`sb resume` is now ALWAYS headless (Fork A, `resume.rs:218` GUARDRAIL-2, authored at
+`qd resume` is now ALWAYS headless (Fork A, `resume.rs:218` GUARDRAIL-2, authored at
 B-CS-1 D3): it drops the OLD interactive zmx/attach happy-path and routes to a
-headless stream-json relaunch (a human re-entering a live session is `sb connect`,
-not `sb resume`). The a5-lifecycle goldens (`a5_lifecycle_live.sh` G-L resume rows;
+headless stream-json relaunch (a human re-entering a live session is `qd connect`,
+not `qd resume`). The a5-lifecycle goldens (`a5_lifecycle_live.sh` G-L resume rows;
 `fixtures/a5-lifecycle/normalized/resume.txt`) encode the OLD zmx/attach behavior.
 
 - The a5 **error-shape** goldens (`a5rec_resume.sh` → `resume.txt`: no-such-session,
@@ -245,37 +245,37 @@ not `sb resume`). The a5-lifecycle goldens (`a5_lifecycle_live.sh` G-L resume ro
   a future Lima re-mint must reconcile the G-L resume rows + `resume.txt`'s
   zmx/attach happy-path to the always-headless relaunch. (Genuinely infra-blocked.)
 
-### (B7-3) a3-cli `08-help-ls.txt` re-mint (`sb ls --help` — `--table` + B5 drift)
+### (B7-3) a3-cli `08-help-ls.txt` re-mint (`qd ls --help` — `--table` + B5 drift)
 
-`test/golden/dryrun/a3-cli/08-help-ls.txt` is RE-MINTED from the RUST `sb ls --help`
+`test/golden/dryrun/a3-cli/08-help-ls.txt` is RE-MINTED from the RUST `qd ls --help`
 (the `2f1c841` TS pin cannot produce these bytes). Reproducer:
 `test/golden/dryrun/a3-cli/remint_ls_help.sh` (double-run determinism enforced).
 **Split attribution** (red-team verdict DoD):
 
 - **WP-B7's SOLE net-new line** is `--table  Force the human table (override the
   JSON auto-default)` — the (B7-1) flip's escape hatch, made discoverable in help.
-- The `--live` flag block, the over-cap `… N more (sb ls --all)` trailer paragraph,
+- The `--live` flag block, the over-cap `… N more (qd ls --all)` trailer paragraph,
   and the `--all and --live are uncapped` limit wording are **PRE-EXISTING B5
   punch-item-2 drift**: they were added to `help::LS` when `--live`/the trailer
   landed in B5, but the a3-cli corpus was never re-minted then. They are reconciled
   on this row now only because B7 regenerates it anyway.
 - Verify the split: the re-minted stdout body's non-`--table` lines BYTE-MATCH
-  `sb ls --help` @ `d53a837` (= `help::LS` @ `d53a837`, which already carried the
-  `--live`/trailer surface): `git show d53a837:crates/sb/src/bin/sb/help.rs`. The
+  `qd ls --help` @ `d53a837` (= `help::LS` @ `d53a837`, which already carried the
+  `--live`/trailer surface): `git show d53a837:crates/qd/src/bin/qd/help.rs`. The
   remaining ~21 stale a3-cli rows (other verbs' help / error shapes) are a SEPARATE
   B-wide a3-cli reconciliation follow-on (NOT WP-B7's scope).
 
 ## Addendum (2026-06-16, WP-B-CS-2-LIVE): the cutover terminal-attach env-deferral (Q2b)
 
-WP-B-CS-2-LIVE built the live `sb connect` OBSERVE run-loop + the turn-boundary
+WP-B-CS-2-LIVE built the live `qd connect` OBSERVE run-loop + the turn-boundary
 cutover EXECUTION (teardown → `revive_claude` → buffered-input-first → attach). The
-sb-supervisor-12 ruling (Q2a/Q2b) required a real-claude SEED proving the path ONCE
+qd-supervisor-12 ruling (Q2a/Q2b) required a real-claude SEED proving the path ONCE
 end-to-end on a GENUINE live busy headless window, driving `revive_claude` AS FAR AS
 IT PHYSICALLY RUNS and recording the env boundary EMPIRICALLY — NOT pre-conceded.
 
 ### (B-CS-2-LIVE-1) cutover native-TUI/zmx terminal attach — `ENOTTY`, a5/Lima class
 
-The seed (`crates/sb/tests/headless_observe_real_claude_seed.rs`,
+The seed (`crates/qd/tests/headless_observe_real_claude_seed.rs`,
 `real_claude_observe_cutover_seed`, `#[ignore]` + explicit, env -i isolated HOME with
 copied creds + a PRE-TRUSTED `.claude.json` — `hasTrustDialogAccepted` +
 `bypassPermissionsModeAccepted` + onboarding done, so it is NOT launch-dialog-blocked)
@@ -296,14 +296,14 @@ drove the FULL path against a genuine `claude` 2.1.178 turn and proved, first-ha
 The path then stops at the FINAL terminal handoff:
 
 ```
-sb connect: embedded mux: attach: ENOTTY: Not a typewriter   (exit 1)
+qd connect: embedded mux: attach: ENOTTY: Not a typewriter   (exit 1)
 ```
 
 **This ONE step — `mux.attach` handing the live native TUI to a controlling
 terminal — is a NAMED ENV-DEFERRAL** (the a5/Lima terminal-attach class, B7-2's
 sibling). `ENOTTY` is inherent to an automated `#[ignore]` harness: it has piped
 stdio and NO controlling TTY, so the terminal can never be handed over. A real human
-running `sb connect` in a real terminal HAS a TTY and the attach succeeds — the
+running `qd connect` in a real terminal HAS a TTY and the attach succeeds — the
 limitation is the test substrate, not the product. Everything UP TO AND INCLUDING
 teardown + `revive_claude` + the attach ATTEMPT runs for real in the seed; only the
 literal TTY handoff is env-blocked. The cutover-execution LOGIC (teardown ordering,

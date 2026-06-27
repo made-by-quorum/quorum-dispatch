@@ -2,7 +2,7 @@ INTENTIONALLY-DIVERGENT TS INVOCATION (red-team m1 spec)
 pin=0d0fa9ed4800efb1309eca2311345c48af2c4932 zmx=0.6.0 host=Linux aarch64 (Lima sbtest)
 driver=mutation/divergent_invocation_drive.sh captured=2026-06-05
 # A recorded scenario (exit-codes) RE-RUN with a deliberate divergence whose effect
-# lands in the NEVER-normalized exit-code field (ADR-0003): `sb info` is pointed at
+# lands in the NEVER-normalized exit-code field (ADR-0003): `qd info` is pointed at
 # an EXISTING stub-backed session (returns exit 0) instead of a missing one (the
 # recorded golden's exit 1). divergent_exit.trace is the REAL divergent output;
 # run_mutation_real.sh compares it vs the recorded exit-codes golden -> the

@@ -15,7 +15,7 @@ cd "$HOME/sbrust-work/test/golden"
 . lib/jail.sh; . lib/normalize.sh; . lib/check_python.sh; . lib/compare.sh
 . lib/stub_claude/stub_install.sh
 jail_establish; stub_install
-export JAIL_SB_CMD=sb JAIL_ZMX_CMD=zmx
+export JAIL_SB_CMD=qd JAIL_ZMX_CMD=zmx
 . scenarios/_scenario_lib.sh
 name="$(scn_session_name divx)"
 python3 recorder/record_pty.py --out "$JAIL_ROOT/boot.raw" --secs 25 -- \

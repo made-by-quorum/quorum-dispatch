@@ -135,7 +135,7 @@ pub struct JoinInputs {
     /// match against an unused mux session. The embedded qrmux daemon tracks each
     /// session by NAME and the registry row carries that same name, so the link is
     /// deterministic and needs no `ps` ancestry. This closes the cold-start race
-    /// (C1 redfix): on a fresh `sb new`, the claude registry row lands before the
+    /// (C1 redfix): on a fresh `qd new`, the claude registry row lands before the
     /// child's ppid edge is visible in the engine's single `ps` snapshot, so the
     /// pid→mux-pid ancestry walk transiently misses — leaving `zmx_name = None`
     /// and `send:pty` falsely reporting "not mux-live". The zmx lane keeps this
@@ -321,7 +321,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
 
         // EMBEDDED-lane BY-NAME fallback (C1 redfix). The pid/ancestor walk depends
         // on the engine's single `ps` snapshot carrying the registry pid's ppid edge
-        // up to the mux-tracked pid. On a fresh `sb new` cold-start that edge can be
+        // up to the mux-tracked pid. On a fresh `qd new` cold-start that edge can be
         // invisible (the child is forked microseconds before the snapshot), so the
         // walk misses even though the mux session is listed — leaving a live session
         // wrongly unlinked. The embedded daemon keys sessions by NAME and the
@@ -448,7 +448,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             // derivation above — never re-derived).
             provider: provider_id,
             // WP-B5-ii-a (ii): carry the registry `entrypoint` onto the row (same
-            // read-back shape as `provider`/`cwd`/`version`) so the `sb ls`
+            // read-back shape as `provider`/`cwd`/`version`) so the `qd ls`
             // daemon-down render gate can scope itself to headless rows. Only the
             // LiveRegistry branch has a registry row to source it; all other
             // branches below carry `None`.
@@ -730,15 +730,15 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
 /// PURE.
 ///
 /// Cap policy (war story, session.ts:1050-1064):
-///   - An explicit `limit` (sb ls -n N) ALWAYS wins, even with --all.
-///   - Otherwise the full view (`include_all`, i.e. `sb ls -a`) is UNCAPPED — the
+///   - An explicit `limit` (qd ls -n N) ALWAYS wins, even with --all.
+///   - Otherwise the full view (`include_all`, i.e. `qd ls -a`) is UNCAPPED — the
 ///     complete authoritative list across every discovered socket dir + all
 ///     tombstones. (Previously `?? 20` silently capped -a at 20, hiding dead
-///     sessions beyond the 20 most-recent — the "sb ls -a is not authoritative"
+///     sessions beyond the 20 most-recent — the "qd ls -a is not authoritative"
 ///     bug.)
 ///   - The default view (no --all) caps at 20 and shows only named, non-killed.
 ///
-/// A malformed `limit` (0, negative, NaN — e.g. from `sb ls -n abc` →
+/// A malformed `limit` (0, negative, NaN — e.g. from `qd ls -n abc` →
 /// `parseInt`→NaN) is treated as UNSET, never as "show zero": it must not be able
 /// to silently empty the authoritative view. Only a positive integer caps. The
 /// NaN case arrives here as `None` from the CLI layer (TS
@@ -1271,7 +1271,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
-// Re-export the resolve tier used by `sb info` callers (kept here so the join
+// Re-export the resolve tier used by `qd info` callers (kept here so the join
 // module is the single entry-point the CLI consumes).
 pub use resolve::{resolve_session, Resolution};
 

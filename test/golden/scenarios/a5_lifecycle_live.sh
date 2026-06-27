@@ -2,17 +2,17 @@
 # test/golden/scenarios/a5_lifecycle_live.sh
 #
 # A5 workstream-C live-jail rows G-L1..G-L6 (spec §7): kill / gc / resume /
-# reconcile against the REAL Rust sb binary, real zmx 0.6, and a fake-claude
+# reconcile against the REAL Rust qd binary, real zmx 0.6, and a fake-claude
 # (zero real-Claude boot, ADD-10a — nothing here creates a Claude/agent session).
 #
 # House pattern: self-contained like dryrun/a2-mac-fakeclaude.sh. Establishes its
 # OWN per-run hermetic jail (rule 9 + ADD-4 + L15 belt), sbrg- names only, every
 # destructive row pre-asserts jail_assert_resolves_in_jail, jailed assertions key
-# on `jail_zmx list` (never `sb ls`). Bash 3.2 floor (macOS): no assoc arrays,
+# on `jail_zmx list` (never `qd ls`). Bash 3.2 floor (macOS): no assoc arrays,
 # no ${var,,}, no mapfile.
 #
 # Usage:  bash test/golden/scenarios/a5_lifecycle_live.sh
-# Env override: SB_BIN (sb-under-test), ZMX_BIN (zmx). Defaults autodetect.
+# Env override: SB_BIN (qd-under-test), ZMX_BIN (zmx). Defaults autodetect.
 set -u
 
 # --- locate the worktree + binaries (no hardcoded worktree path) --------------
@@ -20,9 +20,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WT="$(cd "$HERE/../../.." && pwd)"            # scenarios -> golden -> test -> repo root
 cd "$WT" || { echo "FATAL: cannot cd to worktree root"; exit 1; }
 
-SB_BIN="${SB_BIN:-$WT/target/debug/sb}"
+SB_BIN="${SB_BIN:-$WT/target/debug/qd}"
 ZMX_BIN="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}"
-[ -x "$SB_BIN" ]  || { echo "FATAL: sb binary not found/executable: $SB_BIN"; exit 1; }
+[ -x "$SB_BIN" ]  || { echo "FATAL: qd binary not found/executable: $SB_BIN"; exit 1; }
 [ -x "$ZMX_BIN" ] || { echo "FATAL: zmx binary not found/executable: $ZMX_BIN"; exit 1; }
 
 export JAIL_SB_CMD="$SB_BIN"
@@ -83,7 +83,7 @@ WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"
 
 # spawn_fake <name> -> launches `zmx run <name> bash -lc 'fake --name <name>'`
 # detached in the jail; returns once the registry entry lands (polls ≤6s). We do
-# NOT use `sb new` (ADD-10a banned) — we drive zmx directly with the fake binary.
+# NOT use `qd new` (ADD-10a banned) — we drive zmx directly with the fake binary.
 spawn_fake() {
   local name="$1" sid="${2:-}" i=0
   local cmd="'$FAKE' --name '$name'"
@@ -278,7 +278,7 @@ echo "--- G-L3b: kill F2/C2 post-verify hint discipline (zmx ls, never zmx kill)
 # discipline is asserted STRUCTURALLY against the built verb source: the advisory
 # must instruct `zmx ls` and must NOT instruct a `zmx kill` of an innocent
 # same-named task. (The live survivor-advisory EXIT-1 behavior is proven by G-L3.)
-KSRC="$WT/crates/sb/src/bin/sb/verbs/kill.rs"
+KSRC="$WT/crates/qd/src/bin/qd/verbs/kill.rs"
 if grep -q "still exists after kill" "$KSRC" \
    && grep -q "Verify with: ZMX_DIR=.* zmx ls" "$KSRC"; then
   ok "G-L3b post-verify advisory uses 'zmx ls' hint (source)"
@@ -465,7 +465,7 @@ fi
 sleep 1
 
 # HARD-STOP (reported + VERIFIED by sbr-pa5-lead2; orc-3 ruling pending):
-# `sb reconcile` is NOT jail-hermetic. The bin verb sweeps
+# `qd reconcile` is NOT jail-hermetic. The bin verb sweeps
 # legacy_zmx_dirs(env.uid(), canonical, [PathBuf::from("/tmp")], ..) — literal
 # "/tmp" + the REAL uid (TS-pin-faithful: utils.ts:113 scanRoots default ["/tmp"]),
 # ignoring the jailed TMPDIR/ZMX_DIR — so it scans the HOST's /tmp/claude-<uid>/
@@ -541,7 +541,7 @@ fi
 
 # Real-reconcile row: OFF on macOS PERMANENTLY (orc-3 standing constraint). It runs
 # ONLY in the Lima lane (G-X1), gated by ALL of: (1) jail_require_destructive_ok —
-# the Lima sentinel /etc/sb-rust-lima + hostname!=brano + SB_RUST_DESTRUCTIVE_OK=1,
+# the Lima sentinel /etc/qd-rust-lima + hostname!=brano + SB_RUST_DESTRUCTIVE_OK=1,
 # which FAILS CLOSED on brano/macOS; (2) the sweep belt; (3) the explicit opt-in.
 # On brano this branch is unreachable (the Lima gate alone refuses).
 if jail_require_destructive_ok 2>/dev/null \

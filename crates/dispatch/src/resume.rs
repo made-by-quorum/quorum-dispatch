@@ -1,4 +1,4 @@
-//! `sb resume` decision core (spec §5.3; TS `commands/lifecycle.ts:408-530` +
+//! `qd resume` decision core (spec §5.3; TS `commands/lifecycle.ts:408-530` +
 //! `utils.ts:470-565`).
 //!
 //! Resume relaunches a COLD session in zmx (by default). The PURE pieces here are
@@ -46,7 +46,7 @@ pub fn resolve_resume_cwd(
             return ResumeCwd::Error(format!(
                 "Session's recorded directory no longer exists: {rec}\n  \
                  The project may have been moved, renamed, or deleted.\n  \
-                 Resume it elsewhere with: sb resume <session> --cwd <dir>"
+                 Resume it elsewhere with: qd resume <session> --cwd <dir>"
             ));
         }
         return ResumeCwd::Cwd(rec.to_string());

@@ -41,7 +41,7 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
-RUST_BIN="${A3_RUST_BIN:-$REPO_ROOT/target/debug/sb}"
+RUST_BIN="${A3_RUST_BIN:-$REPO_ROOT/target/debug/qd}"
 export JAIL_SB_CMD="$RUST_BIN"
 
 A3_REAL_HOME="$HOME"
@@ -55,7 +55,7 @@ fail() { FAIL=$((FAIL+1)); FAILED="$FAILED $1"; printf '  [FAIL] %-28s %s\n' "$1
 
 # Build once.
 if [ "${A3_SKIP_BUILD:-0}" != "1" ]; then
-    "$REPO_ROOT/scripts/build-lock.sh" cargo build -p sb --bin sb >/dev/null 2>&1 \
+    "$REPO_ROOT/scripts/build-lock.sh" cargo build -p qd --bin qd >/dev/null 2>&1 \
         || { echo "FATAL: build failed" >&2; exit 3; }
 fi
 [ -x "$RUST_BIN" ] || { echo "FATAL: rust binary missing: $RUST_BIN" >&2; exit 3; }
@@ -128,17 +128,17 @@ ro_no_mutation SA-live-1        live
 
 # ---- mark: appends EXACTLY one well-formed line; round-trips identical -------
 # NB: jail.sh exports SB_HOME, and mark honors it (H4) — so under the jail the
-# marks file lives at <SB_HOME>/state, NOT <HOME>/.sb/state. Derive the path the
-# same way the engine does (sbHome = SB_HOME || <HOME>/.sb).
+# marks file lives at <SB_HOME>/state, NOT <HOME>/.quorum/dispatch/state. Derive the path the
+# same way the engine does (sbHome = SB_HOME || <HOME>/.quorum/dispatch).
 fresh_jail
-SB_DATA="${SB_HOME:-$HOME/.sb}"
+SB_DATA="${SB_HOME:-$HOME/.quorum/dispatch}"
 MARKS="$SB_DATA/state/marks.jsonl"
 [ -f "$MARKS" ] && fail SA-mark-pre "marks.jsonl exists before mark" || pass SA-mark-pre "no marks.jsonl before first mark"
 PAYLOAD='{"k1":"v1","nested":{"a":[1,2,3]},"u":"café ☕"}'
 run_sb mark alpha-worker "$PAYLOAD"
 if [ "$RC" = "0" ] && [ -f "$MARKS" ]; then
     # A7 ratchet fix (2026-06-05): A6 telemetry (merge-ruled 13:20) appends a
-    # USAGE event line at every mark verb — `sb mark` now writes 2 lines (the
+    # USAGE event line at every mark verb — `qd mark` now writes 2 lines (the
     # mark line FIRST, then {event,verb:"mark",...}). Pre-A6 this expected 1.
     nlines="$(wc -l < "$MARKS" | tr -d ' ')"
     if [ "$nlines" = "2" ]; then
@@ -218,11 +218,11 @@ jail_teardown
 
 # ---- H4: mark HONORS SB_HOME for the state dir (commands/bootstrap.ts:88-96) --
 # Contract: marks land at <sbHome>/state/marks.jsonl where sbHome = SB_HOME ||
-# <HOME>/.sb. (a) SB_HOME set → under <SB_HOME>/state, NOT <HOME>/.sb/state.
-# (b) SB_HOME unset → under <HOME>/.sb/state. SB_HOME flows ONLY through the
+# <HOME>/.quorum/dispatch. (a) SB_HOME set → under <SB_HOME>/state, NOT <HOME>/.quorum/dispatch/state.
+# (b) SB_HOME unset → under <HOME>/.quorum/dispatch/state. SB_HOME flows ONLY through the
 # injected Env seam (L9a).
 
-# (a) SB_HOME set to a dir OUTSIDE the default ~/.sb.
+# (a) SB_HOME set to a dir OUTSIDE the default ~/.quorum/dispatch.
 fresh_jail
 SBH="$JAIL_ROOT/tmp/sbdata_override"
 mkdir -p "$SBH"
@@ -233,19 +233,19 @@ SB_HOME="$SBH" perl -e 'alarm shift; exec @ARGV' 8 "$RUST_BIN" mark alpha-worker
     < /dev/null > "$OUT_FILE" 2> "$ERR_FILE"
 RC=$?
 sbhome_marks="$SBH/state/marks.jsonl"
-default_marks="$HOME/.sb/state/marks.jsonl"
+default_marks="$HOME/.quorum/dispatch/state/marks.jsonl"
 if [ "$RC" = "0" ] && [ -f "$sbhome_marks" ] && [ ! -f "$default_marks" ]; then
     nlsb="$(wc -l < "$sbhome_marks" | tr -d ' ')"
     # A7 ratchet fix: mark line + A6 usage line (see SA-mark-1).
     [ "$nlsb" = "2" ] \
-        && pass SA-mark-sbhome-set "SB_HOME set → marks under <SB_HOME>/state (mark + usage), NOT <HOME>/.sb/state" \
+        && pass SA-mark-sbhome-set "SB_HOME set → marks under <SB_HOME>/state (mark + usage), NOT <HOME>/.quorum/dispatch/state" \
         || fail SA-mark-sbhome-set "SB_HOME marks present but $nlsb lines (expected 2: mark + A6 usage)"
 else
     fail SA-mark-sbhome-set "exit=$RC sbhome_marks=$( [ -f "$sbhome_marks" ] && echo yes || echo no ) default_marks=$( [ -f "$default_marks" ] && echo yes || echo no )"
 fi
 jail_teardown
 
-# (b) SB_HOME UNSET → default <HOME>/.sb/state/marks.jsonl. NB: jail.sh exports
+# (b) SB_HOME UNSET → default <HOME>/.quorum/dispatch/state/marks.jsonl. NB: jail.sh exports
 # SB_HOME, so we must explicitly UNSET it for this run to exercise the default.
 fresh_jail
 OUT_FILE="$JAIL_ROOT/tmp/o"; ERR_FILE="$JAIL_ROOT/tmp/e"
@@ -253,9 +253,9 @@ jail_assert_established || { echo "FATAL: jail lost" >&2; exit 3; }
 env -u SB_HOME perl -e 'alarm shift; exec @ARGV' 8 "$RUST_BIN" mark alpha-worker '{"k":"v"}' \
     < /dev/null > "$OUT_FILE" 2> "$ERR_FILE"
 RC=$?
-default_marks="$HOME/.sb/state/marks.jsonl"
+default_marks="$HOME/.quorum/dispatch/state/marks.jsonl"
 if [ "$RC" = "0" ] && [ -f "$default_marks" ]; then
-    pass SA-mark-sbhome-default "SB_HOME unset → marks default to <HOME>/.sb/state"
+    pass SA-mark-sbhome-default "SB_HOME unset → marks default to <HOME>/.quorum/dispatch/state"
 else
     fail SA-mark-sbhome-default "exit=$RC default_marks=$( [ -f "$default_marks" ] && echo yes || echo no )"
 fi
@@ -411,7 +411,7 @@ else
 fi
 jail_teardown
 
-# bootstrap: REAL verb creates ~/.sb state dirs on first run, so "no mutation" is
+# bootstrap: REAL verb creates ~/.quorum/dispatch state dirs on first run, so "no mutation" is
 # NOT its contract. The A3 intent (the verb does the right, bounded thing) maps to
 # IDEMPOTENCE: run twice in a fresh jail, the SECOND run's HOME-sha must equal the
 # first run's (a no-op apart from re-checks), both exit 0. This is the same

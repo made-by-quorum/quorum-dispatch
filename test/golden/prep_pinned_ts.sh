@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # test/golden/prep_pinned_ts.sh — prepare a PINNED TS clone for recording.
 #
-# RED-TEAM m2 + scenario-bypass close: golden recordings must drive the sb at a
+# RED-TEAM m2 + scenario-bypass close: golden recordings must drive the qd at a
 # RATIFIED pinned commit, never the org's shared ~/work/switchboard checkout
 # (whose HEAD floats and whose branches a lead must never switch — ADD-7). This
 # script makes a per-run, throwaway, PIN-VERIFIED clone that record.sh requires.
 #
-# What it does (all OUTSIDE both the org checkout and the sb-rust repo tree):
+# What it does (all OUTSIDE both the org checkout and the qd-rust repo tree):
 #   1. CLONE ~/work/switchboard (LOCAL git objects only — no network fetch) into a
 #      caller-supplied dir that defaults to a build area NOT under either repo and
 #      NOT committed. The source checkout's branches/HEAD are NEVER touched (clone
@@ -32,8 +32,8 @@
 # Usage:
 #   prep_pinned_ts.sh --pin <sha> [--dest <dir>] [--src <ts-repo>]
 #     --pin   REQUIRED ratified PINNED_TS_COMMIT.
-#     --dest  clone dir (default: $PREP_BUILD_DIR or ${TMPDIR:-/tmp}/sb-rust-ts-prep/<pin>).
-#             MUST NOT be under the org checkout or the sb-rust repo (refused otherwise).
+#     --dest  clone dir (default: $PREP_BUILD_DIR or ${TMPDIR:-/tmp}/qd-rust-ts-prep/<pin>).
+#             MUST NOT be under the org checkout or the qd-rust repo (refused otherwise).
 #     --src   the TS repo to clone from (default: ~/work/switchboard).
 #
 # On success prints the clone dir + the verified entrypoint path to stdout.
@@ -63,14 +63,14 @@ done
 
 # Default dest: a build area NOT under either repo, keyed by pin.
 if [ -z "$DEST" ]; then
-    DEST="${PREP_BUILD_DIR:-${TMPDIR:-/tmp}/sb-rust-ts-prep}/$PIN"
+    DEST="${PREP_BUILD_DIR:-${TMPDIR:-/tmp}/qd-rust-ts-prep}/$PIN"
 fi
 
-# REFUSE a dest inside the sb-rust repo tree or inside the org TS checkout — the
+# REFUSE a dest inside the qd-rust repo tree or inside the org TS checkout — the
 # clone must live OUTSIDE both (so it is never committed, never confused with the
 # source checkout).
 _resolve() { ( cd "$1" 2>/dev/null && pwd ) || printf '%s' "$1"; }
-SBRUST_TOP="$(cd "$PREP_HERE/../.." 2>/dev/null && pwd)"   # repo root of sb-rust
+SBRUST_TOP="$(cd "$PREP_HERE/../.." 2>/dev/null && pwd)"   # repo root of qd-rust
 SRC_TOP="$(_resolve "$SRC")"
 # Resolve dest's existing-parent prefix for the containment check.
 _dest_parent="$DEST"
@@ -79,14 +79,14 @@ while [ ! -d "$_dest_parent" ] && [ "$_dest_parent" != "/" ] && [ "$_dest_parent
 done
 _dest_real="$(_resolve "$_dest_parent")"
 case "$_dest_real/" in
-    "$SBRUST_TOP"/*) _prep_die "dest $DEST is under the sb-rust repo ($SBRUST_TOP) — must be outside" 64 ;;
+    "$SBRUST_TOP"/*) _prep_die "dest $DEST is under the qd-rust repo ($SBRUST_TOP) — must be outside" 64 ;;
     "$SRC_TOP"/*)    _prep_die "dest $DEST is under the org TS checkout ($SRC_TOP) — must be outside" 64 ;;
 esac
 
 # Fresh clone each run: remove a stale dest (only if it is clearly our prep dir).
 if [ -e "$DEST" ]; then
     case "$DEST" in
-        *sb-rust-ts-prep*|*"$PIN"*) rm -rf "$DEST" 2>/dev/null || true ;;
+        *qd-rust-ts-prep*|*"$PIN"*) rm -rf "$DEST" 2>/dev/null || true ;;
         *) _prep_die "dest $DEST exists and is not a recognizable prep dir — refusing to remove it" 1 ;;
     esac
 fi

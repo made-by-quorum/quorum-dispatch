@@ -2,20 +2,20 @@
 # test/golden/scenarios/new_went_busy_exit.sh
 #
 # A4 M4b — Level 2 went-busy EXIT-CONTRACT golden scenario (a4-spec §5 "Level 2",
-# §3.5; ADR 0008; doc/PROTOCOL.md "sb new exit contract").
+# §3.5; ADR 0008; doc/PROTOCOL.md "qd new exit contract").
 #
-# Drives `sb new -p` through REAL zmx with the `fakerepl` binary standing in for
+# Drives `qd new -p` through REAL zmx with the `fakerepl` binary standing in for
 # claude (CLAUDE_BIN substitution, launch.rs:23-27), IN-JAIL (ADD-4), and asserts
 # the three-way exit contract end-to-end on the bin layer:
 #
-#   ACCEPT    `sb new <n> -p "<msg>"`  (fakerepl defaults: prompt submits, goes
+#   ACCEPT    `qd new <n> -p "<msg>"`  (fakerepl defaults: prompt submits, goes
 #             busy)                                   -> exit 0  + stdout
 #             `Prompt delivered to "<n>"`.  Run TWICE (determinism).
 #   STALL     same, SB_FAKEREPL_ABSORB_ALL_CRS=1 (every CR absorbed; the
 #             remediation CR can never submit)        -> exit 10 + stderr WARNING
 #             block; the session STILL EXISTS (turn-start unconfirmed, not a
 #             create failure).  Run TWICE (determinism).
-#   NO-PROMPT `sb new <n>` (no -p)                    -> exit 0 (10 is unreachable
+#   NO-PROMPT `qd new <n>` (no -p)                    -> exit 0 (10 is unreachable
 #             without -p; delivery never runs).
 #   REFUSAL   the fakerepl binary run directly out-of-jail (clean env, AND a
 #             partial-spoof env: HOME jail-shaped but SB_HOME elsewhere) -> exit
@@ -23,7 +23,7 @@
 #             scenario layer.
 #
 # HOW THE JAIL ENV REACHES fakerepl (the mechanism, verified empirically):
-# `jail_establish` EXPORTS HOME/SB_HOME/ZMX_DIR/TMPDIR (jail.sh:139-146). `sb new`
+# `jail_establish` EXPORTS HOME/SB_HOME/ZMX_DIR/TMPDIR (jail.sh:139-146). `qd new`
 # spawns `zmx run <n> -d bash -lc "command '<CLAUDE_BIN>' <flags...> --name <n>"`
 # via RealExec (exec.rs:109-113) which INHERITS the parent env, overriding only
 # ZMX_DIR (to the canonical socket dir, which under the jail IS $JAIL_ROOT/zmx).
@@ -40,7 +40,7 @@
 # arrays, no ${var,,}, no mapfile). Builds via scripts/build-lock.sh (B2).
 #
 # Hermetic: everything inside one per-run jail; sessions asserted/torn down via
-# the jail's own zmx primitives (NEVER `sb ls`, which scans the legacy /tmp + XDG
+# the jail's own zmx primitives (NEVER `qd ls`, which scans the legacy /tmp + XDG
 # dirs and would surface the host's REAL org sessions — a noisy, non-hermetic
 # read; the jailed `zmx list` pinned to ZMX_DIR sees ONLY our sessions). Teardown
 # ALWAYS via an EXIT/INT/TERM trap; jail_teardown is idempotent.
@@ -49,7 +49,7 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
-RUST_BIN="${A4_RUST_BIN:-$REPO_ROOT/target/debug/sb}"
+RUST_BIN="${A4_RUST_BIN:-$REPO_ROOT/target/debug/qd}"
 FAKEREPL_BIN="${A4_FAKEREPL_BIN:-$REPO_ROOT/target/debug/fakerepl}"
 ZMX_CMD="${JAIL_ZMX_CMD:-zmx}"
 
@@ -70,10 +70,10 @@ scn_name() { printf '%s%s%s' "${JAIL_PREFIX:?jail not established}" "$1" "$2"; }
 
 # --- Build the two binaries ONCE, through the build lock (B2). ---------------
 if [ "${A4_SKIP_BUILD:-0}" != "1" ]; then
-    "$REPO_ROOT/scripts/build-lock.sh" cargo build -p fakerepl -p sb >/dev/null 2>&1 \
-        || { echo "FATAL: build failed (cargo build -p fakerepl -p sb)" >&2; exit 3; }
+    "$REPO_ROOT/scripts/build-lock.sh" cargo build -p fakerepl -p qd >/dev/null 2>&1 \
+        || { echo "FATAL: build failed (cargo build -p fakerepl -p qd)" >&2; exit 3; }
 fi
-[ -x "$RUST_BIN" ]     || { echo "FATAL: sb binary missing: $RUST_BIN" >&2; exit 3; }
+[ -x "$RUST_BIN" ]     || { echo "FATAL: qd binary missing: $RUST_BIN" >&2; exit 3; }
 [ -x "$FAKEREPL_BIN" ] || { echo "FATAL: fakerepl binary missing: $FAKEREPL_BIN" >&2; exit 3; }
 command -v "$JAIL_ZMX_CMD" >/dev/null 2>&1 \
     || { echo "FATAL: zmx not found on PATH (JAIL_ZMX_CMD=$JAIL_ZMX_CMD)" >&2; exit 3; }
@@ -117,7 +117,7 @@ jail_kill() {
         || ZMX_DIR="$ZMX_DIR" "$JAIL_ZMX_CMD" kill "$name" >/dev/null 2>&1 || true
 }
 
-# run_new <name> <env-prefix> [extra-args...] -- runs `sb new` in the jail with an
+# run_new <name> <env-prefix> [extra-args...] -- runs `qd new` in the jail with an
 # optional single env assignment prefix (e.g. SB_FAKEREPL_ABSORB_ALL_CRS=1), then
 # sets globals RC / OUT_FILE / ERR_FILE for the caller to assert on.
 RC=0; OUT_FILE=""; ERR_FILE=""
@@ -139,7 +139,7 @@ run_new() {
 
 echo "================ A4 went-busy EXIT-CONTRACT scenario (Level 2) ================"
 echo "  jail=$JAIL_ROOT"
-echo "  sb=$RUST_BIN"
+echo "  qd=$RUST_BIN"
 echo "  fakerepl(jailed)=$CLAUDE_BIN"
 echo "  zmx=$JAIL_ZMX_CMD"
 echo
@@ -217,7 +217,7 @@ done
 echo
 
 # ---------------------------------------------------------------------------
-# ROW NO-PROMPT. `sb new` without -p: delivery never runs, so 10 is unreachable.
+# ROW NO-PROMPT. `qd new` without -p: delivery never runs, so 10 is unreachable.
 # Just the create path -> exit 0.
 # ---------------------------------------------------------------------------
 name="$(scn_name noprompt 1)"
@@ -263,7 +263,7 @@ r2err="$JAIL_ROOT/refuse-spoof.err"
 # HOME jail-shaped (passes marker (a)) but SB_HOME elsewhere (fails coherence (b)).
 env -i \
     HOME="$JAIL_ROOT/home" \
-    SB_HOME="/tmp/not-the-jail-sb-home" \
+    SB_HOME="/tmp/not-the-jail-qd-home" \
     ZMX_DIR="$JAIL_ROOT/zmx" \
     TMPDIR="$JAIL_ROOT/tmp" \
     "$FAKEREPL_BIN" </dev/null >/dev/null 2>"$r2err"

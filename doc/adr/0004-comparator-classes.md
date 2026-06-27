@@ -56,7 +56,7 @@ fix-wave + ADD-2 `--wait`). Scenario: `scenarios/relay_health.sh`.
 
 ### Sanctioned divergence: boot-readiness
 
-TS sb determines readiness with a blind-Enter keystroke loop (it sends Enter at
+TS qd determines readiness with a blind-Enter keystroke loop (it sends Enter at
 intervals to dismiss the dev-channels popup, because the PID file does not yet
 exist — see `~/work/switchboard/src/commands/lifecycle.ts:170-203`). The Rust
 oracle deliberately diverges: readiness is the **EVENT contract** (PID-file
@@ -94,13 +94,13 @@ is a dated NAMED divergence with its replacing invariant. (Backstop:
 count(reclasses) == count(named-divergence lines below) == 2.)
 
 - **DIV-9a-1 (2026-06-05): zmx-dir resolution, ZMX_DIR tier — byte-exact →
-  semantic (resolution-outcome).** WHY: sb exposes no "print my resolved zmx dir"
+  semantic (resolution-outcome).** WHY: qd exposes no "print my resolved zmx dir"
   surface, so a byte-exact row could only compare a FABRICATED scenario line, not a
-  real sb output — byte-parity on a fabricated string tests nothing real. REPLACING
+  real qd output — byte-parity on a fabricated string tests nothing real. REPLACING
   INVARIANT (resolution-outcome): a session created with an explicit `ZMX_DIR=X`
   has its zmx socket created under `X` and is reachable/killable there (resolveZmxDir
   returns the explicit dir outright — pinned `src/utils.ts:68-82`, ZMX_DIR branch).
-  The outcome (socket lands in the explicit dir; `sb`/`zmx` find it there) is the
+  The outcome (socket lands in the explicit dir; `qd`/`zmx` find it there) is the
   load-bearing contract, asserted semantically against the jail's `ZMX_DIR`.
 
 - **DIV-9a-2 (2026-06-05): zmx-dir resolution, TMPDIR fallback + collapse —

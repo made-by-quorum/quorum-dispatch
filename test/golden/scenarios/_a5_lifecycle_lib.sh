@@ -5,7 +5,7 @@
 # These scenarios SELF-RECORD the pinned TS engine's output shapes (pin 0d0fa9e)
 # into the golden oracle. record.sh establishes the jail + sets SCN_OUT before
 # sourcing the scenario; each scenario forges its pre-state INSIDE the jail (so
-# every byte is hermetic) and drives the TS sb via scn_sb (SB_UNDER_TEST points
+# every byte is hermetic) and drives the TS qd via scn_sb (SB_UNDER_TEST points
 # at `bun <pinned-clone>/src/index.ts`). Bash 3.2 floor.
 #
 # RECORDING RULES honored here (binding):
@@ -15,7 +15,7 @@
 #   - SB_SECRET_BACKEND=file for config rows (NO keychain — daytime-deferred).
 #   - NEVER a real secret: the fake OpenRouter placeholder is BELOW the real-key
 #     length anchor so the L11 secret-scan admit gate passes.
-#   - ADD-12: destructive `sb reconcile` (no --dry-run) is OFF on macOS; the
+#   - ADD-12: destructive `qd reconcile` (no --dry-run) is OFF on macOS; the
 #     reconcile rows here are --dry-run ONLY (read-only: the verb's dry-run guard
 #     blocks every kill/tombstone). The non-dry `Repaired` shape is LIMA-DEFERRED.
 #   - kill-live: jail_assert_resolves_in_jail pre-asserts before the destructive run.
@@ -24,7 +24,7 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_scenario_lib.sh"
 
 # The OBVIOUSLY-FAKE OpenRouter placeholder. 9 chars after `sk-or-` — BELOW the
-# 20-char real-key anchor the secret-scan gate (and sb-qa safety.sh) enforce, so
+# 20-char real-key anchor the secret-scan gate (and qd-qa safety.sh) enforce, so
 # recording `config get --reveal` of this value does NOT trip the admit gate.
 A5_FAKE_OPENROUTER_KEY='sk-or-FAKE-0000'
 
@@ -51,7 +51,7 @@ EOS
 }
 
 # a5_spawn_fake <name> — spawn a live jailed sbrg- session via the REAL zmx + the
-# fake-claude (NOT `sb new` — ADD-10a banned). Polls until the registry entry +
+# fake-claude (NOT `qd new` — ADD-10a banned). Polls until the registry entry +
 # zmx task land (≤8s). Returns 0 on success.
 a5_spawn_fake() {
     local name="$1" fake="$JAIL_ROOT/fake-claude" work="$JAIL_ROOT/tmp/work" i=0

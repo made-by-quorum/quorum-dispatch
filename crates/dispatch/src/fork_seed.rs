@@ -1,19 +1,19 @@
 //! WP-B5-iii — Mechanism S: fork-transcript seeding (claude-only).
 //!
-//! sb-side realization of `FORK-IDENTITY-SPEC.md` §3/§4/§5/§5a. To fork a session
-//! at a PAST or the latest-safe boundary, sb places a forked copy of the parent
+//! qd-side realization of `FORK-IDENTITY-SPEC.md` §3/§4/§5/§5a. To fork a session
+//! at a PAST or the latest-safe boundary, qd places a forked copy of the parent
 //! transcript at `<projects>/<cwd-slug>/<fork_uuid>.jsonl`; then
 //! `claude --resume <fork_uuid>` (launched in the cwd whose slug holds the file)
 //! resumes the fork. This is the same faithful copy/re-key claude's native
 //! `--fork-session` performs (research S4.1: COPY into a NEW id-keyed file,
 //! re-stamp every record's `sessionId` to the child id, PRESERVE the
-//! `uuid`/`parentUuid` DAG), done by sb so it can ALSO truncate at a chosen safe
+//! `uuid`/`parentUuid` DAG), done by qd so it can ALSO truncate at a chosen safe
 //! boundary (`--turn`) and report staleness (§5a). The seeding MECHANISM is the
 //! build-time decision the spec §3 left open; this module is that mechanism.
 //!
 //! Characterized first-hand (`WP-B5iii-TRANSCRIPT-TRACE.md`, claude 2.1.177):
 //! claude resolves `--resume <uuid>` PURELY by `<cwd-slug>/<uuid>.jsonl` — there
-//! is no session index — so an sb-placed, re-keyed, truncated transcript resumes
+//! is no session index — so an qd-placed, re-keyed, truncated transcript resumes
 //! cleanly (exp F-SEED) and the parent file is never touched.
 //!
 //! PURE: operates over the transcript text / parsed records only — no process, no

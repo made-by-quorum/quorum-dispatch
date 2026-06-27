@@ -1,4 +1,4 @@
-//! `sb whoami` (alias `name`) — REAL (findCallerSession port, commands/status.ts:159-210).
+//! `qd whoami` (alias `name`) — REAL (findCallerSession port, commands/status.ts:159-210).
 //!
 //! P0 wave-2 (spec-w2-env D2): whoami PREFERS `SB_SESSION_ID` (the env-carried
 //! identity the engine injects at every launch — works at ANY process depth and

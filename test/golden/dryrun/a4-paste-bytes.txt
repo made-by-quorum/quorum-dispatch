@@ -1,6 +1,6 @@
 === REAL-HOME BELT before: 728 ===
 === BOOT 3 (paste investigation) ===
-  sb new exit=0 : Started detached session "sbrg-97472178063122623665-paste"
+  qd new exit=0 : Started detached session "sbrg-97472178063122623665-paste"
   resolution belt: sbrg-97472178063122623665-paste resolves uniquely in-jail (OK)
   authed; JP=/tmp/claude-501/sbrg-runs/97472178063122623665/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-97472178063122623665-tmp-work/fa75a8cb-9104-470d-ba0f-a3ad44bba31d.jsonl
 

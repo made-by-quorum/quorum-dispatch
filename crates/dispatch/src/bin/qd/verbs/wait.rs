@@ -1,4 +1,4 @@
-//! REAL `sb wait` backend (spec §3.2; wart-wave W6+W7 content keying, ADD-15) —
+//! REAL `qd wait` backend (spec §3.2; wart-wave W6+W7 content keying, ADD-15) —
 //! claude-code path only.
 //!
 //! Resolve → entry idle check (resolved status) → no-pid error → STATUS +
@@ -40,7 +40,7 @@ fn entry_gate_idle(
 /// (no subscriber) is honest channel-DOWN mode, where `status_fallback` reads the
 /// disk. The §H.2 purity invariant lives or dies on this wiring — guard it: a
 /// regression that drops `status_source` to `None` while a live channel exists
-/// silently reverts `sb wait` to a disk-as-status read, exactly the bug class
+/// silently reverts `qd wait` to a disk-as-status read, exactly the bug class
 /// (B) eliminates.
 fn build_wait_deps<'a>(
     status_source: Option<Box<dyn ChannelStatusSource>>,
@@ -82,11 +82,11 @@ fn usage_wait(session_id: &str, name: Option<&str>) {
     if let Err(e) =
         dispatch::telemetry::append_usage(&RealEnv, &RealClock, "wait", Some(session_id), name)
     {
-        eprintln!("sb wait: telemetry usage append failed (non-fatal): {e}");
+        eprintln!("qd wait: telemetry usage append failed (non-fatal): {e}");
     }
 }
 
-/// `sb wait <session>` — block until a session goes busy→idle. Port of
+/// `qd wait <session>` — block until a session goes busy→idle. Port of
 /// status.ts:214-260 + 359-390 (claude path).
 pub fn run_wait(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
@@ -230,7 +230,7 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
             Box::new(RealTurnEndProbe::new(p, entry_offset)) as Box<dyn TurnCompletion>
         });
     if probe.is_none() {
-        eprintln!("sb wait: no transcript found for this session — status-keyed only");
+        eprintln!("qd wait: no transcript found for this session — status-keyed only");
     }
 
     // WP-B2b-2b deliverable 2 — the B3 disk-free FLIP. With a live subscriber the
@@ -256,7 +256,7 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
     let sleeper = RealSleeper;
     // WP-B2b-2b deliverable 2 (R1-a): `status_source = Some(..)` on the healthy path
     // sources the control status off the SAME subscriber that backs the completion
-    // seam above — flipping `sb wait`'s control path off disk. `None` (no subscriber)
+    // seam above — flipping `qd wait`'s control path off disk. `None` (no subscriber)
     // = honest channel-DOWN mode: `pid.json` (StatusFallback) + the (A) transcript
     // barrier, exactly as before. No control decision rests on a disk status outside
     // channel-down mode (the §6.0 invariant; §H.2 purity test).
@@ -345,7 +345,7 @@ fn run_codex_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i
     let connected: Option<WsAppServer> = endpoint.as_deref().and_then(|ep| {
         let rpc = WsAppServer::connect(ep, std::time::Duration::from_secs(5)).ok()?;
         let client = ClientInfo {
-            name: "sb-manager".to_string(),
+            name: "qd-manager".to_string(),
             title: None,
             version: "0".to_string(),
         };
@@ -449,7 +449,7 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
         Err(code) => return code,
     };
     let cold = |label: &str| {
-        eprintln!("sb wait: \"{label}\": acp session daemon not reachable (try sb resume {label}).");
+        eprintln!("qd wait: \"{label}\": acp session daemon not reachable (try qd resume {label}).");
         1
     };
 

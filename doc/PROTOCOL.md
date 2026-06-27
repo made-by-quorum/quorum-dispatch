@@ -1,13 +1,13 @@
-# sb engine — composition protocol
+# qd engine — composition protocol
 
-Contracts an external tool (e.g. `sbx spawn`) can rely on when shelling out to
-the `sb` engine. Each contract is also enforced by tests/ADRs; this file is the
+Contracts an external tool (e.g. `qb spawn`) can rely on when shelling out to
+the `qd` engine. Each contract is also enforced by tests/ADRs; this file is the
 discoverable index.
 
-## `sb new` exit contract
+## `qd new` exit contract
 
-`sb new <name> [-p <prompt>] [--model <m>] ...` exits with a code an external
-spawner can branch on WITHOUT parsing stdout/stderr. (ADR 0008; `sb new --help`
+`qd new <name> [-p <prompt>] [--model <m>] ...` exits with a code an external
+spawner can branch on WITHOUT parsing stdout/stderr. (ADR 0008; `qd new --help`
 epilogue; golden scenario `new_went_busy_exit.sh`.)
 
 | Exit | Meaning | When |
@@ -21,7 +21,7 @@ Notes for composers:
 - `--model`'s delivery is fire-and-forget and does NOT affect the exit code.
 - `10` is unreachable without `-p`.
 - The codes `2` (config usage) and `3` (`ping` validation) belong to OTHER verbs;
-  `sb new` only ever returns `0`, `1`, or `10`.
-- On `10`, the session is real: `sb attach <name>` / `sb ls` will find it. On `1`
+  `qd new` only ever returns `0`, `1`, or `10`.
+- On `10`, the session is real: `qd attach <name>` / `qd ls` will find it. On `1`
   due to a vanished PID file, the registry row is gone — do not assume the
   session is addressable.

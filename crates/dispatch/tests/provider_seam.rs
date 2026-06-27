@@ -811,7 +811,7 @@ fn daemon_steer_stale_precondition_is_typed_error() {
 /// the production registry; an unknown id → None.
 ///
 /// MUTATION EVIDENCE: registering the fixture in `provider_for` would make
-/// `sb new --provider fixture-daemon` bootable (P1 must not) — this test reds
+/// `qd new --provider fixture-daemon` bootable (P1 must not) — this test reds
 /// that. The fixture is a CONFORMANCE construct, not a dispatchable provider.
 /// DOCUMENTED CHOICE (codex-p1-spec section 2.3): the fixture is constructed
 /// directly by the conformance lane, never via the registry.

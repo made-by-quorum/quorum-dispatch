@@ -3,7 +3,7 @@
 # fetch-zmx.sh — retrieve the pinned zmx 0.6.0 source tarball into a destination
 # directory and sha256-VERIFY it before letting anyone use it.
 #
-# WHY THIS EXISTS: the pin must be enforced, not merely declared. sb is built and
+# WHY THIS EXISTS: the pin must be enforced, not merely declared. qd is built and
 # tested against exactly one zmx source tree; a wrong, truncated, or tampered
 # tarball must be REFUSED loudly rather than silently accepted. The mirror in
 # vendor/zmx/ is the source of truth; this script is the only sanctioned way to

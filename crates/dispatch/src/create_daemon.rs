@@ -1,11 +1,11 @@
-//! `sb new --provider <daemon-hosted>` create pipeline (codex-p2-spec §7.2) — the
+//! `qd new --provider <daemon-hosted>` create pipeline (codex-p2-spec §7.2) — the
 //! daemon-hosted sibling of [`crate::create::run_new`].
 //!
-//! THE TOPOLOGY (orc ruling 02:18 06-07): ONE sb-owned `codex app-server`
-//! process PER codex session, listening on `ws://127.0.0.1:<port>`. sb is a
-//! short-lived CLI; the daemon + the rollout file are the durable truth, so sb
+//! THE TOPOLOGY (orc ruling 02:18 06-07): ONE qd-owned `codex app-server`
+//! process PER codex session, listening on `ws://127.0.0.1:<port>`. qd is a
+//! short-lived CLI; the daemon + the rollout file are the durable truth, so qd
 //! writes the registry row ITSELF (claude precedent inverted — claude writes its
-//! own row, codex's daemon knows nothing of sb), keyed by the daemon pid,
+//! own row, codex's daemon knows nothing of qd), keyed by the daemon pid,
 //! carrying `provider:"codex"`, the REAL thread id as sessionId (m2), and the new
 //! `endpoint` field.
 //!
@@ -14,11 +14,11 @@
 //!   1. version sniff (§3.4) — Breaking verdict → loud named error (found vs pin
 //!      + the re-pin ceremony) unless `SB_CODEX_UNPINNED=1`; PatchDrift → warn.
 //!   2. port allocation (§3.2) — bind `127.0.0.1:0`, take the OS port, drop the
-//!      listener; RE-ROLL any port in 8900-9000 (sb's relay probe range — fleet
+//!      listener; RE-ROLL any port in 8900-9000 (qd's relay probe range — fleet
 //!      lesson); ×N retry ladder if the daemon later fails to bind.
 //!   3. spawn DETACHED (§3.2, P-2-proven) — argv = provider launch_plan argv +
 //!      `["--listen", "ws://127.0.0.1:<port>"]`, `process_group(0)`, stdout/stderr
-//!      → `<sb_home>/.sb/log/codex-<name>.log`, cwd = session cwd.
+//!      → `<sb_home>/.quorum/dispatch/log/codex-<name>.log`, cwd = session cwd.
 //!   4. ws connect (bounded retry — the daemon needs a moment to listen) →
 //!      initialize handshake (+ initialized) → thread/start(cwd, FULL-BYPASS
 //!      policy) → the thread id.
@@ -45,10 +45,10 @@ use crate::registry::{self, RegistryEntry};
 // The R-a FULL-BYPASS posture (codex-p2-spec §3.3).
 // ===========================================================================
 
-/// sb-launched codex threads run codex's full-bypass posture — the claude
+/// qd-launched codex threads run codex's full-bypass posture — the claude
 /// `--dangerously-skip-permissions` parity defaults (codex-p2-spec §3.3).
 ///
-/// ⚠ FLIPPING THESE IS A ONE-LINE PETE-READBACK ITEM. They give an sb-launched
+/// ⚠ FLIPPING THESE IS A ONE-LINE PETE-READBACK ITEM. They give an qd-launched
 /// codex thread approval-policy `never` + sandbox `danger-full-access` (the same
 /// "no prompts, full machine access" posture claude sessions run under today).
 /// They are passed to `AppServerRpc::thread_start(cwd, approval_policy, sandbox)`
@@ -58,9 +58,9 @@ const SANDBOX: &str = "danger-full-access";
 
 /// The ws client identity sent on `initialize` (matches the W3 boot waiter +
 /// the spike probe's `clientInfo`).
-const CLIENT_NAME: &str = "sb-manager";
+const CLIENT_NAME: &str = "qd-manager";
 
-/// The relay-probe port range sb scans (codex-p2-spec §3.2 + fleet lesson). A
+/// The relay-probe port range qd scans (codex-p2-spec §3.2 + fleet lesson). A
 /// daemon port landing here is RE-ROLLED so the relay scan never collides with a
 /// codex daemon.
 const RELAY_RANGE: std::ops::RangeInclusive<u16> = 8900..=9000;
@@ -204,7 +204,7 @@ pub struct DaemonDeps<'a> {
     /// The claim is taken BEFORE the spawn loop, held through the row write, and
     /// released on EVERY exit path (RAII), mirroring create.rs exactly.
     pub claims_dir: PathBuf,
-    /// The log dir root for the daemon's stdout/stderr (`<sb_home>/.sb/log`);
+    /// The log dir root for the daemon's stdout/stderr (`<sb_home>/.quorum/dispatch/log`);
     /// the file is `codex-<name>.log` (codex-p2-spec §3.2).
     pub log_dir: PathBuf,
     /// The detached-spawn seam (real spawner in production; a fake in units).
@@ -309,7 +309,7 @@ impl std::fmt::Display for DaemonError {
                     registry::claim_file_name(name).unwrap_or_else(|| format!("{name}.claim"));
                 write!(
                     f,
-                    "sb start: name '{name}' is being created by another process \
+                    "qd start: name '{name}' is being created by another process \
                      (claim held: {holder}). No session was created. If no create \
                      is in flight, the claim is wedged — delete the '{claim_file}' \
                      file under ~/.claude/claims/ to recover (the claim file only \
@@ -321,7 +321,7 @@ impl std::fmt::Display for DaemonError {
             // the override knob. Mirrors the spec's example wording.
             DaemonError::VersionBreaking { found, pin } => write!(
                 f,
-                "sb start: codex {}.{}.{} detected, pinned {}.{} — run the schema \
+                "qd start: codex {}.{}.{} detected, pinned {}.{} — run the schema \
                  fixture-diff and re-pin (scripts/codex-schema-diff.sh + bump \
                  VERSION.pin). To proceed at your own risk: SB_CODEX_UNPINNED=1. \
                  No session was created.",
@@ -329,38 +329,38 @@ impl std::fmt::Display for DaemonError {
             ),
             DaemonError::VersionUnknown { detail } => write!(
                 f,
-                "sb start: could not determine the codex version ({detail}). \
+                "qd start: could not determine the codex version ({detail}). \
                  Is `codex` on PATH? No session was created."
             ),
             DaemonError::PortAllocFailed { detail } => write!(
                 f,
-                "sb start: could not allocate a local port for the codex daemon \
+                "qd start: could not allocate a local port for the codex daemon \
                  ({detail}). No session was created."
             ),
             DaemonError::SpawnFailed { detail } => write!(
                 f,
-                "sb start: the codex app-server daemon failed to start ({detail}). \
+                "qd start: the codex app-server daemon failed to start ({detail}). \
                  No session was created."
             ),
             DaemonError::HandshakeFailed { detail } => write!(
                 f,
-                "sb start: the codex daemon started but the initialize handshake \
+                "qd start: the codex daemon started but the initialize handshake \
                  failed ({detail}). No session was created."
             ),
             DaemonError::ThreadStartFailed { detail } => write!(
                 f,
-                "sb start: the codex daemon started but thread/start failed \
+                "qd start: the codex daemon started but thread/start failed \
                  ({detail}). No session was created."
             ),
             DaemonError::RowWriteFailed { detail } => write!(
                 f,
-                "sb start: the codex session started but its registry row could not \
+                "qd start: the codex session started but its registry row could not \
                  be written ({detail}); the daemon was stopped. No session was \
                  created."
             ),
             DaemonError::IdMintFailed { detail } => write!(
                 f,
-                "sb start: could not mint a stable session id ({detail}). \
+                "qd start: could not mint a stable session id ({detail}). \
                  No session was created."
             ),
         }
@@ -657,7 +657,7 @@ fn finish_create(
     if let Err(e) = crate::idstore::bind(&deps.ids_path, sb_session_id, &thread_id, deps.clock) {
         eprintln!(
             "WARNING: could not bind stable id {sb_session_id} to codex thread \
-             {thread_id}: {e} — `sb ls` may surface a different id than the \
+             {thread_id}: {e} — `qd ls` may surface a different id than the \
              daemon's SB_SESSION_ID."
         );
     }
@@ -678,7 +678,7 @@ fn finish_create(
         backend: None,
         // spawnedBy: claude rows get this from the bin-side ppid walk
         // (telemetry::find_caller_session); the daemon-create lib has no such
-        // sb-side data, and the spec says None is fine when absent. The verb's
+        // qd-side data, and the spec says None is fine when absent. The verb's
         // telemetry create-stamp still records lineage out-of-band.
         spawned_by: None,
         provider: Some("codex".to_string()),
@@ -704,7 +704,7 @@ fn finish_create(
                 eprintln!(
                     "WARNING: codex session \"{}\" created, but the first prompt \
                      did not start a turn ({e}). The session exists — send again \
-                     with: sb send {} <text>",
+                     with: qd send {} <text>",
                     params.name, params.name
                 );
                 None
@@ -855,7 +855,7 @@ impl DaemonSpawner for RealDaemonSpawner {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        // The detach: own process group (setsid class) → the daemon survives sb's
+        // The detach: own process group (setsid class) → the daemon survives qd's
         // exit + the terminal closing (P-2 GREEN).
         cmd.process_group(0);
         let child = cmd.spawn()?;
@@ -966,10 +966,10 @@ mod tests {
             self.calls.borrow_mut().push("initialized".into());
             Ok(())
         }
-        fn thread_start(&self, _cwd: &str, ap: &str, sb: &str) -> Result<String, RpcError> {
+        fn thread_start(&self, _cwd: &str, ap: &str, qd: &str) -> Result<String, RpcError> {
             self.calls
                 .borrow_mut()
-                .push(format!("thread_start({ap},{sb})"));
+                .push(format!("thread_start({ap},{qd})"));
             match &self.thread_start {
                 Ok(id) => Ok(id.clone()),
                 Err(_) => Err(RpcError::Transport("thread/start boom".into())),
@@ -1111,8 +1111,8 @@ mod tests {
         fn initialized(&self) -> Result<(), RpcError> {
             self.0.initialized()
         }
-        fn thread_start(&self, cwd: &str, ap: &str, sb: &str) -> Result<String, RpcError> {
-            self.0.thread_start(cwd, ap, sb)
+        fn thread_start(&self, cwd: &str, ap: &str, qd: &str) -> Result<String, RpcError> {
+            self.0.thread_start(cwd, ap, qd)
         }
         fn thread_resume(&self, id: &str) -> Result<(), RpcError> {
             self.0.thread_resume(id)

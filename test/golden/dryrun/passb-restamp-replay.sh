@@ -16,7 +16,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${RESTAMP_OUT:-$HERE/dryrun/passb-restamp-evidence.txt}"
-TS_ENTRY="${TS_ENTRY:-/tmp/sb-rust-ts-prep/8c59ec456fe82780fd75d8afb5fe48dc72e10bc8/src/index.ts}"
+TS_ENTRY="${TS_ENTRY:-/tmp/qd-rust-ts-prep/8c59ec456fe82780fd75d8afb5fe48dc72e10bc8/src/index.ts}"
 export SB_UNDER_TEST="bun $TS_ENTRY"
 
 . "$HERE/lib/jail.sh"

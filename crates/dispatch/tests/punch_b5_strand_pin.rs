@@ -5,7 +5,7 @@
 //! Class under pin: a registry row WITHOUT a usable `startedAt` (absent, or a
 //! stale/past one) whose live pid the cmdline arm cannot identify as the
 //! session program. The two-armed identity predicate (kill.rs
-//! `pid_is_foreign`) judges that pid FOREIGN, and `sb stop` then — BY
+//! `pid_is_foreign`) judges that pid FOREIGN, and `qd stop` then — BY
 //! DOCUMENTED DESIGN (r9 m1, accepted minor; real Claude always stamps its
 //! boot instant so real rows are immune):
 //!   - never signals the process (the stranger survives — STRANDED),
@@ -96,7 +96,7 @@ impl Jail {
             .env_remove("SB_MUX")
             .env_remove("CLAUDE_BIN")
             .output()
-            .expect("spawn sb");
+            .expect("spawn qd");
         (
             out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -105,7 +105,7 @@ impl Jail {
     }
 }
 
-/// Drive `sb stop <name>` against a live-unidentifiable pid and assert the
+/// Drive `qd stop <name>` against a live-unidentifiable pid and assert the
 /// FULL documented strand-with-note contract.
 fn assert_strand_with_note(j: &Jail, child: &mut Child, name: &str) {
     let pid = child.id() as i64;

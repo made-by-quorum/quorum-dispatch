@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# scenario: exit codes 1 / 2 — REAL sb error paths driven in the jail.
+# scenario: exit codes 1 / 2 — REAL qd error paths driven in the jail.
 #
 # Corpus entry: "exit codes 0 / 1 / 2" (red-team M3 — the matrix row had no
 # producing scenario, so the exit-code tick would have been vacuous). This drives
-# the REAL sb error surfaces and records the exit code as the load-bearing
+# the REAL qd error surfaces and records the exit code as the load-bearing
 # contract (the comparator class is `exit-code`; exit codes are NEVER normalized
 # per ADR-0003).
 #
-#   exit 1 — operational failure: `sb info <missing-session>` against the jail's
-#            EMPTY registry. sb prints `No session matching "<name>"` to stderr and
+#   exit 1 — operational failure: `qd info <missing-session>` against the jail's
+#            EMPTY registry. qd prints `No session matching "<name>"` to stderr and
 #            exits 1. (Confirmed at current TS main via the a3-cli dryrun corpus
 #            44-fail-info-nosuch: exit 1; re-confirmed against the pinned clone at
 #            record time.)
-#   exit 2 — usage/argument error: `sb config <unknown-subcommand>`. sb's config
+#   exit 2 — usage/argument error: `qd config <unknown-subcommand>`. qd's config
 #            verb rejects an unknown subcommand with a usage message and exits 2.
 #            (a3-cli 40-fail-config-nosuchsub: exit 2 at current main.)
 #
@@ -64,7 +64,7 @@ scn_run() {
 scn_assert() {
     [ -f "$SCN_OUT" ] || return 1
     # The contract: info-missing exits 1, config-unknown-sub exits 2. These are
-    # the REAL sb exit codes — the asserter checks them as the load-bearing class.
+    # the REAL qd exit codes — the asserter checks them as the load-bearing class.
     [ "$(cat "$SCN_OUT.exit1" 2>/dev/null)" = "1" ] || return 1
     [ "$(cat "$SCN_OUT.exit2" 2>/dev/null)" = "2" ] || return 1
 }

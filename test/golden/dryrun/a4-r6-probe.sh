@@ -2,7 +2,7 @@
 # a4-r6-probe.sh — A4 R6 LIVE PROBE: does a >=8KB single send:pty write WHOLESALE-DROP
 # on the Rust two-write path? (orc-2 ordered, relay-1780637708238-13 item 1.)
 #
-# HYPOTHESIS (from sb-orc-3 TS-side live verification): the merged two-write delivery
+# HYPOTHESIS (from qd-orc-3 TS-side live verification): the merged two-write delivery
 # is NOT sufficient at large sizes. A >=4KB single PTY write can WHOLESALE-DROP because
 # the PTY input buffer (~4096B) overflows before the reader drains; composer ends EMPTY
 # and the JSONL user-record delta is 0 — a DISTINCT mode from the R4 stuck-composer.
@@ -24,13 +24,13 @@
 # MODE selected by $1:
 #   sendpty  — BOOT 1: warm-up + 8KB + 16KB (+ conditional 12KB bisect), ONE session,
 #              on the send:pty idle two-write path.
-#   create   — BOOT 2: `sb new -p` create path, ONE size (16KB), record the EXIT CODE
+#   create   — BOOT 2: `qd new -p` create path, ONE size (16KB), record the EXIT CODE
 #              the went-busy contract produces on a drop (Stalled->10 expected).
 set -u
 MODE="${1:-sendpty}"
 WT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -134,10 +134,10 @@ addrow(){ ROWS="${ROWS}$1
 # ============================================================================
 NAME="${JAIL_PREFIX}r6"
 log ""
-log "=== sb new (real claude) ==="
+log "=== qd new (real claude) ==="
 ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 code=$?
-log "  sb new exit=$code : $(cat "$JAIL_ROOT/o")"
+log "  qd new exit=$code : $(cat "$JAIL_ROOT/o")"
 [ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; head -5 "$JAIL_ROOT/e"|sed 's/^/    /'|tee -a "$EV"; }
 if [ "$code" != 0 ]; then log "!!! BOOT FAILED — capturing + stop"; jail_zmx history "$NAME" 2>/dev/null|strip|tail -20|sed 's/^/  /'|tee -a "$EV"; exit 1; fi
 ws "$NAME" idle 30 || log "  WARN not idle after boot (status=$(status_of "$NAME"))"
@@ -227,17 +227,17 @@ if [ "$MODE" = create ]; then
     log "  >>> 12KB (recovered bisect) class=$R12"
     ws "$NAME" idle 60 || true
 
-    # BOOT 2: the `sb new -p` create path with a 16KB priming prompt. The create
+    # BOOT 2: the `qd new -p` create path with a 16KB priming prompt. The create
     # path drives deliver_prompt (bounded-retry, content-verified). Record the EXIT
     # CODE the went-busy contract produces: Accepted->0, Stalled->10, PidFileMissing->1.
     CNAME="${JAIL_PREFIX}r6c"
     marker="R6_CREATE16_${JAIL_RUNID}"
     P="$(mkp 16384 "$marker")"; plen="$(printf '%s' "$P"|wc -c|tr -d ' ')"
     log ""
-    log "===== create ROW: sb new -p, target=16384 bytes marker=$marker ====="
+    log "===== create ROW: qd new -p, target=16384 bytes marker=$marker ====="
     log "  payload actual bytes=$plen"
     ( cd "$WORKDIR" && tmo 150 "$JAIL_SB_CMD" new "$CNAME" --cwd "$WORKDIR" -p "$P" ) >"$JAIL_ROOT/c.out" 2>"$JAIL_ROOT/c.err"; crc=$?
-    log "  sb new -p exit=$crc"
+    log "  qd new -p exit=$crc"
     log "  stdout: $(cat "$JAIL_ROOT/c.out" 2>/dev/null|tr '\n' '|')"
     if [ -s "$JAIL_ROOT/c.err" ]; then log "  stderr:"; cat "$JAIL_ROOT/c.err"|sed 's/^/    /'|tee -a "$EV"; else log "  stderr: (none)"; fi
     sleep 3
@@ -271,7 +271,7 @@ for t,c in recs[-4:]: print("      [%s] %s"%(t,c))' "$JPC" 2>/dev/null | tee -a 
         124) cmap="tmo KILLED at 150s (create path hung — NOT a clean contract exit)";;
         *) cmap="exit $crc (unexpected)";;
     esac
-    log "  CONTRACT: sb new -p exit=$crc -> $cmap"
+    log "  CONTRACT: qd new -p exit=$crc -> $cmap"
     addrow "create(-p) | ${plen}B | delta=$cdelta | $ccls | exit=$crc ($cmap)"
     if [ "$ccls" = DELIVERED ]; then mark G; else mark R; fi
     "$JAIL_SB_CMD" ls --all --short 2>/dev/null | grep -q "$CNAME" && jail_kill_session "$CNAME" >/dev/null 2>&1

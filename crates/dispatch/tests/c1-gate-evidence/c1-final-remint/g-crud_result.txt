@@ -1,17 +1,17 @@
-G-CRUD VERDICT: PASS — keystone dir==socket; 8 verbs via sb (create/list/list_raw/send/history/attach/wait/kill); ls --json coherent; A14-1 belt + armed neg-control
+G-CRUD VERDICT: PASS — keystone dir==socket; 8 verbs via qd (create/list/list_raw/send/history/attach/wait/kill); ls --json coherent; A14-1 belt + armed neg-control
 
-KEYSTONE: engine-resolved dir /tmp/sb-c1gate-runs/gcrud-1780717089555753000/x/qrmux == daemon-bound socket dir /tmp/sb-c1gate-runs/gcrud-1780717089555753000/x/qrmux → true
+KEYSTONE: engine-resolved dir /tmp/qd-c1gate-runs/gcrud-1780717089555753000/x/qrmux == daemon-bound socket dir /tmp/qd-c1gate-runs/gcrud-1780717089555753000/x/qrmux → true
 CREATE: mux session crud-sess pid 42560
-LIST: sb ls --json exit=0, row present+tagged=true
+LIST: qd ls --json exit=0, row present+tagged=true
   stderr: 
-SEND: sb send:pty exit=0
+SEND: qd send:pty exit=0
   stderr: WARNING: Message sent to "crud-sess" but session did not go busy — it may be stuck unsubmitted in the composer.
 HISTORY: engine history contains create sentinel=true
-ATTACH: sb attach alive/replayed=true
-REATTACH: second sb attach alive=true
-WAIT: sb wait exit=0, idle reported=true
-KILL: sb kill --force exit=0
+ATTACH: qd attach alive/replayed=true
+REATTACH: second qd attach alive=true
+WAIT: qd wait exit=0, idle reported=true
+KILL: qd kill --force exit=0
   stderr: 
-A14-1 BELT: engine dir not /tmp-root qrmux path AND under jail XDG = true (dir /tmp/sb-c1gate-runs/gcrud-1780717089555753000/x/qrmux)
+A14-1 BELT: engine dir not /tmp-root qrmux path AND under jail XDG = true (dir /tmp/qd-c1gate-runs/gcrud-1780717089555753000/x/qrmux)
 A14-1 NEG-CTRL: predicate trips on /tmp/qrmux = true (MUST be true)
 

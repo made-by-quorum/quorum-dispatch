@@ -1,4 +1,4 @@
-//! `sb reconcile` decision core (spec §5.4; TS `session.ts:1098-1177` +
+//! `qd reconcile` decision core (spec §5.4; TS `session.ts:1098-1177` +
 //! `commands/lifecycle.ts:937-971`).
 //!
 //! Idempotently detect drift across the three sources of truth and PLAN repairs.

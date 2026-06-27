@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/golden/verify.sh — the asserter for the sb-rust golden-master harness.
+# test/golden/verify.sh — the asserter for the qd-rust golden-master harness.
 #
 # Pipeline: establish jail -> run a scenario (or replay a capture) under a
 # per-case TIMEOUT BUDGET -> normalize -> compare (per the scenario's comparator
@@ -25,7 +25,7 @@
 #
 # A scenario script defines (as shell vars / functions, sourced by this asserter):
 #   SCN_NAME, SCN_BUDGET_MS, SCN_CLASS, SCN_FIXTURE
-#   scn_run            -> drives sb-under-test in the jail, writes $SCN_OUT(.exit)
+#   scn_run            -> drives qd-under-test in the jail, writes $SCN_OUT(.exit)
 #   scn_assert         -> calls comparators on $SCN_OUT; returns 0/nonzero
 # See scenarios/_template.sh.
 # ---------------------------------------------------------------------------

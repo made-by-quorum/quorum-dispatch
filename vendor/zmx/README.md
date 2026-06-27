@@ -1,6 +1,6 @@
 # vendored zmx 0.6.0
 
-This directory pins the exact zmx source sb is built and tested against. The
+This directory pins the exact zmx source qd is built and tested against. The
 pin is enforced by sha256: `scripts/fetch-zmx.sh` retrieves the tarball from
 this in-repo mirror (or an override URL) and REFUSES, non-zero, on any hash
 mismatch. The mirror IS the pin — nothing else decides what "zmx 0.6.0" means
@@ -35,13 +35,13 @@ mirror + fetch + verify.
 
 ## Why pinned to 0.6.0
 
-sb drives Claude sessions by writing keystrokes into the session's PTY via
+qd drives Claude sessions by writing keystrokes into the session's PTY via
 `zmx send <name>`. The `send` subcommand (alongside `history`/`wait`) is what
 0.6.0 advertises and what 0.5.x lacks. Per `LESSONS.md` L3, an older zmx
-silently no-ops every keystroke sb types: `sb new` boots, the auto-Enter never
+silently no-ops every keystroke qd types: `qd new` boots, the auto-Enter never
 lands, the PID file never appears, and the boot loop times out "not found"
 ~40s later — a HANG, not an error. Pinning 0.6.0 (and preflighting the `send`
-subcommand at runtime, L3) is how sb refuses to drive a zmx that cannot be
+subcommand at runtime, L3) is how qd refuses to drive a zmx that cannot be
 driven.
 
 ## How to re-mirror / bump the pin

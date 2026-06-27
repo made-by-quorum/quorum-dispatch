@@ -1,4 +1,4 @@
-//! §4 B-group MCP-over-stdio harness — the REAL `sb relay:serve` subprocess driven
+//! §4 B-group MCP-over-stdio harness — the REAL `qd relay:serve` subprocess driven
 //! as Claude Code drives it: newline-delimited JSON-RPC 2.0 over stdin/stdout, plus
 //! the outbound `notifications/claude/channel` emitted on a `POST /message`.
 //!
@@ -9,7 +9,7 @@
 //! ## Why a real subprocess (not the in-process spawn_for_test)
 //! The MCP loop (`mcp::serve_stdio`) reads the process's REAL stdin and writes the
 //! REAL stdout — there is no in-process seam for it (the in-process `spawn_for_test`
-//! drives ONLY the HTTP half). So every row here spawns `target/debug/sb relay:serve`
+//! drives ONLY the HTTP half). So every row here spawns `target/debug/qd relay:serve`
 //! as a child, pipes JSON-RPC frames into its stdin, and reads response/notification
 //! lines off its stdout. The child stdin handle is held ALIVE for the duration of a
 //! test (dropping it → EOF → child exits 0 after unlinking its sidecar — that is the
@@ -51,12 +51,12 @@ use dispatch::relay_http::CcRelay;
 /// under this; if a read blocks past it, the row FAILS (never hangs the suite).
 const READ_BUDGET: Duration = Duration::from_secs(5);
 
-/// A high port base OUTSIDE the 8900-9000 jail band (sb's own probe scans that band).
+/// A high port base OUTSIDE the 8900-9000 jail band (qd's own probe scans that band).
 /// Each spawn binds an ephemeral port from here; the actual bound port is read from
 /// the sidecar.
 const PORT_BASE: u16 = 29700;
 
-/// A running `sb relay:serve` child with a line-reader thread draining its stdout.
+/// A running `qd relay:serve` child with a line-reader thread draining its stdout.
 /// stdin is held open via `stdin` until the test drops the harness (or calls
 /// [`McpChild::close_stdin`]).
 struct McpChild {
@@ -67,7 +67,7 @@ struct McpChild {
 }
 
 impl McpChild {
-    /// Spawn the real `sb relay:serve` with a hermetic HOME (sidecar + inbox land in
+    /// Spawn the real `qd relay:serve` with a hermetic HOME (sidecar + inbox land in
     /// temp, never the real ~/.claude) and a fixed session id for deterministic
     /// assertions. Stdin + stdout are piped; a background thread feeds stdout lines
     /// into a channel so reads can be bounded.
@@ -83,7 +83,7 @@ impl McpChild {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn sb relay:serve");
+            .expect("spawn qd relay:serve");
 
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");

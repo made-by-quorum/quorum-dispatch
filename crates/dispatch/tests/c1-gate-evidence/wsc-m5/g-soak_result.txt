@@ -1,14 +1,14 @@
 # WS-C M5 G-SOAK evidence (R-1(5)) — RELEASE-build many-session soak — RUN 1 (60s window)
 # Date: 2026-06-06 16:27 EDT
 # Base SHA: 8270c212f91f7d777e445762f0b1560ec0fb9e44 (M5 rows wsc_m5_rows.rs added in THIS phase commit, atop this base)
-# Build profile: RELEASE (target/release/sb daemons); test harness dev profile (wire client only)
+# Build profile: RELEASE (target/release/qd daemons); test harness dev profile (wire client only)
 # Host: brano.local (macOS 26.5, arm64, Darwin 25.5.0)
-# Rerun: scripts/build-lock.sh cargo build --release -p sb --bin sb -p qrmux --bin qrmux
-#        C1_GATE_RUNID=wsc-m5 scripts/build-lock.sh cargo test -p sb --test c1_gate -- --ignored --exact g_soak --nocapture
+# Rerun: scripts/build-lock.sh cargo build --release -p qd --bin qd -p qrmux --bin qrmux
+#        C1_GATE_RUNID=wsc-m5 scripts/build-lock.sh cargo test -p qd --test c1_gate -- --ignored --exact g_soak --nocapture
 #
 G-SOAK VERDICT: FAIL — one or more spec §7 assertions did not hold (see detail; bounds are spec-set and NOT tuned here).
 
-BUILD PROFILE: RELEASE (daemon = /home/u/work/sb-rust/.claude/worktrees/agent-aac709643ceed4141/target/release/sb)
+BUILD PROFILE: RELEASE (daemon = /home/u/work/qd-rust/.claude/worktrees/agent-aac709643ceed4141/target/release/qd)
 CONFIG: N_total=10 (quiet=7 + flooders=3), blast_threads=4, window=60s
 CHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat/flood-loop); NOT full fakerepl (delta named in header)
 

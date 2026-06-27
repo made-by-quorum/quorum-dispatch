@@ -5,7 +5,7 @@
 # to run against production paths and must refuse kill/gc on bare names. These
 # tests point the jail at production-looking state and assert the refusal fires
 # (non-zero + a refusal message). If any of these PASS silently, the harness
-# could be visible to the org's real sb on brano — a phase failure.
+# could be visible to the org's real qd on brano — a phase failure.
 #
 # Bash 3.2 / POSIX floor. Run directly.
 set -u
@@ -53,11 +53,11 @@ jail_establish >/dev/null 2>&1
 allows "established/assert-clean" jail_assert_established
 # Corrupt SB_HOME to the REAL production registry path.
 _saved_sbhome="$SB_HOME"
-export SB_HOME="$_REAL_HOME/.sb"
+export SB_HOME="$_REAL_HOME/.quorum/dispatch"
 refuses "corrupt/sbhome-prod-path" jail_assert_established
 export SB_HOME="$_saved_sbhome"
 # Corrupt HOME itself back to the real home — the most dangerous case, since TS
-# sb keys its registry on HOME. Must be refused.
+# qd keys its registry on HOME. Must be refused.
 _saved_home="$HOME"
 export HOME="$_REAL_HOME"
 refuses "corrupt/home-real-home" jail_assert_established
@@ -73,7 +73,7 @@ allows "established/assert-restored" jail_assert_established
 # --- 2b. Binary-read env vars: jail must CLEAR inherited leaks (finding #2) -
 # The Rust binary reads SB_PLUGINS_ROOT / SB_SPAWN_AGENTS_DIR / CLAUDE_BIN /
 # SB_CLAUDE_FLAGS. Before this fix the jail neither set nor cleared them, so a
-# value inherited from the real shell reached sb inside the jail and escaped
+# value inherited from the real shell reached qd inside the jail and escaped
 # isolation (the --agent escape via SB_SPAWN_AGENTS_DIR; the binary-substitution
 # via CLAUDE_BIN). Two-part proof per var:
 #   (i)  pre-export a real-home-looking value BEFORE jail_establish, then assert
@@ -84,34 +84,34 @@ jail_teardown >/dev/null 2>&1
 
 # (i) Pre-export the --agent escape vector + the binary-substitution vector to
 # real-home-looking paths, plus the flags-string leak, then establish.
-export SB_PLUGINS_ROOT="$_REAL_HOME/.sb/plugins"
-export SB_SPAWN_AGENTS_DIR="$_REAL_HOME/.sb/plugins/core/agents"
+export SB_PLUGINS_ROOT="$_REAL_HOME/.quorum/dispatch/plugins"
+export SB_SPAWN_AGENTS_DIR="$_REAL_HOME/.quorum/dispatch/plugins/core/agents"
 export CLAUDE_BIN="$_REAL_HOME/.local/bin/claude"
 export SB_CLAUDE_FLAGS="--dangerously-skip-permissions"
 jail_establish >/dev/null 2>&1
 allows "established/clears-inherited-envvars" jail_assert_established
 # The clean belt passing above already implies the vars were cleared; assert the
 # unset directly too so the row names the property.
-refuses "cleared/sb-plugins-root-unset"   sh -c '[ -n "${SB_PLUGINS_ROOT:-}" ]'
-refuses "cleared/sb-spawn-agents-dir-unset" sh -c '[ -n "${SB_SPAWN_AGENTS_DIR:-}" ]'
+refuses "cleared/qd-plugins-root-unset"   sh -c '[ -n "${SB_PLUGINS_ROOT:-}" ]'
+refuses "cleared/qd-spawn-agents-dir-unset" sh -c '[ -n "${SB_SPAWN_AGENTS_DIR:-}" ]'
 refuses "cleared/claude-bin-unset"        sh -c '[ -n "${CLAUDE_BIN:-}" ]'
-refuses "cleared/sb-claude-flags-unset"   sh -c '[ -n "${SB_CLAUDE_FLAGS:-}" ]'
+refuses "cleared/qd-claude-flags-unset"   sh -c '[ -n "${SB_CLAUDE_FLAGS:-}" ]'
 
 # (ii) Belt refuses each leaked value (fail-closed). The --agent escape vector:
-export SB_SPAWN_AGENTS_DIR="$_REAL_HOME/.sb/plugins/core/agents"
-refuses "leak/sb-spawn-agents-dir-real-home" jail_assert_established
+export SB_SPAWN_AGENTS_DIR="$_REAL_HOME/.quorum/dispatch/plugins/core/agents"
+refuses "leak/qd-spawn-agents-dir-real-home" jail_assert_established
 unset SB_SPAWN_AGENTS_DIR
 # The binary-substitution vector:
 export CLAUDE_BIN="$_REAL_HOME/.local/bin/claude"
 refuses "leak/claude-bin-real-home" jail_assert_established
 unset CLAUDE_BIN
 # The (NOT-Rust-read but defense-in-depth) plugins root:
-export SB_PLUGINS_ROOT="$_REAL_HOME/.sb/plugins"
-refuses "leak/sb-plugins-root-real-home" jail_assert_established
+export SB_PLUGINS_ROOT="$_REAL_HOME/.quorum/dispatch/plugins"
+refuses "leak/qd-plugins-root-real-home" jail_assert_established
 unset SB_PLUGINS_ROOT
 # The flags-string leak (path rule can't apply — must be unset):
 export SB_CLAUDE_FLAGS="--dangerously-skip-permissions"
-refuses "leak/sb-claude-flags-set" jail_assert_established
+refuses "leak/qd-claude-flags-set" jail_assert_established
 unset SB_CLAUDE_FLAGS
 # A jail-ROOTED override IS allowed (the live A2 captures' contract): re-export
 # CLAUDE_BIN + SB_SPAWN_AGENTS_DIR under JAIL_ROOT and assert the belt passes.
@@ -156,7 +156,7 @@ NAME="${JAIL_PREFIX}sess"
 #     (the exact A4 risk: the legacy /tmp tier resolving a real org socket). The
 #     resolver is a shell function, so we set the override in-process (an env-only
 #     export cannot carry a function definition into the belt's subshell call).
-_forge_out_of_jail() { printf '%s\n' "$_REAL_HOME/.sb/sessions/$1/zmx.sock"; }
+_forge_out_of_jail() { printf '%s\n' "$_REAL_HOME/.quorum/dispatch/sessions/$1/zmx.sock"; }
 _JAIL_TARGET_RESOLVER=_forge_out_of_jail
 refuses "belt/out-of-jail-resolution" jail_assert_target_resolves_in_jail "$NAME"
 
@@ -203,7 +203,7 @@ unset _JAIL_TARGET_RESOLVER
 # Reproduces the A6 set-u incident mechanism (repro + root-cause: A7 journal
 # 2026-06-05): a draft ignores a FAILED jail_establish (which used to leave
 # JAIL_ROOT set with HOME still real), then aborts under set -u (1-arg
-# jail_register_pid), firing an EXIT-trap jail_teardown that ran `sb ls` /
+# jail_register_pid), firing an EXIT-trap jail_teardown that ran `qd ls` /
 # `zmx list` against the REAL env. Fix under test: (a) establish failure paths
 # clear JAIL_ROOT; (b) teardown refuses env-dependent steps unless
 # _JAIL_ESTABLISHED=1 AND HOME is jail-rooted; (c) register_pid refuses bad

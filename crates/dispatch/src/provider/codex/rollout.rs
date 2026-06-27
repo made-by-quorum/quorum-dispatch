@@ -384,7 +384,7 @@ mod tests {
     // The completed-turn rollout (rss-jail), lines transcribed verbatim. Top-level
     // shape `{"timestamp":..,"type":..,"payload":{..}}`; event_msg nests
     // payload.type.
-    const EV_SESSION_META: &str = r#"{"timestamp":"2026-06-07T06:09:26.889Z","type":"session_meta","payload":{"id":"019ea0b3-04d3-7400-8d95-f55d41e961e4","timestamp":"2026-06-07T06:09:07.283Z","cwd":"/jail/work","originator":"sb-rss-probe","cli_version":"0.134.0"}}"#;
+    const EV_SESSION_META: &str = r#"{"timestamp":"2026-06-07T06:09:26.889Z","type":"session_meta","payload":{"id":"019ea0b3-04d3-7400-8d95-f55d41e961e4","timestamp":"2026-06-07T06:09:07.283Z","cwd":"/jail/work","originator":"qd-rss-probe","cli_version":"0.134.0"}}"#;
     const EV_TASK_STARTED: &str = r#"{"timestamp":"2026-06-07T06:09:26.899Z","type":"event_msg","payload":{"type":"task_started","turn_id":"019ea0b3-5157-7913-8a49-3308f6be7cb0","started_at":1780812566}}"#;
     const EV_TURN_CONTEXT: &str = r#"{"timestamp":"2026-06-07T06:09:26.903Z","type":"turn_context","payload":{"turn_id":"019ea0b3-5157-7913-8a49-3308f6be7cb0","cwd":"/jail/work","approval_policy":"never"}}"#;
     const EV_USER_MESSAGE: &str = r#"{"timestamp":"2026-06-07T06:09:26.909Z","type":"event_msg","payload":{"type":"user_message","message":"Reply with exactly the text RSS-PROBE and nothing else.","images":[]}}"#;

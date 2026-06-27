@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "sb engine crate (Rust rewrite). A1: data layer + Mux trait."
+description = "qd engine crate (Rust rewrite). A1: data layer + Mux trait."
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -45,7 +45,7 @@ rusqlite = { version = "0.32", default-features = false }
 tempfile = "3"
 # portable-pty: the fakerepl gate (tests/fakerepl_gate.rs) drives the M1 submit
 # discipline against the fakerepl binary over a REAL PTY. DEV-ONLY — it must
-# never appear in the normal build (verify: `cargo tree -p sb` shows it only
+# never appear in the normal build (verify: `cargo tree -p qd` shows it only
 # under [dev-dependencies]).
 portable-pty = "0.9"
 

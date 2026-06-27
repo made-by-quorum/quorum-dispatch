@@ -3,14 +3,14 @@
 # 0b DELTA-STRENGTH W3.2 (P1): VALUE-BEARING cross-checks on RAW PRE-NORMALIZATION values.
 #
 # Corpus entry: relay-health. Per ADD-5 the relay SERVER is the external cc-relay
-# DRIVER; the sb ENGINE owns only the messaging CONTRACT, so this row records ONLY
+# DRIVER; the qd ENGINE owns only the messaging CONTRACT, so this row records ONLY
 # the contract surface (survives a transport-driver swap):
 #   (a) registration sidecar SHAPE   — ~/.claude/relay/<x>.json {sessionId,port,pid,status}
 #                                       (session.ts getRelayPorts 159-183)
 #   (b) GET /health                  — RelayHealth {sessionId,port,pid,status}
 #                                       (session.ts 185-212)
 #   (c) POST /message -> {message_id}— the send:relay client contract (send.ts 414-426)
-#   (d) ls join                      — relayPort surfaces in `sb ls` by PID-parentage
+#   (d) ls join                      — relayPort surfaces in `qd ls` by PID-parentage
 #                                       (session.ts 845-873, 922)
 #
 # W3.2 STRENGTHENING (value-bearing cross-checks, red-team B2 PRE-NORMALIZATION rule):
@@ -19,7 +19,7 @@
 # RAW (un-normalized) values and emit DERIVED equality/boolean lines:
 #   - sidecar_pid_eq_health_pid=1     : sidecar.pid == /health.pid (same relay child)
 #   - sessionid_chain_eq=1            : sidecar.sessionId == /health.sessionId ==
-#                                       the sb-ls-join row's sessionId (one identity)
+#                                       the qd-ls-join row's sessionId (one identity)
 #   - message_id=mid-4fab57b3a2a5     : the deterministic stub token for the FIXED
 #                                       probe text "contract-probe" (mid-<sha1[:12]>),
 #                                       asserted LITERALLY byte-exact in the fixture
@@ -31,7 +31,7 @@
 # emit the DERIVED booleans (the existing has_message_id=1 pattern), which then
 # normalize trivially (a 1 stays a 1; the literal mid- token carries no pid/ts/path).
 #
-# §S: drives the pinned-TS sb against the stub's LIVE in-jail relay endpoint (the
+# §S: drives the pinned-TS qd against the stub's LIVE in-jail relay endpoint (the
 # stub binds $SB_RELAY_PORT and writes the sidecar). Comparator class = byte-exact on
 # the normalized CONTRACT shape + the derived boolean/equality/token lines.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_scenario_lib.sh"
@@ -49,7 +49,7 @@ scn_run() {
     local name
     name="$(scn_session_name rl)"
     # Boot a stub-backed session WITH relay (the stub's server:relay flag makes it
-    # bind $SB_RELAY_PORT + write the sidecar). Boot via sb so zmx + PID-file +
+    # bind $SB_RELAY_PORT + write the sidecar). Boot via qd so zmx + PID-file +
     # relay all come up the real way.
     bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
@@ -107,7 +107,7 @@ except Exception:
     print(" ERROR")
 ' "${SB_RELAY_PORT:-0}" "$SCN_PROBE_TEXT"
 
-        # (d) ls join — relayPort surfaces in `sb ls --json` (PID-parentage join).
+        # (d) ls join — relayPort surfaces in `qd ls --json` (PID-parentage join).
         printf 'CONTRACT ls-join:'
         scn_sb ls --json 2>/dev/null > "$SCN_OUT.lsjson"
         python3 -c '
@@ -156,7 +156,7 @@ health_pid = health.get("pid")
 sidecar_sid = sidecar.get("sessionId")
 health_sid = health.get("sessionId")
 
-# the sb-ls relay-join row's sessionId (the row that carries relayPort).
+# the qd-ls relay-join row's sessionId (the row that carries relayPort).
 ls_relay_sid = None
 for r in ls_rows:
     if r.get("relayPort"):

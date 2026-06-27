@@ -1,4 +1,4 @@
-//! `sb config` — hand-parsed (spec §2: config bypasses commander with
+//! `qd config` — hand-parsed (spec §2: config bypasses commander with
 //! allowUnknownOption + allowExcessArguments + helpOption(false), commands/config.ts:222-
 //! 224). Port of `runConfigLogic` (commands/config.ts:74-164) + `helpText` (commands/config.ts:54-
 //! 72) as a PURE function over an injected [`SecretStore`].
@@ -6,7 +6,7 @@
 //! The arg-handling / usage / help / exit-codes are REAL (unit-tested below,
 //! ported from config.test.ts). As of A5 (M2) the secret-store backend is REAL:
 //! [`RealStore`] wires the tiered store in [`dispatch::secrets`] (macOS Keychain when
-//! available, else a chmod-600 `~/.sb/config.toml`), including the ADR 0010
+//! available, else a chmod-600 `~/.quorum/dispatch/config.toml`), including the ADR 0010
 //! locked-keychain auto-fallback. The hidden prompt is wired in [`dispatch`]
 //! (termios echo-off on `/dev/tty`); a non-TTY one-arg `set` fails loud (A5
 //! §3.3, named divergence — TS attempts the prompt and breaks under zmx).
@@ -75,7 +75,7 @@ fn fail(message: &str, code: i32) -> ConfigResult {
 fn unknown_key_error(key: &str) -> ConfigResult {
     fail(
         &format!(
-            "sb config: unknown key '{key}'. Known keys: {}.",
+            "qd config: unknown key '{key}'. Known keys: {}.",
             known_key_names().join(", ")
         ),
         2,
@@ -98,7 +98,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Usage: sb config <set|get|unset|path> [key] [value] [--reveal]\n\nManage stored secrets. Secrets live in the macOS Keychain when available, else\na chmod-600 ~/.sb/config.toml. An env var ALWAYS overrides the stored value.\n\nCommands:\n  sb config set <key>           Prompt (hidden) for the value and store it\n  sb config set <key> <value>   Store non-interactively (value may land in shell history)\n  sb config get <key>           Print the stored value MASKED (--reveal for full)\n  sb config unset <key>         Delete the stored value\n  sb config path                Show active backend + config path + which keys are set\n\nKnown keys:\n{known}"
+        "Usage: qd config <set|get|unset|path> [key] [value] [--reveal]\n\nManage stored secrets. Secrets live in the macOS Keychain when available, else\na chmod-600 ~/.quorum/dispatch/config.toml. An env var ALWAYS overrides the stored value.\n\nCommands:\n  qd config set <key>           Prompt (hidden) for the value and store it\n  qd config set <key> <value>   Store non-interactively (value may land in shell history)\n  qd config get <key>           Print the stored value MASKED (--reveal for full)\n  qd config unset <key>         Delete the stored value\n  qd config path                Show active backend + config path + which keys are set\n\nKnown keys:\n{known}"
     )
 }
 
@@ -128,7 +128,7 @@ pub fn run_config_logic(
         "path" => run_path(rest, store),
         // Unknown subcommand → exit 2 (commands/config.ts:92-95).
         _ => fail(
-            &format!("sb config: unknown subcommand '{sub}'. Use set, get, unset, or path."),
+            &format!("qd config: unknown subcommand '{sub}'. Use set, get, unset, or path."),
             2,
         ),
     }
@@ -141,7 +141,7 @@ fn run_set(
 ) -> ConfigResult {
     let Some(key) = rest.first() else {
         return fail(
-            "sb config set: a key is required (e.g. `sb config set openrouter-key`).",
+            "qd config set: a key is required (e.g. `qd config set openrouter-key`).",
             2,
         );
     };
@@ -155,14 +155,14 @@ fn run_set(
         // Plain (non-secret) keys skip the warning — there is no secret to leak.
         if !is_plain_file_key(key) {
             warning = format!(
-                "sb config: warning -- passing a secret on the command line may leave it in your shell history. Prefer `sb config set {key}` (hidden prompt).\n"
+                "qd config: warning -- passing a secret on the command line may leave it in your shell history. Prefer `qd config set {key}` (hidden prompt).\n"
             );
         }
         rest[1..].join(" ")
     } else {
         let v = prompt_value.unwrap_or("").trim().to_string();
         if v.is_empty() {
-            return fail("sb config set: empty value; nothing stored.", 1);
+            return fail("qd config set: empty value; nothing stored.", 1);
         }
         v
     };
@@ -192,15 +192,15 @@ fn run_get(rest: &[String], store: &mut dyn SecretStore) -> ConfigResult {
         if a == "--reveal" {
             reveal = true;
         } else if a.starts_with('-') {
-            return fail(&format!("sb config get: unknown option '{a}'."), 2);
+            return fail(&format!("qd config get: unknown option '{a}'."), 2);
         } else if key.is_none() {
             key = Some(a);
         } else {
-            return fail(&format!("sb config get: unexpected argument '{a}'."), 2);
+            return fail(&format!("qd config get: unexpected argument '{a}'."), 2);
         }
     }
     let Some(key) = key else {
-        return fail("sb config get: a key is required.", 2);
+        return fail("qd config get: a key is required.", 2);
     };
     if !is_known_key(key) {
         return unknown_key_error(key);
@@ -228,14 +228,14 @@ fn run_get(rest: &[String], store: &mut dyn SecretStore) -> ConfigResult {
 
 fn run_unset(rest: &[String], store: &mut dyn SecretStore) -> ConfigResult {
     let Some(key) = rest.first() else {
-        return fail("sb config unset: a key is required.", 2);
+        return fail("qd config unset: a key is required.", 2);
     };
     if !is_known_key(key) {
         return unknown_key_error(key);
     }
     if rest.len() > 1 {
         return fail(
-            &format!("sb config unset: unexpected argument '{}'.", rest[1]),
+            &format!("qd config unset: unexpected argument '{}'.", rest[1]),
             2,
         );
     }
@@ -256,7 +256,7 @@ fn run_unset(rest: &[String], store: &mut dyn SecretStore) -> ConfigResult {
 fn run_path(rest: &[String], store: &mut dyn SecretStore) -> ConfigResult {
     if !rest.is_empty() {
         return fail(
-            &format!("sb config path: unexpected argument '{}'.", rest[0]),
+            &format!("qd config path: unexpected argument '{}'.", rest[0]),
             2,
         );
     }
@@ -291,7 +291,7 @@ fn run_path(rest: &[String], store: &mut dyn SecretStore) -> ConfigResult {
 // --- production binding (A5 M2: real tiered store) ---
 
 /// The REAL secret store (A5 M2): binds the [`dispatch::secrets`] tiered backend
-/// (macOS Keychain when available, else a chmod-600 `~/.sb/config.toml`),
+/// (macOS Keychain when available, else a chmod-600 `~/.quorum/dispatch/config.toml`),
 /// including the ADR 0010 locked-keychain auto-fallback. Owns the production
 /// seams ([`RealEnv`]/[`RealExec`]) and the per-process fallback-notice flag,
 /// and builds a [`dispatch::secrets::SecretDeps`] over real-fs closures for each op.
@@ -428,14 +428,14 @@ pub fn dispatch(argv_tail: &[String]) -> i32 {
             // message — never a broken/hung prompt.
             let key = &argv_tail[1];
             eprintln!(
-                "sb config set: stdin is not a TTY; pass the value as an argument or use SB_SECRET_BACKEND=file sb config set {key} <value>."
+                "qd config set: stdin is not a TTY; pass the value as an argument or use SB_SECRET_BACKEND=file qd config set {key} <value>."
             );
             return 1;
         }
         match prompt_hidden(&format!("Value for {}: ", argv_tail[1])) {
             Ok(v) => Some(v),
             Err(e) => {
-                eprintln!("sb config set: {e}");
+                eprintln!("qd config set: {e}");
                 return 1;
             }
         }
@@ -560,7 +560,7 @@ mod tests {
             FakeStore {
                 files: HashMap::new(),
                 backend: "file".to_string(),
-                path: "/sbx/config.toml".to_string(),
+                path: "/quorum/bond/config.toml".to_string(),
             }
         }
     }
@@ -605,7 +605,7 @@ mod tests {
         let mut s = FakeStore::new();
         let r = run_config_logic(&[], &mut s, None);
         assert_eq!(r.exit_code, 0);
-        assert!(r.stdout.contains("Usage: sb config"));
+        assert!(r.stdout.contains("Usage: qd config"));
     }
 
     #[test]
@@ -613,7 +613,7 @@ mod tests {
         let mut s = FakeStore::new();
         assert!(run_config_logic(&argv(&["--help"]), &mut s, None)
             .stdout
-            .contains("Usage: sb config"));
+            .contains("Usage: qd config"));
     }
 
     #[test]
@@ -857,7 +857,7 @@ mod tests {
         let mut s = FakeStore::new();
         let r = run_config_logic(&argv(&["get"]), &mut s, None);
         assert_eq!(r.exit_code, 2);
-        assert_eq!(r.stderr, "sb config get: a key is required.\n");
+        assert_eq!(r.stderr, "qd config get: a key is required.\n");
         assert!(r.stdout.is_empty());
     }
 
@@ -900,7 +900,7 @@ mod tests {
         let r = run_config_logic(&argv(&["path"]), &mut s, None);
         assert_eq!(r.exit_code, 0);
         assert!(r.stdout.contains("Backend:     file"));
-        assert!(r.stdout.contains("/sbx/config.toml"));
+        assert!(r.stdout.contains("/quorum/bond/config.toml"));
         // B4 affordance: the key is listed WITH its resolving tier.
         assert!(r.stdout.contains("openrouter-key (file)"));
         assert!(!r.stdout.contains("sk-super-secret"));

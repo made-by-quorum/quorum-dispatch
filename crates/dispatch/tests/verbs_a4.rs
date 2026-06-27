@@ -1,5 +1,5 @@
 //! A4 verb-level integration tests (send:pty / send:http / wait) driving the
-//! REAL `sb` binary against a JAILED, empty HOME (L9a / ADD-4 — never the real
+//! REAL `qd` binary against a JAILED, empty HOME (L9a / ADD-4 — never the real
 //! home; HOME + ZMX_DIR point into a per-test tempdir with no sessions).
 //!
 //! These cover each new verb's resolve-failure path end-to-end through the bin:
@@ -17,7 +17,7 @@ fn sb_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
-/// Run `sb <args...>` with HOME + ZMX_DIR jailed into `home`/`zmx` under `dir`.
+/// Run `qd <args...>` with HOME + ZMX_DIR jailed into `home`/`zmx` under `dir`.
 /// Returns (exit_code, stdout, stderr).
 fn run_sb(dir: &Path, args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
@@ -34,7 +34,7 @@ fn run_sb(dir: &Path, args: &[&str]) -> (i32, String, String) {
         // Keep zmx from being on PATH-relevant for these resolve-only paths; the
         // empty registry + empty zmx dir already yield zero sessions.
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -42,7 +42,7 @@ fn run_sb(dir: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
-// --- P0 W1 (sbx spec-cli §11): new/kill are RETIRED erroring stubs ---------
+// --- P0 W1 (qb spec-cli §11): new/kill are RETIRED erroring stubs ---------
 // They error helpfully on ANY args (accept-and-ignore, never a clap usage
 // error), exit 1, and never touch state. start/stop are the live verbs.
 
@@ -60,7 +60,7 @@ fn new_retired_stub_errors_helpfully_exits_1() {
             "retired `new` → exit 1 for {args:?} (stderr: {err})"
         );
         assert!(
-            err.contains("sb new: `new` is retired; use `sb start`"),
+            err.contains("qd new: `new` is retired; use `qd start`"),
             "retired-stub stderr for {args:?}, got: {err}"
         );
     }
@@ -80,7 +80,7 @@ fn kill_retired_stub_errors_helpfully_exits_1() {
             "retired `kill` → exit 1 for {args:?} (stderr: {err})"
         );
         assert!(
-            err.contains("sb kill: `kill` is retired; use `sb stop`"),
+            err.contains("qd kill: `kill` is retired; use `qd stop`"),
             "retired-stub stderr for {args:?}, got: {err}"
         );
     }
@@ -154,7 +154,7 @@ fn send_http_engine_session_is_never_opencode_error_block() {
         .env("HOME", &home)
         .env("ZMX_DIR", temp.path().join("zmx"))
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     let code = out.status.code().unwrap_or(-1);
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
@@ -166,14 +166,14 @@ fn send_http_engine_session_is_never_opencode_error_block() {
         "expected the not-an-OpenCode ERROR block, got: {err}"
     );
     assert!(
-        err.contains("sb send:relay wk") && err.contains("sb send:pty wk"),
+        err.contains("qd send:relay wk") && err.contains("qd send:pty wk"),
         "expected the send:relay / send:pty guidance bullets, got: {err}"
     );
 }
 
 #[test]
 fn wait_idle_session_reports_idle_exit_0() {
-    // A seeded LIVE IDLE claude session: `sb wait` entry idle check →
+    // A seeded LIVE IDLE claude session: `qd wait` entry idle check →
     // `<label> is idle` on stdout, exit 0 (no polling).
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
@@ -192,7 +192,7 @@ fn wait_idle_session_reports_idle_exit_0() {
         .env("HOME", &home)
         .env("ZMX_DIR", temp.path().join("zmx"))
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(code, 0, "idle entry → exit 0 (stdout: {stdout})");

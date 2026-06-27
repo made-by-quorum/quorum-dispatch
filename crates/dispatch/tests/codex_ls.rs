@@ -32,7 +32,7 @@
 //!
 //! ## `info-codex.json` (named-golden / no info `--json` precedent)
 //!
-//! This engine has NO `info --json` mode — `sb info` renders human text only
+//! This engine has NO `info --json` mode — `qd info` renders human text only
 //! (`render::info_text`; the existing info golden is `info-alpha.txt`). The rule-8
 //! filing (codex-p2-spec section 9.1) BINDS the new file name to `info-codex.json`,
 //! so we pin the codex row's human info text INSIDE a JSON object
@@ -148,7 +148,7 @@ fn run_codex(opts: JoinOpts) -> CodexRun {
     //     task_complete) → derive_status = Busy (connectionless). cwd from
     //     session_meta. ---
     let live_meta = format!(
-        r#"{{"timestamp":"2026-06-04T10:01:39.000Z","type":"session_meta","payload":{{"id":"{codex_uuid}","cwd":"/work/codexA","originator":"sb"}}}}"#
+        r#"{{"timestamp":"2026-06-04T10:01:39.000Z","type":"session_meta","payload":{{"id":"{codex_uuid}","cwd":"/work/codexA","originator":"qd"}}}}"#
     );
     let live_started = r#"{"timestamp":"2026-06-04T10:01:40.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"019ea0b3-5157-7913-8a49-3308f6be7cb0"}}"#;
     let live_user = r#"{"timestamp":"2026-06-04T10:01:41.000Z","type":"event_msg","payload":{"type":"user_message","message":"do a thing"}}"#;
@@ -171,7 +171,7 @@ fn run_codex(opts: JoinOpts) -> CodexRun {
     //     scan. cwd from session_meta. ---
     let cold_uuid = "019e9f3b-deea-7392-9861-b5d8ad376e2b";
     let cold_meta = format!(
-        r#"{{"timestamp":"2026-06-04T08:33:20.000Z","type":"session_meta","payload":{{"id":"{cold_uuid}","cwd":"/work/codexCold","originator":"sb"}}}}"#
+        r#"{{"timestamp":"2026-06-04T08:33:20.000Z","type":"session_meta","payload":{{"id":"{cold_uuid}","cwd":"/work/codexCold","originator":"qd"}}}}"#
     );
     let cold_started = r#"{"timestamp":"2026-06-04T08:33:21.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t-cold"}}"#;
     let cold_complete = r#"{"timestamp":"2026-06-04T08:33:30.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t-cold","last_agent_message":"done"}}"#;
@@ -348,7 +348,7 @@ fn cold_codex_row_surfaces_despite_garbage_sqlite() {
 fn endpoint_never_appears_in_ls_json_or_human_info() {
     // codex-p2-spec section 9.4 + section 7.4: the recorded ws endpoint MUST NOT
     // appear in `ls --json` NOR on the human info surface. The endpoint is an
-    // internal registry field (agents reach codex sessions through sb verbs).
+    // internal registry field (agents reach codex sessions through qd verbs).
     //
     // MUTATION EVIDENCE: if a future change leaked `endpoint` into the Session
     // model + render (the banned --json key) this assertion reds.

@@ -1,8 +1,8 @@
 //! WP-B2b-2b — live daemon-launch wiring, integration (§6 DoD "fake-claude
 //! end-to-end").
 //!
-//! Drives the REAL `qrmux::server::run_server` (the embedded daemon entry sb
-//! itself runs) with the sb-side `DaemonHeadlessFactory` injected — exactly the
+//! Drives the REAL `qrmux::server::run_server` (the embedded daemon entry qd
+//! itself runs) with the qd-side `DaemonHeadlessFactory` injected — exactly the
 //! production seam (`crates/dispatch/src/bin/qd/daemon.rs`), only the fixture binary +
 //! the isolated registry differ. A fixture shell script emits canned stream-json;
 //! one client `LaunchHeadless`es, a second `SubscribeRepublish`es and receives
@@ -51,7 +51,7 @@ impl TurnCompletion for CanaryProbe {
 }
 
 /// Drive a REAL `run_wait_content_loop` to completion off the LIVE daemon channel:
-/// stand up `run_server` + the sb-side factory, `LaunchHeadless`, then (on a
+/// stand up `run_server` + the qd-side factory, `LaunchHeadless`, then (on a
 /// blocking thread, so the daemon's runtime stays free) a real [`ChannelSubscriber`]
 /// settles the channel and backs BOTH wait seams; the disk + transcript fallbacks
 /// are CANARIES that must never fire. Returns `(outcome, disk_reads, probe_reads,
@@ -213,7 +213,7 @@ fn factory(
     })
 }
 
-/// WP-B5-i: find the daemon-MINTED row by sb name (it is keyed on the claude CHILD
+/// WP-B5-i: find the daemon-MINTED row by qd name (it is keyed on the claude CHILD
 /// pid, NOT the daemon pid `PID`, so we cannot read it by `PID`). Scans the
 /// sessions dir for the live row whose `name` matches.
 fn minted_row(sessions_dir: &Path, name: &str) -> Option<dispatch::registry::RegistryEntry> {
@@ -405,7 +405,7 @@ fn fake_claude_launch_subscribe_and_registry_flip() {
             Some("idle"),
             "minted row must end idle after the turn; saw {seen:?}"
         );
-        // Identity: the row carries the system/init session_id, the sb name, the
+        // Identity: the row carries the system/init session_id, the qd name, the
         // headless discriminant, and NO provider field (claude rows carry none →
         // the join defaults absent to "claude-code" → addressable + connect-routable;
         // WP-B5-i D ruling).
@@ -588,7 +588,7 @@ fn wait_loop_completes_off_live_channel_no_disk() {
 }
 
 /// `#[ignore]` ONE real isolated claude turn driven to Done through the FULL live
-/// path: `run_server` + the sb-side `DaemonHeadlessFactory` + a real `claude -p`,
+/// path: `run_server` + the qd-side `DaemonHeadlessFactory` + a real `claude -p`,
 /// waited via a real `ChannelSubscriber` + `run_wait_content_loop` — completing off
 /// the channel with ZERO disk-status reads. Isolation = the lib.sh `env -i` contract
 /// (synthetic HOME + CLAUDE_CONFIG_DIR, NEVER the live `~/.claude*`).
@@ -725,8 +725,8 @@ fn real_isolated_claude_wait_completes_off_channel() {
 
         // WP-B5-i (D, req 4): the REAL-claude mint is ls/resolve-ADDRESSABLE. The
         // daemon minted a child-pid-keyed registry row from claude's real
-        // `system/init` session_id — read it back by NAME (the same join `sb ls`/
-        // `sb connect` resolve through) and assert the addressability facts: a
+        // `system/init` session_id — read it back by NAME (the same join `qd ls`/
+        // `qd connect` resolve through) and assert the addressability facts: a
         // headless-marked row carrying NO provider field (claude rows carry none →
         // resolver-uniform) + a real session_id, keyed on the claude CHILD pid
         // (never the daemon/test pid). This is the seed B5-ii proves survives

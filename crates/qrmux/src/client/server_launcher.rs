@@ -4,10 +4,10 @@ use tokio::net::UnixStream;
 /// How to spawn the daemon process (C1 M4fix).
 ///
 /// The standalone qrmux CLI re-execs `current_exe()` with `["server"]` (its own
-/// binary HAS a `server` subcommand). But an EMBEDDING binary (the `sb` engine)
+/// binary HAS a `server` subcommand). But an EMBEDDING binary (the `qd` engine)
 /// is the daemon too — it links qrmux — yet its daemon entry is a DIFFERENT
-/// subcommand (`sb qrmux-server`), and `current_exe()` for it is the `sb` binary,
-/// which has NO bare `server` verb. Re-execing `sb server …` failed in production
+/// subcommand (`qd qrmux-server`), and `current_exe()` for it is the `qd` binary,
+/// which has NO bare `server` verb. Re-execing `qd server …` failed in production
 /// ("too many arguments") so the embedded daemon never started (Lima delta
 /// a6-embedded-backend-DELTA.txt). The launch spec lets the embedder say exactly
 /// which program + arg-prefix re-creates ITS daemon, decoupling the launcher from
@@ -17,9 +17,9 @@ use tokio::net::UnixStream;
 /// (the `--socket-dir` pair only when a dir override is given).
 #[derive(Debug, Clone)]
 pub struct ServerLaunchSpec {
-    /// The daemon program to exec (e.g. the `sb` binary's `current_exe()`).
+    /// The daemon program to exec (e.g. the `qd` binary's `current_exe()`).
     pub program: PathBuf,
-    /// Args BEFORE `--socket-dir` (e.g. `["qrmux-server"]` for the sb embedder,
+    /// Args BEFORE `--socket-dir` (e.g. `["qrmux-server"]` for the qd embedder,
     /// or `["server"]` to mirror the standalone default explicitly).
     pub args_prefix: Vec<String>,
 }
@@ -244,7 +244,7 @@ async fn probe_liveness_confirmed(path: &std::path::Path, name: &str) -> anyhow:
 /// `socket_dir` of `Some(dir)` derives `<dir>/<name>.sock` / `.lock` / `.log`
 /// and propagates `--socket-dir <dir> --session <name>` to the spawned daemon
 /// (the R26 crossing). `launch` selects the daemon program (the embedder's
-/// `sb qrmux-server`); `None` is the standalone default.
+/// `qd qrmux-server`); `None` is the standalone default.
 pub async fn ensure_session_server_running(
     socket_dir: Option<&Path>,
     name: &str,

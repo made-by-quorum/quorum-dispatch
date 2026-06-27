@@ -1,9 +1,9 @@
-//! Pete feedback #6 (duplicate session ids) — end-to-end, driving the REAL `sb`
+//! Pete feedback #6 (duplicate session ids) — end-to-end, driving the REAL `qd`
 //! binary against a JAILED HOME (L9a / ADD-4 — HOME + ZMX_DIR point into a
 //! per-test tempdir, never the real home). Mirrors the provider_field.rs harness
 //! shape (forge registry rows, run the bin, assert exit + stderr).
 //!
-//! sb does NOT mint its own session id (`session_id` == the provider's id), so
+//! qd does NOT mint its own session id (`session_id` == the provider's id), so
 //! uniqueness rides on the engine never DRIVING an ambiguous id. The deduped join
 //! collapses two same-id LIVE rows to one — hiding the collision from
 //! `resolve_or_die`'s loud `Many` path. The resume PREFLIGHT scans the RAW registry
@@ -22,7 +22,7 @@ fn sb_bin() -> &'static str {
 }
 
 /// Spawn a real, short-lived child so we have a genuinely-ALIVE pid distinct from
-/// the test runner's. `sb`'s `is_pid_alive` (kill(pid,0)) sees it live while the
+/// the test runner's. `qd`'s `is_pid_alive` (kill(pid,0)) sees it live while the
 /// binary runs. Caller kills + reaps it after the assertion.
 fn live_child() -> Child {
     Command::new("sleep")
@@ -32,7 +32,7 @@ fn live_child() -> Child {
 }
 
 /// Forge the given `<pid>.json` rows under a freshly-jailed HOME and run
-/// `sb <args...>`. Returns (exit, stdout, stderr).
+/// `qd <args...>`. Returns (exit, stdout, stderr).
 fn run_sb_with_rows(dir: &Path, rows: &[(i64, String)], args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
     let zmx = dir.join("zmx");
@@ -48,7 +48,7 @@ fn run_sb_with_rows(dir: &Path, rows: &[(i64, String)], args: &[&str]) -> (i32, 
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -63,8 +63,8 @@ fn row(pid: i64, session_id: &str, name: &str, updated_at: i64) -> String {
 }
 
 /// THE BUG: two distinct ALIVE processes registered under ONE session id (the
-/// `sb-rust-orc-13` dup Pete hit). The deduped join collapses them to one row, so a
-/// naive `sb resume <name>` would silently relaunch the survivor — compounding the
+/// `qd-rust-orc-13` dup Pete hit). The deduped join collapses them to one row, so a
+/// naive `qd resume <name>` would silently relaunch the survivor — compounding the
 /// collision. The preflight must REFUSE loudly (exit 1) and surface the duplicates.
 ///
 /// MUTATION EVIDENCE: removing the `common::refuse_id_collision` call site in
@@ -82,16 +82,16 @@ fn resume_refuses_a_duplicate_id_collision() {
     let rows = [
         (
             p1,
-            row(p1, "orc-dup-id-0001", "sb-rust-orc-dup", 1717000001000),
+            row(p1, "orc-dup-id-0001", "qd-rust-orc-dup", 1717000001000),
         ),
         (
             p2,
-            row(p2, "orc-dup-id-0001", "sb-rust-orc-dup", 1717000002000),
+            row(p2, "orc-dup-id-0001", "qd-rust-orc-dup", 1717000002000),
         ),
     ];
 
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "sb-rust-orc-dup"]);
+    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "qd-rust-orc-dup"]);
 
     let _ = c1.kill();
     let _ = c1.wait();
@@ -118,7 +118,7 @@ const DEAD_PID: i64 = 2_147_483_646;
 /// does NOT dedup them — dedup is by id). The OLD resolver derived liveness from the
 /// status STRING, so the dead leftover counted as "live" → two "live" rows →
 /// `resolve_or_die` died with "Ambiguous — matches 2 sessions". The pid-aware
-/// refinement drops the dead-pid row, so `sb resume <name>` / `<code>` resolves to
+/// refinement drops the dead-pid row, so `qd resume <name>` / `<code>` resolves to
 /// the one truly-alive session (and then correctly reports it already-alive — NOT
 /// "Ambiguous").
 ///
@@ -133,17 +133,17 @@ fn resume_resolves_past_a_dead_pid_stale_namesake() {
     let rows = [
         (
             live_pid,
-            row(live_pid, "dup-alive-0001", "sb-dup-name", 1717000002000),
+            row(live_pid, "dup-alive-0001", "qd-dup-name", 1717000002000),
         ),
         (
             DEAD_PID,
-            row(DEAD_PID, "dup-stale-0001", "sb-dup-name", 1717000001000),
+            row(DEAD_PID, "dup-stale-0001", "qd-dup-name", 1717000001000),
         ),
     ];
 
     let t = tempfile::tempdir().unwrap();
     // Exact-NAME query exercises the NAME tier's pid-aware refinement.
-    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "sb-dup-name"]);
+    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "qd-dup-name"]);
 
     let _ = child.kill();
     let _ = child.wait();
@@ -167,7 +167,7 @@ fn resume_resolves_past_a_dead_pid_stale_namesake() {
 /// W1 phase 2 (ADD-8 residual): the SAME id-collision must be refused by the SHARED
 /// `attach_resolved` guard. (Was pinned over BOTH `connect` and demoted `attach`;
 /// the attach VERB is a retired erroring stub since STATE 22, so `connect` — the
-/// mechanic's one caller — carries the pin alone.) A `sb connect <name>` over two
+/// mechanic's one caller — carries the pin alone.) A `qd connect <name>` over two
 /// same-id alive rows would otherwise silently attach to the deduped survivor
 /// (the exact ADD-8 hole).
 ///
@@ -185,16 +185,16 @@ fn connect_refuses_a_duplicate_id_collision() {
         let rows = [
             (
                 p1,
-                row(p1, "add8-dup-id-0001", "sb-add8-dup", 1717000001000),
+                row(p1, "add8-dup-id-0001", "qd-add8-dup", 1717000001000),
             ),
             (
                 p2,
-                row(p2, "add8-dup-id-0001", "sb-add8-dup", 1717000002000),
+                row(p2, "add8-dup-id-0001", "qd-add8-dup", 1717000002000),
             ),
         ];
 
         let t = tempfile::tempdir().unwrap();
-        let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &[verb, "sb-add8-dup"]);
+        let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &[verb, "qd-add8-dup"]);
 
         let _ = c1.kill();
         let _ = c1.wait();
@@ -230,11 +230,11 @@ fn connect_does_not_refuse_a_single_alive_session() {
         let pid = child.id() as i64;
         let rows = [(
             pid,
-            row(pid, "add8-single-0001", "sb-add8-single", 1717000001000),
+            row(pid, "add8-single-0001", "qd-add8-single", 1717000001000),
         )];
 
         let t = tempfile::tempdir().unwrap();
-        let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &[verb, "sb-add8-single"]);
+        let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &[verb, "qd-add8-single"]);
 
         let _ = child.kill();
         let _ = child.wait();
@@ -250,7 +250,7 @@ fn connect_does_not_refuse_a_single_alive_session() {
     }
 }
 
-/// ROOT-CAUSE COMPLEMENT (feat/kill-cleanup-dead-records): `sb stop` must sweep
+/// ROOT-CAUSE COMPLEMENT (feat/kill-cleanup-dead-records): `qd stop` must sweep
 /// away OTHER dead-pid registry leftovers so they stop accumulating into the
 /// dup-session "Ambiguous — matches 2 sessions" failure that the resolver fix only
 /// papers over. After killing one live session, a SEPARATE stale dead-pid record
@@ -280,28 +280,28 @@ fn kill_sweeps_dead_pid_registry_leftovers_but_spares_live_ones() {
             row(
                 victim_pid,
                 "kill-victim-0001",
-                "sb-kill-victim",
+                "qd-kill-victim",
                 1717000003000,
             ),
         ),
         // The stale leftover: a SEPARATE dead pid, on-disk status still "idle".
         (
             DEAD_PID,
-            row(DEAD_PID, "kill-stale-0001", "sb-kill-stale", 1717000001000),
+            row(DEAD_PID, "kill-stale-0001", "qd-kill-stale", 1717000001000),
         ),
         (
             bystander_pid,
             row(
                 bystander_pid,
                 "kill-bystander-0001",
-                "sb-kill-bystander",
+                "qd-kill-bystander",
                 1717000002000,
             ),
         ),
     ];
 
     let t = tempfile::tempdir().unwrap();
-    let (code, out, err) = run_sb_with_rows(t.path(), &rows, &["stop", "sb-kill-victim"]);
+    let (code, out, err) = run_sb_with_rows(t.path(), &rows, &["stop", "qd-kill-victim"]);
 
     let _ = bystander.kill();
     let _ = bystander.wait();
@@ -356,11 +356,11 @@ fn resume_refuses_an_already_alive_session() {
     let pid = child.id() as i64;
     let rows = [(
         pid,
-        row(pid, "live-single-0001", "sb-rust-live", 1717000001000),
+        row(pid, "live-single-0001", "qd-rust-live", 1717000001000),
     )];
 
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "sb-rust-live"]);
+    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "qd-rust-live"]);
 
     let _ = child.kill();
     let _ = child.wait();

@@ -4,8 +4,8 @@
 # Sourced by every scenario AND by verify.sh (which sets SCN_OUT). Scenarios are
 # parameterized on the TS entrypoint + pin so Part-2 recording is a re-run:
 #
-#   SB_UNDER_TEST   — how to invoke the sb-under-test. Default: the TS sb on PATH.
-#                     For dry-runs this is `bun <TS-entrypoint>` or just `sb`.
+#   SB_UNDER_TEST   — how to invoke the qd-under-test. Default: the TS qd on PATH.
+#                     For dry-runs this is `bun <TS-entrypoint>` or just `qd`.
 #                     For Part 2 / SBQA swap it points at the Rust binary.
 #   PINNED_TS_COMMIT — set ONLY in Part 2. Part 1 dry-runs run against current TS
 #                      main and stamp DRYRUN-NOT-ORACLE.
@@ -13,18 +13,18 @@
 # Every scenario runs INSIDE the jail (verify.sh calls jail_establish before
 # sourcing the scenario, so SB_HOME/ZMX_DIR/XDG_*/TMPDIR/JAIL_PREFIX are set).
 # Scenarios MUST use jail_sb / jail_zmx / the jail-guarded kill helpers — never a
-# bare sb/zmx invocation.
+# bare qd/zmx invocation.
 # ---------------------------------------------------------------------------
 
-# The sb-under-test command. A space-separated string so it can be `bun entry`.
-SB_UNDER_TEST="${SB_UNDER_TEST:-sb}"
+# The qd-under-test command. A space-separated string so it can be `bun entry`.
+SB_UNDER_TEST="${SB_UNDER_TEST:-qd}"
 
 # scn_session_name <suffix> — a jail-prefixed, unique session name.
 scn_session_name() {
     printf '%s%s' "${JAIL_PREFIX:?jail not established}" "${1:-sess}"
 }
 
-# scn_sb <args...> — run the sb-under-test under the hermetic jail env.
+# scn_sb <args...> — run the qd-under-test under the hermetic jail env.
 # Honors a multi-word SB_UNDER_TEST (e.g. "bun /path/index.ts").
 #
 # NOTE: scn_sb is for NON-session-targeting invocations (ls, info, config, help,
@@ -39,7 +39,7 @@ scn_sb() {
 
 # scn_sb_target <verb> <name> [args...] — session-targeting invocation, BELTED.
 #
-# A4 finding (orchestrator-ruled): the jailed sb resolves a name through the
+# A4 finding (orchestrator-ruled): the jailed qd resolves a name through the
 # engine's production tiers (incl. the literal-/tmp legacy zmx scan), so a
 # name-collision could resolve a kill/send/wait onto a REAL org session. Before the
 # verb reaches the engine this asserts the name resolves ONLY under JAIL_ROOT

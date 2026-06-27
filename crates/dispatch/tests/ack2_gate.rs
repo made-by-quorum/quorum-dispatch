@@ -1,18 +1,18 @@
 //! ACK-2 M5 — GATE-ASSEMBLY INTEGRATION ROWS (ack2-spec §11): the jail-level
 //! event-sequence teeth G3, the three-arm boot-readiness gate G7, the
 //! transcript-race G8, the §9 exit/stdout stability assertions, and the §G10
-//! privacy grep. These drive the REAL `sb` binary (`CARGO_BIN_EXE_qd`) through
+//! privacy grep. These drive the REAL `qd` binary (`CARGO_BIN_EXE_qd`) through
 //! per-run hermetic fakerepl-backed jails against the embedded qrmux daemon —
 //! the SAME engine path `c1_gate.rs` exercises, with `fakerepl` substituted for
 //! claude via the `CLAUDE_BIN` override (launch.rs:23-27).
 //!
 //! ## How the chain works (validated, M5 probe)
 //!
-//! `sb start` boots `CLAUDE_BIN`; the embedded EventBootWaiter polls
+//! `qd start` boots `CLAUDE_BIN`; the embedded EventBootWaiter polls
 //! `<HOME>/.claude/sessions/<pid>.json` for the named row. `fakerepl` writes that
 //! row (status idle), reads its PTY stdin per the burst model, and on submit
 //! appends a claude-shaped user record to `SB_FAKEREPL_CONVO_JSONL`. With
-//! `SB_FAKEREPL_SESSION_ID` carried on the row, `sb`'s registry→sessionId→
+//! `SB_FAKEREPL_SESSION_ID` carried on the row, `qd`'s registry→sessionId→
 //! find_jsonl_path chain resolves the transcript, so the W8 verify + the --wait
 //! anchor loop land real `turn-anchored` events. Every event the wiring emits
 //! lands in `<SB_HOME>/state/sessions/<key>.events.jsonl` (sessionId-keyed when
@@ -151,7 +151,7 @@ struct Jail {
     convo: PathBuf,
     /// the sessionId fakerepl stamps on its registry row.
     uuid: String,
-    /// session names created via `sb start` in this jail (reaped at teardown so the
+    /// session names created via `qd start` in this jail (reaped at teardown so the
     /// embedded-daemon-hosted fakerepl children never orphan + wedge the build lock).
     created: std::cell::RefCell<Vec<String>>,
 }
@@ -164,7 +164,7 @@ impl Jail {
             .as_nanos();
         // SHORT literal-/tmp base so the embedded qrmux sun_path fits (c1_gate
         // note); the sbrg-runs/<id> segment satisfies fakerepl's HOME belt.
-        let base = PathBuf::from("/tmp/sb-ack2gate");
+        let base = PathBuf::from("/tmp/qd-ack2gate");
         let root = base.join("sbrg-runs").join(format!("{tag}-{nanos}"));
         let home = root.join("home");
         let xdg = base.join(format!("x-{tag}-{nanos}"));
@@ -241,9 +241,9 @@ impl Jail {
 
     fn teardown(&self) {
         // Reap the embedded-daemon-hosted fakerepl children FIRST (per-target
-        // `sb stop --force`, NEVER a destructive sweep — c1_gate discipline), so a
+        // `qd stop --force`, NEVER a destructive sweep — c1_gate discipline), so a
         // lingering fakerepl holding the PTY never orphans + wedges the build lock.
-        // THEN remove the jail tree. `sb stop` runs under this jail's env so it
+        // THEN remove the jail tree. `qd stop` runs under this jail's env so it
         // talks to this jail's embedded daemon only.
         let names: Vec<String> = self.created.borrow().clone();
         for name in names {
@@ -270,19 +270,19 @@ fn walk(dir: &Path, f: &mut dyn FnMut(&Path)) -> std::io::Result<()> {
 }
 
 // ===========================================================================
-// sb driver
+// qd driver
 // ===========================================================================
 
-/// Run `sb <args>` under the jail env with `fakerepl` as CLAUDE_BIN and the given
+/// Run `qd <args>` under the jail env with `fakerepl` as CLAUDE_BIN and the given
 /// extra env (fakerepl knobs etc.). Returns (exit, stdout, stderr, elapsed).
 fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String, Duration) {
-    // WP-B-CS-1 (D2): `sb start` now auto-detects the driver, and this harness pipes
+    // WP-B-CS-1 (D2): `qd start` now auto-detects the driver, and this harness pipes
     // stdio (`cmd.output()`), so a bare start would be a non-TTY caller → the HEADLESS
     // surface. These gate tests exercise the INTERACTIVE -p delivery + §9/ack2 event
     // emission (an interactive-path feature), so force the interactive surface with
     // the `--interactive` override (inserted right after the `start` subcommand).
     // Without it, start routes headless and emits NONE of the interactive-path events
-    // asserted below. (Behavior delta — non-TTY `sb start -p` is headless by design
+    // asserted below. (Behavior delta — non-TTY `qd start -p` is headless by design
     // now — is flagged in the WP-B-CS-1 response for the red-team/integration.)
     let injected: Vec<String>;
     let arg_refs: Vec<&str>;
@@ -318,7 +318,7 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
         cmd.env(k, v);
     }
     let start = Instant::now();
-    let out = cmd.output().expect("spawn sb");
+    let out = cmd.output().expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -364,7 +364,7 @@ fn run_sb_claude(
         cmd.env(k, v);
     }
     let start = Instant::now();
-    let out = cmd.output().expect("spawn sb");
+    let out = cmd.output().expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -451,10 +451,10 @@ fn chunked_payload(canary: &str) -> String {
 }
 
 // ===========================================================================
-// G3 — per-path event SEQUENCES (jail, real sb binary + fakerepl + embedded mux)
+// G3 — per-path event SEQUENCES (jail, real qd binary + fakerepl + embedded mux)
 // ===========================================================================
 
-/// G3 idle-chunked: `sb start -p <chunked>` → send-initiated(new-p,idle) →
+/// G3 idle-chunked: `qd start -p <chunked>` → send-initiated(new-p,idle) →
 /// chunks-delivered → turn-anchored. The send-initiated carries chunks>1 +
 /// matching chunk_sha256s + content fields. (The new -p verify read-back IS the
 /// anchor; W8 Verified.)
@@ -544,7 +544,7 @@ fn g3_seq_new_p_idle_chunked_anchors() {
     jail.teardown();
 }
 
-/// G3 idle-single: `sb start -p <single-chunk>` → send-initiated(idle) →
+/// G3 idle-single: `qd start -p <single-chunk>` → send-initiated(idle) →
 /// chunks-delivered; NO terminal (single-chunk never runs verify → stays dangling
 /// by design, §9 "written" row).
 #[test]
@@ -582,7 +582,7 @@ fn g3_seq_new_p_idle_single_no_terminal() {
 }
 
 /// G3 queue path: hold the session busy (long BUSY_MS) via a prior `new -p`, then
-/// `sb send:pty` (no --wait) → send-initiated(busy-queued) → chunks-delivered; NO
+/// `qd send:pty` (no --wait) → send-initiated(busy-queued) → chunks-delivered; NO
 /// terminal. stdout "Message queued in ...".
 #[test]
 fn g3_seq_sendpty_queue_busy_queued() {
@@ -629,7 +629,7 @@ fn g3_seq_sendpty_queue_busy_queued() {
     jail.teardown();
 }
 
-/// G3 --wait complete: seed convo, then `sb send:pty --wait <chunked>` →
+/// G3 --wait complete: seed convo, then `qd send:pty --wait <chunked>` →
 /// ... → turn-anchored with anchor.line_index ≥ 0 AND status-transition records
 /// present (discharges the status-transition jail coverage too).
 #[test]
@@ -696,7 +696,7 @@ fn g3_seq_sendpty_wait_complete_anchored_with_status_transitions() {
 }
 
 /// G3 --wait timeout (THE WAIT-LOOP anchor-timeout): fakerepl under ABSORB never
-/// submits our send → `sb send:pty --wait --timeout 3` times out → anchor-timeout
+/// submits our send → `qd send:pty --wait --timeout 3` times out → anchor-timeout
 /// with waited_ms == the --timeout value (3000). NO turn-anchored for this send.
 ///
 /// MUTATION CONTROL (G3, spec-mandated): with this row in place, deleting the
@@ -784,7 +784,7 @@ fn g7_n() -> usize {
         .unwrap_or(20)
 }
 
-/// G7(a) PIPELINE ARM: N (≥20) `sb start -p <chunked>` primed sends each reach
+/// G7(a) PIPELINE ARM: N (≥20) `qd start -p <chunked>` primed sends each reach
 /// turn-anchored in the events file. Proves the measurement pipeline + the
 /// existing serialization+remediation hold under N. Records the NN/NN number.
 #[test]
@@ -833,7 +833,7 @@ fn g7a_pipeline_arm_nn_anchored() {
 
 /// G7(b) MEASUREMENT ARM (the non-vacuous tooth): fakerepl ABSORB_ALL_CRS (the
 /// remediation CRs are absorbed too → the swallow is INDUCED + unrecoverable) →
-/// `sb start -p <chunked>` → exit 10 (Stalled, unchanged contract) AND the events
+/// `qd start -p <chunked>` → exit 10 (Stalled, unchanged contract) AND the events
 /// file shows send-initiated + chunks-delivered + anchor-timeout and NO
 /// turn-anchored — the written-never-anchored signature COUNTED from the file.
 ///
@@ -872,7 +872,7 @@ fn g7b_measurement_arm_induced_swallow_counted() {
 }
 
 /// G7(c) READINESS ARM: CLAUDE_BIN=/bin/sleep boots a pane that never writes a
-/// pid file → `sb start -p` REFUSES HONESTLY (nonzero exit, NO prompt ever
+/// pid file → `qd start -p` REFUSES HONESTLY (nonzero exit, NO prompt ever
 /// delivered). The guarded property is NO BLIND WRITE: regardless of WHICH
 /// honest refusal fires, the prompt bytes are never sent.
 ///

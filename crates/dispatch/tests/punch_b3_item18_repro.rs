@@ -60,7 +60,7 @@ fn ended_same_name_start_lands_in_requested_cwd() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = PathBuf::from(format!("/tmp/sb-b3i18/{nanos}"));
+    let root = PathBuf::from(format!("/tmp/qd-b3i18/{nanos}"));
     let zmx_dir = root.join("zmx");
     let home = root.join("home");
     let cwd_a = root.join("cwd-a");

@@ -74,7 +74,7 @@ pub trait Sink: Send {
 }
 
 /// Boxed sinks ARE sinks (WP-B2b-2b): the daemon's registry-status half of the
-/// composite is injected sb-side as a `Box<dyn Sink>` (qrmux cannot name
+/// composite is injected qd-side as a `Box<dyn Sink>` (qrmux cannot name
 /// `RegistryStatusSink`), so it must compose into [`Fanout`] like any other sink.
 impl Sink for Box<dyn Sink> {
     fn deliver(&self, msg: Republish) {
@@ -83,7 +83,7 @@ impl Sink for Box<dyn Sink> {
 }
 
 /// A pure fan-out combinator (WP-B2b-2a §C, design §C layer-1): deliver one
-/// [`Republish`] to BOTH `a` then `b`. Composed on the `sb` side as
+/// [`Republish`] to BOTH `a` then `b`. Composed on the `qd` side as
 /// `Fanout { a: RegistryStatusSink, b: SocketFanoutSink }` so a single reader/pump
 /// drives both the registry-status write AND the socket republish — neither sink
 /// can be referenced from the other's crate. `Republish: Clone` (above) lets us
@@ -556,7 +556,7 @@ pub struct HeadlessLaunch {
     /// Daemon-resolved spawn-time flags — permission posture
     /// (`--dangerously-skip-permissions`) + relay channel injection
     /// (`--dangerously-load-development-channels server:relay`), emitted
-    /// immediately after the binary. Populated by the daemon via `crates/sb`'s
+    /// immediately after the binary. Populated by the daemon via `crates/qd`'s
     /// `launch::claude_flags` (the SAME resolver the interactive PTY path uses)
     /// so headless launches inherit the configured/overridable launch posture.
     /// Empty = no injection (a bare `-p` launch, e.g. an isolated unit/integration

@@ -62,9 +62,9 @@ Evidence (all in-repo):
   (the message visible at the `❯` prompt after the turn ended, delta=0).
 - soak-ledger **R4 row** (`exec/log/2026-06-05-a4.md`) — root-cause + disposition.
 
-The IDLE `send:pty` path (`crates/sb/src/bin/sb/verbs/send.rs`,
-`SendPtyAction::SendVerify`) and the `sb new -p` create path
-(`crates/sb/src/submit.rs::deliver_prompt`) BOTH delivered via a single
+The IDLE `send:pty` path (`crates/qd/src/bin/qd/verbs/send.rs`,
+`SendPtyAction::SendVerify`) and the `qd new -p` create path
+(`crates/qd/src/submit.rs::deliver_prompt`) BOTH delivered via a single
 `message + "\r"` write — a faithful port of the TS reference idle/create paths
 (`0d0fa9e:src/commands/send.ts:204` `sendRaw(message + "\r")`;
 `0d0fa9e:src/commands/lifecycle.ts` `deliverPrompt` `zmx send` `message + "\r"`).
@@ -108,11 +108,11 @@ chunked text phase UNDERNEATH it** (mode a).
    being visibly present and unsubmitted — never blind. (On a mode-(a) overflow the
    composer is empty, so this correctly fires zero CRs.)
 
-**The chunking lands in the SHARED write layer** (`crates/sb/src/submit.rs`:
+**The chunking lands in the SHARED write layer** (`crates/qd/src/submit.rs`:
 `chunk_text` + `send_text_chunked`, driven by `deliver_idle_two_write` /
 `deliver_idle_two_write_with` and `RealDeliverDeps::send_message`), so **ALL** PTY
 text paths get it: (a) `deliver_idle_two_write`'s text phase (idle `send:pty`); (b)
-`deliver_prompt`'s text phase (`sb new -p` create); (c) the busy-queue text phase in
+`deliver_prompt`'s text phase (`qd new -p` create); (c) the busy-queue text phase in
 `verbs/send.rs` (was one `mux.send(text)`); (d) `--model`'s `/model <m>` — routed
 through the same helper. **(d) is SUPERSEDED 2026-06-11 — see the note below.**
 
@@ -157,10 +157,10 @@ Two paths land this:
    ACCEPTANCE (busy) not COMPLETION. Stdout/stderr wording + exit codes are
    byte-unchanged (only the delivery mechanism changes).
 
-2. **`deliver_prompt` / `sb new -p` (a LEAD EXTENSION of the ruling):** the same
+2. **`deliver_prompt` / `qd new -p` (a LEAD EXTENSION of the ruling):** the same
    two-write + content-verified-CR shape. The ruling NAMES the idle `send:pty`
    path; the lead extends to `deliver_prompt` on the **same-mechanism** grounds —
-   it had the identical single `message + "\r"` write, and external `sbx spawn`
+   it had the identical single `message + "\r"` write, and external `qb spawn`
    priming prompts are the **LIKELIEST ≥4KB case**. The bounded-retry rounds are
    kept; each round's CR becomes content-verified. All ADR-0008 exit-contract
    semantics (Accepted/Stalled/PidFileMissing → 0/10/1) are unchanged. **This
@@ -197,7 +197,7 @@ live bugs — but it CAN, and now does, prove BOTH mechanisms are load-bearing:
 
 ## Consequences
 
-- The idle `send:pty`, `sb new -p`, busy-queue, and `--model` paths now survive a
+- The idle `send:pty`, `qd new -p`, busy-queue, and `--model` paths now survive a
   large write that overflows the tty queue (mode a) AND a ≥4KB paste whose `\r` is
   absorbed (mode b). The ≤1024B common case is unaffected (one chunk, byte-identical
   single write; it submitted before and submits now).

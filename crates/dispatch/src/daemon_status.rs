@@ -52,11 +52,11 @@ pub type NowFn = Box<dyn Fn() -> i64 + Send + Sync>;
 /// daemon-row write), per the `WP-B-CS-1-IDENTITY-FORK-RULING.md` caveat-2 fallback.
 #[derive(Debug, Clone)]
 pub struct MintIdentity {
-    /// The sb session name → addressability by name (`sb ls`/`relay`/`connect`).
+    /// The qd session name → addressability by name (`qd ls`/`relay`/`connect`).
     pub name: Option<String>,
     /// The per-session working directory (informational on the row).
     pub cwd: Option<String>,
-    /// The hosting/mode discriminant the `sb connect` resolver branches on
+    /// The hosting/mode discriminant the `qd connect` resolver branches on
     /// (`Some("headless")` → `TargetMode::HeadlessAgent` → observe). Reuses the
     /// existing `entrypoint` row field (no new schema; existing rows leave it None).
     pub entrypoint: Option<String>,
@@ -64,7 +64,7 @@ pub struct MintIdentity {
     /// claude rows carry NO `provider` field (the existing interactive invariant,
     /// common.rs), and the join defaults absent → `"claude-code"` (model.rs). An
     /// explicit `Some("claude")` is REJECTED by `provider_for`/
-    /// `refuse_unknown_provider` (no such provider) and would make `sb connect`
+    /// `refuse_unknown_provider` (no such provider) and would make `qd connect`
     /// refuse the row "unknown provider" — so the mint leaves it `None`, uniform
     /// with the interactive `<pid>.json` model (the WP-B5-i D ruling). The field
     /// stays on `MintIdentity` for a future non-claude minter.
@@ -150,7 +150,7 @@ impl RegistryStatusSink {
     /// WP-B5-i (identity option B): a MINTING sink for a headless session, keyed on
     /// the claude CHILD `pid`. On the first [`Republish::Ready`] it stamps the
     /// child-pid-keyed registry row from `identity` + the event's `session_id`
-    /// (status `busy`), so the session becomes addressable (`sb ls`/`relay`/
+    /// (status `busy`), so the session becomes addressable (`qd ls`/`relay`/
     /// `connect` by id AND name); every later flip is a CAS-guarded `set_status`
     /// against the `started_at` it minted. The `started_at` is stamped ONCE here so
     /// the minted row and the CAS guard agree.
@@ -323,7 +323,7 @@ impl RegistryStatusSink {
 /// mirrors `registry::debug_warn`; a status write never crashes the pump).
 fn debug_warn(msg: &str) {
     if std::env::var_os("SB_DEBUG").is_some_and(|v| v == "1") {
-        eprintln!("sb[daemon_status]: {msg}");
+        eprintln!("qd[daemon_status]: {msg}");
     }
 }
 
@@ -664,11 +664,11 @@ mod tests {
 
     /// WP-B5-i (D) — the CONNECT-RESOLUTION guard the row/Sink-layer tests missed
     /// (the live-CLI DoD earned its keep by surfacing this): the minted row's
-    /// `provider` must be a value `sb connect`'s resolver ACCEPTS. The join reads
+    /// `provider` must be a value `qd connect`'s resolver ACCEPTS. The join reads
     /// the field verbatim and defaults absent → `"claude-code"`
     /// (`join.rs`/`model.rs`); `refuse_unknown_provider`/`provider_for` then accept
     /// only real provider ids. So the minted (absent) provider, after the join
-    /// default, MUST resolve via `provider_for` — else `sb connect` refuses the row
+    /// default, MUST resolve via `provider_for` — else `qd connect` refuses the row
     /// "unknown provider" before the observe resolver ever runs.
     ///
     /// FIX-SHAPED MUTATION (the exact banked defect this caught): mint
@@ -685,7 +685,7 @@ mod tests {
         assert!(
             crate::provider::provider_for(resolved).is_some(),
             "the minted row's provider {resolved:?} must resolve via provider_for \
-             (else `sb connect` refuses the headless row 'unknown provider')"
+             (else `qd connect` refuses the headless row 'unknown provider')"
         );
     }
 

@@ -9,7 +9,7 @@
 //! external/persisted data must use `#[serde(default)]` + `Option<T>` and must
 //! NOT use `deny_unknown_fields`, so legacy / missing-field / unknown-field data
 //! never hard-fails. A *genuinely corrupt* blob must fail CLEANLY (an `Err`),
-//! never panic — a known TS lesson (dirty registry must not crash `sb ls`).
+//! never panic — a known TS lesson (dirty registry must not crash `qd ls`).
 
 use serde::Deserialize;
 

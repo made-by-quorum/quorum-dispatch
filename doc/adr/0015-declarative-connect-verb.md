@@ -8,7 +8,7 @@
 The CLI exposed two overlapping imperative session-entry verbs: `attach` (take over a
 live session's terminal via the mux) and `resume` (relaunch a cold session). A human had
 to know which one applied to a session's current state, and the failure wording leaked
-mux internals — e.g. `sb attach <cold-session>` printed `Session "<name>" is not in zmx.`,
+mux internals — e.g. `qd attach <cold-session>` printed `Session "<name>" is not in zmx.`,
 which both exposes the `zmx` mux detail and states the wrong reason (the session is cold,
 not "missing from the mux"). Separately, codex sessions are daemon-hosted with no terminal
 pane, yet `attach` refused them with a misleading `unknown provider "codex"` (codex IS
@@ -22,7 +22,7 @@ Collapse session-entry into one declarative human verb and clarify the audiences
   the row's provider *hosting* first, then liveness:
   - live claude (`Hosting::MuxPane`) → attach the pane;
   - cold claude → **auto-revive then attach** (revive-to-drivable + a TTY tail);
-  - codex (`Hosting::Daemon`) → a loud redirect (`sb send:relay` to drive, `sb resume` to
+  - codex (`Hosting::Daemon`) → a loud redirect (`qd send:relay` to drive, `qd resume` to
     revive) — there is no pane to attach, so `connect` never attaches a daemon;
   - opencode → parked; unknown provider → loud refusal.
 - **`resume <session>`** — kept first-class but documented as the AGENT verb:
@@ -31,7 +31,7 @@ Collapse session-entry into one declarative human verb and clarify the audiences
   `--help` points at `connect`) but still registered + dispatchable for scripts. It shares
   the same resolution/dispatch mechanic (`lifecycle::attach_resolved`) as `connect`.
 - The cold/unreachable human error names the human verb: `session '<name>' is cold (not
-  running) — revive and attach with: sb connect <name>`. It never leaks `zmx`/mux internals.
+  running) — revive and attach with: qd connect <name>`. It never leaks `zmx`/mux internals.
 - A shared live-id-collision preflight (`common::refuse_id_collision`) runs in the shared
   mechanic, so `connect` and the demoted `attach` both refuse a genuine ≥2-alive id
   collision loudly (a single live row still attaches normally).
@@ -57,4 +57,4 @@ path; `resume`'s own zmx-attach default path is unchanged.
 - Follow-up (verb-message pass, not this change): some `connect` revive-failure infra
   errors are still generic or name `zmx` in genuine missing-binary/launch diagnostics
   (a rare path, distinct from the misleading status leak this ADR removed); and `resume`'s
-  "already alive — use sb attach" message is off-model for agents.
+  "already alive — use qd attach" message is off-model for agents.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scenario: a5rec gc — TS sb `gc` lifecycle: dry-run(empty), dry-run(forged aged
+# scenario: a5rec gc — TS qd `gc` lifecycle: dry-run(empty), dry-run(forged aged
 # candidate), real prune→trash, list-trash, recover, recover-collision refusal,
 # purge(>30d). Records as ONE byte-exact transcript fixture (jail paths/ages
 # normalized). Pin 0d0fa9e. tooling: record.sh@388ccd9 normalize.sh@b581f75.
@@ -16,22 +16,22 @@ scn_run() {
     DJ="$PROJ/$DEADSID.jsonl"
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=gc (forged file mtimes >7d / prunedAt >30d)"
-        echo "\$ sb gc --dry-run (empty)"
+        echo "\$ qd gc --dry-run (empty)"
         scn_sb gc --dry-run 2>&1
-        echo "\$ sb gc --list-trash (empty)"
+        echo "\$ qd gc --list-trash (empty)"
         scn_sb gc --list-trash 2>&1
     } > "$SCN_OUT"
     # Forge an aged dead jsonl candidate (>7d), no live PID claims its sid.
     printf '{"type":"summary"}\n' > "$DJ"
     touch -t "$(date -v-8d +%Y%m%d%H%M 2>/dev/null || date -d '8 days ago' +%Y%m%d%H%M)" "$DJ" 2>/dev/null
     {
-        echo "\$ sb gc --dry-run (forged aged candidate)"
+        echo "\$ qd gc --dry-run (forged aged candidate)"
         scn_sb gc --dry-run 2>&1
-        echo "\$ sb gc (real prune to trash)"
+        echo "\$ qd gc (real prune to trash)"
         scn_sb gc 2>&1
-        echo "\$ sb gc --list-trash (after prune)"
+        echo "\$ qd gc --list-trash (after prune)"
         scn_sb gc --list-trash 2>&1
-        echo "\$ sb gc --recover deadsession-rec"
+        echo "\$ qd gc --recover deadsession-rec"
         scn_sb gc --recover "$DEADSID" 2>&1
     } >> "$SCN_OUT"
     # Re-trash the recovered file (re-age it so gc sees it as a candidate), then
@@ -40,7 +40,7 @@ scn_run() {
     scn_sb gc >/dev/null 2>&1
     printf '{"type":"summary"}\n' > "$DJ"
     {
-        echo "\$ sb gc --recover deadsession-rec (collision: original exists → refuse)"
+        echo "\$ qd gc --recover deadsession-rec (collision: original exists → refuse)"
         scn_sb gc --recover "$DEADSID" 2>&1
         echo "exit=$?"
     } >> "$SCN_OUT"
@@ -52,7 +52,7 @@ scn_run() {
         sed "s/\"prunedAt\":[^,]*/\"prunedAt\": \"$OLD_ISO\"/" "$meta" > "$meta.tmp" && mv "$meta.tmp" "$meta"
     fi
     {
-        echo "\$ sb gc --purge (>30d trash)"
+        echo "\$ qd gc --purge (>30d trash)"
         scn_sb gc --purge 2>&1
     } >> "$SCN_OUT"
     printf '0\n' > "$SCN_OUT.exit"

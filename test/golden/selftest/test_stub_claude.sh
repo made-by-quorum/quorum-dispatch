@@ -2,7 +2,7 @@
 # test/golden/selftest/test_stub_claude.sh — selftests for the deterministic
 # stub_claude counterpart (§S substrate; rider R1).
 #
-# Drives the stub DIRECTLY (no jail, no real sb, no real fixtures/), each in a
+# Drives the stub DIRECTLY (no jail, no real qd, no real fixtures/), each in a
 # throwaway HOME, and proves the five behaviours the contract rows rely on:
 #   (1) PID file appears under <HOME>/.claude/sessions after the dismiss Enter,
 #       matched by name (lifecycle.ts:135-161), with status idle.

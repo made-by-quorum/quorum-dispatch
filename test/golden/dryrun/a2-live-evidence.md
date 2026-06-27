@@ -35,8 +35,8 @@ real-home belt must show this set UNTOUCHED after every live boot.
 $ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test --workspace
   golden lib            4 passed
   golden dirty_state    5 passed
-  sb lib              222 passed   <- A2 create/boot/preflight/launch/zmx_mux units
-  sb bin                0 passed
+  qd lib              222 passed   <- A2 create/boot/preflight/launch/zmx_mux units
+  qd bin                0 passed
   create_claim_race     2 passed   <- multi-PROCESS race winner + claims_dir derivation
   parity                6 passed
   roundtrip             1 passed
@@ -63,7 +63,7 @@ no blob. Pin = zmx 0.6.0.
 ## Row 7 — Preflight unit matrix (L3)
 
 ```
-$ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p sb preflight
+$ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p qd preflight
   real_060_help_advertises_send ........... ok
   old_05x_shaped_help_lacks_send_is_no .... ok
   garbage_output_is_unknown ............... ok
@@ -95,7 +95,7 @@ Workspace suite (covers 0a normalize + A1 registry/jsonl/zmx_dir) = 241/241 (row
 ## Row 10a — Mutation evidence: zero-keystroke assert has TEETH (offline)
 
 ```
-$ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p sb boot::
+$ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p qd boot::
   boot::tests::stock_boot_zero_keystrokes ............................. ok
   boot::tests::mutation_evidence_injected_enter_fails_zero_keystroke_assert ok
   boot::tests::unmatched_dialog_fails_immediately_zero_keystrokes ..... ok
@@ -112,7 +112,7 @@ FAILS — proving the assert in `stock_boot_zero_keystrokes` is not vacuous.
 
 ## Row 2 + Row 4 + Row 5(live stock half) — BOOT A (real-claude #1 of 3)
 
-Driver: `test/golden/dryrun/a2-live-row2.sh` (built `target/debug/sb` + real zmx
+Driver: `test/golden/dryrun/a2-live-row2.sh` (built `target/debug/qd` + real zmx
 0.6.0, in-jail, seeded claude state via probe method, STOCK flags
 `SB_CLAUDE_FLAGS=--dangerously-skip-permissions` → no dev-channels → dialog-free).
 
@@ -120,7 +120,7 @@ Driver: `test/golden/dryrun/a2-live-row2.sh` (built `target/debug/sb` + real zmx
 ```
 child 0 exit=1 ; child 1 exit=1 ; child 2 exit=1 ; child 3 exit=0
 wins=1 losers=3
-loser stderr (all 3): "sb new: name '<NAME>' is being created by another process
+loser stderr (all 3): "qd new: name '<NAME>' is being created by another process
   (claim held: {"pid":13627,"timestamp":1780615005009,"name":"<NAME>"}). No session was created."
 zmx list in-jail: EXACTLY ONE task (name=<NAME> pid=13869)
 tasks matching NAME = 1
@@ -154,7 +154,7 @@ send (raw inject, NO trailing CR — no turn, no API spend):
 reattach: jail_zmx history <NAME> → 23-line boot-screen backlog (Welcome banner)
   after session detached the whole time. REATTACH-ASSERT: PASS
 
-kill: zmx task removed (sb kill verb DEFERRED to gc phase per bin/sb.rs — RECORDED
+kill: zmx task removed (qd kill verb DEFERRED to gc phase per bin/qd.rs — RECORDED
   EXCLUSION, not silent skip; used the zmx-side kill primitive the belt wraps).
   zmx list after: "no sessions found". KILL-ASSERT: PASS
 ```
@@ -174,9 +174,9 @@ Driver: `test/golden/dryrun/a2-live-row3.sh`. (positive control = real-claude #2
 
 ### Negative — unresolvable agent, NO boot
 ```
-$ sb new <NAME> --cwd <work> --agent bogus-agent-xyz
+$ qd new <NAME> --cwd <work> --agent bogus-agent-xyz
 exit=1
-stderr: "sb new: agent definition 'bogus-agent-xyz' does not resolve
+stderr: "qd new: agent definition 'bogus-agent-xyz' does not resolve
   (/tmp/.../agents/bogus-agent-xyz.md) — refusing to boot a generic session
   (fail-closed). No session was created."
 zmx list AFTER: "no sessions found" (UNCHANGED — no task, no boot)
@@ -188,7 +188,7 @@ boot a generic session; Rust refuses).
 ### Positive control — resolvable agent boots
 ```
 $ printf ... > <agents_dir>/real-helper.md ; export SB_SPAWN_AGENTS_DIR=<agents_dir>
-$ sb new <NAME2> --cwd <work> --agent real-helper
+$ qd new <NAME2> --cwd <work> --agent real-helper
 exit=0 ; stdout: Started detached session "<NAME2>"
 zmx list: name=<NAME2> pid=46634 (one task)
 ```
@@ -206,7 +206,7 @@ cachedGrowthBookFeatures from real home (287 keys, probe-3) + channels symlink t
 ~/work/cc-relay.
 
 ```
-$ sb new <NAME> --cwd <work>   (default flags, dev-channels ON)
+$ qd new <NAME> --cwd <work>   (default flags, dev-channels ON)
 exit=0 ; stdout: Started detached session "<NAME>"
 zmx history scrollback INCLUDES:
   "▎ Channels (experimental) messages from server:relay inject directly in this
@@ -219,7 +219,7 @@ REAL-HOME BELT: 723→723 HOLDS
 
 **PASS (configured-flag boot half) — with a recorded caveat.** The dev-channels
 feature DID engage (channels-experimental banner + server:relay injection visible
-in application output), exit 0, status idle. This proves the built sb boots
+in application output), exit 0, status idle. This proves the built qd boots
 correctly with the configured (dev-channels) flag set and that the GrowthBook gate
 opened in-jail.
 
@@ -237,7 +237,7 @@ opened) — it is "answerer live-exercise deferred for boot-budget".
 
 ### Row 4 / Row 5 answerer — OFFLINE re-attestation (the M3 dialog coverage)
 ```
-$ cargo test -p sb boot::
+$ cargo test -p qd boot::
   dev_channels_dialog_answered_once_then_boots ....... ok  (matched dialog → ONE \r → boots)
   dev_channels_dialog_persists_two_sends_then_fail ... ok  (≤2 sends then loud FAIL)
   detect_dialog_matched_dev_channels ................. ok  (verbatim captured dialog text)
@@ -252,14 +252,14 @@ local development" / "2. Exit"). **PASS** — answerer content-match + single-sh
 ## Row 5 — unmatched-dialog loud-fail (OFFLINE attestation)
 
 ```
-$ cargo test -p sb boot::
+$ cargo test -p qd boot::
   unmatched_dialog_fails_immediately_zero_keystrokes ... ok
   detect_dialog_unmatched_folder_trust ................. ok
   stock_boot_zero_keystrokes ........................... ok
   mutation_evidence_injected_enter_fails_zero_keystroke_assert ... ok
 ```
 **PASS (offline).** An unmatched dialog (e.g. folder-trust) → FAIL LOUD naming
-`sb attach`, ZERO keystrokes. The LIVE variant (un-pre-trusted cwd → loud fail) is
+`qd attach`, ZERO keystrokes. The LIVE variant (un-pre-trusted cwd → loud fail) is
 OPTIONAL per spec §11.5 and would cost a boot ATTEMPT — DEFERRED to stay within
 the ≤3 real-claude boot budget. Mutation evidence (inject Enter → assert fails)
 re-attested here = row 10a teeth.
@@ -270,21 +270,21 @@ Boots spent after Row 4: 3/3 (AT BUDGET — no further real-claude boots taken).
 
 ## Row 10b — Mutation evidence: claim-race has TEETH
 
-Mutated `crates/sb/src/create.rs` claim step to claim a UNIQUE per-PID name
+Mutated `crates/qd/src/create.rs` claim step to claim a UNIQUE per-PID name
 (`<name>-qa-mut-<pid>`) instead of the shared name → the O_EXCL claim never
 collides → every racer "wins" (the claim is effectively disabled).
 
 ```
 # MUTATED:
-$ cargo test -p sb --test create_claim_race create_path_claim_race_...
-  thread '...' panicked at crates/sb/tests/create_claim_race.rs:219:5:
+$ cargo test -p qd --test create_claim_race create_path_claim_race_...
+  thread '...' panicked at crates/qd/tests/create_claim_race.rs:219:5:
   assertion `left == right` failed: exactly ONE process must win the claim (got 6)
   test result: FAILED. 0 passed; 1 failed
 
-$ git checkout crates/sb/src/create.rs    # REVERTED
+$ git checkout crates/qd/src/create.rs    # REVERTED
 
 # REVERTED:
-$ cargo test -p sb --test create_claim_race
+$ cargo test -p qd --test create_claim_race
   create_path_claim_race_exactly_one_winner_across_processes ... ok
   claims_dir_is_under_claude_root ... ok
   test result: ok. 2 passed; 0 failed
@@ -309,19 +309,19 @@ The race test is non-vacuous. (Row 10a zero-keystroke mutation re-attested in Ro
 ## Row 8 — Linux live smoke (Lima `sbtest`, aarch64/vz)
 
 Driver: `test/golden/dryrun/a2-lima-smoke.sh`. VM: aarch64 / Linux / hostname
-`lima-sbtest`, rust 1.95.0, zmx 0.6.0 at `/usr/local/bin/zmx`. sb built IN-VM
-(`CARGO_TARGET_DIR=/tmp/sb-vm-target`; the worktree mount is read-only so target
+`lima-sbtest`, rust 1.95.0, zmx 0.6.0 at `/usr/local/bin/zmx`. qd built IN-VM
+(`CARGO_TARGET_DIR=/tmp/qd-vm-target`; the worktree mount is read-only so target
 went VM-local). FAKE claude via `CLAUDE_BIN` (writes a valid registry row then
 `sleep 600`) — exercises the FULL create path + real zmx + boot waiter at ZERO
 claude auth/cost.
 
 ```
 === ENV === aarch64 / Linux / lima-sbtest
-CREATE: sb new → exit=0, "Started detached session"
+CREATE: qd new → exit=0, "Started detached session"
 zmx list: one task (name=...-lima pid=199561)
 PID file (jailed home): {"...","status":"idle",...} ← EventBootWaiter polled it
 SEND: "LIMA_SMOKE_MARKER" present in application output
-RSS (KB): zmx daemon ~3660  | fake-claude(sleep) ~6356  | sb exits after detach
+RSS (KB): zmx daemon ~3660  | fake-claude(sleep) ~6356  | qd exits after detach
 KILL (real zmx): task gone from list; wrapper PID 199561 is DEAD
 VERDICT: create_exit=0 task=1 pidfile=present kill_after=0 → PASS
 ```
@@ -330,7 +330,7 @@ boot waiter reaching idle off the fake-claude registry row.
 
 Recorded notes:
 - **real-claude-on-Linux DEFERRED** (auth/backend env = A4 scope) — recorded exclusion.
-- The Lima sentinel `/etc/sb-rust-lima` is ABSENT, so `jail_require_destructive_ok`
+- The Lima sentinel `/etc/qd-rust-lima` is ABSENT, so `jail_require_destructive_ok`
   would fail-closed. The smoke does NOT use it — it uses the standard in-jail
   prefix-guarded kill (allowed on any host). No destructive-gated op was attempted.
   (Heads-up for the lead: if a future row needs the destructive gate in this VM,
@@ -369,7 +369,7 @@ Fake-claude cycles (macOS bonus + Lima) consumed ZERO real-claude boots.
 | Row | What | Result |
 |-----|------|--------|
 | 1 | Workspace green (test 241/241 + clippy -D + fmt) | **PASS** |
-| 2 | LIVE create/send/reattach/kill vs real zmx 0.6.0 | **PASS** (kill via zmx primitive; `sb kill` verb deferred to gc — recorded exclusion) |
+| 2 | LIVE create/send/reattach/kill vs real zmx 0.6.0 | **PASS** (kill via zmx primitive; `qd kill` verb deferred to gc — recorded exclusion) |
 | 3 | `--agent` fail-closed (neg + pos control) | **PASS** |
 | 4 | Concurrent create — exactly one winner | **PASS** |
 | 5 | Dialog-free boot: stock zero-keystroke (live+offline); unmatched loud-fail (offline) | **PASS** |
@@ -390,7 +390,7 @@ Fake-claude cycles (macOS bonus + Lima) consumed ZERO real-claude boots.
   BLOCKED-ENV (the gate opened).
 - **Unmatched-dialog LIVE variant (Row 5):** OPTIONAL per spec; deferred for boot
   budget; covered offline (`unmatched_dialog_fails_immediately_zero_keystrokes`).
-- **`sb kill` verb (Row 2):** deferred to gc phase per `bin/sb.rs` (A2 lands only
+- **`qd kill` verb (Row 2):** deferred to gc phase per `bin/qd.rs` (A2 lands only
   the zmx-side kill primitives). Kill asserted via the zmx primitive the belt wraps.
 - **real-claude-on-Linux (Row 8):** A4 scope (auth/backend env).
 
@@ -414,7 +414,7 @@ list goes empty), but it IS a jail-hygiene gap: orphaned claude procs accumulate
 across runs. **Recommendation to lead:** either register the spawned claude PID
 in the jail (via `findZmxWrapperForPid` ancestry — A2 already ports the primitive)
 so teardown kills the child, or have teardown SIGKILL any `claude --name
-<JAIL_PREFIX>*` survivors. Relevant because the gc phase (`sb kill` + reconcile)
+<JAIL_PREFIX>*` survivors. Relevant because the gc phase (`qd kill` + reconcile)
 will need exactly this child-reaping anyway.
 
 **GATE (pass-a) RECOMMENDATION: ACCEPT.** All 11 rows PASS; 3/3 boot budget
@@ -433,15 +433,15 @@ exercised") is **inverted**. Two deconfounding probe boots (unauthenticated,
 zero API cost, jailed, belt held):
 
 - **Probe 6** — settings.json `allowedChannels:["server:relay"]` ONLY, dangerous
-  flag on, raw zmx (no sb): dialog APPEARS and blocks. `allowedChannels` is not a
+  flag on, raw zmx (no qd): dialog APPEARS and blocks. `allowedChannels` is not a
   pre-acceptor.
 - **Probe 7** — QA's row-4 seed EXACTLY (`.claude.json` `dangerouslyLoad
   DevelopmentChannels:true` + GrowthBook flags + trust; no settings.json), raw
-  zmx (no sb, NO answerer): dialog APPEARS and blocks for 30s+ (PID file never
+  zmx (no qd, NO answerer): dialog APPEARS and blocks for 30s+ (PID file never
   written). With probe 3 (same key + dialog appeared) this eliminates the
   pre-accept hypothesis entirely.
 
-Therefore QA's boot B — identical seed, launched through the BUILT sb — got past
+Therefore QA's boot B — identical seed, launched through the BUILT qd — got past
 the dialog because **the EventBootWaiter's delegated-consent answerer detected
 and answered it, live**. A dismissed dialog is overwritten in-place (no
 scrollback line is produced), which is why `zmx history` showed no trace —

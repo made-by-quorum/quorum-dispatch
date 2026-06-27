@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""record_pty.py — PTY recorder for the sb-rust golden harness.
+"""record_pty.py — PTY recorder for the qd-rust golden harness.
 
 Ported from the proven spike harness (spike/empirical/pty_capture.py +
 pty_drive.py). Forks a PTY, runs a command, captures EVERY raw byte it emits to

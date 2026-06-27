@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # passb-diag-argv.sh — interpose a logging shim in front of the stub to capture
-# the argv/env the Rust sb hands to `claude`, and watch zmx list during boot.
+# the argv/env the Rust qd hands to `claude`, and watch zmx list during boot.
 # DEV-TIME EVIDENCE / DRYRUN-NOT-ORACLE. (sbr-pa4-lead2 pass-b diagnosis)
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DIAG="$HERE/dryrun/passb-diag"
 mkdir -p "$DIAG"
-SUT="${SUT:-/home/u/work/wt-a4-passb/target/debug/sb}"
+SUT="${SUT:-/home/u/work/wt-a4-passb/target/debug/qd}"
 
 . "$HERE/lib/jail.sh"
 . "$HERE/lib/stub_claude/stub_install.sh"
@@ -40,12 +40,12 @@ name="${JAIL_PREFIX}argv"
 watchpid=$!
 
 STUB_BUSY_HOLD_MS=6000 "$SUT" new "$name" > "$DIAG/argv-boot-stdout.txt" 2> "$DIAG/argv-boot-stderr.txt"
-echo "sb new rc=$?"
+echo "qd new rc=$?"
 sleep 2
 kill "$watchpid" 2>/dev/null || true
 echo "--- stub argv log ---"; cat "$LOG" 2>/dev/null || echo "(stub never invoked)"
 echo "--- zmx watch ---"; sort -u "$DIAG/zmx-watch.txt" | head -5
-echo "--- sb new stderr ---"; cat "$DIAG/argv-boot-stderr.txt"
+echo "--- qd new stderr ---"; cat "$DIAG/argv-boot-stderr.txt"
 echo "--- manual stub run (same argv, 3s) ---"
 # If we captured argv, re-run the stub by hand to see if it survives.
 exit 0

@@ -13,13 +13,13 @@
 //! therefore names one provider session forever.
 //!
 //! Concurrency: [`mint_or_get`] holds an exclusive `flock` on the store file
-//! across read-fold + append, so concurrent minters (e.g. two `sb ls` backfills)
+//! across read-fold + append, so concurrent minters (e.g. two `qd ls` backfills)
 //! agree on one id per session and never interleave lines. Readers (the join)
 //! use [`fold`] WITHOUT the lock — torn trailing lines are tolerated (skipped).
 //!
-//! ## Mint timing at `sb start` (P0 wave-2, spec-w2-env Design note option (a))
+//! ## Mint timing at `qd start` (P0 wave-2, spec-w2-env Design note option (a))
 //!
-//! At `sb start <name>` the provider UUID does not exist until Claude Code boots
+//! At `qd start <name>` the provider UUID does not exist until Claude Code boots
 //! and writes its registry row — but the stable id must already be in the
 //! child's env at launch (env-bake time). The flow is **mint-at-start,
 //! bind-at-boot-confirm**:
@@ -55,7 +55,7 @@ pub const ID_LEN: usize = 8;
 /// is broken — error loudly rather than loop).
 const MAX_MINT_RETRIES: usize = 16;
 
-/// The store path under a resolved sb state dir: `<state_dir>/ids.jsonl`.
+/// The store path under a resolved qd state dir: `<state_dir>/ids.jsonl`.
 pub fn ids_path(state_dir: &Path) -> PathBuf {
     state_dir.join("ids.jsonl")
 }
@@ -189,7 +189,7 @@ pub fn fold(path: &Path) -> IdMap {
 /// lowercase-fold ([`normalize`]) → shape gate ([`is_valid_id`]) → `by_id`
 /// lookup, with an UNBOUND mint (`None` slot) resolving to `None`.
 ///
-/// THE one chain for "what engine identity resolves?" — `sb whoami` and the
+/// THE one chain for "what engine identity resolves?" — `qd whoami` and the
 /// send:relay `from_session` derivation (B2 item 5) both call this, so
 /// attribution and whoami answer identically BY CONSTRUCTION (the
 /// name-consistency lesson: two hand-rolled copies of a derivation drift).
@@ -230,7 +230,7 @@ pub fn fill_sb_ids(sessions: &mut [Session], map: &IdMap) {
 }
 
 /// WP-B5-iii obl-4: fill `Session.lineage` (the fork→PARENT-sbId pointer) from a
-/// fold — the SAME read-only join pass `sb ls` runs (`common::all_sessions`), so
+/// fold — the SAME read-only join pass `qd ls` runs (`common::all_sessions`), so
 /// a fork's parent is discoverable through the live resolver path, not a raw row
 /// assert. Parity-safe: `lineage` is NOT serialized on the `ls --json` surface
 /// (a lineage output field is a B7-owned golden-delta, deferred). Strictly the
@@ -294,7 +294,7 @@ pub fn mint_or_get_with(
 }
 
 /// Mint an UNBOUND id (P0 wave-2 mint-at-start flow): the provider UUID does
-/// not exist yet at `sb start` env-bake time, so the mint line carries
+/// not exist yet at `qd start` env-bake time, so the mint line carries
 /// `session_id: null` (+ `name` for legibility). The id is injected into the
 /// child's env; [`bind`] attaches the UUID after the boot waiter confirms the
 /// registry row. Same flock + collision discipline as [`mint_or_get`].
@@ -1111,7 +1111,7 @@ mod tests {
     fn lineage_round_trips_and_fill_surfaces_parent_sbid_not_own() {
         // WP-B5-iii obl-4: record a fork→parent lineage pointer, fold it back, and
         // surface it onto the fork's Session via the SAME `fill_lineage` the live
-        // `sb ls` join (`common::all_sessions`) runs — discovery through the
+        // `qd ls` join (`common::all_sessions`) runs — discovery through the
         // resolver path, not a raw-row assert.
         let dir = tempfile::tempdir().unwrap();
         let path = store(&dir);

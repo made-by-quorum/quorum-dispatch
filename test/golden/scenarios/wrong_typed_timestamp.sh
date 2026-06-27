@@ -9,7 +9,7 @@
 # THE A1 POINT (registry permissive-parse): TS reads the registry with a bare
 # JSON.parse + `as PidEntry` cast (getPidEntries, session.ts:335-346) — NO runtime
 # type validation — then renders via `new Date(pid.startedAt)`. An ISO-string
-# startedAt is therefore TOLERATED: the dynamic read keeps the row, `sb ls --json`
+# startedAt is therefore TOLERATED: the dynamic read keeps the row, `qd ls --json`
 # shows the session, exit 0. (Empirically confirmed at pin 8c59ec4: the row renders
 # with startedAt/lastActive round-tripped back to the ISO strings — see RECORDED-FROM.)
 # The Rust side must match this PRESENCE through the A1 PR#20 per-field-permissive
@@ -17,7 +17,7 @@
 # default, the ROW SURVIVES, visible to ls/resolve again. (Byte-parity for the
 # wrong-typed field is NOT claimed — the row's PRESENCE is the contract.)
 #
-# Determinism (double-record): the OUTCOME is derived BOOLEANS over `sb ls --json`
+# Determinism (double-record): the OUTCOME is derived BOOLEANS over `qd ls --json`
 # (row visible by sessionId, ls exit 0), computed PRE-normalization from a FIXED
 # pre-seeded sessionId. NOT a byte trace of the (run-independent) registry. The
 # seeded pid is a fixed bogus constant the pid-normalizer collapses; the booleans
@@ -70,7 +70,7 @@ PY
 
 scn_assert() {
     [ -f "$SCN_OUT" ] || return 1
-    grep -q 'SHAPE ls_exit_zero=1' "$SCN_OUT"            || { _cmp_fail failure-shape "sb ls did not exit 0 over the wrong-typed-timestamp registry"; return 1; }
+    grep -q 'SHAPE ls_exit_zero=1' "$SCN_OUT"            || { _cmp_fail failure-shape "qd ls did not exit 0 over the wrong-typed-timestamp registry"; return 1; }
     grep -q 'SHAPE wrong_typed_row_visible=1' "$SCN_OUT" || { _cmp_fail failure-shape "wrong-typed-timestamp row NOT visible in ls (whole-row drop — pre-A1-PR#20 behavior)"; return 1; }
     return 0
 }

@@ -126,7 +126,7 @@ fn differ_trees(doctor: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let regen = tmp.path().join("regen");
     fs::create_dir_all(&fix).unwrap();
     fs::create_dir_all(&regen).unwrap();
-    // VERSION.pin/manifest.txt are sb-side metadata the differ must IGNORE —
+    // VERSION.pin/manifest.txt are qd-side metadata the differ must IGNORE —
     // present in fixture only, proving the -x exclusions work.
     fs::write(fix.join("VERSION.pin"), "0.0.0\n").unwrap();
     fs::write(fix.join("manifest.txt"), "# meta\n").unwrap();

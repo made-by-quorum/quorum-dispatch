@@ -181,7 +181,7 @@ pub struct Envelope {
     pub seq: u64,
     /// sessionId when known.
     pub session: Option<String>,
-    /// sb session name when known.
+    /// qd session name when known.
     pub name: Option<String>,
     /// RF-6 (R3d) — the EMITTING process's OS start-time (epoch ms), stamped on
     /// every record so the §7 dead-writer rule can tell the genuine original

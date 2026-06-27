@@ -1,6 +1,6 @@
 //! WS-C M3a: per-session client surface (spec §3.2 client identity belt, §4.2,
 //! §4.4). NEW surface ALONGSIDE the intact legacy `client/mod.rs` verbs — the
-//! engine (crates/sb) does not call these until M3b flips it.
+//! engine (crates/qd) does not call these until M3b flips it.
 //!
 //! Every entry point derives the socket from the session NAME via
 //! [`session_socket_path_for`] (`<dir>/<name>.sock`), connects, runs the v3
@@ -217,8 +217,8 @@ pub async fn create_detached_session(
 /// injected `HeadlessFactory`). `resume_session_id` continues an existing claude
 /// session (`--resume`), else a fresh launch.
 ///
-/// This is the wiring that makes the DORMANT prod trigger LIVE: `sb start` (agent
-/// driver) and `sb resume` route here. Returns on the daemon's `Connected` ack;
+/// This is the wiring that makes the DORMANT prod trigger LIVE: `qd start` (agent
+/// driver) and `qd resume` route here. Returns on the daemon's `Connected` ack;
 /// a framed `Error` (a daemon with no headless support, or a launch-resolve
 /// failure) is surfaced verbatim — never swallowed as success.
 pub async fn launch_headless_session(

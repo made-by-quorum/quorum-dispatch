@@ -1,8 +1,8 @@
 # A4 pass-(b) closure replay — evidence (sbr-pa4-lead2)
 
 Date: Fri Jun 5 08:53 EDT 2026 (system `date`; see journal note on the clock
-anomaly vs prior entry stamps). SUT: Rust `sb` built from main @ 959dcbd
-(debug, `scripts/build-lock.sh cargo build -p sb -p fakerepl`, worktree
+anomaly vs prior entry stamps). SUT: Rust `qd` built from main @ 959dcbd
+(debug, `scripts/build-lock.sh cargo build -p qd -p fakerepl`, worktree
 `~/work/wt-a4-passb`). Verification basis: LOCAL runs only (GitHub Actions
 down — billing; Pete ruled keep-going). All replays serial (host memory
 pressure WARN). Jail: rule 9 + ADD-4 hermetic env via lib/jail.sh throughout.
@@ -52,7 +52,7 @@ pressure WARN). Jail: rule 9 + ADD-4 hermetic env via lib/jail.sh throughout.
 - With this session's shell `TMPDIR=/var/folders/.../T/` the jail base is ~82
   chars; zmx derives a session-name cap from the ~104-byte socket-path limit →
   cap ~20 bytes < the 27-byte `sbrg-<runid>-*` names → `zmx run` prints
-  `error: session name is too long` **but exits 0**; sb's I6 Bug-D scan then
+  `error: session name is too long` **but exits 0**; qd's I6 Bug-D scan then
   correctly reports NotAttachable. Engine behaves per contract; zmx's
   error+exit-0 is a quirk worth an upstream note.
 - Workaround used (replays): invoke with TMPDIR=/tmp (jail base 38 chars) —

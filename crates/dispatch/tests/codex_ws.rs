@@ -2,7 +2,7 @@
 //! (codex-p2-spec sections 6.2, 8 W2, 10).
 //!
 //! OFFLINE: the "server" is a std thread binding `127.0.0.1:0` (an ephemeral OS
-//! port) that we assert is NOT in 8900-9000 (sb's relay probe range — fleet
+//! port) that we assert is NOT in 8900-9000 (qd's relay probe range — fleet
 //! lesson; re-bind if it lands there). Readiness is handshaked over a channel
 //! (the bound `SocketAddr` is sent once `accept` is ready) — NO sleeps-as-sync.
 //! Each scenario's server runs a DETERMINISTIC script keyed on the inbound
@@ -139,7 +139,7 @@ fn initialize_correlates_response_by_id() {
     let client = connect(&url);
     let res = client
         .initialize(&ClientInfo {
-            name: "sb-test".into(),
+            name: "qd-test".into(),
             title: None,
             version: "0".into(),
         })

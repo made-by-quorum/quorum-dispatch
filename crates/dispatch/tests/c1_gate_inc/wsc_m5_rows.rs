@@ -16,18 +16,18 @@
 // ---------------------------------------------------------------------------
 // RELEASE BINARIES (the gate's whole point — house locator pattern).
 //
-// The row drives the REAL RELEASE `sb` binary for `sb start`, so each session's
-// cold-start auto-launches a RELEASE `sb qrmux-server --session <name>` daemon
-// (embedded_mux::embedder_launch_spec re-execs current_exe() = the release sb).
+// The row drives the REAL RELEASE `qd` binary for `qd start`, so each session's
+// cold-start auto-launches a RELEASE `qd qrmux-server --session <name>` daemon
+// (embedded_mux::embedder_launch_spec re-execs current_exe() = the release qd).
 // The daemons — the processes under measurement (RSS, runtime, RTT) — are thus
 // release. The in-process EmbeddedMux client used for the RTT/history/list
 // measurement is just the WIRE caller; its profile does not change what the
-// daemon does. We belt-and-suspenders SB_EMBEDDED_DAEMON_PROGRAM = the release sb
+// daemon does. We belt-and-suspenders SB_EMBEDDED_DAEMON_PROGRAM = the release qd
 // on the in-process client env too, so any in-process launch is release as well
-// (in practice the daemons are already up from `sb start`, so the client only
+// (in practice the daemons are already up from `qd start`, so the client only
 // connects).
 //
-// release_sb_bin()/release_qrmux_bin() locate target/release/{sb,qrmux} from the
+// release_sb_bin()/release_qrmux_bin() locate target/release/{qd,qrmux} from the
 // test exe's target dir and PANIC WITH A REMEDY if absent — never a silent skip
 // (the c1_gate qrmux_bin contract).
 //
@@ -52,14 +52,14 @@
 // headers.
 // ===========================================================================
 
-/// Locate `target/release/sb` from the test exe's target dir. PANICS with a build
+/// Locate `target/release/qd` from the test exe's target dir. PANICS with a build
 /// remedy if absent (house locator pattern; never a silent vacuous skip).
 fn release_sb_bin() -> PathBuf {
-    release_bin("sb")
+    release_bin("qd")
 }
 
 /// Locate `target/release/qrmux` (the daemon binary, present for parity even
-/// though `sb qrmux-server` is the launched daemon entry).
+/// though `qd qrmux-server` is the launched daemon entry).
 #[allow(dead_code)]
 fn release_qrmux_bin() -> PathBuf {
     release_bin("qrmux")
@@ -86,9 +86,9 @@ fn release_bin(name: &str) -> PathBuf {
     bin
 }
 
-/// Build environment for driving the RELEASE `sb` binary in a jail. Mirrors
+/// Build environment for driving the RELEASE `qd` binary in a jail. Mirrors
 /// Jail::apply_embedded but as a (k, String) vec for Command construction in
-/// threads, AND points SB_EMBEDDED_DAEMON_PROGRAM at the release sb so any
+/// threads, AND points SB_EMBEDDED_DAEMON_PROGRAM at the release qd so any
 /// daemon launch (engine or in-process client) is release.
 fn release_jail_env(jail: &Jail) -> Vec<(String, String)> {
     let rel = release_sb_bin().to_string_lossy().into_owned();
@@ -104,9 +104,9 @@ fn release_jail_env(jail: &Jail) -> Vec<(String, String)> {
     ]
 }
 
-/// `sb start <name>` through the RELEASE binary with the claude-shaped fake-claude
+/// `qd start <name>` through the RELEASE binary with the claude-shaped fake-claude
 /// shim execing `app`. `extra` adds env (SB_FAKE_NAME, QRMUX_TEST_SHARED, …).
-/// Returns the exit code. The daemon auto-launched is the release `sb qrmux-server`.
+/// Returns the exit code. The daemon auto-launched is the release `qd qrmux-server`.
 fn release_sb_new(
     jail: &Jail,
     fake: &Path,
@@ -128,21 +128,21 @@ fn release_sb_new(
     }
     let _ = std::fs::create_dir_all(jail.root.join("tmp"));
     let _ = std::fs::create_dir_all(jail.root.join("zmx"));
-    let out = cmd.output().expect("spawn release sb start");
+    let out = cmd.output().expect("spawn release qd start");
     // Teardown-leak belt: record the auto-launched per-session daemon post-boot
     // (engine-cold-started, pid unseen at spawn) via the exact-socket-dir lookup.
     record_engine_daemons(&jail.root, &jail.resolved_dir());
     out.status.code().unwrap_or(-1)
 }
 
-/// Pre-spawn ONE RELEASE shared-fate daemon (`sb qrmux-server --session shared`
+/// Pre-spawn ONE RELEASE shared-fate daemon (`qd qrmux-server --session shared`
 /// with QRMUX_TEST_SHARED=1) and wait for its `shared.sock`. The shared-baseline
 /// arm uses this PROBE-style construction (pre-spawned daemon + in-process
-/// mux_create) rather than the engine `sb start` cold-start: under the seam the
+/// mux_create) rather than the engine `qd start` cold-start: under the seam the
 /// full engine boot-waiter/registry-join path is the production-irrelevant
-/// multi-session-on-one-daemon world M4 documented as flaky through `sb start`, so
+/// multi-session-on-one-daemon world M4 documented as flaky through `qd start`, so
 /// the deterministic probe mechanism is the honest baseline construction. Uses
-/// the RELEASE `sb` binary (`sb qrmux-server`) so the baseline daemon is release,
+/// the RELEASE `qd` binary (`qd qrmux-server`) so the baseline daemon is release,
 /// same as the split arm's daemons. Returns (DaemonGuard, shared.sock path).
 fn start_release_shared_daemon(jail: &Jail, dir: &Path) -> (DaemonGuard, PathBuf) {
     std::fs::create_dir_all(dir).ok();
@@ -356,7 +356,7 @@ fn g_soak() {
             // Quiet sessions + flooders all collapse onto the one shared daemon.
             for i in 0..n_quiet {
                 let name = format!("q{i}");
-                // run_detached: the engine mux primitive `sb start` drives, minus the
+                // run_detached: the engine mux primitive `qd start` drives, minus the
                 // boot-waiter/registry-join (those are the flaky-under-seam engine
                 // legs M4 named — the probe path avoids them). The child is `cat`.
                 if mux.run_detached(&dir, &name, "exec cat", &jail.home).map(|r| r.status == Some(0)).unwrap_or(false) {
@@ -370,8 +370,8 @@ fn g_soak() {
                 }
             }
         } else {
-            // SPLIT arm: full engine cold-start via the RELEASE `sb` binary — each
-            // `sb start` auto-launches its own per-session release daemon. This is
+            // SPLIT arm: full engine cold-start via the RELEASE `qd` binary — each
+            // `qd start` auto-launches its own per-session release daemon. This is
             // the realistic, claude-shaped path (the topology under gate).
             for i in 0..n_quiet {
                 let name = format!("q{i}");

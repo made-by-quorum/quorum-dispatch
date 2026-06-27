@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scenario: a5rec ping — TS sb `ping` liveness classifications (exit 0=done
+# scenario: a5rec ping — TS qd `ping` liveness classifications (exit 0=done
 # 1=stuck 2=active 3=error 4=ambiguous). Forges registry status/turns/timestamps
 # to drive done/active/ambiguous deterministically, plus the no-target error and
 # the --prefix sweep + --json shapes. Volatile age=/uptime= counters are
@@ -22,11 +22,11 @@ scn_run() {
     sleep 30 & local P_AMBG=$!
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=ping (forged status/turns; age=/uptime= → <DUR>)"
-        echo "\$ sb ping (no target → error exit 3)"
+        echo "\$ qd ping (no target → error exit 3)"
         scn_sb ping 2>&1; echo "exit=$?"
-        echo "\$ sb ping --prefix sbrg- (empty registry)"
+        echo "\$ qd ping --prefix sbrg- (empty registry)"
         scn_sb ping --prefix sbrg- 2>&1; echo "exit=$?"
-        echo "\$ sb ping --prefix sbrg- --json (empty)"
+        echo "\$ qd ping --prefix sbrg- --json (empty)"
         scn_sb ping --prefix sbrg- --json 2>&1; echo "exit=$?"
     } > "$SCN_OUT"
     # DONE: idle, recent (uptime < 300) → exit 0.
@@ -36,12 +36,12 @@ scn_run() {
     # AMBIGUOUS: idle, 0 turns, uptime > 300 → exit 4.
     a5_forge_registry "${JAIL_PREFIX}ambg" idle 0 "$P_AMBG" 600
     {
-        echo "\$ sb ping sbrg-done (idle recent → done exit 0)"
+        echo "\$ qd ping sbrg-done (idle recent → done exit 0)"
         # Isolate each target: ping by exact name reads only that entry.
         scn_sb ping "${JAIL_PREFIX}done" 2>&1; echo "exit=$?"
-        echo "\$ sb ping sbrg-actv (busy recent → active exit 2)"
+        echo "\$ qd ping sbrg-actv (busy recent → active exit 2)"
         scn_sb ping "${JAIL_PREFIX}actv" 2>&1; echo "exit=$?"
-        echo "\$ sb ping sbrg-ambg (idle 0-turns aged → ambiguous exit 4)"
+        echo "\$ qd ping sbrg-ambg (idle 0-turns aged → ambiguous exit 4)"
         scn_sb ping "${JAIL_PREFIX}ambg" 2>&1; echo "exit=$?"
     } >> "$SCN_OUT"
     kill "$P_DONE" "$P_ACTV" "$P_AMBG" 2>/dev/null
@@ -50,7 +50,7 @@ scn_run() {
 
 scn_assert() {
     [ -f "$SCN_OUT" ] || return 1
-    grep -q "sb ping: provide a <session> or --prefix" "$SCN_OUT" || return 1
+    grep -q "qd ping: provide a <session> or --prefix" "$SCN_OUT" || return 1
     grep -q "No sessions matching 'sbrg-'" "$SCN_OUT" || return 1
     grep -q "${JAIL_PREFIX}done: status=idle" "$SCN_OUT" || return 1
     grep -q "${JAIL_PREFIX}actv: status=busy" "$SCN_OUT" || return 1

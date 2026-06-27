@@ -1,14 +1,14 @@
 # WS-C M5 G-IDLE evidence (R-1(6)) — RELEASE-build idle-footprint measurement
 # Date: 2026-06-06 16:27 EDT
 # Base SHA: 8270c212f91f7d777e445762f0b1560ec0fb9e44 (the M5 rows wsc_m5_rows.rs are added in THIS phase commit, atop this base)
-# Build profile: RELEASE (target/release/sb daemons); test harness dev profile (wire client only)
+# Build profile: RELEASE (target/release/qd daemons); test harness dev profile (wire client only)
 # Host: brano.local (macOS 26.5, arm64, Darwin 25.5.0)
-# Rerun: scripts/build-lock.sh cargo build --release -p sb --bin sb -p qrmux --bin qrmux
-#        C1_GATE_RUNID=wsc-m5 scripts/build-lock.sh cargo test -p sb --test c1_gate -- --ignored --exact g_idle --nocapture
+# Rerun: scripts/build-lock.sh cargo build --release -p qd --bin qd -p qrmux --bin qrmux
+#        C1_GATE_RUNID=wsc-m5 scripts/build-lock.sh cargo test -p qd --test c1_gate -- --ignored --exact g_idle --nocapture
 #
 G-IDLE VERDICT: MEASUREMENT COMPLETE (release build, N=[0, 1, 5, 10, 20], ≥60s settle each) — per-daemon idle RSS table recorded; macOS RSS-overcount caveat + PSS Lima follow-up named; flag-vs-2×-dev-base = false. No pass/fail threshold (measurement row).
 
-BUILD PROFILE: RELEASE (daemon = /home/u/work/sb-rust/.claude/worktrees/agent-aac709643ceed4141/target/release/sb)
+BUILD PROFILE: RELEASE (daemon = /home/u/work/qd-rust/.claude/worktrees/agent-aac709643ceed4141/target/release/qd)
 MEASUREMENT: per-session daemon idle RSS at N = [0, 1, 5, 10, 20]; settle 60s each point.
 CHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat), NOT full fakerepl (delta: no convo/submit semantics — irrelevant to idle RSS).
 MACOS RSS CAVEAT (spec §8): `ps -o rss` double-counts SHARED TEXT PAGES — N identical release binaries share their text segment, so ΣRSS OVERCOUNTS the true marginal fleet cost. PSS-honest numbers (smaps_rollup) require the Lima/Linux lane. NAMED FOLLOW-UP, not a blocker for this row.

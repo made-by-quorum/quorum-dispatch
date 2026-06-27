@@ -1,9 +1,9 @@
 #!/bin/bash
 # a2-live-row2.sh — A2 gate rows 2+4+5(live stock half): concurrent-create race
-# via the BUILT sb binary against REAL zmx 0.6.0, in-jail, stock flags
+# via the BUILT qd binary against REAL zmx 0.6.0, in-jail, stock flags
 # (--dangerously-skip-permissions only → no dev-channels → dialog-free).
 #
-# Boot A: N=4 background `sb new <same name>` processes. Assert exactly one
+# Boot A: N=4 background `qd new <same name>` processes. Assert exactly one
 # exit 0; losers nonzero with claim/in-use error; zmx list shows EXACTLY ONE
 # task; winner reached ready (PID file in jailed home, status idle). Then REUSE
 # the winner session for send / reattach / kill rows.
@@ -11,9 +11,9 @@
 # Bash 3.2. Self-cd. Points JAIL_SB_CMD at the built debug binary + JAIL_ZMX_CMD
 # at the pinned real zmx.
 set -u
-WT=/home/u/work/sb-rust/.claude/worktrees/agent-acfec16fb3b5c3375
+WT=/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -36,11 +36,11 @@ printf '{"hasCompletedOnboarding": true, "bypassPermissionsModeAccepted": true, 
 
 NAME="${JAIL_PREFIX}race"
 
-# --- THE RACE: N=4 background sb new, same name, stock flags --------------------
+# --- THE RACE: N=4 background qd new, same name, stock flags --------------------
 N=4
 RDIR="$JAIL_ROOT/raceout"
 mkdir -p "$RDIR"
-echo "=== launching $N concurrent 'sb new $NAME' (built binary, stock flags) ==="
+echo "=== launching $N concurrent 'qd new $NAME' (built binary, stock flags) ==="
 pids=""
 i=0
 while [ "$i" -lt "$N" ]; do
@@ -127,7 +127,7 @@ else
 fi
 
 echo
-echo "=== ROW 2 kill (sb kill verb DEFERRED to gc phase per bin/sb.rs — using jail_kill_session belt) ==="
+echo "=== ROW 2 kill (qd kill verb DEFERRED to gc phase per bin/qd.rs — using jail_kill_session belt) ==="
 # Capture wrapper PID before kill (zmx task pid).
 echo "  zmx list before kill:"; jail_zmx list 2>&1 | grep "$NAME" | sed 's/^/    /'
 "$JAIL_ZMX_CMD" kill "$NAME" --force >/dev/null 2>&1 || "$JAIL_ZMX_CMD" kill "$NAME" >/dev/null 2>&1 || true

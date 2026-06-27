@@ -1,7 +1,7 @@
 //! WP-B-CS-2-LIVE — the REAL-claude SEED (ruling Q2a, MANDATORY, non-deferrable):
 //! prove the live OBSERVE run-loop + turn-boundary cutover EXECUTION ONCE,
 //! end-to-end, against a GENUINE live busy headless `claude` window — driving the
-//! REAL `sb` binary (so `run_headless_observe` + `revive_claude` run for real), with
+//! REAL `qd` binary (so `run_headless_observe` + `revive_claude` run for real), with
 //! ONLY the HOME isolated (the `headless_b2b2b` / lib.sh `env -i` contract: a
 //! synthetic HOME + CLAUDE_CONFIG_DIR with copied creds, NEVER the live `~/.claude`).
 //!
@@ -47,7 +47,7 @@ fn live_creds() -> String {
 /// An isolated jail: a synthetic HOME + an isolated CLAUDE_CONFIG_DIR carrying the
 /// copied creds + a controlled `.claude.json` (onboarding done, cwd trusted, no MCP).
 /// The REAL claude (launched by the daemon with `clear_env=false`) inherits HOME +
-/// CLAUDE_CONFIG_DIR from the `sb` process env, so it reads THIS jail — never the
+/// CLAUDE_CONFIG_DIR from the `qd` process env, so it reads THIS jail — never the
 /// live `~/.claude`.
 struct Jail {
     root: PathBuf,
@@ -116,7 +116,7 @@ impl Jail {
     }
 
     fn run(&self, args: &[&str]) -> std::process::Output {
-        self.cmd(args).output().expect("spawn sb")
+        self.cmd(args).output().expect("spawn qd")
     }
 
     /// Reap EVERY process whose argv or cwd references this jail's unique tempdir
@@ -175,7 +175,7 @@ fn real_claude_observe_cutover_seed() {
     let j = jail(root.path());
     let sessions_dir = j.sessions_dir();
 
-    // --- sb start --headless against the REAL claude. The prompt emits a tripwire
+    // --- qd start --headless against the REAL claude. The prompt emits a tripwire
     //     token (real assistant text) and then a long count, so the turn stays BUSY
     //     long enough to connect mid-turn. ------------------------------------------
     let prompt = format!(
@@ -189,7 +189,7 @@ fn real_claude_observe_cutover_seed() {
     assert_eq!(
         start.status.code(),
         Some(0),
-        "sb start --headless (real claude) must exit 0; stdout={s_out} stderr={s_err}"
+        "qd start --headless (real claude) must exit 0; stdout={s_out} stderr={s_err}"
     );
 
     // --- poll until the real claude turn is BUSY (mid-turn) -----------------------
@@ -213,7 +213,7 @@ fn real_claude_observe_cutover_seed() {
     };
     eprintln!("[seed] real claude row busy: pid={pid}");
 
-    // --- sb connect during the busy window; drive choice 2 + a buffered input -----
+    // --- qd connect during the busy window; drive choice 2 + a buffered input -----
     let mut child = match j
         .cmd(&["connect", SESSION])
         .stdin(Stdio::piped())
@@ -224,7 +224,7 @@ fn real_claude_observe_cutover_seed() {
         Ok(c) => c,
         Err(e) => {
             j.reap();
-            panic!("spawn sb connect: {e}");
+            panic!("spawn qd connect: {e}");
         }
     };
     {
@@ -309,7 +309,7 @@ fn real_claude_observe_cutover_seed() {
     // `revive_claude` resume + where the terminal attach stops. NOT asserted to a
     // fixed outcome — printed for the close-verify to read the genuine boundary.
     eprintln!(
-        "[seed] Q2b EMPIRICAL boundary — sb connect exit={:?}, child still alive={}\n\
+        "[seed] Q2b EMPIRICAL boundary — qd connect exit={:?}, child still alive={}\n\
          ----- connect stdout -----\n{stdout}\n----- connect stderr -----\n{stderr}",
         out.status.code(),
         pid_alive(pid)

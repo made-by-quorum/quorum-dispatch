@@ -1,7 +1,7 @@
-//! `sb` — the engine crate of the sb→Rust rewrite.
+//! `qd` — the engine crate of the qd→Rust rewrite.
 //!
-//! Phase A1: the data layer behind `sb ls --json` / `sb info`, ported from the
-//! TypeScript sb (`~/work/switchboard`, read-only source of truth) with its
+//! Phase A1: the data layer behind `qd ls --json` / `qd info`, ported from the
+//! TypeScript qd (`~/work/switchboard`, read-only source of truth) with its
 //! war-story comments carried forward (LESSONS.md rule 1 — comments-carry).
 //!
 //! Architecture (spec: ws/switchboard/rust/exec/a1-spec.md):
@@ -82,7 +82,7 @@ pub mod zmx_mux;
 /// Returns the crate's marker name. Anchor kept from the 0a scaffold (the 0a
 /// gate's smoke test references it).
 pub fn crate_marker() -> &'static str {
-    "sb"
+    "qd"
 }
 
 #[cfg(test)]
@@ -91,6 +91,6 @@ mod tests {
 
     #[test]
     fn crate_marker_is_sb() {
-        assert_eq!(crate_marker(), "sb");
+        assert_eq!(crate_marker(), "qd");
     }
 }

@@ -1,4 +1,4 @@
-//! REAL `sb send:relay` backend (spec §4.3).
+//! REAL `qd send:relay` backend (spec §4.3).
 //!
 //! Source: `qa/hardening@3dd9f1e:src/commands/send.ts` send:relay action
 //! (send.ts:391-475). Flow:
@@ -111,7 +111,7 @@ fn run_with_client(
     // unknown-provider shape rather than panicking (structurally unreachable).
     let Some(provider_impl) = dispatch::provider::provider_for(&provider_id) else {
         eprintln!(
-            "sb send:relay: unknown provider \"{provider_id}\" — this engine supports: claude-code."
+            "qd send:relay: unknown provider \"{provider_id}\" — this engine supports: claude-code."
         );
         return 1;
     };
@@ -376,7 +376,7 @@ fn inject_via_provider(
 }
 
 /// codex P2 W6 (codex-p2-spec section 7.5) — the codex SEND ladder at the verb
-/// layer. A codex row is a daemon-hosted protocol thread; `sb send:relay` for it:
+/// layer. A codex row is a daemon-hosted protocol thread; `qd send:relay` for it:
 ///
 ///   1. resolve endpoint (the row's recorded registry `endpoint`, re-read by pid —
 ///      it is NOT on the human/agent `Session`/`--json` surface, §9.4), thread id
@@ -415,7 +415,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
     // The thread id (m2 — the REAL uuid the daemon assigned) is the row's sessionId.
     let thread_id = session.session_id.clone();
     if thread_id.is_empty() {
-        eprintln!("sb send:relay: \"{name}\": this codex session has no thread id (cold/dead).");
+        eprintln!("qd send:relay: \"{name}\": this codex session has no thread id (cold/dead).");
         return 1;
     }
 
@@ -423,7 +423,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
     // --json surface — re-read the row by pid). A dead/cold row (no live pid) has
     // no daemon to reach.
     let Some(pid) = session.pid.filter(|&p| p != 0) else {
-        eprintln!("sb send:relay: \"{name}\": session daemon not reachable (try sb resume {name})");
+        eprintln!("qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})");
         return 1;
     };
     let endpoint = match dispatch::registry::read_entry(&paths.sessions_dir, pid)
@@ -433,7 +433,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
         Some(ep) => ep,
         None => {
             eprintln!(
-                "sb send:relay: \"{name}\": session daemon not reachable (try sb resume {name})"
+                "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
             );
             return 1;
         }
@@ -446,20 +446,20 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
             // Daemon unreachable (connect failed): the same SEND-vocabulary surface
             // as a missing endpoint (§7.5).
             eprintln!(
-                "sb send:relay: \"{name}\": session daemon not reachable (try sb resume {name})"
+                "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
             );
             return 1;
         }
     };
     {
         let client = ClientInfo {
-            name: "sb-manager".to_string(),
+            name: "qd-manager".to_string(),
             title: None,
             version: "0".to_string(),
         };
         if rpc.initialize(&client).is_err() {
             eprintln!(
-                "sb send:relay: \"{name}\": session daemon not reachable (try sb resume {name})"
+                "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
             );
             return 1;
         }
@@ -531,7 +531,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
         Err(InjectError::NoTransport(_)) => {
             // Structurally unreachable (we set app_server Some) — defensive.
             eprintln!(
-                "sb send:relay: \"{name}\": session daemon not reachable (try sb resume {name})"
+                "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
             );
             1
         }
@@ -539,7 +539,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
             // A protocol/precondition failure. SEND-vocabulary only (InjectError's
             // Display carries no start/steer tokens; the rpc-layer error text is
             // W2-sanitized).
-            eprintln!("sb send:relay: \"{name}\": send failed ({e}).");
+            eprintln!("qd send:relay: \"{name}\": send failed ({e}).");
             1
         }
     }
@@ -564,7 +564,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
     };
     let not_reachable = |name: &str| {
         eprintln!(
-            "sb send:relay: \"{name}\": acp session daemon not reachable (try sb resume {name})"
+            "qd send:relay: \"{name}\": acp session daemon not reachable (try qd resume {name})"
         );
         1
     };
@@ -626,7 +626,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
             0
         }
         Err(InjectError::Precondition(s)) => {
-            eprintln!("sb send:relay: \"{name}\": send failed ({s}).");
+            eprintln!("qd send:relay: \"{name}\": send failed ({s}).");
             1
         }
         Err(_) => not_reachable(&name),

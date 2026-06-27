@@ -125,7 +125,7 @@ pub struct DaemonCtx {
     /// WP-B2b-2b (design §D-2b, the injected "DaemonCtx factory"): resolves a
     /// `LaunchHeadless` into a spawn plan + the registry-status sink. `None` for
     /// the bare-qrmux binary / the test fixture (no headless support → the verb is
-    /// refused). Populated by `sb`'s daemon entry. `Arc<dyn ..>` so the per-
+    /// refused). Populated by `qd`'s daemon entry. `Arc<dyn ..>` so the per-
     /// connection `DaemonCtx` stays cheaply `Clone`.
     pub headless: Option<Arc<dyn crate::headless_session::HeadlessFactory>>,
 }

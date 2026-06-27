@@ -3,14 +3,14 @@
 # G-B4 / G-N2 (RUNTIME content audit + relay/shell consent behavior, in a
 # scratch-HOME jail).
 #
-# Runs the REAL Rust `sb bootstrap` binary inside a per-run hermetic jail and
+# Runs the REAL Rust `qd bootstrap` binary inside a per-run hermetic jail and
 # asserts the ENGINE invariants that no unit test can prove (they exercise the
 # live binary end-to-end, not the pure deciders):
 #
 #   G-B5  RUNTIME content-audit: bootstrap output contains NO forbidden tokens
-#         (the scope-audit deny set + substrate/marketplace + spawn/sbx).
+#         (the scope-audit deny set + substrate/marketplace + spawn/qb).
 #   G-B1  idempotence: bootstrap runs TWICE in the same scratch HOME → exit 0
-#         both times, identical state-dir layout (~/.sb + ~/.sb/state present).
+#         both times, identical state-dir layout (~/.quorum/dispatch + ~/.quorum/dispatch/state present).
 #   G-B3  consent default-No / non-TTY: bootstrap run NON-INTERACTIVELY (stdin
 #         not a TTY) → relay registration and the shell-integration line are
 #         NEVER offered and NOTHING is written (relay not registered, rc file
@@ -41,16 +41,16 @@ REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 . "$REPO_ROOT/test/golden/lib/jail.sh"
 
 # The Rust binary under test. Default to the workspace debug build; overridable.
-SB_BIN="${SB_BIN:-$REPO_ROOT/target/debug/sb}"
+SB_BIN="${SB_BIN:-$REPO_ROOT/target/debug/qd}"
 if [ ! -x "$SB_BIN" ]; then
-    echo "bootstrap-audit: building sb (no binary at $SB_BIN)..." >&2
-    ( cd "$REPO_ROOT" && ./scripts/build-lock.sh cargo build -p sb --bin sb >/dev/null 2>&1 ) \
-        || { echo "FAIL: could not build sb" >&2; exit 2; }
+    echo "bootstrap-audit: building qd (no binary at $SB_BIN)..." >&2
+    ( cd "$REPO_ROOT" && ./scripts/build-lock.sh cargo build -p qd --bin qd >/dev/null 2>&1 ) \
+        || { echo "FAIL: could not build qd" >&2; exit 2; }
 fi
 export JAIL_SB_CMD="$SB_BIN"
-# NOTE: the relay registration now uses the BARE `sb` command (resolved via PATH,
+# NOTE: the relay registration now uses the BARE `qd` command (resolved via PATH,
 # never goes stale on a binary move — relay-path hardening v2), so the recorded
-# `mcp add` argv carries `sb`, NOT this binary's absolute path. The G-B4 assertion
+# `mcp add` argv carries `qd`, NOT this binary's absolute path. The G-B4 assertion
 # below greps for the literal bare command rather than a resolved path.
 
 PASS=0
@@ -58,11 +58,11 @@ FAIL=0
 ok()  { PASS=$((PASS + 1)); printf 'ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$1"; }
 
-# The forbidden-token set (G-B5): the scope-audit deny set + the sbx-era
+# The forbidden-token set (G-B5): the scope-audit deny set + the qb-era
 # additions. Case-insensitive. A match in bootstrap's stdout/stderr is a
-# content leak (sbx-side VOCABULARY stays banned even though the shell + relay
+# content leak (qb-side VOCABULARY stays banned even though the shell + relay
 # steps are sanctioned engine behavior).
-FORBIDDEN='substrate|marketplace|SB_PLUGINS_ROOT|plugins-root|plugins_root|spawn|sbx'
+FORBIDDEN='substrate|marketplace|SB_PLUGINS_ROOT|plugins-root|plugins_root|spawn|qb'
 
 # --- jail up ---------------------------------------------------------------
 jail_establish >/dev/null 2>&1 || { echo "FAIL: jail_establish" >&2; exit 2; }
@@ -113,7 +113,7 @@ EOF
 chmod +x "$STUB_DIR/zmx"
 
 # Most arms run with the stubs on PATH (claude PRESENT). PATH is inherited by
-# the sb child through jail_sb. Save the original for the claude-missing arm.
+# the qd child through jail_sb. Save the original for the claude-missing arm.
 ORIG_PATH="$PATH"
 export PATH="$STUB_DIR:$PATH"
 
@@ -135,7 +135,7 @@ RC2=$?
 
 # G-B1: state-dir layout present.
 if [ -d "$SB_HOME" ] && [ -d "$SB_HOME/state" ]; then
-    ok "G-B1/state-dirs-present (~/.sb + ~/.sb/state)"
+    ok "G-B1/state-dirs-present (~/.quorum/dispatch + ~/.quorum/dispatch/state)"
 else
     bad "G-B1/state-dirs-present — missing $SB_HOME or $SB_HOME/state"
 fi
@@ -166,10 +166,10 @@ if grep -qi 'relay: not configured' "$OUT1"; then
 else
     bad "G-B3/relay-not-configured-reported — expected 'relay: not configured'"
 fi
-if grep -qi 'sb relay:register' "$OUT1"; then
+if grep -qi 'qd relay:register' "$OUT1"; then
     ok "G-B3/relay-register-later-pointer"
 else
-    bad "G-B3/relay-register-later-pointer — no 'sb relay:register' pointer"
+    bad "G-B3/relay-register-later-pointer — no 'qd relay:register' pointer"
 fi
 if [ -e "$STUB_STATE" ]; then
     bad "G-B3/no-register-on-non-tty — relay was registered without a TTY"
@@ -178,12 +178,12 @@ else
 fi
 
 # G-B3 (shell step): non-TTY → init line NOT offered, rc NOT modified.
-if grep -qi 'sb init bash' "$OUT1"; then
+if grep -qi 'qd init bash' "$OUT1"; then
     ok "G-B3/shell-add-later-pointer"
 else
-    bad "G-B3/shell-add-later-pointer — no 'sb init bash' pointer"
+    bad "G-B3/shell-add-later-pointer — no 'qd init bash' pointer"
 fi
-if [ -e "$JAIL_BASHRC" ] && grep -q 'sb init' "$JAIL_BASHRC" 2>/dev/null; then
+if [ -e "$JAIL_BASHRC" ] && grep -q 'qd init' "$JAIL_BASHRC" 2>/dev/null; then
     bad "G-B3/no-rc-write-on-non-tty — jailed .bashrc gained the init line"
 else
     ok "G-B3/no-rc-write-on-non-tty"
@@ -232,7 +232,7 @@ if command -v python3 >/dev/null 2>&1; then
     # for the G-B6 sub-shell). Drive bootstrap under a PTY (isatty → offers fire).
     python3 - "$JAIL_SB_CMD" "$OUT4" <<'PYEOF'
 import os, pty, sys, time, signal
-sb, outpath = sys.argv[1], sys.argv[2]
+qd, outpath = sys.argv[1], sys.argv[2]
 out = open(outpath, "wb")
 def read(fd):
     try:
@@ -243,7 +243,7 @@ def read(fd):
 fed = [b"y\n", b"y\n", b"y\n"]
 pid, fd = pty.fork()
 if pid == 0:
-    os.execv(sb, [sb, "bootstrap"])
+    os.execv(qd, [qd, "bootstrap"])
 else:
     import select
     deadline = time.time() + 120
@@ -288,16 +288,16 @@ PYEOF
     else
         bad "G-B4/relay-registered-via-claude-mcp-add — stub recorded no add: $(cat "$STUB_STATE" 2>/dev/null)"
     fi
-    # The registered command is the BARE `sb` (resolved via PATH, never goes
+    # The registered command is the BARE `qd` (resolved via PATH, never goes
     # stale on a binary move — relay-path hardening v2), NOT an absolute path.
-    # The exact tail is `... relay -- sb relay:serve`.
-    if grep -q 'relay -- sb relay:serve' "$STUB_STATE" 2>/dev/null; then
-        ok "G-B4/registered-command-is-bare-sb"
+    # The exact tail is `... relay -- qd relay:serve`.
+    if grep -q 'relay -- qd relay:serve' "$STUB_STATE" 2>/dev/null; then
+        ok "G-B4/registered-command-is-bare-qd"
     else
-        bad "G-B4/registered-command-is-bare-sb — recorded: $(cat "$STUB_STATE" 2>/dev/null)"
+        bad "G-B4/registered-command-is-bare-qd — recorded: $(cat "$STUB_STATE" 2>/dev/null)"
     fi
     # The shell-integration line landed in the JAILED .bashrc.
-    if [ -f "$JAIL_BASHRC" ] && grep -q 'sb init bash' "$JAIL_BASHRC"; then
+    if [ -f "$JAIL_BASHRC" ] && grep -q 'qd init bash' "$JAIL_BASHRC"; then
         ok "G-B4/init-line-added-to-jailed-bashrc"
     else
         bad "G-B4/init-line-added-to-jailed-bashrc — missing init line in $JAIL_BASHRC"
@@ -325,7 +325,7 @@ PYEOF
     else
         bad "G-B4/shell-configured-reported — expected 'shell: integration configured' in rerun"
     fi
-    INIT_COUNT="$(grep -c 'sb init bash' "$JAIL_BASHRC" 2>/dev/null || echo 0)"
+    INIT_COUNT="$(grep -c 'qd init bash' "$JAIL_BASHRC" 2>/dev/null || echo 0)"
     if [ "$INIT_COUNT" = "1" ]; then
         ok "G-B4/init-line-not-duplicated"
     else

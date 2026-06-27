@@ -1,25 +1,25 @@
-//! C1 M6 — ENGINE-LEVEL gate rows (c1-spec "Gate rows"), driving the REAL `sb`
+//! C1 M6 — ENGINE-LEVEL gate rows (c1-spec "Gate rows"), driving the REAL `qd`
 //! binary (`CARGO_BIN_EXE_qd`) through per-run hermetic jails against a REAL
 //! jailed qrmux daemon. These are the gate teeth for the Stage-2 mux swap.
 //!
 //! ## How these differ from the M4 crate-level live tests
 //!
 //! `tests/embedded_mux_live.rs` (M4) exercises the `EmbeddedMux` ADAPTER crate
-//! API directly. THIS suite is ENGINE-LEVEL: every row drives the real `sb`
-//! binary's verbs (`sb new` / `sb connect` / `sb send:pty` / `sb ls --json` /
-//! `sb kill` / `sb wait`) so the FULL engine path (selector → gather/MuxDirs →
+//! API directly. THIS suite is ENGINE-LEVEL: every row drives the real `qd`
+//! binary's verbs (`qd new` / `qd connect` / `qd send:pty` / `qd ls --json` /
+//! `qd kill` / `qd wait`) so the FULL engine path (selector → gather/MuxDirs →
 //! mux trait → protocol → daemon) is under test, not a mock.
 //!
-//! ## Why a fake-claude for `sb new`
+//! ## Why a fake-claude for `qd new`
 //!
-//! `sb new` boots the configured `CLAUDE_BIN` and the EventBootWaiter polls
+//! `qd new` boots the configured `CLAUDE_BIN` and the EventBootWaiter polls
 //! `<sessions_dir>` for a `<pid>.json` whose `name` matches (claude-code owns
 //! that write). In a jail there is no real Claude, so we point `CLAUDE_BIN` at a
 //! tiny shell script that writes the registry row a real Claude would write
 //! (name + status idle + its own pid) and then EXECs a real interactive app
-//! (`cat` / `less` / a backlog generator). This makes `sb new` boot-verify for
+//! (`cat` / `less` / a backlog generator). This makes `qd new` boot-verify for
 //! real AND makes the session surface as a LIVE (non-cold) registry row so
-//! `sb send:pty` (which rejects cold sessions) accepts it. The fake-claude is
+//! `qd send:pty` (which rejects cold sessions) accepts it. The fake-claude is
 //! TEST INFRA; the engine code path it drives is 100% real.
 //!
 //! ## Comparator provenance (cross-crate)
@@ -150,7 +150,7 @@ impl Jail {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = PathBuf::from("/tmp/sb-c1gate-runs").join(format!("{tag}-{nanos}"));
+        let root = PathBuf::from("/tmp/qd-c1gate-runs").join(format!("{tag}-{nanos}"));
         let home = root.join("h");
         let xdg_runtime = root.join("x");
         let sessions_dir = home.join(".claude").join("sessions");
@@ -327,7 +327,7 @@ fn start_daemon(
 }
 
 // ===========================================================================
-// Mux helpers (the engine's OWN adapter — same primitive `sb new` uses)
+// Mux helpers (the engine's OWN adapter — same primitive `qd new` uses)
 // ===========================================================================
 
 use dispatch::embedded_mux::EmbeddedMux;
@@ -347,7 +347,7 @@ fn mux_for(jail: &Jail) -> EmbeddedMux {
 }
 
 /// Create a detached session via the engine mux primitive (the same
-/// `mux.run_detached` `sb new` drives) running `shell_cmd`. Returns the listed
+/// `mux.run_detached` `qd new` drives) running `shell_cmd`. Returns the listed
 /// MuxSession (carrying the real child pid).
 fn mux_create(jail: &Jail, dir: &Path, name: &str, shell_cmd: &str) -> MuxSession {
     let mux = mux_for(jail);
@@ -371,7 +371,7 @@ fn mux_create(jail: &Jail, dir: &Path, name: &str, shell_cmd: &str) -> MuxSessio
 
 /// Forge the LIVE registry `<pid>.json` a real Claude would write, so the engine
 /// `gather`/`join` surfaces the mux session as a LIVE (non-cold) row — required
-/// for `sb send:pty` (rejects cold). The pid IS the mux session's child pid, so
+/// for `qd send:pty` (rejects cold). The pid IS the mux session's child pid, so
 /// the join's by-pid match links the registry row to the mux session and tags
 /// its socket_dir. This is the SANCTIONED forged-row technique (tests/verbs_a4.rs).
 fn forge_registry_row(jail: &Jail, name: &str, pid: u32) {
@@ -383,15 +383,15 @@ fn forge_registry_row(jail: &Jail, name: &str, pid: u32) {
 }
 
 // ===========================================================================
-// sb binary drivers (CLI + PTY)
+// qd binary drivers (CLI + PTY)
 // ===========================================================================
 
-/// WP-B-CS-1 (D2): force the INTERACTIVE surface for `sb start` on these NON-PTY
-/// runners. They pipe stdio (`cmd.output()`), so a bare `sb start` would auto-detect
+/// WP-B-CS-1 (D2): force the INTERACTIVE surface for `qd start` on these NON-PTY
+/// runners. They pipe stdio (`cmd.output()`), so a bare `qd start` would auto-detect
 /// the headless surface — and a no-`-p` start would even hit Fork B's
 /// refuse-no-prompt. These gate rows exercise the interactive zmx/embedded create
 /// path, so `--interactive` (the override) is inserted right after `start`. The PTY
-/// runner (`SbAttach`, real TTY) is unaffected. Behavior delta — non-TTY `sb start`
+/// runner (`SbAttach`, real TTY) is unaffected. Behavior delta — non-TTY `qd start`
 /// is headless by design now — is flagged in the WP-B-CS-1 response.
 fn with_interactive_start(args: &[&str]) -> Vec<String> {
     if args.first() == Some(&"start") {
@@ -404,13 +404,13 @@ fn with_interactive_start(args: &[&str]) -> Vec<String> {
     }
 }
 
-/// Run `sb <args>` (CLI, non-PTY) under the jail's embedded env. Returns
+/// Run `qd <args>` (CLI, non-PTY) under the jail's embedded env. Returns
 /// (exit, stdout, stderr).
 fn run_sb(jail: &Jail, args: &[&str]) -> (i32, String, String) {
     let mut cmd = Command::new(sb_bin());
     cmd.args(with_interactive_start(args));
     jail.apply_embedded(&mut cmd);
-    let out = cmd.output().expect("spawn sb");
+    let out = cmd.output().expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -418,7 +418,7 @@ fn run_sb(jail: &Jail, args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// Run `sb <args>` with an explicit SB_MUX value + optional extra env.
+/// Run `qd <args>` with an explicit SB_MUX value + optional extra env.
 fn run_sb_env(jail: &Jail, args: &[&str], extra: &[(&str, &str)]) -> (i32, String, String) {
     let mut cmd = Command::new(sb_bin());
     cmd.args(with_interactive_start(args));
@@ -426,7 +426,7 @@ fn run_sb_env(jail: &Jail, args: &[&str], extra: &[(&str, &str)]) -> (i32, Strin
     for (k, v) in extra {
         cmd.env(k, v);
     }
-    let out = cmd.output().expect("spawn sb");
+    let out = cmd.output().expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -434,7 +434,7 @@ fn run_sb_env(jail: &Jail, args: &[&str], extra: &[(&str, &str)]) -> (i32, Strin
     )
 }
 
-/// A running `sb connect <name>` on a real PTY (was `sb attach` — the verb is a
+/// A running `qd connect <name>` on a real PTY (was `qd attach` — the verb is a
 /// retired stub since STATE 22; connect drives the SAME attach mechanic for a
 /// live session): a reader thread drains the master into `output`; `writer` is
 /// the master write half for keystrokes (detach key, scroll, etc.). The ENGINE
@@ -482,7 +482,7 @@ impl SbAttach {
         }
         cmd.cwd(&jail.home);
 
-        let child = pair.slave.spawn_command(cmd).expect("spawn sb connect");
+        let child = pair.slave.spawn_command(cmd).expect("spawn qd connect");
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
@@ -790,7 +790,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 // ===========================================================================
-// Fake-claude script (for `sb new`)
+// Fake-claude script (for `qd new`)
 // ===========================================================================
 
 /// Write a fake-claude shell script that writes the registry `<pid>.json` a real

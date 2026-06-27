@@ -22,7 +22,7 @@ use std::sync::Arc;
 /// Daemon-side resolver for a headless launch (design §D-2b, the injected
 /// "DaemonCtx factory"). The daemon process resolves the launch posture
 /// (`claude_bin`/`flags`/`env`/`cwd` — seam #1) AND the registry-status sink (the
-/// sb-side `RegistryStatusSink`, which qrmux cannot name) for one
+/// qd-side `RegistryStatusSink`, which qrmux cannot name) for one
 /// `LaunchHeadless`. The socket fan-out half of the composite is added by
 /// [`SessionManager::create_headless`]; this resolver supplies only the
 /// registry-write half so neither crate references the other's sink type.
@@ -61,7 +61,7 @@ pub type StatusSinkFactory = Box<dyn FnOnce(i64) -> Box<dyn Sink> + Send>;
 
 /// The resolved plan for one headless launch: the spawn spec + the deferred
 /// registry-status sink builder. `status_sink_factory` of `None` means "socket
-/// fan-out only" (no registry write — e.g. a bare-qrmux launcher that has no `sb`
+/// fan-out only" (no registry write — e.g. a bare-qrmux launcher that has no `qd`
 /// registry); `Some` is invoked with the claude child pid post-spawn and composed
 /// into a [`Fanout`] with the socket sink so ONE reader/pump drives both.
 pub struct HeadlessLaunchPlan {

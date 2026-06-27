@@ -1,4 +1,4 @@
-//! `sb resume` + `sb kill` for DAEMON-hosted (codex) sessions (codex-p2-spec
+//! `qd resume` + `qd kill` for DAEMON-hosted (codex) sessions (codex-p2-spec
 //! §7.6 resume + kill paragraphs; ADD-26(2): resume is a FIRST-CLASS AGENT verb =
 //! `thread/resume` revive-to-DRIVABLE with NO interactive-attach tail; attach /
 //! `--remote` is SEVERED entirely). This is the W7 lib core — the verb layer
@@ -6,7 +6,7 @@
 //! that calls in here and returns BEFORE any claude attach/resume internals
 //! (the R-a hot-file discipline).
 //!
-//! THE TOPOLOGY (W4): ONE sb-owned `codex app-server` per codex session; sb is a
+//! THE TOPOLOGY (W4): ONE qd-owned `codex app-server` per codex session; qd is a
 //! short-lived CLI, so the daemon pid + the on-disk rollout are the durable truth.
 //! resume/kill reconnect (or respawn) to that truth; the registry row carries the
 //! daemon pid (the file name), `provider:"codex"`, the REAL thread id (m2), and the
@@ -29,7 +29,7 @@
 //!   - Daemon ALIVE (pid alive + endpoint set): the thread is already drivable →
 //!     a SUCCESS no-op + a clear agent-facing message ("send to it"), exit 0. NO
 //!     spawn, NO attach.
-//!   - Daemon DEAD (sb restart/reboot class) but the row + rollout exist → REVIVE:
+//!   - Daemon DEAD (qd restart/reboot class) but the row + rollout exist → REVIVE:
 //!     respawn a codex app-server (reuse the create machinery: version sniff, port
 //!     alloc outside 8900-9000, detached `process_group(0)` spawn, ws connect +
 //!     initialize), then `thread/resume{thread_id}` (hydrates from the on-disk
@@ -71,9 +71,9 @@ use crate::registry::{self, ensure_tombstone, RegistryEntry};
 
 /// The ws client identity sent on `initialize` (matches the create path + boot
 /// waiter + spike probe `clientInfo`).
-const CLIENT_NAME: &str = "sb-manager";
+const CLIENT_NAME: &str = "qd-manager";
 
-/// The relay-probe port range sb scans (codex-p2-spec §3.2): a revive daemon port
+/// The relay-probe port range qd scans (codex-p2-spec §3.2): a revive daemon port
 /// landing here is RE-ROLLED (the real allocator owns this — restated for the
 /// retry honesty of the revive ladder).
 const RELAY_RANGE: std::ops::RangeInclusive<u16> = 8900..=9000;
@@ -510,7 +510,7 @@ impl std::fmt::Display for ResumeError {
                 f,
                 "session \"{name}\" has no resumable history yet \
                  (it never completed a turn, so codex persisted no rollout to revive from). \
-                 Start it fresh with: sb start --provider codex."
+                 Start it fresh with: qd start --provider codex."
             ),
             ResumeError::Daemon(e) => write!(f, "{e}"),
             ResumeError::Other { detail } => write!(f, "{detail}"),
@@ -623,7 +623,7 @@ pub fn resume_codex<'a>(
         return Ok(ResumeOutcome::AlreadyRunning);
     }
 
-    // Cases 2/3: daemon DEAD (sb restart/reboot) or cold/foreign → REVIVE. The
+    // Cases 2/3: daemon DEAD (qd restart/reboot) or cold/foreign → REVIVE. The
     // no-rollout HONEST EDGE surfaces during the resume rung below.
     revive(deps, params)
 }
@@ -1164,8 +1164,8 @@ mod tests {
         fn initialized(&self) -> Result<(), RpcError> {
             self.0.initialized()
         }
-        fn thread_start(&self, cwd: &str, ap: &str, sb: &str) -> Result<String, RpcError> {
-            self.0.thread_start(cwd, ap, sb)
+        fn thread_start(&self, cwd: &str, ap: &str, qd: &str) -> Result<String, RpcError> {
+            self.0.thread_start(cwd, ap, qd)
         }
         fn thread_resume(&self, id: &str) -> Result<(), RpcError> {
             self.0.thread_resume(id)

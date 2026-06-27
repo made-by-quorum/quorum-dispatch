@@ -12,11 +12,11 @@
 # byte-diff of the normalized outputs (determinism proof), raw + normalized both
 # written, provenance stamped. SUT = the RUST binary (the contract being pinned).
 #
-# Usage: SB_BIN=<abs sb> bash test/golden/remint_kill_wave.sh
+# Usage: SB_BIN=<abs qd> bash test/golden/remint_kill_wave.sh
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SB_BIN="${SB_BIN:?SB_BIN required (abs path to the Rust sb)}"
+SB_BIN="${SB_BIN:?SB_BIN required (abs path to the Rust qd)}"
 [ -x "$SB_BIN" ] || { echo "FATAL: SB_BIN not executable: $SB_BIN"; exit 64; }
 
 STAGE="$HERE/.remint-stage.$$"

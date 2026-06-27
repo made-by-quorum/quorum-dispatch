@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn shorten_path_plain_home() {
         let home = "/home/u";
-        assert_eq!(shorten_path("/home/u/work/sb", home), "~/work/sb");
+        assert_eq!(shorten_path("/home/u/work/qd", home), "~/work/qd");
     }
 
     #[test]

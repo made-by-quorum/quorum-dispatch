@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scenario: a5rec resume — TS sb `resume` shapes: no-such-session; bad zmx-name on
+# scenario: a5rec resume — TS qd `resume` shapes: no-such-session; bad zmx-name on
 # a COLD session (traversal rejection); recorded-cwd-missing clean error. Cold
 # relaunch happy path is covered live by a5_lifecycle_live.sh (Rust) + Lima;
 # here we record the TS ERROR shapes at pin. Pin 0d0fa9e.
@@ -41,11 +41,11 @@ scn_run() {
 
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=resume (error shapes; cold relaunch covered live by Rust+Lima)"
-        echo "\$ sb resume sbrg-nope (no such session)"
+        echo "\$ qd resume sbrg-nope (no such session)"
         scn_sb resume "${JAIL_PREFIX}nope" 2>&1; echo "exit=$?"
-        echo "\$ sb resume coldsess-rec --zmx-name '../evil' (cold session, unsafe zmx-name)"
+        echo "\$ qd resume coldsess-rec --zmx-name '../evil' (cold session, unsafe zmx-name)"
         scn_sb resume "$COLDSID" --zmx-name '../evil' 2>&1; echo "exit=$?"
-        echo "\$ sb resume gonecwd-rec (recorded cwd missing, no --cwd)"
+        echo "\$ qd resume gonecwd-rec (recorded cwd missing, no --cwd)"
         scn_sb resume "$GONESID" --no-attach 2>&1; echo "exit=$?"
     } > "$SCN_OUT"
     printf '0\n' > "$SCN_OUT.exit"

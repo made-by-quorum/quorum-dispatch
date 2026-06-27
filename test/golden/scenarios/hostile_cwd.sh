@@ -17,7 +17,7 @@
 # cwd and emit DERIVED booleans (specials-preserved, slash-mapped, jsonl-landed). A
 # wrong mapping (e.g. an impl that sanitized `:`→`_` or `.`→`-`) flips a boolean.
 #
-# §S: drives the pinned-TS `sb new` (cwd = the hostile dir) against the stub; the
+# §S: drives the pinned-TS `qd new` (cwd = the hostile dir) against the stub; the
 # stub writes its JSONL under ~/.claude/projects/<cwdToProjectPath(getcwd())>/ using
 # the SAME transform (stub_claude.py:169-171), so the row measures the ENGINE's cwd
 # recording + the --wait path resolution, not the stub.
@@ -41,7 +41,7 @@ scn_run() {
     local name
     name="$(scn_session_name hc)"
 
-    # Create the hostile cwd UNDER the jailed HOME and run sb new FROM it (so the
+    # Create the hostile cwd UNDER the jailed HOME and run qd new FROM it (so the
     # recorded session cwd == the hostile dir; the stub's getcwd() is the same).
     local hostile_cwd="$HOME/$SCN_HOSTILE_BASE"
     mkdir -p "$hostile_cwd"

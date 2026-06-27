@@ -50,7 +50,7 @@ SCN_CONFIG_FLAGS="--dangerously-skip-permissions"
 scn_run() {
     local name
     name="$(scn_session_name bcc)"
-    # Drive sb-under-test with the config-seam override in the environment. The
+    # Drive qd-under-test with the config-seam override in the environment. The
     # Rust engine MUST honor it (ADR 0006); pinned TS ignores it (constant) — which
     # is exactly why this is expectation-only.
     SB_CLAUDE_FLAGS="$SCN_CONFIG_FLAGS" \

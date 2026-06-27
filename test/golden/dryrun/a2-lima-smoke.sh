@@ -4,13 +4,13 @@
 # Exercises the FULL create path + real zmx + boot waiter with a FAKE claude
 # (zero auth/cost): a tiny sh that writes a valid registry row into
 # $HOME/.claude/sessions/$$.json then sleeps. In-VM jail (jail.sh). Records
-# uname/arch + RSS of sb + zmx daemon.
+# uname/arch + RSS of qd + zmx daemon.
 #
 # real-claude-on-Linux DEFERRED (auth/backend env = A4 scope) — recorded exclusion.
-# Bash. Run INSIDE the VM. Args: $1 = repo dir, $2 = sb binary, $3 = target dir.
+# Bash. Run INSIDE the VM. Args: $1 = repo dir, $2 = qd binary, $3 = target dir.
 set -u
-REPO="${1:-/home/u/work/sb-rust/.claude/worktrees/agent-acfec16fb3b5c3375}"
-SB_BIN="${2:-/tmp/sb-vm-target/debug/sb}"
+REPO="${1:-/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375}"
+SB_BIN="${2:-/tmp/qd-vm-target/debug/qd}"
 cd "$REPO" || exit 1
 
 export JAIL_SB_CMD="$SB_BIN"
@@ -18,7 +18,7 @@ export JAIL_ZMX_CMD="$(command -v zmx)"
 . test/golden/lib/jail.sh
 
 echo "=== ENV ==="; uname -m; uname -s; hostname
-echo "sb=$SB_BIN  zmx=$JAIL_ZMX_CMD"
+echo "qd=$SB_BIN  zmx=$JAIL_ZMX_CMD"
 
 jail_establish || { echo "FATAL: jail_establish"; exit 1; }
 trap jail_teardown EXIT
@@ -49,7 +49,7 @@ WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"
 NAME="${JAIL_PREFIX}lima"
 
 echo
-echo "=== CREATE: sb new (fake claude via CLAUDE_BIN) ==="
+echo "=== CREATE: qd new (fake claude via CLAUDE_BIN) ==="
 ( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" \
     "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/lima-out.txt" 2> "$JAIL_ROOT/lima-err.txt"
@@ -73,9 +73,9 @@ jail_zmx history "$NAME" 2>/dev/null | perl -pe 's/\e\[[0-9;?]*[ -\/]*[@-~]//g; 
     || jail_zmx history "$NAME" 2>/dev/null | tail -5 | sed 's/^/    /'
 
 echo
-echo "=== RSS (sb + zmx daemon) ==="
+echo "=== RSS (qd + zmx daemon) ==="
 echo "  process RSS (KB):"
-ps -eo pid,rss,comm 2>/dev/null | grep -iE "zmx|sb|fake-claude|sleep" | grep -v grep | sed 's/^/    /' | head -10
+ps -eo pid,rss,comm 2>/dev/null | grep -iE "zmx|qd|fake-claude|sleep" | grep -v grep | sed 's/^/    /' | head -10
 
 echo
 echo "=== KILL (in-jail, real zmx) ==="

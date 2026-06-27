@@ -86,40 +86,40 @@ impl std::fmt::Display for BackendError {
         match self {
             BackendError::Symlink { path } => write!(
                 f,
-                "sb start --via: refusing to read backends file '{}' — it is a symlink (O_NOFOLLOW).",
+                "qd start --via: refusing to read backends file '{}' — it is a symlink (O_NOFOLLOW).",
                 path.display()
             ),
             BackendError::MissingFile { path } => write!(
                 f,
-                "sb start --via: no backends file at '{}'. Create it (hand-edited JSON, schema v1) to define routing profiles.",
+                "qd start --via: no backends file at '{}'. Create it (hand-edited JSON, schema v1) to define routing profiles.",
                 path.display()
             ),
             BackendError::ReadFailed { path, detail } => write!(
                 f,
-                "sb start --via: failed to read backends file '{}': {detail}",
+                "qd start --via: failed to read backends file '{}': {detail}",
                 path.display()
             ),
             BackendError::Unparseable { path, detail } => write!(
                 f,
-                "sb start --via: backends file '{}' is not valid JSON: {detail}",
+                "qd start --via: backends file '{}' is not valid JSON: {detail}",
                 path.display()
             ),
             BackendError::UnknownName { name, known } => {
                 if known.is_empty() {
                     write!(
                         f,
-                        "sb start --via: unknown backend '{name}'. No backends are defined."
+                        "qd start --via: unknown backend '{name}'. No backends are defined."
                     )
                 } else {
                     write!(
                         f,
-                        "sb start --via: unknown backend '{name}'. Known backends: {}.",
+                        "qd start --via: unknown backend '{name}'. Known backends: {}.",
                         known.join(", ")
                     )
                 }
             }
             BackendError::ConfigError { detail } => {
-                write!(f, "sb start --via: backend is misconfigured: {detail}")
+                write!(f, "qd start --via: backend is misconfigured: {detail}")
             }
         }
     }
@@ -273,7 +273,7 @@ pub struct PermWarning {
 impl PermWarning {
     pub fn message(&self) -> String {
         format!(
-            "sb start --via: WARNING: backends file '{}' is group/other-readable; \
+            "qd start --via: WARNING: backends file '{}' is group/other-readable; \
              it holds key NAMES only, but tighten it to 0600 (chmod 600 '{}').",
             self.path.display(),
             self.path.display()
@@ -389,8 +389,8 @@ impl std::fmt::Display for ComposeError {
         match self {
             ComposeError::SecretMissing { name, key } => write!(
                 f,
-                "sb start --via: backend '{name}' needs secret '{key}'; set it with \
-                 `sb config set {key}`."
+                "qd start --via: backend '{name}' needs secret '{key}'; set it with \
+                 `qd config set {key}`."
             ),
         }
     }
@@ -793,7 +793,7 @@ mod tests {
         }
         // The message names the key + config-set hint, never a value.
         let msg = e.to_string();
-        assert!(msg.contains("openrouter-key") && msg.contains("sb config set"));
+        assert!(msg.contains("openrouter-key") && msg.contains("qd config set"));
     }
 
     // --- compose: credential-slot exclusivity (F12, spec §3.2.3) ---

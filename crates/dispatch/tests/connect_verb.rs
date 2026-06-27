@@ -1,9 +1,9 @@
-//! W1 ADD-26 — `sb connect` (the human "get me into this session" verb).
+//! W1 ADD-26 — `qd connect` (the human "get me into this session" verb).
 //! P0 start-surface rework (STATE 22): the `attach` verb is RETIRED (erroring
 //! stub, the new/kill pattern) — the old demoted-attach pins below were
 //! retargeted to the stub contract; connect is the one attach-mechanic caller.
 //!
-//! Drives the REAL `sb` binary (`CARGO_BIN_EXE_qd`) against a JAILED, empty HOME
+//! Drives the REAL `qd` binary (`CARGO_BIN_EXE_qd`) against a JAILED, empty HOME
 //! (L9a / ADD-4 — never the real home; HOME + ZMX_DIR point into a per-test
 //! tempdir + an EMPTY zmx dir, so a forged claude row is necessarily COLD: it has
 //! no live mux pane to attach to). Mirrors the provider_field.rs harness — forge a
@@ -19,7 +19,7 @@ fn sb_bin() -> &'static str {
 }
 
 /// Forge a single registry row `<pid>.json` under a freshly-jailed HOME and run
-/// `sb <args...>`. Returns (exit_code, stdout, stderr). HOME → `<dir>/home`,
+/// `qd <args...>`. Returns (exit_code, stdout, stderr). HOME → `<dir>/home`,
 /// ZMX_DIR → an EMPTY `<dir>/zmx` (so claude rows are cold). CODEX_HOME points at
 /// an empty codex tree so a codex row resolves without a real daemon.
 fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32, String, String) {
@@ -38,7 +38,7 @@ fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32,
         .env("ZMX_DIR", &zmx)
         .env("CODEX_HOME", &codex_home)
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -46,7 +46,7 @@ fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32,
     )
 }
 
-/// Run `sb <args...>` against a freshly-jailed, EMPTY HOME (no rows). Used for the
+/// Run `qd <args...>` against a freshly-jailed, EMPTY HOME (no rows). Used for the
 /// unknown-name resolve_or_die path + the no-arg clap error.
 fn run_sb_empty(dir: &Path, args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
@@ -59,7 +59,7 @@ fn run_sb_empty(dir: &Path, args: &[&str]) -> (i32, String, String) {
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -94,8 +94,8 @@ fn claude_row_autonamed(pid: i64) -> String {
 
 // === Daemon redirect (codex) ===
 
-/// `sb connect <codex-row>` → the LOUD daemon redirect naming BOTH `sb send:relay`
-/// AND `sb resume`, exit 1, and does NOT attach (mutation evidence: there is no
+/// `qd connect <codex-row>` → the LOUD daemon redirect naming BOTH `qd send:relay`
+/// AND `qd resume`, exit 1, and does NOT attach (mutation evidence: there is no
 /// terminal-takeover, and stdout stays empty — the verb never reaches mux.attach).
 ///
 /// MUTATION EVIDENCE: removing the `Hosting::Daemon` branch in `attach_resolved`
@@ -112,12 +112,12 @@ fn connect_codex_is_daemon_redirect_not_attach() {
         "names the daemon hosting reason, got: {err}"
     );
     assert!(
-        err.contains("sb send:relay cx"),
-        "redirect points at sb send:relay, got: {err}"
+        err.contains("qd send:relay cx"),
+        "redirect points at qd send:relay, got: {err}"
     );
     assert!(
-        err.contains("sb resume cx"),
-        "redirect points at sb resume, got: {err}"
+        err.contains("qd resume cx"),
+        "redirect points at qd resume, got: {err}"
     );
     assert!(
         !err.contains("unknown provider"),
@@ -138,7 +138,7 @@ fn connect_codex_is_daemon_redirect_not_attach() {
 // `cold_session_error` helper died with the verb, connect's cold path
 // auto-revives instead.)
 
-/// `sb attach <anything>` is the retired erroring stub: exit 1, the pinned
+/// `qd attach <anything>` is the retired erroring stub: exit 1, the pinned
 /// stderr line, NO resolution/state touched — even with a perfectly attachable
 /// row forged in the registry.
 ///
@@ -152,7 +152,7 @@ fn attach_verb_is_retired_erroring_stub() {
     assert_eq!(code, 1, "retired attach exits 1");
     assert!(
         err.contains(
-            "sb attach: `attach` is retired; humans use `sb connect`, agents use `sb send:relay`"
+            "qd attach: `attach` is retired; humans use `qd connect`, agents use `qd send:relay`"
         ),
         "the exact retired-stub line, got: {err}"
     );
@@ -166,7 +166,7 @@ fn attach_verb_is_retired_erroring_stub() {
 }
 
 /// W1 phase 2 — connect's cold→auto-revive DIVERGENCE from attach. A cold claude
-/// `sb connect` no longer short-circuits to the pure cold-error: it ATTEMPTS the
+/// `qd connect` no longer short-circuits to the pure cold-error: it ATTEMPTS the
 /// detached revive (resume::revive_claude) FIRST. In this jail the revive cannot
 /// confirm boot (no real claude under the forged row), so it drives the real
 /// run_detached + the ADR-0005 ready-wait to a genuine timeout — hence this test is
@@ -199,10 +199,10 @@ fn cold_claude_connect_attempts_revive_then_fails_loudly() {
         "connect: cold path attempts revive (revive-failure line expected), got: {err}"
     );
     // revive-FAILS returns the revive's own loud error; it must NOT append the
-    // cold-error pointer (that says "revive with `sb connect`" — re-run the command
+    // cold-error pointer (that says "revive with `qd connect`" — re-run the command
     // that just failed, circular on the human verb). The revive line above stands alone.
     assert!(
-        !err.contains("revive and attach with: sb connect"),
+        !err.contains("revive and attach with: qd connect"),
         "connect: revive-fails does NOT append the circular cold-error pointer, got: {err}"
     );
 }
@@ -269,7 +269,7 @@ fn connect_unknown_name_clear_error() {
 
 // === fail-connect-noarg: clap required-arg error ===
 
-/// `sb connect` with no `<session>` → clap required-arg error (commander phrasing,
+/// `qd connect` with no `<session>` → clap required-arg error (commander phrasing,
 /// exit 1 per cli.rs's centralized mapping).
 #[test]
 fn connect_noarg_required_arg_error() {
@@ -284,9 +284,9 @@ fn connect_noarg_required_arg_error() {
 
 // === W2: resume help documents resume as AGENT-FACING (revive-to-drivable, no tail) ===
 
-/// `sb resume --help` now documents resume as the AGENT verb: it revives a cold
+/// `qd resume --help` now documents resume as the AGENT verb: it revives a cold
 /// session to a DRIVABLE state with NO interactive attach tail (non-TTY safe), and
-/// points humans wanting an interactive landing at `sb connect`.
+/// points humans wanting an interactive landing at `qd connect`.
 ///
 /// MUTATION EVIDENCE: reverting help::RESUME to the old "Resume a dead session
 /// (wraps in zmx by default)" one-liner reds the agent-facing / drivable / connect
@@ -310,8 +310,8 @@ fn resume_help_documents_agent_facing_revive_to_drivable() {
         "points at the working send:relay channel, got: {help}"
     );
     assert!(
-        help.contains("sb connect"),
-        "points humans at sb connect for the interactive landing, got: {help}"
+        help.contains("qd connect"),
+        "points humans at qd connect for the interactive landing, got: {help}"
     );
     // No longer claims to merely "Resume a dead session" with no agent framing.
     assert!(
@@ -322,8 +322,8 @@ fn resume_help_documents_agent_facing_revive_to_drivable() {
 
 // === attach retirement: absent from TOP help, --help marks it retired ===
 
-/// `attach` is absent from the top-level command table (`sb --help`) — which now
-/// carries the start/resume/connect MODEL LINE (STATE 21) — and `sb attach
+/// `attach` is absent from the top-level command table (`qd --help`) — which now
+/// carries the start/resume/connect MODEL LINE (STATE 21) — and `qd attach
 /// --help` still renders, marked retired and pointing at connect.
 ///
 /// MUTATION EVIDENCE: re-listing attach in help::TOP reds the absence assert;

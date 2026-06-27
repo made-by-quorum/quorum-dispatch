@@ -1,9 +1,9 @@
-//! `sb mark <session> <payload>` — NET-NEW (ADD-3a/3b; spec §4). Dumb opaque
-//! append: resolve the session, then append ONE line to the sb state dir's
+//! `qd mark <session> <payload>` — NET-NEW (ADD-3a/3b; spec §4). Dumb opaque
+//! append: resolve the session, then append ONE line to the qd state dir's
 //! `marks.jsonl`: `{"ts": <iso8601>, "sessionId": "<id>", "payload": <object>}`.
 //!
 //! The marks file lives at `<sbHome>/state/marks.jsonl` where
-//! `sbHome = SB_HOME || <home>/.sb` (commands/bootstrap.ts:88-96
+//! `sbHome = SB_HOME || <home>/.quorum/dispatch` (commands/bootstrap.ts:88-96
 //! `resolveBootstrapPaths`). SB_HOME is read ONLY through the injected `Env` seam
 //! via [`SbPaths::from_home_env`] (L9a — never raw `std::env`), so a jailed
 //! SB_HOME relocates the marks file correctly (H4).
@@ -36,7 +36,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let payload: Value = match validate_payload(payload_raw) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("sb mark: {e}");
+            eprintln!("qd mark: {e}");
             return 1;
         }
     };
@@ -69,7 +69,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let marks_path = match marks_path(&env) {
         Some(p) => p,
         None => {
-            eprintln!("sb mark: HOME is not set — cannot resolve the state dir.");
+            eprintln!("qd mark: HOME is not set — cannot resolve the state dir.");
             return 1;
         }
     };
@@ -89,12 +89,12 @@ pub fn run(m: &ArgMatches) -> i32 {
             if let Err(e) =
                 dispatch::telemetry::append_usage(&env, &RealClock, "mark", Some(&session_id), None)
             {
-                eprintln!("sb mark: telemetry usage append failed (non-fatal): {e}");
+                eprintln!("qd mark: telemetry usage append failed (non-fatal): {e}");
             }
             0
         }
         Err(e) => {
-            eprintln!("sb mark: {e}");
+            eprintln!("qd mark: {e}");
             1
         }
     }
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn marks_path_honors_sb_home_override() {
-        // SB_HOME set → <SB_HOME>/state/marks.jsonl, NOT <HOME>/.sb/state.
+        // SB_HOME set → <SB_HOME>/state/marks.jsonl, NOT <HOME>/.quorum/dispatch/state.
         let mut env = MapEnv::default();
         env.vars
             .insert("HOME".to_string(), "/jail/home".to_string());

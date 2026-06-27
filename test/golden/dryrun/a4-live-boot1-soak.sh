@@ -6,15 +6,15 @@
 #   (b) ~4 x queue-path: long-running prompt, then send:pty WHILE busy -> "Message queued"
 #   (c) ~2 x send:pty --wait (one idle, one while busy) -- reply extraction + attribution
 #   (d) ~3 x long-paste (>=1KB and >=4KB) -- exactly one turn each (JSONL user-record count)
-#   (e) ~3 x sb wait during busy -> " done" exit 0
+#   (e) ~3 x qd wait during busy -> " done" exit 0
 #
 # Seed recipe = a2-live-row4.sh (probe-3 GrowthBook/onboarding). cachedGrowthBook
 # Features COPIED FROM REAL HOME READ-ONLY. REAL-HOME BELT around the boot.
-# Every sb/zmx via jail primitives. NEVER real state. Fail-loud, max 2 retries.
+# Every qd/zmx via jail primitives. NEVER real state. Fail-loud, max 2 retries.
 set -u
 WT=/home/u/work/wt-a4-lead
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -119,12 +119,12 @@ ATT=0; ACC=0; QUEUED=0; ANOM=0
 
 log ""
 log "############################################################"
-log "### BOOT 1 -- sb new (default flags) -- REAL CLAUDE #1   ###"
+log "### BOOT 1 -- qd new (default flags) -- REAL CLAUDE #1   ###"
 log "############################################################"
 ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/boot1-out.txt" 2> "$JAIL_ROOT/boot1-err.txt"
 code=$?
-log "sb new exit=$code"
+log "qd new exit=$code"
 log "  stdout: $(cat "$JAIL_ROOT/boot1-out.txt")"
 log "  stderr: $(head -5 "$JAIL_ROOT/boot1-err.txt")"
 PF="$(pidfile_for "$NAME" || true)"
@@ -294,23 +294,23 @@ for sz in 1100 4200 4500; do
 done
 
 log ""
-log "=== GROUP (e): 3 x sb wait during busy ==="
+log "=== GROUP (e): 3 x qd wait during busy ==="
 for i in 1 2 3; do
     wait_status "$NAME" idle 40 || log "  (e$i) WARN not idle before"
     "$JAIL_SB_CMD" send:pty "$NAME" "Count slowly from 1 to 15, one per line, then say WAITDONE_$i." >/dev/null 2>&1
     ATT=$((ATT+1)); ACC=$((ACC+1))
     if wait_status "$NAME" busy 12; then
-        log "  (e$i) session busy; calling sb wait"
+        log "  (e$i) session busy; calling qd wait"
         out="$(timeout 130 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
-        log "  (e$i) sb wait rc=$rc out=[$out]"
+        log "  (e$i) qd wait rc=$rc out=[$out]"
         if [ "$rc" = "0" ] && printf '%s' "$out" | grep -qi "done"; then
-            log "  (e$i) VERIFIED: sb wait ' done' exit 0 after busy->idle"
+            log "  (e$i) VERIFIED: qd wait ' done' exit 0 after busy->idle"
         else
-            log "  (e$i) ANOMALY: sb wait rc=$rc out=[$out]"
+            log "  (e$i) ANOMALY: qd wait rc=$rc out=[$out]"
             ANOM=$((ANOM+1))
         fi
     else
-        log "  (e$i) ANOMALY: could not drive busy for sb wait"
+        log "  (e$i) ANOMALY: could not drive busy for qd wait"
         ANOM=$((ANOM+1))
     fi
 done
@@ -339,15 +339,15 @@ log "  BELT HOLDS ($real_before -> $real_after, zero leaked prefixed rows)"
 
 log ""
 log "############################################################"
-log "### EXIT-CONTRACT SPOT-CHECK (sb new -p) -- REAL CLAUDE #2 ###"
+log "### EXIT-CONTRACT SPOT-CHECK (qd new -p) -- REAL CLAUDE #2 ###"
 log "############################################################"
-# a4-spec section 3.5 / section 6: sb new -p on REAL claude -> exit 0 (went busy = accepted)
+# a4-spec section 3.5 / section 6: qd new -p on REAL claude -> exit 0 (went busy = accepted)
 # + stdout 'Prompt delivered'. Record the exit code EXPLICITLY (echo $?).
 NAME2="${JAIL_PREFIX}exitp"
 ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME2" --cwd "$WORKDIR" -p "say the word ready and nothing else" ) \
     > "$JAIL_ROOT/ec-out.txt" 2> "$JAIL_ROOT/ec-err.txt"
 EC_CODE=$?
-log "  sb new -p exit code (echo \$?): $EC_CODE"
+log "  qd new -p exit code (echo \$?): $EC_CODE"
 log "  stdout:"; sed 's/^/    /' "$JAIL_ROOT/ec-out.txt" | tee -a "$EV"
 log "  stderr:"; head -5 "$JAIL_ROOT/ec-err.txt" | sed 's/^/    /' | tee -a "$EV"
 if [ "$EC_CODE" = "0" ] && grep -q "Prompt delivered" "$JAIL_ROOT/ec-out.txt"; then

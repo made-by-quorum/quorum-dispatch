@@ -1,6 +1,6 @@
-//! Verb-level `sb send:relay` test (spec §4.5): the no-relay error path.
+//! Verb-level `qd send:relay` test (spec §4.5): the no-relay error path.
 //!
-//! Drives the REAL `sb` binary (via `CARGO_BIN_EXE_qd`) with a hermetic tempdir
+//! Drives the REAL `qd` binary (via `CARGO_BIN_EXE_qd`) with a hermetic tempdir
 //! HOME and NO relay listening, asserting the exact stderr wording + exit 1
 //! (send.ts:407-408: `Session "<name>" has no relay.`).
 //!
@@ -14,7 +14,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-/// Build a hermetic env for the `sb` child: every state root inside `home`.
+/// Build a hermetic env for the `qd` child: every state root inside `home`.
 fn hermetic_env(cmd: &mut Command, home: &Path) {
     let claude = home.join(".claude");
     fs::create_dir_all(claude.join("sessions")).unwrap();
@@ -81,7 +81,7 @@ fn send_relay_no_relay_errors_exit_1() {
     write_session(&home, 31337, "lonely", "lonely-sid");
     cmd.args(["send:relay", "lonely", "hello"]);
 
-    let out = cmd.output().expect("run sb send:relay");
+    let out = cmd.output().expect("run qd send:relay");
     let stderr = String::from_utf8_lossy(&out.stderr);
 
     assert_eq!(

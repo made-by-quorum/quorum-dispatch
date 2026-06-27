@@ -2,7 +2,7 @@
 # test/golden/lib/stub_claude/stub_install.sh — install the deterministic stub as
 # the jail's `claude` binary and re-export CLAUDE_BIN to it.
 #
-# §S substrate ruling: contract rows are recorded by driving the pinned-TS sb
+# §S substrate ruling: contract rows are recorded by driving the pinned-TS qd
 # against this stub, NOT a real Claude. buildClaudeCmd (utils.ts:507-513 @ pin)
 # launches `command '<CLAUDE_BIN>' <flags...>`, and CLAUDE_BIN is overridable
 # (utils.ts:226). The jail UNSETS CLAUDE_BIN for hermeticity (finding #2) but

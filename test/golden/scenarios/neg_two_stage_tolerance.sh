@@ -7,14 +7,14 @@
 # syntactically-PARTIAL JSON prefix + flush, a ~1500ms gap, then the complete
 # rewrite — BYPASSING the atomic tmp+rename (stub_claude.py:289-313). A reader that
 # races the write can observe a mid-write partial file. This row asserts the
-# ENGINE'S READ TOLERANCE OUTCOME: boot readiness STILL fires and `sb ls` never
+# ENGINE'S READ TOLERANCE OUTCOME: boot readiness STILL fires and `qd ls` never
 # crashes on a mid-write partial PID file (findPidFile/readPidStatus catch the
 # partial-JSON parse error and retry, lifecycle.ts:148-176).
 #
 # OUTCOME-ONLY (binding, red-team m3 / W2.2): we assert the DETERMINISTIC OUTCOME
 # ONLY — boot reached idle, ls exits 0, the session is VISIBLE after the write
 # completes. We NEVER assert the PARTIAL STATE itself (observing the partial file is
-# RACY and non-deterministic — it would break double-record). The `sb ls` calls run
+# RACY and non-deterministic — it would break double-record). The `qd ls` calls run
 # DURING and AFTER the write window; the assertion is only that they do not crash
 # and the session is present once the write settles.
 #
@@ -46,7 +46,7 @@ scn_run() {
     STUB_TWO_STAGE_PID_WRITE=1 bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
 
-    # Poll `sb ls` DURING the write window — it must never crash (rc!=0). This
+    # Poll `qd ls` DURING the write window — it must never crash (rc!=0). This
     # deliberately races the two-stage write to exercise the engine reading a file
     # that may be mid-write. We assert ONLY that ls does not crash (OUTCOME, not the
     # partial state). Run a few times across the boot window.
@@ -101,8 +101,8 @@ print(1 if any((r.get("name") == name) for r in rows) else 0)
 scn_assert() {
     [ -f "$SCN_OUT" ] || return 1
     grep -q 'SHAPE boot_reached_idle=1' "$SCN_OUT"                || { _cmp_fail failure-shape "boot did NOT reach idle through the two-stage partial PID writes (intolerant reader)"; return 1; }
-    grep -q 'SHAPE ls_never_crashed_during_write=1' "$SCN_OUT"    || { _cmp_fail failure-shape "sb ls CRASHED on a mid-write partial PID file (not partial-tolerant)"; return 1; }
-    grep -q 'SHAPE ls_after_exit_zero=1' "$SCN_OUT"               || { _cmp_fail failure-shape "sb ls did not exit 0 after the write settled"; return 1; }
+    grep -q 'SHAPE ls_never_crashed_during_write=1' "$SCN_OUT"    || { _cmp_fail failure-shape "qd ls CRASHED on a mid-write partial PID file (not partial-tolerant)"; return 1; }
+    grep -q 'SHAPE ls_after_exit_zero=1' "$SCN_OUT"               || { _cmp_fail failure-shape "qd ls did not exit 0 after the write settled"; return 1; }
     grep -q 'SHAPE session_visible_after=1' "$SCN_OUT"            || { _cmp_fail failure-shape "session NOT visible after the write completed (whole-row dropped on a partial read — pre-PR#20 behaviour)"; return 1; }
     return 0
 }

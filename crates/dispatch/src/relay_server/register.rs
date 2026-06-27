@@ -21,13 +21,13 @@ use crate::exec::Exec;
 pub const RELAY_SERVER_NAME: &str = "relay";
 
 /// The BARE command we register the relay under (owner decision, relay-path
-/// hardening v2). We register `dispatch relay:serve` — the bare program name `dispatch`,
+/// hardening v2). We register `qd relay:serve` — the bare program name `qd`,
 /// NOT an absolute path to a specific binary — so the registration NEVER goes
-/// stale when the `dispatch` binary is moved or upgraded out from under it (the root
+/// stale when the `qd` binary is moved or upgraded out from under it (the root
 /// cause of the recurring "no relay" bug). Claude Code resolves MCP `command`
-/// values via PATH (proven by the working `npx`-based servers), and `dispatch` is on
+/// values via PATH (proven by the working `npx`-based servers), and `qd` is on
 /// PATH for any working setup. Args stay `["relay:serve"]`.
-pub const RELAY_BARE_COMMAND: &str = "dispatch";
+pub const RELAY_BARE_COMMAND: &str = "qd";
 
 /// A bounded deadline for every `claude mcp` shell-out — a wedged `claude`
 /// must never hang bootstrap (mirrors the zmx-probe L3 discipline).
@@ -77,9 +77,9 @@ pub fn user_relay_registered(claude_json: &str) -> Option<bool> {
 
 /// PURE: the `command` string Claude Code currently has registered for the relay
 /// MCP server, given the CONTENTS of `~/.claude.json`. This is the program the
-/// entry spawns (`<command> relay:serve`) — now the BARE `dispatch` we register
-/// (resolved via PATH), but it may also be a legacy ABSOLUTE PATH written by an
-/// older `sb` (the form self-heal repairs only if it is genuinely broken).
+/// entry spawns (`<command> relay:serve`) — now the BARE `qd` we register
+/// (resolved via PATH), but it may also be a legacy ABSOLUTE PATH or a stale
+/// bare name (e.g. `dispatch` from a prior rename) that self-heal must repair.
 /// Returns `None` when the config is unparseable, the `relay` entry is absent,
 /// or it carries no string `command`.
 pub fn registered_relay_command(claude_json: &str) -> Option<String> {
@@ -96,57 +96,49 @@ pub fn registered_relay_command(claude_json: &str) -> Option<String> {
 /// still names an existing file, decide whether the registration is genuinely
 /// BROKEN and must be repaired (re-pointed to the bare [`RELAY_BARE_COMMAND`]).
 ///
-/// A registration is STALE (broken) ONLY when its stored command is an ABSOLUTE
-/// path that names a file which no longer exists. EVERYTHING ELSE is VALID and
-/// left alone:
-/// - a BARE command (e.g. `dispatch`, or any non-absolute name) — Claude Code resolves
-///   it via PATH at spawn time, so it never goes stale when the binary moves.
-///   This is the form we now register; self-heal must NOT rewrite it (that would
-///   undo the bare registration and re-introduce the staleness class).
-/// - an ABSOLUTE path that still EXISTS — a legacy entry that happens to work; no
-///   need to disturb it.
+/// A registration is STALE (broken) when EITHER:
+/// - its stored command is an ABSOLUTE path that names a file which no longer
+///   exists (the legacy binary was moved/deleted), OR
+/// - its stored command is a BARE name that does not match [`RELAY_BARE_COMMAND`]
+///   (a leftover from a prior rename, e.g. `dispatch` after the dispatch→qd rename).
+///
+/// VALID and left alone:
+/// - the current [`RELAY_BARE_COMMAND`] (`qd`) — Claude Code resolves it via PATH
+///   at spawn time; self-heal must NOT rewrite it (would re-introduce staleness).
+/// - an ABSOLUTE path that still EXISTS — a legacy entry that still works.
 ///
 /// `command_exists` is injected (the bin layer stats the path) so this stays
 /// pure + unit-testable. We DELIBERATELY do NOT touch an unregistered relay
 /// (`registered_relay_command` is `None`) — self-heal only REPAIRS a broken
 /// existing entry; it never registers one the user never asked for (consent).
-///
-/// RENAME NOTE (P3/T3.4 — sb→dispatch): a leftover BARE `sb` entry written by the
-/// pre-rename binary is now broken (the `sb` program is gone from PATH) yet, by
-/// the bare-is-never-stale rule above, self-heal will NOT repair it. Closing
-/// this gap (repairing a bare command that fails a PATH lookup) is a BEHAVIORAL
-/// change to self-heal and is OUT of scope for the rename-only P3. It is
-/// DEFERRED to T4.4, which does an explicit `dispatch relay:register` repoint at
-/// cutover (and resolves the load-bearing cc-relay channel). See
-/// RELAY-RECONCILIATION.md §T3.4(3)/§T4.4. The cutover MUST NOT rely on
-/// self-heal for the bare `sb`→`dispatch` transition.
 pub fn relay_command_is_stale(claude_json: &str, command_exists: impl Fn(&str) -> bool) -> bool {
     match registered_relay_command(claude_json) {
-        // Broken ONLY if it is an absolute path naming a file that is gone.
-        Some(stored) => is_absolute_path(&stored) && !command_exists(&stored),
+        Some(stored) if is_absolute_path(&stored) => !command_exists(&stored),
+        // A bare name that is not the current command is a stale rename remnant.
+        Some(stored) => stored != RELAY_BARE_COMMAND,
         None => false,
     }
 }
 
 /// Is `command` an absolute filesystem path (vs. a bare program name resolved via
-/// PATH)? Unix absolute paths start with `/`; a bare command like `dispatch` does not.
+/// PATH)? Unix absolute paths start with `/`; a bare command like `qd` does not.
 /// (dispatch targets Unix only — macOS/Linux — so a `/` prefix is the right test.)
 fn is_absolute_path(command: &str) -> bool {
     command.starts_with('/')
 }
 
 /// Register the relay at USER scope as the BARE command [`RELAY_BARE_COMMAND`]
-/// (`dispatch relay:serve`). IDEMPOTENT and REPOINTING: `claude mcp add` refuses to
+/// (`qd relay:serve`). IDEMPOTENT and REPOINTING: `claude mcp add` refuses to
 /// overwrite an existing entry (it reports "already exists" and leaves the old
 /// command untouched), so we `remove` first (harmless when absent — `claude mcp
 /// remove` exits 0 either way) and then `add`, guaranteeing the command becomes
-/// the bare `dispatch`.
+/// the bare `qd`.
 ///
 /// We register the BARE program name (not an absolute path) so the entry NEVER
-/// goes stale when the `dispatch` binary moves/upgrades — Claude Code resolves the
+/// goes stale when the `qd` binary moves/upgrades — Claude Code resolves the
 /// command via PATH at spawn time (owner decision; relay-path hardening v2).
 ///
-/// The argv is `claude mcp add -s user relay -- dispatch relay:serve` (stdio is
+/// The argv is `claude mcp add -s user relay -- qd relay:serve` (stdio is
 /// claude's default transport). Returns `Ok(())` on a clean add, else the
 /// child's stderr/stdout (or the spawn error) so the caller can report it.
 pub fn register_relay(exec: &impl Exec) -> Result<(), String> {
@@ -218,7 +210,7 @@ mod tests {
 
     #[test]
     fn user_relay_registered_true_when_present() {
-        let json = r#"{"mcpServers":{"playwright":{},"relay":{"command":"dispatch","args":["relay:serve"]}}}"#;
+        let json = r#"{"mcpServers":{"playwright":{},"relay":{"command":"qd","args":["relay:serve"]}}}"#;
         assert_eq!(user_relay_registered(json), Some(true));
     }
 
@@ -243,10 +235,10 @@ mod tests {
 
     #[test]
     fn registered_relay_command_extracts_the_command_path() {
-        let json = r#"{"mcpServers":{"relay":{"command":"/old/gone/sb","args":["relay:serve"]}}}"#;
+        let json = r#"{"mcpServers":{"relay":{"command":"/old/gone/qd","args":["relay:serve"]}}}"#;
         assert_eq!(
             registered_relay_command(json).as_deref(),
-            Some("/old/gone/sb")
+            Some("/old/gone/qd")
         );
     }
 
@@ -264,42 +256,38 @@ mod tests {
     #[test]
     fn relay_command_stale_only_when_absolute_path_is_missing() {
         // The only BROKEN shape: a stored ABSOLUTE path naming a file that is
-        // gone (the legacy `sb` was moved/deleted). → repair (re-point to bare).
-        let json = r#"{"mcpServers":{"relay":{"command":"/old/gone/sb"}}}"#;
+        // gone (the legacy `qd` was moved/deleted). → repair (re-point to bare).
+        let json = r#"{"mcpServers":{"relay":{"command":"/old/gone/qd"}}}"#;
         assert!(relay_command_is_stale(json, |_| false));
     }
 
     #[test]
     fn relay_command_not_stale_for_bare_command() {
-        // The form we NOW register — bare `dispatch`, resolved via PATH. NEVER stale,
-        // even though it is not an absolute path: a bare command never goes stale
-        // when the binary moves. Self-heal must leave it alone (NOT rewrite it to
-        // an absolute path, which would re-introduce the staleness class).
-        let json = r#"{"mcpServers":{"relay":{"command":"dispatch","args":["relay:serve"]}}}"#;
-        // `command_exists` is irrelevant for a bare command — never consulted.
+        // The form we NOW register — bare `qd`, resolved via PATH. NEVER stale,
+        // even though it is not an absolute path: the correct bare command never
+        // goes stale when the binary moves. Self-heal must leave it alone (NOT
+        // rewrite it to an absolute path, which would re-introduce staleness).
+        let json = r#"{"mcpServers":{"relay":{"command":"qd","args":["relay:serve"]}}}"#;
+        // `command_exists` is irrelevant for the correct bare command — never consulted.
         assert!(!relay_command_is_stale(json, |_| false));
         assert!(!relay_command_is_stale(json, |_| true));
     }
 
     #[test]
-    fn relay_self_heal_does_not_repair_vanished_bare_legacy_sb() {
-        // RECORD of the DEFERRED self-heal gap (P3/T3.4): a leftover BARE `sb`
-        // entry from the pre-rename binary is broken after sb→dispatch (the `sb`
-        // program is gone from PATH), yet self-heal treats EVERY bare command as
-        // never-stale, so it does NOT repair it — even when a PATH lookup fails.
-        // This is by design (bare-is-never-stale); closing it would be a
-        // behavioral change, OUT of scope for the rename-only P3. The cutover
-        // (T4.4) does an explicit `dispatch relay:register` repoint instead.
-        let legacy = r#"{"mcpServers":{"relay":{"command":"sb","args":["relay:serve"]}}}"#;
-        // command_exists=false models the vanished `sb`; still NOT flagged stale.
-        assert!(!relay_command_is_stale(legacy, |_| false));
+    fn relay_legacy_bare_dispatch_command_is_stale() {
+        // A leftover BARE `dispatch` entry from the pre-rename (dispatch→qd) era is
+        // flagged as stale — `dispatch` is gone from PATH and is not the current
+        // RELAY_BARE_COMMAND. Self-heal re-points it to bare `qd`.
+        let legacy = r#"{"mcpServers":{"relay":{"command":"dispatch","args":["relay:serve"]}}}"#;
+        assert!(relay_command_is_stale(legacy, |_| false));
+        assert!(relay_command_is_stale(legacy, |_| true));
     }
 
     #[test]
     fn relay_command_not_stale_for_existing_absolute_path() {
         // A legacy absolute-path entry that STILL EXISTS is valid — leave it
         // alone (no need to disturb a working registration).
-        let json = r#"{"mcpServers":{"relay":{"command":"/here/sb"}}}"#;
+        let json = r#"{"mcpServers":{"relay":{"command":"/here/qd"}}}"#;
         assert!(!relay_command_is_stale(json, |_| true));
     }
 
@@ -356,7 +344,7 @@ mod tests {
             .expect("add ran");
         assert!(remove_idx < add_idx, "remove must precede add: {log:?}");
         // The add argv is the user-scope stdio registration pointing at the BARE
-        // `dispatch` command (resolved via PATH — never goes stale on a binary move).
+        // `qd` command (resolved via PATH — never goes stale on a binary move).
         let add = &log[add_idx];
         assert_eq!(
             add.args,
@@ -367,7 +355,7 @@ mod tests {
                 "user",
                 "relay",
                 "--",
-                "dispatch",
+                "qd",
                 "relay:serve"
             ]
         );

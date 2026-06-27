@@ -222,7 +222,7 @@ assert_boot_ready_event() {
 # assert_resolution_outcome <resolved_dir> <expected_dir>
 # semantic (resolution-outcome) class — ADR-0004 DIV-9a-1/2. The load-bearing
 # property of zmx-dir resolution is the OUTCOME (which socket dir wins / what a
-# compounded TMPDIR collapses to), NOT a byte-for-byte fabricated line. sb exposes
+# compounded TMPDIR collapses to), NOT a byte-for-byte fabricated line. qd exposes
 # no print-resolved-dir surface, so the scenario observes the outcome (where a
 # session's socket actually lands / which dir resolveZmxDir targets) and this
 # comparator asserts it equals the expected canonical dir.

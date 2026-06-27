@@ -4,10 +4,10 @@
 //! Two tiers, NO literal `/tmp` (ADD-14: the engine never WRITES under literal
 //! `/tmp`):
 //!   1. `$XDG_RUNTIME_DIR/qrmux` (per-user, systemd-managed), else
-//!   2. `<sbHome>/mux` where `sbHome = SB_HOME || <home>/.sb`, resolved through
+//!   2. `<sbHome>/mux` where `sbHome = SB_HOME || <home>/.quorum/dispatch`, resolved through
 //!      the existing [`SbPaths::from_home_env`] seam (paths.rs:53-58) so the mux
 //!      dir MOVES with a relocated engine state dir and with SB_HOME-only jails
-//!      (spec D2/R32: NOT literal `$HOME/.sb`).
+//!      (spec D2/R32: NOT literal `$HOME/.quorum/dispatch`).
 //!
 //! This mirrors qrmux's own standalone fallback (`server/socket.rs::resolve_socket_dir`)
 //! so engine and standalone agree fully (ADR 0013). Embedded-path agreement is
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn tier2_relocates_with_sb_home() {
         // SB_HOME-relocation (R32): the mux dir MOVES with the relocated engine
-        // state dir, NOT pinned to literal $HOME/.sb.
+        // state dir, NOT pinned to literal $HOME/.quorum/dispatch.
         let e = env(501, &[("SB_HOME", "/elsewhere/sbdata")]);
         let dir = resolve_qrmux_dir(Path::new("/jail/home"), &e).unwrap();
         assert_eq!(dir, PathBuf::from("/elsewhere/sbdata/mux"));
@@ -145,9 +145,9 @@ mod tests {
     fn tier2_sb_home_only_jail() {
         // An SB_HOME-only jail (HOME points at a real-ish home, but SB_HOME
         // relocates state) still moves the mux dir under SB_HOME.
-        let e = env(501, &[("SB_HOME", "/jail/sb")]);
+        let e = env(501, &[("SB_HOME", "/jail/qd")]);
         let dir = resolve_qrmux_dir(Path::new("/real/home"), &e).unwrap();
-        assert_eq!(dir, PathBuf::from("/jail/sb/mux"));
+        assert_eq!(dir, PathBuf::from("/jail/qd/mux"));
     }
 
     #[test]
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn guard_trips_on_overlong_tier2() {
-        // A home root long enough that <root>/.sb/mux + leaf budget > 104.
+        // A home root long enough that <root>/.quorum/dispatch/mux + leaf budget > 104.
         let long_home = format!("/home/{}", "x".repeat(120));
         let e = env(501, &[]);
         let err = resolve_qrmux_dir(Path::new(&long_home), &e).unwrap_err();

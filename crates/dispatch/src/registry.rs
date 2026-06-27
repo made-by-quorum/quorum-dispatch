@@ -17,7 +17,7 @@
 //! [`RegistryEntry`] carries exactly one lineage field, `spawned_by`
 //! (`spawnedBy` on disk). There is deliberately NO `on_behalf_of` and NO
 //! enumerated org-vocabulary event type anywhere in this module (ADD-3a/3b):
-//! all org vocabulary is sbx-side content flowing through the dumb `sb mark`
+//! all org vocabulary is qb-side content flowing through the dumb `qd mark`
 //! verb (A3); `marks.jsonl` payloads are OPAQUE to the engine.
 //!
 //! # Permissive parsing (L8 / CONVENTIONS.md)
@@ -51,7 +51,7 @@
 //! A degraded row must not vanish silently. Two surfaces carry the signal:
 //!   1. the degraded field-name list rides on the read-path return types
 //!      ([`ScannedEntry::degraded`], [`TombstonedEntry::degraded`]) so a future
-//!      `sb doctor` verb (later phase) can report it as the user-facing surface;
+//!      `qd doctor` verb (later phase) can report it as the user-facing surface;
 //!   2. one stderr warning line per degraded (or genuinely-skipped) file, gated
 //!      behind `SB_DEBUG=1` and SILENT by default — stdout byte-parity surfaces
 //!      (`ls --json`, etc.) MUST NOT change for well-typed fixtures, and the
@@ -123,7 +123,7 @@ pub struct RegistryEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     /// codex P2 W4 (codex-p2-spec sections 7.2, 9.2): the daemon-hosted session's
-    /// recorded ws endpoint (`ws://127.0.0.1:<port>`). Internal surface — sb
+    /// recorded ws endpoint (`ws://127.0.0.1:<port>`). Internal surface — qd
     /// reconnects to it per-verb (claude rows NEVER carry it). skip-None +
     /// appended LAST keeps every existing row / tombstone / golden byte-stable
     /// (the same R1 / `provider` pattern), pinned by the absent-stays-absent
@@ -240,7 +240,7 @@ pub struct ScannedEntry {
     pub entry: RegistryEntry,
     pub tombstoned: bool,
     /// Field names that were WRONG-TYPED on disk and degraded to default (A4
-    /// pass-(b) F3). Empty for a clean row. Carried so a future `sb doctor` verb
+    /// pass-(b) F3). Empty for a clean row. Carried so a future `qd doctor` verb
     /// can surface degraded rows; the row itself still appears in `ls`.
     pub degraded: Vec<&'static str>,
 }
@@ -462,14 +462,14 @@ fn parse_file(path: &Path) -> Option<(RegistryEntry, Vec<&'static str>)> {
 
 /// Emit ONE diagnostic line to stderr, gated behind `SB_DEBUG=1`. SILENT by
 /// default so stdout byte-parity surfaces (`ls --json`, ...) never change. WHY a
-/// decision function: a future `sb doctor` verb (later phase) is the user-facing
+/// decision function: a future `qd doctor` verb (later phase) is the user-facing
 /// surface for degraded/skipped rows; until then this debug gate is the only
 /// signal, and factoring it lets tests assert the message shape directly without
 /// capturing process stderr. Returns the formatted line (for testability) and
 /// writes it only when the gate is on.
 fn debug_warn(msg: &str) -> Option<String> {
     if std::env::var_os("SB_DEBUG").is_some_and(|v| v == "1") {
-        let line = format!("sb[registry]: {msg}");
+        let line = format!("qd[registry]: {msg}");
         eprintln!("{line}");
         Some(line)
     } else {
@@ -942,7 +942,7 @@ pub fn next_claim_incarnation(claims_dir: &Path, name: &str) -> u64 {
 /// `O_EXCL` (`create_new(true)`) and writing `payload` into it.
 ///
 /// SINGLE atomic op for the claim: there is NO read-then-check-then-write
-/// window anywhere. WHY: a read-then-write race lets two concurrent `sb new`
+/// window anywhere. WHY: a read-then-write race lets two concurrent `qd new`
 /// both observe "name free" and both claim ONE name — the `create_new` /
 /// `O_EXCL` open is the single point where exactly one racer wins. (A2 wires
 /// enforcement into the create path; A1 builds + concurrency-tests the
@@ -959,7 +959,7 @@ pub fn next_claim_incarnation(claims_dir: &Path, name: &str) -> u64 {
 /// payload or an alive holder → [`ClaimError::AlreadyClaimed`] with the existing
 /// payload, unchanged. An unsanitizable name yields an `InvalidInput` I/O error.
 ///
-/// EXEC-PROOF HOLDER IDENTITY (sbx punch B4 item 10, the P0 (pid,start-time)
+/// EXEC-PROOF HOLDER IDENTITY (qb punch B4 item 10, the P0 (pid,start-time)
 /// kill-path lesson): `is_alive(pid)` alone cannot tell the CLAIMANT from a
 /// stranger that recycled its pid — a dead claimant whose pid was reused made
 /// the claim look live forever. So a claim payload that carries the claimant's
@@ -977,7 +977,7 @@ pub fn next_claim_incarnation(claims_dir: &Path, name: &str) -> u64 {
 /// OPERATOR RECOVERY (documented): if a name is wedged by a claim that this
 /// reap logic refuses to clear (e.g. an alive-pid holder that is not really a
 /// create — pid recycled within the slack window), the recovery is to delete
-/// the claim file by hand: `<sb-home>/.claude/claims/<name>.claim` (the path a
+/// the claim file by hand: `<qd-home>/.claude/claims/<name>.claim` (the path a
 /// loser's `NameClaimed` error prints). The claim file only closes the create
 /// window; deleting it never corrupts a booted session (the durable record is
 /// the registry row).
@@ -1807,7 +1807,7 @@ mod tests {
         // SB_DEBUG=1: emits a formatted line.
         std::env::set_var("SB_DEBUG", "1");
         let line = debug_warn("degraded [\"startedAt\"]").expect("gate on → Some");
-        assert!(line.starts_with("sb[registry]: "), "line: {line}");
+        assert!(line.starts_with("qd[registry]: "), "line: {line}");
         assert!(line.contains("startedAt"), "line: {line}");
 
         // Any other value is NOT the gate (only exact "1").
@@ -2168,7 +2168,7 @@ mod tests {
         }
     }
 
-    // --- sbx punch B4 item 10: exec-proof claim identity ((pid, start-time)) ---
+    // --- qb punch B4 item 10: exec-proof claim identity ((pid, start-time)) ---
 
     /// PIN: a RECYCLED-PID claim — holder pid is alive, but its current
     /// occupant started AFTER the claimed start (beyond the kill-path slack) —

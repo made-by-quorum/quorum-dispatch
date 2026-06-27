@@ -92,7 +92,7 @@ pub enum ClientMsg {
     /// the child in (`None` = inherit the daemon's own cwd, today's behaviour);
     /// `claude_args` are extra passthrough flags appended AFTER the daemon's
     /// resolved posture flags (flags-first byte-stability). Threaded end-to-end
-    /// from `sb start` so the daemon stops resolving cwd/posture entirely itself.
+    /// from `qd start` so the daemon stops resolving cwd/posture entirely itself.
     LaunchHeadless {
         name: String,
         prompt: String,

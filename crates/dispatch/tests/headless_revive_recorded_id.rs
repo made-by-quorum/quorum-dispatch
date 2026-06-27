@@ -4,7 +4,7 @@
 //! exercised: (D) proved live-Observe addressability, but NOT the COLD revive
 //! path (there is no exit-1 gate there, so it was carried forward, not closed).
 //!
-//! Drives the REAL `sb connect` binary end-to-end against a JAILED HOME — ONLY
+//! Drives the REAL `qd connect` binary end-to-end against a JAILED HOME — ONLY
 //! `claude` is faked (a fixture script via `CLAUDE_BIN` that LOGS its argv on
 //! every invocation, so the revive spawn's exact `--resume <id>` fragment is
 //! observable). The COLD headless row is shaped EXACTLY like the B5-i
@@ -17,7 +17,7 @@
 //!
 //!   cargo test -p dispatch --test headless_revive_recorded_id -- --ignored --nocapture
 //!
-//! Proves: `sb connect` on the COLD row → `resolve_target_mode(headless,
+//! Proves: `qd connect` on the COLD row → `resolve_target_mode(headless,
 //! pid_alive=false)` → `TargetMode::Cold` → `revive_claude`, which spawns
 //! `claude --resume <recorded-SID>` (the recorded id is load-bearing — a resumed
 //! session, never a fresh one).
@@ -142,7 +142,7 @@ impl Jail {
             .env_remove("SB_MUX")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .output()
-            .expect("spawn sb")
+            .expect("spawn qd")
     }
 
     fn argv_lines(&self) -> Vec<String> {
@@ -155,7 +155,7 @@ impl Jail {
 }
 
 #[test]
-#[ignore = "spawns real sb subprocesses + a detached daemon + sleeps; run explicitly with --ignored --nocapture"]
+#[ignore = "spawns real qd subprocesses + a detached daemon + sleeps; run explicitly with --ignored --nocapture"]
 fn connect_cold_revive_resumes_recorded_session_id() {
     let root = tempfile::tempdir().unwrap();
     let j = jail(root.path());
@@ -168,7 +168,7 @@ fn connect_cold_revive_resumes_recorded_session_id() {
         "the cold headless row is addressable by name + recorded id pre-revive; ls={ls_out}"
     );
 
-    // --- the proof: `sb connect <name>` on the COLD row → revive via recorded id -
+    // --- the proof: `qd connect <name>` on the COLD row → revive via recorded id -
     // connect → resolve_target_mode(headless, pid_alive=false) → Cold →
     // revive_claude → spawns `claude --resume <recorded-SID>`. The detached-pane
     // attach tail exits nonzero under the test's no-TTY shell — the load-bearing

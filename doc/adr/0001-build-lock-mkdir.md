@@ -7,7 +7,7 @@
 
 The build mutex (`scripts/build-lock.sh`) must serialize concurrent cargo
 build/test invocations and recover from dead lock holders. The original Phase 0a
-brief specified `flock -x -w 300 ~/.sb-rust/build.lock`.
+brief specified `flock -x -w 300 ~/.quorum/dispatch-rust/build.lock`.
 
 `flock(1)` does **not** exist on macOS, and the project's CI and primary dev host
 both run on macOS arm64 (CI matrix: `macos-latest` arm64 + `ubuntu-latest` x86_64).
@@ -24,7 +24,7 @@ Options considered:
 ## Decision
 
 Implement the lock as an atomic `mkdir` of a lock **directory**
-(`$SB_RUST_LOCK_DIR/build.lock`, default base `~/.sb-rust`). Inside it, write an
+(`$SB_RUST_LOCK_DIR/build.lock`, default base `~/.quorum/dispatch-rust`). Inside it, write an
 `owner` metadata file with `owner`, `pid`, `timestamp`. Acquisition loops on
 `mkdir`; on contention it reads the holder PID and, if that PID is dead, reclaims
 the stale lock; otherwise it waits up to a 300s timeout (`SB_RUST_LOCK_TIMEOUT`).
@@ -33,7 +33,7 @@ Release is a `trap`-driven `rm -rf` guarded so only the owner deletes.
 The semantics the brief required are preserved: mutual exclusion, bounded 300s
 wait, owner+PID+timestamp metadata, and stale-lock recovery for dead holders. The
 lock base is overridable via `SB_RUST_LOCK_DIR` so tests are hermetic and never
-touch a real `~/.sb-rust`.
+touch a real `~/.quorum/dispatch-rust`.
 
 ## Consequences
 

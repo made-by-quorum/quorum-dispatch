@@ -4,7 +4,7 @@
 //! always produces the same codes (session.ts:23-26) — there is no clock, RNG,
 //! or environment input, so the codes are a pure function of the session ids and
 //! their order. That determinism is load-bearing for `ls --json` parity and for
-//! a human re-running `sb ls` and getting the same 3-char handles.
+//! a human re-running `qd ls` and getting the same 3-char handles.
 
 use crate::model::Session;
 use sha2::{Digest, Sha256};

@@ -1,8 +1,8 @@
-//! Tiered secret store for `sb` — port of `0d0fa9e:src/secrets.ts`.
+//! Tiered secret store for `qd` — port of `0d0fa9e:src/secrets.ts`.
 //!
 //! Goal: stop users hand-exporting OPENROUTER_API_KEY. Secrets live in a tiered
 //! backend — the macOS Keychain when available, otherwise a chmod-600 config
-//! file under `~/.sb`. An env var ALWAYS overrides both (so CI / one-offs / the
+//! file under `~/.quorum/dispatch`. An env var ALWAYS overrides both (so CI / one-offs / the
 //! existing survey contract keep working unchanged).
 //! (`0d0fa9e:src/secrets.ts:3-7`).
 //!
@@ -32,14 +32,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // ----------------------------------------------------------------------------
 
 /// Known secret names and the env var that overrides each. Keep this small; add
-/// a row to register a new key. `sb config` rejects any name not listed here.
+/// a row to register a new key. `qd config` rejects any name not listed here.
 /// (`0d0fa9e:src/secrets.ts:25-27`).
 pub const KNOWN_KEYS: &[(&str, &str)] = &[("openrouter-key", "OPENROUTER_API_KEY")];
 
-/// PLAIN (non-secret) config keys (sbx punch item 7). These live ONLY in the
-/// file tier — as TOP-LEVEL `key = "value"` lines in `~/.sb/config.toml` (the
+/// PLAIN (non-secret) config keys (qb punch item 7). These live ONLY in the
+/// file tier — as TOP-LEVEL `key = "value"` lines in `~/.quorum/dispatch/config.toml` (the
 /// `claude_flags` precedent), NEVER the keychain (they are not secrets) and
-/// NEVER the `[secrets]` table. `sb config set/get/unset` accepts them like any
+/// NEVER the `[secrets]` table. `qd config set/get/unset` accepts them like any
 /// known key but routes them through the plain top-level read/write below.
 pub const PLAIN_FILE_KEYS: &[&str] = &["render-default"];
 
@@ -68,13 +68,13 @@ pub fn env_var_for_key(name: &str) -> Option<&'static str> {
     KNOWN_KEYS.iter().find(|(n, _)| *n == name).map(|(_, e)| *e)
 }
 
-/// Validate a value for a known key at `sb config set` time (punch item 7,
+/// Validate a value for a known key at `qd config set` time (punch item 7,
 /// errors-that-teach). `None` = acceptable; `Some(msg)` = the teaching error.
 /// Secret keys accept anything (a secret's shape is the backend's business).
 pub fn validate_key_value(key: &str, value: &str) -> Option<String> {
     if key == "render-default" && value != "inline" && value != "alt-screen" {
         return Some(format!(
-            "sb config set: invalid value '{value}' for render-default — use 'inline' \
+            "qd config set: invalid value '{value}' for render-default — use 'inline' \
              (the default: sessions render in the scrollback so phone/SSH attach can \
              scroll) or 'alt-screen' (fullscreen rendering; opt back in per-session \
              with --alt-screen)."
@@ -83,9 +83,9 @@ pub fn validate_key_value(key: &str, value: &str) -> Option<String> {
     None
 }
 
-/// The Keychain service all sb secrets share; the account is the secret name.
+/// The Keychain service all qd secrets share; the account is the secret name.
 /// (`0d0fa9e:src/secrets.ts:38`).
-pub const KEYCHAIN_SERVICE: &str = "sb-cli";
+pub const KEYCHAIN_SERVICE: &str = "qd-cli";
 
 /// The locked-keychain detection signature (ADR 0010; A5 spec §3.2). The
 /// documented errSecInteractionNotAllowed (OSStatus -25308) text, AND the
@@ -95,7 +95,7 @@ const LOCKED_KEYCHAIN_SIGNATURE: &str = "User interaction is not allowed";
 
 /// The one-per-process fallback notice (ADR 0010; A5 spec §3.2).
 const FALLBACK_NOTICE: &str =
-    "sb config: keychain locked (headless?) — falling back to file backend (~/.sb/config.toml).";
+    "qd config: keychain locked (headless?) — falling back to file backend (~/.quorum/dispatch/config.toml).";
 
 /// The one-per-process env-forced-locked GET diagnostic (orc-2 ruling
 /// relay-1780639217973-4, "middle path c"; A5 spec §3.2). Under env-forced
@@ -273,7 +273,7 @@ fn escape_toml(value: &str) -> String {
 /// The managed header comment line `serialize_secrets_toml` emits (and the
 /// merge in [`write_secrets_table`] dedupes against).
 const MANAGED_HEADER: &str =
-    "# sb config -- managed by `sb config`. Do not hand-edit secret values.";
+    "# qd config -- managed by `qd config`. Do not hand-edit secret values.";
 
 /// Serialize a `[secrets]` table back to config-file text. Keys sorted for a
 /// stable, diff-friendly file. Byte-for-byte the TS emitter
@@ -491,7 +491,7 @@ fn plain_file_delete(name: &str, deps: &SecretDeps) {
 }
 
 // ----------------------------------------------------------------------------
-// Keychain backend: `security` CLI, service=sb-cli, account=<name>.
+// Keychain backend: `security` CLI, service=qd-cli, account=<name>.
 // (`0d0fa9e:src/secrets.ts:165-200`).
 // ----------------------------------------------------------------------------
 
@@ -602,9 +602,9 @@ fn keychain_set(name: &str, value: &str, deps: &SecretDeps) -> KeychainOutcome<(
     let code = r.status.unwrap_or(1);
     let trimmed = r.stderr.trim();
     let msg = if trimmed.is_empty() {
-        format!("sb config: keychain write failed (exit {code})")
+        format!("qd config: keychain write failed (exit {code})")
     } else {
-        format!("sb config: keychain write failed (exit {code}) -- {trimmed}")
+        format!("qd config: keychain write failed (exit {code}) -- {trimmed}")
     };
     KeychainOutcome::Failed(msg)
 }
@@ -691,11 +691,11 @@ fn emit_locked_diag_once(deps: &SecretDeps) {
 /// Read a secret from the active backend (None = not set).
 /// (`0d0fa9e:src/secrets.ts:223-225`, extended for ADR 0010 keychain fallback.)
 ///
-/// sbx punch B4 item 1 (TIER-STRANDING fix, orc-ratified read-side fallthrough):
+/// qb punch B4 item 1 (TIER-STRANDING fix, orc-ratified read-side fallthrough):
 /// a keychain-SELECTED read that cleanly MISSES (unlocked, item absent) now
 /// FALLS THROUGH to the file backend instead of reporting "not set". The strand:
 /// writers legitimately land file-tier values (ADR-0010 locked-set fallback;
-/// `SB_SECRET_BACKEND=file sb config set …` — which the engine's own non-TTY
+/// `SB_SECRET_BACKEND=file qd config set …` — which the engine's own non-TTY
 /// hint recommends; hand-edit), and a later unlocked-keychain read missed them
 /// for every store consumer at once. Keychain still WINS when present (a stale
 /// file copy never shadows a live keychain value — the file answers ONLY on a
@@ -756,7 +756,7 @@ pub fn set_secret(name: &str, value: &str, deps: &SecretDeps) -> Result<Backend,
                     // operator explicitly demanded keychain; do NOT silently
                     // write a weaker file copy. Surface the locked failure.
                     return Err(format!(
-                        "sb config: keychain locked ({LOCKED_KEYCHAIN_SIGNATURE}) and SB_SECRET_BACKEND=keychain forbids file fallback. Unlock the keychain or use SB_SECRET_BACKEND=file."
+                        "qd config: keychain locked ({LOCKED_KEYCHAIN_SIGNATURE}) and SB_SECRET_BACKEND=keychain forbids file fallback. Unlock the keychain or use SB_SECRET_BACKEND=file."
                     ));
                 }
                 emit_fallback_notice_once(deps);
@@ -809,7 +809,7 @@ pub struct BackendInfo {
 ///
 /// A5 §3.2: the `backend` field is the SELECTION (keychain stays keychain even
 /// under fallback). The keys-set enumeration resolves each known key through
-/// [`resolve_config_tier`] (the same precedence `sb config get` reports), so a
+/// [`resolve_config_tier`] (the same precedence `qd config get` reports), so a
 /// file-stranded key now truthfully shows tier=`File` — was the misleading
 /// "(none)" while config.toml held it. `config path`'s `Backend:` line reports
 /// the selection; `Keys set:` reports the effective per-tier state.
@@ -898,7 +898,7 @@ fn resolved_file(v: Option<String>) -> ResolvedSecret {
 /// secret keys; file-only for plain keys (`render-default` — no env, no
 /// keychain). Returns the value + the tier it resolved from (`None` = unset).
 ///
-/// This is the single resolution `sb config get` / `sb config path` report
+/// This is the single resolution `qd config get` / `qd config path` report
 /// from, so the operator sees WHERE a value came from — converting tier drift
 /// from archaeology to a one-line diagnosis, and closing the
 /// config-get-vs-survey asymmetry (config now consults the env tier for the
@@ -997,7 +997,7 @@ pub fn resolve_secret(name: &str, env_var_name: &str, deps: &SecretDeps) -> Reso
 }
 
 // ----------------------------------------------------------------------------
-// Masking (for `sb config get` default output) — L11.
+// Masking (for `qd config get` default output) — L11.
 // (`0d0fa9e:src/secrets.ts:299-303`).
 // ----------------------------------------------------------------------------
 
@@ -1189,8 +1189,8 @@ mod tests {
 
     #[test]
     fn config_path_honors_sb_home() {
-        let env = map_env(&[("SB_HOME", "/tmp/sbx-test")]);
-        assert_eq!(resolve_config_path(&env), "/tmp/sbx-test/config.toml");
+        let env = map_env(&[("SB_HOME", "/tmp/qb-test")]);
+        assert_eq!(resolve_config_path(&env), "/tmp/qb-test/config.toml");
     }
     #[test]
     fn config_path_defaults_to_dot_sb_under_home() {
@@ -1266,13 +1266,13 @@ mod tests {
     fn file_set_writes_toml_and_chmods_600_get_round_trips() {
         let fs = FakeFs::default();
         let exec = ScriptedExec::new();
-        let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         h.run(|deps| {
             assert_eq!(
                 set_secret("openrouter-key", "sk-or-FAKE-secret9999", deps),
                 Ok(Backend::File)
             );
-            let path = "/sbx/config.toml";
+            let path = "/quorum/bond/config.toml";
             assert!(fs.files.borrow()[path].contains("openrouter-key = \"sk-or-FAKE-secret9999\""));
             assert!(fs
                 .chmods
@@ -1290,7 +1290,7 @@ mod tests {
     fn file_get_returns_none_when_absent() {
         let fs = FakeFs::default();
         let exec = ScriptedExec::new();
-        let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         h.run(|deps| assert_eq!(get_secret("openrouter-key", deps), None));
     }
 
@@ -1298,7 +1298,7 @@ mod tests {
     fn file_set_chmods_600_even_when_updating_existing_file() {
         let fs = FakeFs::default();
         let exec = ScriptedExec::new();
-        let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         h.run(|deps| {
             set_secret("openrouter-key", "first", deps).unwrap();
             fs.chmods.borrow_mut().clear();
@@ -1315,7 +1315,7 @@ mod tests {
     fn file_delete_removes_the_key() {
         let fs = FakeFs::default();
         let exec = ScriptedExec::new();
-        let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         h.run(|deps| {
             set_secret("openrouter-key", "v", deps).unwrap();
             delete_secret("openrouter-key", deps);
@@ -1327,12 +1327,12 @@ mod tests {
     fn file_backend_info_reports_file_path_keys_never_values() {
         let fs = FakeFs::default();
         let exec = ScriptedExec::new();
-        let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         h.run(|deps| {
             set_secret("openrouter-key", "sekret", deps).unwrap();
             let info = secret_backend_info(deps);
             assert_eq!(info.backend, Backend::File);
-            assert_eq!(info.file_path, "/sbx/config.toml");
+            assert_eq!(info.file_path, "/quorum/bond/config.toml");
             assert_eq!(
                 info.keys_set,
                 vec![("openrouter-key".to_string(), Source::File)]
@@ -1387,7 +1387,7 @@ mod tests {
                 "-a",
                 "openrouter-key",
                 "-s",
-                "sb-cli",
+                "qd-cli",
                 "-w",
                 "sk-or-FAKE-zzz"
             ]
@@ -1499,14 +1499,14 @@ mod tests {
     #[test]
     fn resolve_env_wins_over_file() {
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-file\"\n",
         )]);
         let exec = ScriptedExec::new();
         let h = file_harness(
             &fs,
             &exec,
-            &[("SB_HOME", "/sbx"), ("OPENROUTER_API_KEY", "sk-env")],
+            &[("SB_HOME", "/quorum/bond"), ("OPENROUTER_API_KEY", "sk-env")],
         );
         let r = h.run(|deps| resolve_secret("openrouter-key", "OPENROUTER_API_KEY", deps));
         assert_eq!(r.value, Some("sk-env".to_string()));
@@ -1532,11 +1532,11 @@ mod tests {
     #[test]
     fn resolve_file_when_env_empty_keychain_unavailable() {
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-file\"\n",
         )]);
         let exec = ScriptedExec::new();
-        let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         let r = h.run(|deps| resolve_secret("openrouter-key", "OPENROUTER_API_KEY", deps));
         assert_eq!(r.value, Some("sk-file".to_string()));
         assert_eq!(r.source, Some(Source::File));
@@ -1546,7 +1546,7 @@ mod tests {
     fn resolve_nothing_anywhere_null() {
         let fs = FakeFs::default();
         let exec = ScriptedExec::new();
-        let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         let r = h.run(|deps| resolve_secret("openrouter-key", "OPENROUTER_API_KEY", deps));
         assert_eq!(r.value, None);
         assert_eq!(r.source, None);
@@ -1585,7 +1585,7 @@ mod tests {
         // keychain SELECTED (darwin + available), NOT env-forced.
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1599,7 +1599,7 @@ mod tests {
                 Ok(Backend::File)
             );
         });
-        let path = "/sbx/config.toml";
+        let path = "/quorum/bond/config.toml";
         assert!(fs.files.borrow()[path].contains("openrouter-key = \"sk-or-FAKE-fallback\""));
         // chmod 600 asserted after the FALLBACK write too.
         assert!(fs
@@ -1622,7 +1622,7 @@ mod tests {
         // env-forced keychain (even on linux): NEVER falls back.
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx"), ("SB_SECRET_BACKEND", "keychain")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond"), ("SB_SECRET_BACKEND", "keychain")]),
             exec: &exec,
             keychain_available: false,
             platform: "linux",
@@ -1651,7 +1651,7 @@ mod tests {
         );
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1673,7 +1673,7 @@ mod tests {
         // a file read → keys_set truthfully lists the fallback-file keys, while
         // the SELECTION stays keychain.
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-or-FAKE-infile\"\n",
         )]);
         let exec = ScriptedExec::new().on(
@@ -1685,7 +1685,7 @@ mod tests {
         );
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1705,7 +1705,7 @@ mod tests {
     #[test]
     fn fallback_resolve_secret_under_lock_reads_file_source_file() {
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-or-FAKE-resolved\"\n",
         )]);
         let exec = ScriptedExec::new().on(
@@ -1717,7 +1717,7 @@ mod tests {
         );
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1750,7 +1750,7 @@ mod tests {
         );
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1813,7 +1813,7 @@ mod tests {
         let exec = locked_get_exec();
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx"), ("SB_SECRET_BACKEND", "keychain")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond"), ("SB_SECRET_BACKEND", "keychain")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1845,13 +1845,13 @@ mod tests {
         // A SELECTED (not env-forced) locked keychain falls back to file: the
         // FALLBACK notice fires, the env-forced diagnostic does NOT.
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-or-FAKE-sel\"\n",
         )]);
         let exec = locked_get_exec();
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]), // NOT env-forced
+            env: map_env(&[("SB_HOME", "/quorum/bond")]), // NOT env-forced
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1890,7 +1890,7 @@ mod tests {
         );
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx"), ("SB_SECRET_BACKEND", "keychain")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond"), ("SB_SECRET_BACKEND", "keychain")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1917,7 +1917,7 @@ mod tests {
         let exec = locked_get_exec();
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx"), ("SB_SECRET_BACKEND", "keychain")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond"), ("SB_SECRET_BACKEND", "keychain")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -1943,7 +1943,7 @@ mod tests {
         {
             let fs = FakeFs::default();
             let exec = ScriptedExec::new();
-            let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+            let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
             let r = h.run(|deps| resolve_secret("openrouter-key", "OPENROUTER_API_KEY", deps));
             assert_eq!(r.value, None);
             assert!(!r.locked, "plain-absent must not set locked");
@@ -1952,13 +1952,13 @@ mod tests {
         // (the value is accessible via the file, so not inaccessible).
         {
             let fs = FakeFs::with(&[(
-                "/sbx/config.toml",
+                "/quorum/bond/config.toml",
                 "[secrets]\nopenrouter-key = \"sk-or-FAKE-fb\"\n",
             )]);
             let exec = locked_get_exec();
             let h = Harness {
                 fs: &fs,
-                env: map_env(&[("SB_HOME", "/sbx")]),
+                env: map_env(&[("SB_HOME", "/quorum/bond")]),
                 exec: &exec,
                 keychain_available: true,
                 platform: "darwin",
@@ -2018,7 +2018,7 @@ mod tests {
         let exec = ScriptedExec::new(); // NO canned `security` responses.
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: true,
             platform: "darwin",
@@ -2044,9 +2044,9 @@ mod tests {
             .chmods
             .borrow()
             .iter()
-            .any(|(p, m)| p == "/sbx/config.toml" && *m == 0o600));
+            .any(|(p, m)| p == "/quorum/bond/config.toml" && *m == 0o600));
         // Stored as a TOP-LEVEL line, not in [secrets].
-        let text = fs.files.borrow().get("/sbx/config.toml").cloned().unwrap();
+        let text = fs.files.borrow().get("/quorum/bond/config.toml").cloned().unwrap();
         assert_eq!(text, "render-default = \"alt-screen\"\n");
     }
 
@@ -2057,11 +2057,11 @@ mod tests {
     fn plain_key_upsert_preserves_other_content() {
         let initial =
             "# hand comment\nclaude_flags = \"--a --b\"\n[secrets]\nopenrouter-key = \"sk-x\"\n";
-        let fs = FakeFs::with(&[("/sbx/config.toml", initial)]);
+        let fs = FakeFs::with(&[("/quorum/bond/config.toml", initial)]);
         let exec = ScriptedExec::new();
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: false,
             platform: "linux",
@@ -2071,7 +2071,7 @@ mod tests {
         // Insert: lands at the end of the top-level region, BEFORE [secrets].
         h.run(|deps| set_secret("render-default", "inline", deps))
             .unwrap();
-        let text = fs.files.borrow().get("/sbx/config.toml").cloned().unwrap();
+        let text = fs.files.borrow().get("/quorum/bond/config.toml").cloned().unwrap();
         assert_eq!(
             text,
             "# hand comment\nclaude_flags = \"--a --b\"\nrender-default = \"inline\"\n[secrets]\nopenrouter-key = \"sk-x\"\n"
@@ -2079,7 +2079,7 @@ mod tests {
         // Update: replaced in place.
         h.run(|deps| set_secret("render-default", "alt-screen", deps))
             .unwrap();
-        let text = fs.files.borrow().get("/sbx/config.toml").cloned().unwrap();
+        let text = fs.files.borrow().get("/quorum/bond/config.toml").cloned().unwrap();
         assert!(text.contains("render-default = \"alt-screen\""));
         assert!(!text.contains("render-default = \"inline\""));
         // The secrets table reads back unchanged through the secrets path.
@@ -2089,7 +2089,7 @@ mod tests {
         );
         // Unset: back to the original bytes.
         h.run(|deps| delete_secret("render-default", deps));
-        let text = fs.files.borrow().get("/sbx/config.toml").cloned().unwrap();
+        let text = fs.files.borrow().get("/quorum/bond/config.toml").cloned().unwrap();
         assert_eq!(text, initial);
     }
 
@@ -2107,13 +2107,13 @@ mod tests {
             Some("inline".to_string())
         );
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "render-default = \"inline\"\n[secrets]\nopenrouter-key = \"sk-x\"\n",
         )]);
         let exec = ScriptedExec::new();
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: false,
             platform: "linux",
@@ -2139,11 +2139,11 @@ mod tests {
     fn secret_write_preserves_top_level_keys_and_other_sections() {
         let initial = "# hand comment\nclaude_flags = \"--a\"\nrender-default = \"alt-screen\"\n\
                        [secrets]\nopenrouter-key = \"sk-old\"\n[other]\nx = \"1\"\n";
-        let fs = FakeFs::with(&[("/sbx/config.toml", initial)]);
+        let fs = FakeFs::with(&[("/quorum/bond/config.toml", initial)]);
         let exec = ScriptedExec::new();
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: false,
             platform: "linux",
@@ -2152,10 +2152,10 @@ mod tests {
         };
         h.run(|deps| set_secret("openrouter-key", "sk-new", deps))
             .unwrap();
-        let text = fs.files.borrow().get("/sbx/config.toml").cloned().unwrap();
+        let text = fs.files.borrow().get("/quorum/bond/config.toml").cloned().unwrap();
         assert_eq!(
             text,
-            "# sb config -- managed by `sb config`. Do not hand-edit secret values.\n\
+            "# qd config -- managed by `qd config`. Do not hand-edit secret values.\n\
              # hand comment\nclaude_flags = \"--a\"\nrender-default = \"alt-screen\"\n\
              [secrets]\nopenrouter-key = \"sk-new\"\n[other]\nx = \"1\"\n"
         );
@@ -2174,7 +2174,7 @@ mod tests {
         let exec = ScriptedExec::new();
         let h = Harness {
             fs: &fs,
-            env: map_env(&[("SB_HOME", "/sbx")]),
+            env: map_env(&[("SB_HOME", "/quorum/bond")]),
             exec: &exec,
             keychain_available: false,
             platform: "linux",
@@ -2183,7 +2183,7 @@ mod tests {
         };
         h.run(|deps| set_secret("openrouter-key", "sk-x", deps))
             .unwrap();
-        let text = fs.files.borrow().get("/sbx/config.toml").cloned().unwrap();
+        let text = fs.files.borrow().get("/quorum/bond/config.toml").cloned().unwrap();
         assert_eq!(
             text,
             serialize_secrets_toml(&[("openrouter-key".to_string(), "sk-x".to_string())])
@@ -2210,23 +2210,23 @@ mod tests {
     }
 
     // ========================================================================
-    // sbx punch B4 item 1 — TIER-STRANDING fix (Phase-1 repro → Phase-2 fix).
+    // qb punch B4 item 1 — TIER-STRANDING fix (Phase-1 repro → Phase-2 fix).
     //
     // PHASE-1 verdict (orc-ratified): the divergence reproduced as
     // TIER-STRANDING. All store readers share one precedence, but a
     // keychain-SELECTED clean miss returned "not set" WITHOUT consulting the
     // file tier, while writers legitimately land file-tier values:
     //   (w1) ADR-0010 locked-keychain set fallback (headless/SSH),
-    //   (w2) `SB_SECRET_BACKEND=file sb config set …` — the engine's OWN
+    //   (w2) `SB_SECRET_BACKEND=file qd config set …` — the engine's OWN
     //        non-TTY teaching error recommends exactly this form,
-    //   (w3) a hand-edit / restore of ~/.sb/config.toml.
+    //   (w3) a hand-edit / restore of ~/.quorum/dispatch/config.toml.
     //
     // PHASE-2 fix (this commit): `get_secret` + `resolve_secret` now FALL
     // THROUGH to the file tier on a clean keychain miss (keychain still wins
     // when present). The former DEFECT rows below are FLIPPED to HELD — they
     // now assert the value round-trips across the lock-state change, for every
-    // store consumer at once (`sb config get`, `sb survey`, `sb start --via`,
-    // `sb config path`). Read-side only: `set_secret`/`delete_secret` are
+    // store consumer at once (`qd config get`, `qd survey`, `qd start --via`,
+    // `qd config path`). Read-side only: `set_secret`/`delete_secret` are
     // unchanged (no set-side cross-tier self-heal — orc ruling).
     // ========================================================================
 
@@ -2253,12 +2253,12 @@ mod tests {
     }
 
     /// HELD (was DEFECT — the w1 timeline, now FIXED): process 1 runs
-    /// `sb config set` under a LOCKED keychain → ADR-0010 fallback stores the
+    /// `qd config set` under a LOCKED keychain → ADR-0010 fallback stores the
     /// value in the file tier. Process 2 — same config root, keychain now
     /// UNLOCKED but holding no item — runs every store-reader's resolution:
-    /// ALL now find the file-tier key via the clean-miss fallthrough. `sb
-    /// config get` reports it (tier=file); `sb survey` resolves it (source
-    /// File); `sb config path` lists it (file). The strand is closed.
+    /// ALL now find the file-tier key via the clean-miss fallthrough. `qd
+    /// config get` reports it (tier=file); `qd survey` resolves it (source
+    /// File); `qd config path` lists it (file). The strand is closed.
     #[test]
     fn held_item1_locked_set_then_unlocked_read_resolves_file_tier() {
         let fs = FakeFs::default(); // the persistent config root across both "processes"
@@ -2266,7 +2266,7 @@ mod tests {
 
         // Process 1: headless set; keychain selected (darwin+available), locked.
         let set_exec = locked_add_exec();
-        let h_set = keychain_harness(&fs, &set_exec, &[("SB_HOME", "/sbx")]);
+        let h_set = keychain_harness(&fs, &set_exec, &[("SB_HOME", "/quorum/bond")]);
         let stored = h_set.run(|deps| set_secret(key, "sk-or-FAKE-stranded", deps));
         assert_eq!(
             stored,
@@ -2274,21 +2274,21 @@ mod tests {
             "ADR-0010 fallback stored to file"
         );
         assert!(
-            fs.files.borrow()["/sbx/config.toml"].contains("sk-or-FAKE-stranded"),
+            fs.files.borrow()["/quorum/bond/config.toml"].contains("sk-or-FAKE-stranded"),
             "the value persists in the file tier"
         );
 
         // Process 2: same root, keychain unlocked + empty (clean miss).
         let get_exec = unlocked_empty_find_exec();
-        let h_get = keychain_harness(&fs, &get_exec, &[("SB_HOME", "/sbx")]);
+        let h_get = keychain_harness(&fs, &get_exec, &[("SB_HOME", "/quorum/bond")]);
 
-        // `sb config get` reader (config.rs RealStore::get → get_secret).
+        // `qd config get` reader (config.rs RealStore::get → get_secret).
         assert_eq!(
             h_get.run(|deps| get_secret(key, deps)),
             Some("sk-or-FAKE-stranded".to_string()),
             "FIXED: get_secret falls through to the file-tier value on a clean miss"
         );
-        // `sb survey` reader (bin/dispatch/survey.rs resolve_api_key → resolve_secret).
+        // `qd survey` reader (bin/dispatch/survey.rs resolve_api_key → resolve_secret).
         let r = h_get.run(|deps| resolve_secret(key, "OPENROUTER_API_KEY", deps));
         assert_eq!(
             (r.value, r.source, r.locked),
@@ -2299,20 +2299,20 @@ mod tests {
             ),
             "FIXED: resolve_secret reports the file-tier value (source File)"
         );
-        // `sb start --via` secret-credential reader uses the same get_secret
+        // `qd start --via` secret-credential reader uses the same get_secret
         // path — fixed by the get_secret assertion above.
 
-        // `sb config path` Keys-set enumeration: the key is listed with tier=File.
+        // `qd config path` Keys-set enumeration: the key is listed with tier=File.
         let info = h_get.run(secret_backend_info);
         assert_eq!(info.backend, Backend::Keychain); // SELECTION unchanged
         assert_eq!(
             info.keys_set,
             vec![("openrouter-key".to_string(), Source::File)],
-            "FIXED: `sb config path` lists the file-stranded key with tier=File"
+            "FIXED: `qd config path` lists the file-stranded key with tier=File"
         );
     }
 
-    /// HELD (was DEFECT — w2, now FIXED): `SB_SECRET_BACKEND=file sb config set
+    /// HELD (was DEFECT — w2, now FIXED): `SB_SECRET_BACKEND=file qd config set
     /// …` (the exact form config.rs's non-TTY error recommends) stores to the
     /// file tier; a later read WITHOUT that env var (default selection:
     /// keychain) now FINDS it via the clean-miss fallthrough.
@@ -2326,7 +2326,7 @@ mod tests {
         let h_set = keychain_harness(
             &fs,
             &set_exec,
-            &[("SB_HOME", "/sbx"), ("SB_SECRET_BACKEND", "file")],
+            &[("SB_HOME", "/quorum/bond"), ("SB_SECRET_BACKEND", "file")],
         );
         assert_eq!(
             h_set.run(|deps| set_secret(key, "sk-or-FAKE-filetier", deps)),
@@ -2337,7 +2337,7 @@ mod tests {
 
         // Read: default env (no SB_SECRET_BACKEND) → keychain selected, clean miss.
         let get_exec = unlocked_empty_find_exec();
-        let h_get = keychain_harness(&fs, &get_exec, &[("SB_HOME", "/sbx")]);
+        let h_get = keychain_harness(&fs, &get_exec, &[("SB_HOME", "/quorum/bond")]);
         assert_eq!(
             h_get.run(|deps| get_secret(key, deps)),
             Some("sk-or-FAKE-filetier".to_string()),
@@ -2355,11 +2355,11 @@ mod tests {
 
     /// AFFORDANCE PIN (the Phase-1 asymmetry, now CLOSED): with the env var
     /// exported and the store empty, BOTH surfaces agree the value resolves
-    /// from the ENV tier — `sb survey`'s reader (`resolve_secret`) AND `sb
+    /// from the ENV tier — `qd survey`'s reader (`resolve_secret`) AND `qd
     /// config get`'s reader (`resolve_config_tier`, which `config get` now
     /// uses). Phase-1 pinned the divergence (the old `get_secret` was
     /// store-only → "not set" while survey saw the env value); the affordance
-    /// resolution closes it. (`sb start --via` retains NO env tier BY PINNED
+    /// resolution closes it. (`qd start --via` retains NO env tier BY PINNED
     /// DESIGN — profile determinism, red-team F3/F10 — that asymmetry is
     /// intentional and not a divergence.)
     #[test]
@@ -2370,7 +2370,7 @@ mod tests {
             &fs,
             &exec,
             &[
-                ("SB_HOME", "/sbx"),
+                ("SB_HOME", "/quorum/bond"),
                 ("OPENROUTER_API_KEY", "sk-or-FAKE-env"),
             ],
         );
@@ -2398,7 +2398,7 @@ mod tests {
         let key = "openrouter-key";
 
         let set_exec = locked_add_exec();
-        let h_set = keychain_harness(&fs, &set_exec, &[("SB_HOME", "/sbx")]);
+        let h_set = keychain_harness(&fs, &set_exec, &[("SB_HOME", "/quorum/bond")]);
         assert_eq!(
             h_set.run(|deps| set_secret(key, "sk-or-FAKE-headless", deps)),
             Ok(Backend::File)
@@ -2412,7 +2412,7 @@ mod tests {
             "",
             "security: User interaction is not allowed.",
         );
-        let h_get = keychain_harness(&fs, &get_exec, &[("SB_HOME", "/sbx")]);
+        let h_get = keychain_harness(&fs, &get_exec, &[("SB_HOME", "/quorum/bond")]);
         assert_eq!(
             h_get.run(|deps| get_secret(key, deps)),
             Some("sk-or-FAKE-headless".to_string())
@@ -2436,7 +2436,7 @@ mod tests {
 
         let set_exec =
             ScriptedExec::new().on("security", &["add-generic-password"], Some(0), "", "");
-        let h_set = keychain_harness(&fs, &set_exec, &[("SB_HOME", "/sbx")]);
+        let h_set = keychain_harness(&fs, &set_exec, &[("SB_HOME", "/quorum/bond")]);
         assert_eq!(
             h_set.run(|deps| set_secret(key, "sk-or-FAKE-kc", deps)),
             Ok(Backend::Keychain)
@@ -2453,7 +2453,7 @@ mod tests {
             "sk-or-FAKE-kc\n",
             "",
         );
-        let h_get = keychain_harness(&fs, &get_exec, &[("SB_HOME", "/sbx")]);
+        let h_get = keychain_harness(&fs, &get_exec, &[("SB_HOME", "/quorum/bond")]);
         assert_eq!(
             h_get.run(|deps| get_secret(key, deps)),
             Some("sk-or-FAKE-kc".to_string())
@@ -2468,7 +2468,7 @@ mod tests {
     #[test]
     fn pin_item1_keychain_value_wins_over_stale_file_copy() {
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-or-FAKE-STALE-file\"\n",
         )]);
         let exec = ScriptedExec::new().on(
@@ -2478,7 +2478,7 @@ mod tests {
             "sk-or-FAKE-LIVE-keychain\n",
             "",
         );
-        let h = keychain_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = keychain_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         assert_eq!(
             h.run(|deps| get_secret("openrouter-key", deps)),
             Some("sk-or-FAKE-LIVE-keychain".to_string()),
@@ -2498,14 +2498,14 @@ mod tests {
     fn affordance_item1_resolve_config_tier_reports_each_tier() {
         // env tier (key in env AND file → env wins, source Env).
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-file\"\n",
         )]);
         let exec = unlocked_empty_find_exec();
         let h_env = keychain_harness(
             &fs,
             &exec,
-            &[("SB_HOME", "/sbx"), ("OPENROUTER_API_KEY", "sk-env")],
+            &[("SB_HOME", "/quorum/bond"), ("OPENROUTER_API_KEY", "sk-env")],
         );
         let r = h_env.run(|deps| resolve_config_tier("openrouter-key", deps));
         assert_eq!(r.source, Some(Source::Env));
@@ -2519,24 +2519,24 @@ mod tests {
             "sk-kc\n",
             "",
         );
-        let h_kc = keychain_harness(&fs2, &kc, &[("SB_HOME", "/sbx")]);
+        let h_kc = keychain_harness(&fs2, &kc, &[("SB_HOME", "/quorum/bond")]);
         let r = h_kc.run(|deps| resolve_config_tier("openrouter-key", deps));
         assert_eq!(r.source, Some(Source::Keychain));
 
         // file tier (clean keychain miss → file).
         let fs3 = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-file3\"\n",
         )]);
         let miss3 = unlocked_empty_find_exec();
-        let h_file = keychain_harness(&fs3, &miss3, &[("SB_HOME", "/sbx")]);
+        let h_file = keychain_harness(&fs3, &miss3, &[("SB_HOME", "/quorum/bond")]);
         let r = h_file.run(|deps| resolve_config_tier("openrouter-key", deps));
         assert_eq!(r.source, Some(Source::File));
 
         // plain file-tier key: File, no env/keychain consulted.
-        let fs4 = FakeFs::with(&[("/sbx/config.toml", "render-default = \"alt-screen\"\n")]);
+        let fs4 = FakeFs::with(&[("/quorum/bond/config.toml", "render-default = \"alt-screen\"\n")]);
         let exec4 = ScriptedExec::new();
-        let h_plain = keychain_harness(&fs4, &exec4, &[("SB_HOME", "/sbx")]);
+        let h_plain = keychain_harness(&fs4, &exec4, &[("SB_HOME", "/quorum/bond")]);
         let r = h_plain.run(|deps| resolve_config_tier("render-default", deps));
         assert_eq!(r.value, Some("alt-screen".to_string()));
         assert_eq!(r.source, Some(Source::File));
@@ -2544,12 +2544,12 @@ mod tests {
         // unset → None / None.
         let fs5 = FakeFs::default();
         let miss5 = unlocked_empty_find_exec();
-        let h_unset = keychain_harness(&fs5, &miss5, &[("SB_HOME", "/sbx")]);
+        let h_unset = keychain_harness(&fs5, &miss5, &[("SB_HOME", "/quorum/bond")]);
         let r = h_unset.run(|deps| resolve_config_tier("openrouter-key", deps));
         assert_eq!((r.value, r.source), (None, None));
     }
 
-    /// S1(i) PIN: `secret_backend_info` (sb config path) now counts an
+    /// S1(i) PIN: `secret_backend_info` (qd config path) now counts an
     /// ENV-exported key even with an EMPTY store — it lists with tier=Env. This
     /// is the affordance working: config path reports WHERE a key resolves,
     /// including the env tier (was: env keys never appeared because the old
@@ -2562,7 +2562,7 @@ mod tests {
             &fs,
             &exec,
             &[
-                ("SB_HOME", "/sbx"),
+                ("SB_HOME", "/quorum/bond"),
                 ("OPENROUTER_API_KEY", "sk-or-FAKE-env"),
             ],
         );
@@ -2575,18 +2575,18 @@ mod tests {
     }
 
     /// S1(ii) PIN (transparency fidelity): a STRAY hand-added `[secrets]` key —
-    /// a name NOT in the registry — still appears in `sb config path` with
+    /// a name NOT in the registry — still appears in `qd config path` with
     /// tier=File. The known-keys enumeration alone would silently drop it
     /// (defeating "which keys are set"); the union with the file table keeps
     /// it visible.
     #[test]
     fn backend_info_lists_unknown_hand_added_secrets_key_with_tier_file() {
         let fs = FakeFs::with(&[(
-            "/sbx/config.toml",
+            "/quorum/bond/config.toml",
             "[secrets]\nopenrouter-key = \"sk-known\"\nstray-hand-key = \"v\"\n",
         )]);
         let exec = ScriptedExec::new(); // file backend (linux)
-        let h = file_harness(&fs, &exec, &[("SB_HOME", "/sbx")]);
+        let h = file_harness(&fs, &exec, &[("SB_HOME", "/quorum/bond")]);
         let info = h.run(secret_backend_info);
         assert_eq!(
             info.keys_set,

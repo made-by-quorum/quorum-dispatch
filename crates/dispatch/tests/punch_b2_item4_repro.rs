@@ -1,6 +1,6 @@
-//! sbx 0.1 punch-list B2, item 4 — PHASE-1 REPRO + MECHANISM PINS for the relay
+//! qb 0.1 punch-list B2, item 4 — PHASE-1 REPRO + MECHANISM PINS for the relay
 //! reply-tool body-loss on the no-waiting-sender push-back path (the fleet's
-//! standing pain item). Spec: ~/work/ws/switchboard/sbx/punch/b2-relay-spec.md.
+//! standing pain item). Spec: ~/work/ws/switchboard/qb/punch/b2-relay-spec.md.
 //!
 //! REPRO-FIRST DISCIPLINE: in phase 1 the `defect_pin_*` rows asserted the
 //! then-current defective behavior; phase 2 FLIPPED them to pin the fixes

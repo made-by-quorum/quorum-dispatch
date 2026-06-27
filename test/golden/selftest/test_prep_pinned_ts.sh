@@ -8,7 +8,7 @@
 #   (1) prep with the CORRECT pin -> succeeds, writes .prep-verified with the pin.
 #   (2) prep with a WRONG pin -> REFUSES (pin not reachable / HEAD mismatch), and
 #       leaves NO clone behind.
-#   (3) prep dest UNDER the sb-rust repo tree -> REFUSED (containment guard).
+#   (3) prep dest UNDER the qd-rust repo tree -> REFUSED (containment guard).
 #   (4) record.sh G2: SB_UNDER_TEST NOT under a prep-verified clone -> REFUSED
 #       (exit 71), no fixture written.
 #   (5) record.sh G2: SB_UNDER_TEST under a clone whose marker pin MISMATCHES the
@@ -68,10 +68,10 @@ else
     FAIL=$((FAIL + 1)); printf 'FAIL prep/wrong-pin-no-clone-left — a clone was left behind\n'
 fi
 
-# --- 3. dest under the sb-rust repo tree -> REFUSED --------------------------
+# --- 3. dest under the qd-rust repo tree -> REFUSED --------------------------
 DEST3="$REPO_TOP/test/golden/.scratch-prep-should-refuse"
 if PREP_SKIP_BUN=1 bash "$PREP" --pin "$GOOD_PIN" --src "$SRC" --dest "$DEST3" >/dev/null 2>&1; then
-    FAIL=$((FAIL + 1)); printf 'FAIL prep/dest-in-repo-refused — prep cloned INTO the sb-rust repo!\n'
+    FAIL=$((FAIL + 1)); printf 'FAIL prep/dest-in-repo-refused — prep cloned INTO the qd-rust repo!\n'
     rm -rf "$DEST3" 2>/dev/null
 else
     PASS=$((PASS + 1)); printf 'ok   prep/dest-in-repo-refused\n'

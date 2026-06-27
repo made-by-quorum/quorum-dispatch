@@ -1,4 +1,4 @@
-//! REAL `sb stop` backend (P0 W1: today's `kill` renamed, sbx spec-cli §11;
+//! REAL `qd stop` backend (P0 W1: today's `kill` renamed, qb spec-cli §11;
 //! originally spec §5.1; TS `commands/lifecycle.ts:532-789`). The retired
 //! `kill` verb no longer reaches this module (it errors in verbs/stubs.rs), so
 //! every user-facing string here names `stop` — the verb the caller invoked.
@@ -40,7 +40,7 @@ use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 use super::common;
 use super::common::resolve_or_die;
 
-/// `sb stop <session>` — provider split, then the claude/zmx dual-reap core.
+/// `qd stop <session>` — provider split, then the claude/zmx dual-reap core.
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
     // W3 (ADD-15, Pete 2026-06-05): the interactive confirmation prompt is GONE —
@@ -56,7 +56,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("sb stop: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd stop: HOME is not set — cannot resolve the session state dir.");
             return 1;
         }
     };
@@ -77,7 +77,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // Kept structurally honest (ADD-9a), mirroring run_attach's parked OC branch.
     // NOTE: spec §2 carries no OC exclusion — the real ground is the A1 join design.
     if session.provider == "opencode" {
-        eprintln!("sb stop: OpenCode kill is not supported in the Rust engine (parked).");
+        eprintln!("qd stop: OpenCode kill is not supported in the Rust engine (parked).");
         let _ = server; // --server is the OC-only flag; parked with the branch.
         return 1;
     }
@@ -134,7 +134,7 @@ pub fn run(m: &ArgMatches) -> i32 {
             match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
-                    eprintln!("sb stop: {msg}");
+                    eprintln!("qd stop: {msg}");
                     return 1;
                 }
             }
@@ -248,7 +248,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // (the ~1-3s scan gap means a victim could in principle have been replaced
     // between snapshot and stamp; the forward anchor + the kill_pid_tree
     // recheck close the window from stamp time on). descendant_kill_list
-    // returns EMPTY for self-stop (sb inside the session's own tree — never
+    // returns EMPTY for self-stop (qd inside the session's own tree — never
     // sweep toward the caller; the L10 PID-only lesson).
     let descendant_victims: Vec<(i32, i64)> = if sweep_root_ok {
         proc_rows
@@ -407,12 +407,12 @@ pub fn run(m: &ArgMatches) -> i32 {
     //
     //     KNOWN SHAPE (b3 adversarial concern 4, defensible — documented not
     //     fixed): a session B being COMMISSIONED from inside session A (an
-    //     embedded `sb start B` running as a descendant of A's claude) at the
-    //     instant `sb stop A` snapshots is a true descendant of A, so its
-    //     nascent process is swept. This is `sb stop A` stopping A's whole
+    //     embedded `qd start B` running as a descendant of A's claude) at the
+    //     instant `qd stop A` snapshots is a true descendant of A, so its
+    //     nascent process is swept. This is `qd stop A` stopping A's whole
     //     subtree, which includes the in-flight commission it spawned — the
     //     intended semantics of stopping the commissioner; the window closes
-    //     when `sb start B` exits and B reparents off A.
+    //     when `qd start B` exits and B reparents off A.
     if !descendant_victims.is_empty() {
         for leftover in
             dispatch::effects::kill_pid_tree(&descendant_victims, dispatch::effects::KILL_GRACE_MS)
@@ -495,7 +495,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // Dead-PID registry sweep (root-cause complement to the resolver fix): the
     // killed session's OWN <pid>.json was just tombstoned, but a session that died
     // WITHOUT graceful shutdown leaves its `<pid>.json` behind forever (only the
-    // MANUAL `sb reconcile` sweeps it). Two records for one logical session — one
+    // MANUAL `qd reconcile` sweeps it). Two records for one logical session — one
     // live pid + one dead-pid stale "idle" — is what caused false "Ambiguous —
     // matches 2 sessions". So after a successful kill, opportunistically tombstone
     // OTHER dead-pid registry records too.
@@ -572,12 +572,12 @@ fn run_codex_kill(paths: &SbPaths, session: &dispatch::model::Session) -> i32 {
     if pid <= 0 {
         // A codex row with no daemon pid has nothing to reap (and nothing to key a
         // tombstone by). Mirrors the claude "nothing to kill" wording shape.
-        eprintln!("sb stop: \"{name}\": codex session has no daemon pid. Nothing to kill.");
+        eprintln!("qd stop: \"{name}\": codex session has no daemon pid. Nothing to kill.");
         return 1;
     }
 
     // Capture the row BEFORE the kill (claude removes its own <pid>.json on graceful
-    // SIGTERM; the codex daemon knows nothing of sb, but capturing keeps the tombstone
+    // SIGTERM; the codex daemon knows nothing of qd, but capturing keeps the tombstone
     // audit trail — provider + endpoint — even if the kill races a row rewrite).
     let captured = read_entry(&paths.sessions_dir, pid);
     let spawner = RealDaemonSpawner;
@@ -621,7 +621,7 @@ fn run_acp_kill(paths: &SbPaths, session: &dispatch::model::Session) -> i32 {
         .unwrap_or_else(|| session.session_id.clone());
     let pid = session.pid.unwrap_or(0);
     if pid <= 0 {
-        eprintln!("sb stop: \"{name}\": acp session has no daemon pid. Nothing to kill.");
+        eprintln!("qd stop: \"{name}\": acp session has no daemon pid. Nothing to kill.");
         return 1;
     }
     // Capture the row BEFORE the kill (carries provider + endpoint for the tombstone).

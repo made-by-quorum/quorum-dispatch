@@ -51,7 +51,7 @@ impl DriverOverride {
     }
 }
 
-/// The agent env markers (S-B rulings §"Detection signals"): a `sb` invocation
+/// The agent env markers (S-B rulings §"Detection signals"): a `qd` invocation
 /// from INSIDE a live Claude Code session carries one of these. Either present
 /// (and non-empty) ⇒ the caller is an agent, even at a TTY.
 const AGENT_ENV_MARKERS: [&str; 2] = ["SB_SESSION_ID", "CLAUDECODE"];
@@ -70,7 +70,7 @@ fn agent_marker_present(env: &dyn Env) -> bool {
 ///   1. an explicit override always wins (`--headless` ⇒ Agent, `--interactive`
 ///      ⇒ Human);
 ///   2. else an agent env marker present ⇒ Agent — this BEATS the TTY (a Claude
-///      session that itself runs `sb` may sit at a TTY, but it is still an agent
+///      session that itself runs `qd` may sit at a TTY, but it is still an agent
 ///      caller; the marker is the signal the daemon-spawn case cannot rely on
 ///      isatty for);
 ///   3. else a real TTY (stdin AND stdout) ⇒ Human (the interactive default);
@@ -98,7 +98,7 @@ pub fn resolve_driver_real(over: DriverOverride, env: &dyn Env) -> Driver {
     resolve_driver(over, crate::tty::stdin_and_stdout_are_tty(), env)
 }
 
-/// The route `sb start` takes once its driver is resolved (WP-B-CS-1, D2). The
+/// The route `qd start` takes once its driver is resolved (WP-B-CS-1, D2). The
 /// pure decision the verb acts on — separated from the launch so the whole
 /// {driver × prompt} matrix is unit-testable without a real daemon/claude.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,7 +115,7 @@ pub enum StartRoute {
     RefuseNoPrompt,
 }
 
-/// Resolve the `sb start` route from the driver and whether a prompt was given
+/// Resolve the `qd start` route from the driver and whether a prompt was given
 /// (S-B-COMMAND-SURFACE-RULINGS + the D2/D3 SCOPE-RULING, Fork B). Human → the
 /// interactive create path (prompt optional). Agent → headless when a prompt is
 /// present, else [`StartRoute::RefuseNoPrompt`].
@@ -127,7 +127,7 @@ pub fn start_route(driver: Driver, has_prompt: bool) -> StartRoute {
     }
 }
 
-/// The render surface `sb ls` selects (WP-B-CS-2, S-B rulings §"sb ls"): a TTY
+/// The render surface `qd ls` selects (WP-B-CS-2, S-B rulings §"qd ls"): a TTY
 /// human gets the **table**, a pipe/agent gets **JSON**, and an explicit `--json`
 /// always overrides to JSON (the same context-default + explicit-escape pattern as
 /// the start/resume driver). The pure decision, separated from the verb so the
@@ -135,7 +135,7 @@ pub fn start_route(driver: Driver, has_prompt: bool) -> StartRoute {
 ///
 /// WIRED into `ls::run_inner` (WP-B7 PIECE 1): the live piped default flipped
 /// table→JSON (agent/pipe ⇒ JSON, human/TTY ⇒ table), a Pete-directed behavior
-/// change carried with a recorded test-delta (the `sb resume` GUARDRAIL-2 golden-
+/// change carried with a recorded test-delta (the `qd resume` GUARDRAIL-2 golden-
 /// delta pattern). `--json`/`--table` are the explicit overrides on this surface
 /// axis (`--short` is a CONTENT modifier, not a selector — it never reaches here).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +146,7 @@ pub enum LsRender {
     Json,
 }
 
-/// Resolve the `sb ls` render surface from the explicit `--json` flag and the
+/// Resolve the `qd ls` render surface from the explicit `--json` flag and the
 /// auto-detected driver (S-B rulings: auto table for a TTY, JSON for a pipe;
 /// `--json` override wins). `--json` ⇒ JSON unconditionally; else Agent ⇒ JSON,
 /// Human ⇒ Table. (Wired into `ls::run_inner`, WP-B7 PIECE 1 — see [`LsRender`].)
@@ -160,10 +160,10 @@ pub fn ls_render_mode(json_flag: bool, driver: Driver) -> LsRender {
     }
 }
 
-/// `sb resume` is an AGENT verb: **ALWAYS headless** (Fork A full replacement). The
+/// `qd resume` is an AGENT verb: **ALWAYS headless** (Fork A full replacement). The
 /// driver is accepted only to PROVE the decision ignores it — even a Human/TTY
-/// context resumes headless (a human re-entering a session is `sb connect`
-/// (WP-B-CS-2), NOT `sb resume`, so there is no `--interactive` escape on resume).
+/// context resumes headless (a human re-entering a session is `qd connect`
+/// (WP-B-CS-2), NOT `qd resume`, so there is no `--interactive` escape on resume).
 /// A regression that re-introduces a driver-keyed interactive branch flips one of
 /// these rows and REDs [`tests::resume_is_always_headless_even_at_a_tty`].
 pub fn resume_is_headless(_driver: Driver) -> bool {
@@ -293,7 +293,7 @@ mod tests {
         );
     }
 
-    // --- D2: start_route (the pure sb-start decision) -----------------------
+    // --- D2: start_route (the pure qd-start decision) -----------------------
 
     #[test]
     fn start_route_human_is_interactive_with_or_without_prompt() {
@@ -339,7 +339,7 @@ mod tests {
 
     // --- WP-B-CS-2: ls render-mode auto-detect (override wins) --------------
 
-    /// `sb ls` mode matrix (S-B rulings §"sb ls"): `--json` always wins; else the
+    /// `qd ls` mode matrix (S-B rulings §"qd ls"): `--json` always wins; else the
     /// driver decides (Agent/pipe → JSON, Human/TTY → table). FIX-SHAPED MUTATION:
     /// dropping the `--json` override (letting the driver decide even when the flag
     /// is set) would flip the `--json`-at-a-TTY row from JSON to Table and red the
@@ -357,7 +357,7 @@ mod tests {
     // --- D3: resume is ALWAYS headless (Fork A) -----------------------------
 
     /// Resume ignores the driver: even a Human driver at a TTY resumes headless
-    /// (no `--interactive` escape — a human re-entering is `sb connect`). FIX-SHAPED
+    /// (no `--interactive` escape — a human re-entering is `qd connect`). FIX-SHAPED
     /// MUTATION: re-introducing a driver-keyed interactive branch (e.g.
     /// `matches!(driver, Driver::Agent)`) flips the Human row to false and REDs.
     #[test]

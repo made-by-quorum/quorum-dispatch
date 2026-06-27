@@ -4,12 +4,12 @@
 # Corpus entry: zmx-dir resolution (Bug-D keystone, TS src/utils.ts resolveZmxDir
 # 68-82). Comparator class WAS byte-exact; ADD-9a Part-2 Step-1 reclassed it to
 # semantic (resolution-outcome) — see ADR-0004 DIV-9a-1 (ZMX_DIR tier) and
-# DIV-9a-2 (TMPDIR fallback + collapse). WHY: sb exposes no "print my resolved zmx
+# DIV-9a-2 (TMPDIR fallback + collapse). WHY: qd exposes no "print my resolved zmx
 # dir" surface, so a byte-exact row could only compare a FABRICATED line; the real,
 # load-bearing contract is the OUTCOME — a session created under an explicit
 # ZMX_DIR has its socket land in THAT dir (reachable/killable there).
 #
-# STUB-BACKED (§S): drives the pinned-TS `sb new` against the deterministic stub
+# STUB-BACKED (§S): drives the pinned-TS `qd new` against the deterministic stub
 # (CLAUDE_BIN=jail-rooted shim) so a REAL zmx session is created, then OBSERVES the
 # socket dir it landed in and asserts it equals the jail's ZMX_DIR (the explicit
 # tier winning outright). The TMPDIR-collapse tier is Linux-leaning at runtime and
@@ -26,7 +26,7 @@ SCN_STUB_BACKED=1
 scn_run() {
     local name
     name="$(scn_session_name zd)"
-    # Boot a stub-backed session via the pinned-TS sb. startDetached pins the write
+    # Boot a stub-backed session via the pinned-TS qd. startDetached pins the write
     # side to canonicalZmxDir() = ZMX_DIR (explicit tier, utils.ts:70). Capture the
     # boot trace forensically; the OUTCOME is read from where the socket landed.
     scn_capture_pty "$SCN_OUT" 40 -- \

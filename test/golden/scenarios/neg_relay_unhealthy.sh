@@ -7,14 +7,14 @@
 # pin that premise does NOT hold, and this row records the ENGINE'S REAL behaviour
 # instead of fabricating the assumed one:
 #
-#   - `sb ls` joins the relay by reading the SIDECAR (~/.claude/relay/<x>.json,
+#   - `qd ls` joins the relay by reading the SIDECAR (~/.claude/relay/<x>.json,
 #     getRelayPorts session.ts:159-183) whose `status` it hardcodes to "ok"; it does
 #     NOT re-query GET /health for the join. scanRelayPorts (the /health caller,
 #     session.ts:185-212) is the FALLBACK that fires only when NO sidecar exists AND
 #     scans ports 8900-8999 — never the jail's relay port. send:relay resolves the
-#     same sidecar way (fastRelayLookup). So NO sb surface degrades on a dead /health
+#     same sidecar way (fastRelayLookup). So NO qd surface degrades on a dead /health
 #     at the pin. (Empirically confirmed: a controlled in-jail probe with
-#     STUB_DEAD_HEALTH=1 returned `/health` 503 status=dead while `sb ls --json` still
+#     STUB_DEAD_HEALTH=1 returned `/health` 503 status=dead while `qd ls --json` still
 #     showed relay_joined_rows=1.)
 #
 # WHAT THIS ROW THEREFORE RECORDS (a REAL, value-bearing engine property, not a
@@ -71,7 +71,7 @@ except Exception:
     print(0)
 ' "${SB_RELAY_PORT:-0}")"
 
-    # (2) The ENGINE surface: sb ls --json STILL joins the relay (sidecar-driven,
+    # (2) The ENGINE surface: qd ls --json STILL joins the relay (sidecar-driven,
     # health-independent). A health-gating regression would drop the join.
     scn_sb ls --json 2>/dev/null > "$SCN_OUT.lsjson"
     local joined

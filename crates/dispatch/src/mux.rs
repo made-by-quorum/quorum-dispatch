@@ -84,7 +84,7 @@ pub trait Mux {
     fn wait(&self, socket_dir: &Path, names: &[String]) -> io::Result<i32>;
 
     /// `zmx attach <name>` pinned to `socket_dir` — an INTERACTIVE, stdio-inherit
-    /// handoff (terminal takeover for `sb attach`). Returns the exit code.
+    /// handoff (terminal takeover for `qd attach`). Returns the exit code.
     fn attach(&self, socket_dir: &Path, name: &str) -> io::Result<i32>;
 }
 

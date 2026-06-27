@@ -7,7 +7,7 @@ OUTDIR="$1"
 # REPO-relative (this file lives at test/golden/mutation/); GOLDEN_TOP = test/golden.
 GOLDEN_TOP="$(cd "$(dirname "$0")/.." && pwd)"
 export TMPDIR="${TMPDIR:-/tmp}"
-export SB_UNDER_TEST="${SB_UNDER_TEST:-bun /tmp/sb-rust-ts-prep/8c59ec456fe82780fd75d8afb5fe48dc72e10bc8/src/index.ts}"
+export SB_UNDER_TEST="${SB_UNDER_TEST:-bun /tmp/qd-rust-ts-prep/8c59ec456fe82780fd75d8afb5fe48dc72e10bc8/src/index.ts}"
 cd "$GOLDEN_TOP"
 _run_seam() {
   local seam_env="$1" scn="$2" out="$3" budget="${4:-30000}"
@@ -15,7 +15,7 @@ _run_seam() {
     . lib/jail.sh; . lib/normalize.sh; . lib/check_python.sh; . lib/compare.sh
     . lib/stub_claude/stub_install.sh
     jail_establish; stub_install
-    export JAIL_SB_CMD=sb JAIL_ZMX_CMD=zmx
+    export JAIL_SB_CMD=qd JAIL_ZMX_CMD=zmx
     eval "export '"$seam_env"'"
     SCN_OUT=$JAIL_ROOT/out.raw
     . '"$scn"'

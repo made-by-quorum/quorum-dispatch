@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# test/golden/lib/jail.sh — Session jail for the sb-rust golden-master harness.
+# test/golden/lib/jail.sh — Session jail for the qd-rust golden-master harness.
 #
 # Source this in the asserter, the recorder wrapper, and every scenario. Do NOT
-# execute directly. Ported and HARDENED from the proven sb-qa battery jail
-# (~/work/sb-qa/test/qa/lib/safety.sh): POSITIVE sandbox detection, name-prefix
+# execute directly. Ported and HARDENED from the proven qd-qa battery jail
+# (~/work/qd-qa/test/qa/lib/safety.sh): POSITIVE sandbox detection, name-prefix
 # kill guard, PID whitelist, production-path refusal.
 #
-# ABSOLUTE RULE (spec §3.6): the org's REAL TypeScript sb runs on this same
-# machine (brano). This harness MUST be invisible to it. Every sb/zmx process we
+# ABSOLUTE RULE (spec §3.6): the org's REAL TypeScript qd runs on this same
+# machine (brano). This harness MUST be invisible to it. Every qd/zmx process we
 # touch lives inside a per-run hermetic jail. The harness FAILS CLOSED: if the
 # jail is not fully established, nothing runs.
 #
@@ -25,7 +25,7 @@
 #   jail_guard_name <name>         — refuse any name not matching $JAIL_PREFIX.
 #   jail_register_pid <pid> <name> — whitelist a PID as a prefixed-session member.
 #   jail_raw_kill <pid>            — kill a PID only if registered.
-#   jail_sb <args...>             — run sb-under-test inside the jail env.
+#   jail_sb <args...>             — run qd-under-test inside the jail env.
 #   jail_zmx <args...>            — run zmx inside the jail env.
 #   jail_kill_session <name>       — kill a session by name (guarded + in-jail).
 #   jail_require_destructive_ok    — Lima destructive gate (mirror of safety.sh).
@@ -36,17 +36,17 @@
 #
 # redteam-retro finding #2 (latent hermeticity hole, now closed): the binary reads
 # four env vars the jail did NOT set OR clear — SB_PLUGINS_ROOT, SB_SPAWN_AGENTS_DIR,
-# CLAUDE_BIN, SB_CLAUDE_FLAGS — so an inherited shell value would reach sb inside the
+# CLAUDE_BIN, SB_CLAUDE_FLAGS — so an inherited shell value would reach qd inside the
 # jail and escape isolation. jail_establish now UNSETS all four (fail-closed), and the
 # positive belt re-checks them: the three path-typed vars, if re-set to a jail-rooted
 # override by a live capture, must live under JAIL_ROOT; SB_CLAUDE_FLAGS (a flags
 # string) must stay unset.
 # ---------------------------------------------------------------------------
 
-# The sb-under-test binary/entrypoint. Defaults to the TS sb for dry-runs; Part 2
+# The qd-under-test binary/entrypoint. Defaults to the TS qd for dry-runs; Part 2
 # / the SBQA swap points this at the Rust binary. Overridable, but it is only ever
 # invoked through the jail env (jail_sb), never bare.
-JAIL_SB_CMD="${JAIL_SB_CMD:-sb}"
+JAIL_SB_CMD="${JAIL_SB_CMD:-qd}"
 JAIL_ZMX_CMD="${JAIL_ZMX_CMD:-zmx}"
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ jail_establish() {
     # A7 M10: every failure path past this assignment CLEARS JAIL_ROOT before
     # returning. A failed establish that leaves JAIL_ROOT set primes the A6
     # set-u incident mechanism: an EXIT-trap jail_teardown keys on JAIL_ROOT,
-    # passes its early-return guard, and runs `sb ls`/`zmx list` under the
+    # passes its early-return guard, and runs `qd ls`/`zmx list` under the
     # PREVAILING (real) env — read-only org-registry exposure, reproduced
     # 2026-06-05 (A7 journal). Teardown carries its own belt too.
     if [ -e "$JAIL_ROOT" ]; then
@@ -136,14 +136,14 @@ jail_establish() {
         }
     chmod 700 "$JAIL_ROOT/xdg_runtime" 2>/dev/null || true
 
-    # Export the hermetic env. Every sb/zmx invocation inherits these via jail_sb /
+    # Export the hermetic env. Every qd/zmx invocation inherits these via jail_sb /
     # jail_zmx. Exported here so scenarios run under them.
     #
-    # HOME is LOAD-BEARING: the TS sb derives its registry (~/.claude/sessions),
+    # HOME is LOAD-BEARING: the TS qd derives its registry (~/.claude/sessions),
     # relay dir (~/.claude/relay), and projects from homedir(), NOT from SB_HOME.
     # Without overriding HOME the harness would READ AND MODIFY the org's real
     # session registry on brano — exactly the invisibility violation rule 9 bans.
-    # (Empirically confirmed 2026-06-04: `sb ls --json` returned real org sessions
+    # (Empirically confirmed 2026-06-04: `qd ls --json` returned real org sessions
     # until HOME was jailed.) SB_HOME is kept too in case the Rust port honors it.
     export HOME="$JAIL_ROOT/home"
     export SB_HOME="$JAIL_ROOT/sb_home"
@@ -164,7 +164,7 @@ jail_establish() {
     # Clear the four env vars the binary-under-test reads but the jail does NOT
     # itself need to set (redteam-retro finding #2 — latent hermeticity hole). The
     # jail formerly neither set nor unset these, so a value inherited from the real
-    # brano shell would reach sb inside the jail and escape isolation — e.g. an
+    # brano shell would reach qd inside the jail and escape isolation — e.g. an
     # inherited SB_SPAWN_AGENTS_DIR makes `--agent` resolve agent defs from a REAL,
     # out-of-jail dir (create.rs resolve_agents_dir), and an inherited CLAUDE_BIN
     # substitutes a real out-of-jail binary (launch.rs claude_bin). We FAIL CLOSED
@@ -175,7 +175,7 @@ jail_establish() {
     # it is never left exported in the asserted env.
     #   SB_PLUGINS_ROOT     — path; NOT read by the Rust binary (PR #6 removed the
     #                         plugins-root tier) but cleared for defense in depth
-    #                         (TS sb + live-TS captures still honor it).
+    #                         (TS qd + live-TS captures still honor it).
     #   SB_SPAWN_AGENTS_DIR — path; read by create.rs (the --agent escape vector).
     #   CLAUDE_BIN          — path; read by launch.rs (the binary-substitution vector).
     #   SB_CLAUDE_FLAGS     — flags STRING (not a path); read by launch.rs.
@@ -239,7 +239,7 @@ jail_assert_established() {
     esac
 
     # Each isolation var must be set AND live under JAIL_ROOT (production refusal).
-    # HOME is included: it is load-bearing for invisibility (TS sb keys its
+    # HOME is included: it is load-bearing for invisibility (TS qd keys its
     # registry on homedir()).
     local v name val
     local real_home="${JAIL_REAL_HOME:-$HOME}"
@@ -270,7 +270,7 @@ jail_assert_established() {
         # REAL home (captured before HOME was jailed) — NOT the live $HOME, which
         # is now a sandbox path and would make these patterns vacuous.
         case "$val" in
-            "$real_home"|"$real_home"/.sb|"$real_home"/.sb/*|"$real_home"/.claude|"$real_home"/.claude/*|"$real_home"/.config|"$real_home"/.config/*|"$real_home"/.local/*|/tmp/zmx-*)
+            "$real_home"|"$real_home"/.quorum/dispatch|"$real_home"/.quorum/dispatch/*|"$real_home"/.claude|"$real_home"/.claude/*|"$real_home"/.config|"$real_home"/.config/*|"$real_home"/.local/*|/tmp/zmx-*)
                 ok=0
                 reasons="${reasons}  $name='$val' matches a PRODUCTION path pattern\n"
                 ;;
@@ -298,7 +298,7 @@ jail_assert_established() {
             reasons="${reasons}  $name='$val' is set but does not resolve under JAIL_ROOT ($JAIL_ROOT)\n"
         fi
         case "$val" in
-            "$real_home"|"$real_home"/.sb|"$real_home"/.sb/*|"$real_home"/.claude|"$real_home"/.claude/*|"$real_home"/.config|"$real_home"/.config/*|"$real_home"/.local/*|/tmp/zmx-*)
+            "$real_home"|"$real_home"/.quorum/dispatch|"$real_home"/.quorum/dispatch/*|"$real_home"/.claude|"$real_home"/.claude/*|"$real_home"/.config|"$real_home"/.config/*|"$real_home"/.local/*|/tmp/zmx-*)
                 ok=0
                 reasons="${reasons}  $name='$val' matches a PRODUCTION path pattern\n"
                 ;;
@@ -339,7 +339,7 @@ jail_guard_name() {
         return 0
     fi
     _jail_refuse "kill/gc target '$name' does not match required prefix '$JAIL_PREFIX'"
-    printf '[jail] Never call sb kill / zmx kill / kill on a bare name.\n' >&2
+    printf '[jail] Never call qd kill / zmx kill / kill on a bare name.\n' >&2
     return 1
 }
 
@@ -347,7 +347,7 @@ jail_guard_name() {
 # jail_assert_target_resolves_in_jail <name> — the TARGET-RESOLUTION BELT.
 #
 # WHY (A4 finding, orchestrator-ruled): the prefix guard (jail_guard_name) checks
-# the NAME's SHAPE — but the jailed TS sb-under-test RESOLVES a name through the
+# the NAME's SHAPE — but the jailed TS qd-under-test RESOLVES a name through the
 # engine's production tiers, including the literal-/tmp legacy zmx scan (Bug-D
 # feature; pin-reconciled in TS PR #10). So even a prefix-correct name could, on a
 # collision, resolve to a REAL org session's zmx socket / registry path OUTSIDE the
@@ -359,8 +359,8 @@ jail_guard_name() {
 #   - OUT-OF-JAIL — any resolved candidate path is not under $JAIL_ROOT, OR
 #   - AMBIGUITY  — both an in-jail AND an out-of-jail candidate resolve.
 #
-# Resolution is queried the SAME way the engine resolves: (1) the jailed sb's own
-# session lookup (`sb info <name> --json`, registry under the JAILED home) and
+# Resolution is queried the SAME way the engine resolves: (1) the jailed qd's own
+# session lookup (`qd info <name> --json`, registry under the JAILED home) and
 # (2) the zmx socket path for the name across the jail's resolution tiers
 # (ZMX_DIR, XDG_RUNTIME_DIR, and the literal-/tmp legacy tier the finding is about).
 # Every path-shaped token in those results must carry the $JAIL_ROOT prefix.
@@ -378,7 +378,7 @@ _JAIL_TARGET_RESOLVER="${_JAIL_TARGET_RESOLVER:-jail__resolve_target_paths}"
 # it must NOT itself act on the session, only OBSERVE where it would resolve.
 jail__resolve_target_paths() {
     local name="$1"
-    # (1) Jailed registry lookup: ask the jailed sb for the session as JSON and
+    # (1) Jailed registry lookup: ask the jailed qd for the session as JSON and
     # extract any absolute-path-shaped values (socket paths, dirs, pid files). The
     # jailed HOME means this reads OUR registry; a colliding name that the engine
     # resolves via the legacy /tmp tier would surface a /tmp path here.
@@ -463,9 +463,9 @@ jail_assert_target_resolves_in_jail() {
 # jail_assert_resolves_in_jail <name> — RESOLUTION BELT (A4 finding, orc-2 ruling
 # 2026-06-05: relay-1780630993819-7 item 3b).
 #
-# WHY: sb's session discovery scans the LITERAL /tmp legacy tier + XDG family by
+# WHY: qd's session discovery scans the LITERAL /tmp legacy tier + XDG family by
 # design (Bug-D cross-dir discovery — production semantics, preserved per the
-# A-track ruling). Inside a jail that means `sb ls`/resolve can SEE — and a
+# A-track ruling). Inside a jail that means `qd ls`/resolve can SEE — and a
 # kill/send could in principle RESOLVE — the host's real org sessions. The
 # sbrg- prefix discipline (jail_guard_name) is the first wall; this belt is the
 # SECOND: before any destructive or session-targeting live row (kill/send/wait)
@@ -495,7 +495,7 @@ jail_assert_resolves_in_jail() {
 # ---------------------------------------------------------------------------
 # jail_sweep_belt_ok — SWEEP BELT for destructive sweep verbs (orc-3 ruling on the
 # A5 reconcile hermeticity finding, 2026-06-05). REQUIRED before any destructive
-# `sb reconcile` (and any future destructive `sb gc` zmx-reap) live row.
+# `qd reconcile` (and any future destructive `qd gc` zmx-reap) live row.
 #
 # WHY a SECOND belt: jail_assert_resolves_in_jail guards a SINGLE named target. A
 # SWEEP verb (reconcile) enumerates its OWN targets across the literal-/tmp Bug-D
@@ -507,12 +507,12 @@ jail_assert_resolves_in_jail() {
 # EVERY planned zmx-reap target is BOTH sbrg-prefixed AND resolves inside the
 # jailed zmx dir. A single out-of-jail planned target fails the whole belt closed.
 #
-# STANDING CONSTRAINT (orc-3): destructive `sb reconcile` on macOS is OFF
+# STANDING CONSTRAINT (orc-3): destructive `qd reconcile` on macOS is OFF
 # PERMANENTLY — the destructive live row lives ONLY in the Lima lane (G-X1), where
 # this belt ALSO runs (defense in depth). On brano this belt protects future
 # phases from re-adding a macOS live sweep.
 #
-# Args: $1 = the sb-under-test verb invocation that supports --dry-run, default
+# Args: $1 = the qd-under-test verb invocation that supports --dry-run, default
 #       "reconcile". The caller's jail env (jail_sb) is used.
 jail_sweep_belt_ok() {
     jail_assert_established || return 1
@@ -583,7 +583,7 @@ jail_raw_kill() {
 }
 
 # ---------------------------------------------------------------------------
-# jail_sb / jail_zmx — invoke sb / zmx under the hermetic env. Always re-asserts.
+# jail_sb / jail_zmx — invoke qd / zmx under the hermetic env. Always re-asserts.
 jail_sb() {
     jail_assert_established || return 1
     "$JAIL_SB_CMD" "$@"
@@ -634,7 +634,7 @@ jail_teardown() {
         esac
     fi
     if [ "$_jail_env_ok" = "1" ]; then
-    # 1. Ask the jailed sb to list ITS sessions (its registry is in the jailed
+    # 1. Ask the jailed qd to list ITS sessions (its registry is in the jailed
     #    HOME) and kill each PREFIXED one via the guarded killer. This catches
     #    detached zmx daemons a scenario started but did not register (e.g. when a
     #    scenario was hard-killed mid-flight before its own cleanup ran). Every
@@ -651,7 +651,7 @@ jail_teardown() {
     fi
     # 2. Suspenders: a DETACHED zmx daemon a scenario started may not have a
     #    registry entry yet (boot mid-flight when the scenario was hard-killed), so
-    #    sb ls in step 1 misses it. Ask zmx directly — its sockets live in the
+    #    qd ls in step 1 misses it. Ask zmx directly — its sockets live in the
     #    jail's ZMX_DIR — and kill each PREFIXED session by name (guarded). zmx
     #    runs under the jailed env (ZMX_DIR/TMPDIR/HOME), so it only sees OUR
     #    sessions. Every name is re-guarded against JAIL_PREFIX.
@@ -708,13 +708,13 @@ jail_teardown() {
 # jail_require_destructive_ok — mirror of safety.sh require_destructive_ok.
 #
 # A destructive op may run ONLY if ALL THREE hold (POSITIVE "I am the disposable
-# Lima sandbox"): (a) sentinel /etc/sb-rust-lima, (b) hostname!=brano,
+# Lima sandbox"): (a) sentinel /etc/qd-rust-lima, (b) hostname!=brano,
 # (c) SB_RUST_DESTRUCTIVE_OK=1. On brano this ALWAYS fails closed.
 jail_require_destructive_ok() {
     local ok=1 reasons=""
-    if [ ! -f /etc/sb-rust-lima ]; then
+    if [ ! -f /etc/qd-rust-lima ]; then
         ok=0
-        reasons="${reasons}  (a) /etc/sb-rust-lima sentinel not found\n"
+        reasons="${reasons}  (a) /etc/qd-rust-lima sentinel not found\n"
     fi
     local hn
     hn="$(hostname 2>/dev/null || printf '')"
@@ -730,7 +730,7 @@ jail_require_destructive_ok() {
     fi
     if [ "$ok" -ne 1 ]; then
         printf '[jail] REFUSED: destructive op cannot run here (fail-closed).\n' >&2
-        printf '[jail] Requires ALL of: (a) /etc/sb-rust-lima, (b) hostname!=brano, (c) SB_RUST_DESTRUCTIVE_OK=1\n' >&2
+        printf '[jail] Requires ALL of: (a) /etc/qd-rust-lima, (b) hostname!=brano, (c) SB_RUST_DESTRUCTIVE_OK=1\n' >&2
         printf '[jail] Unmet:\n' >&2
         printf '%b' "$reasons" >&2
         return 1

@@ -8,7 +8,7 @@
 //!     "expected Hello" refusal; the ServerHello.session identity belt fires on a
 //!     wrong-daemon connect (exact mismatch error).
 //!   * **G-COLDSTART-N (c) gate-grade** — a launched-but-unclaimed daemon with a
-//!     SHORT `QRMUX_CLAIM_TIMEOUT_MS`: `sb ls`-shaped scan shows NO phantom row
+//!     SHORT `QRMUX_CLAIM_TIMEOUT_MS`: `qd ls`-shaped scan shows NO phantom row
 //!     WHILE unclaimed (red-team M3), Hello-only probes do NOT extend its life
 //!     (B1 reset rule), and it exits within budget with the socket gone.
 //!   * **G-COLDSTART-N (e) W-2 ROWS** — (i) the KillSession reply-flush race:
@@ -21,8 +21,8 @@
 //!     via a slow KillSession drop rather than racing a fixed grace.
 //!
 //! The engine-level isolation / cold-start / events / legacy arms (G-ISOL,
-//! G-COLDSTART-N a/b/d, G-EVSPLIT, G-LEGACY) drive the real `sb` binary and live
-//! in `crates/sb/tests/c1_gate_inc/wsc_m4_rows.rs`.
+//! G-COLDSTART-N a/b/d, G-EVSPLIT, G-LEGACY) drive the real `qd` binary and live
+//! in `crates/qd/tests/c1_gate_inc/wsc_m4_rows.rs`.
 
 #![allow(dead_code, unused_imports)]
 
@@ -313,7 +313,7 @@ fn g_coldstart_claim_timeout_no_phantom_then_reaped() -> Result<(), Box<dyn Erro
         .build()
         .unwrap();
 
-    // WHILE unclaimed: the scan (the `sb ls` engine path) shows NO phantom row —
+    // WHILE unclaimed: the scan (the `qd ls` engine path) shows NO phantom row —
     // an unclaimed daemon (0 ListSessions rows) is INVISIBLE (red-team M3).
     let rows = rt
         .block_on(async { scan_sessions(Some(&dir)).await })
@@ -628,7 +628,7 @@ fn w2_grace_ended_window_refuses_new_connect_named() -> Result<(), Box<dyn Error
 
 // ===========================================================================
 // G-ISOL NEGATIVE control (shared-fate, MUST RED) — the gate-integrity twin of
-// the engine-level POSITIVE g_isol arm (crates/sb/tests/c1_gate_inc/wsc_m4_rows.rs).
+// the engine-level POSITIVE g_isol arm (crates/qd/tests/c1_gate_inc/wsc_m4_rows.rs).
 //
 // Construction (spec §7, red-team M4): the QRMUX_TEST_SHARED=1 seam collapses
 // the per-session split into the retired shared-fate world — (a) the socket leaf
@@ -641,7 +641,7 @@ fn w2_grace_ended_window_refuses_new_connect_named() -> Result<(), Box<dyn Error
 // PASSES by DETECTING that RED — proving G-ISOL cannot pass vacuously.
 //
 // WHY qrmux-level: two sessions on ONE daemon is a world production NEVER builds;
-// driving it through the full `sb new` engine path entangles the artificial mode
+// driving it through the full `qd new` engine path entangles the artificial mode
 // with the boot-waiter / registry-join / shared-manager end-watch in
 // production-irrelevant ways. The control's job is gate integrity (the inversion
 // can't pass vacuously), not engine-path coverage — the positive arm covers the

@@ -10,7 +10,7 @@
 set -u
 WT=/home/u/work/wt-a4-lead
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 EV="$WT/test/golden/dryrun/a4-paste-bytes.txt"; : > "$EV"
@@ -53,7 +53,7 @@ print(n)' "$1"; }
 
 log "=== BOOT 3 (paste investigation) ==="
 ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
-log "  sb new exit=$? : $(cat "$JAIL_ROOT/o")"
+log "  qd new exit=$? : $(cat "$JAIL_ROOT/o")"
 ws "$NAME" idle 30||log "  WARN not idle"
 # RESOLUTION BELT (orc-2 ruling): every send/kill-by-name op asserts the name
 # resolves to EXACTLY ONE session in the jailed zmx dir first.

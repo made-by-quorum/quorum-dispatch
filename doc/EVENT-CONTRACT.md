@@ -56,7 +56,7 @@ events.rs:438-446`):
 | `pid` | u32 | writer pid; the multi-writer key (the dead-writer rule reads THIS pid) |
 | `seq` | u64 | monotonic **per (pid, file)**, from **0** |
 | `session` | string? | the session **uuid**, when known (omitted when not) |
-| `name` | string? | the sb **name**, when known (omitted when not) |
+| `name` | string? | the qd **name**, when known (omitted when not) |
 
 `Option` payload fields are **OMITTED when None** (never `null`/empty —
 `insert_opt_str events.rs:429-433`); bool flags `chunk_sha256s_capped`/`recovered`

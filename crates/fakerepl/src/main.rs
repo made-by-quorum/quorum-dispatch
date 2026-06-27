@@ -57,7 +57,7 @@ use report::Reporter;
 static PID_FILE_C: AtomicPtr<libc::c_char> = AtomicPtr::new(std::ptr::null_mut());
 
 /// SIGTERM handler: unlink the registry row (async-signal-safe via raw
-/// `unlink(2)`), then `_exit(0)`. `sb kill` / harness teardown SIGTERMs the
+/// `unlink(2)`), then `_exit(0)`. `qd kill` / harness teardown SIGTERMs the
 /// child; without this the row would linger and a later scan would see a phantom
 /// session. We do NOT touch the report sink here (not async-signal-safe); the
 /// harness reads the report after the child is gone and tolerates a missing
@@ -189,7 +189,7 @@ impl Config {
                 // WP-B5-iii: faithful claude emulation — `--resume <id>` continues
                 // session <id>, so the registry row's sessionId is <id> unless a
                 // test pins SB_FAKEREPL_SESSION_ID explicitly. This lets a
-                // Mechanism-S fork (whose uuid sb mints PRE-spawn and passes via
+                // Mechanism-S fork (whose uuid qd mints PRE-spawn and passes via
                 // `--resume <fork_uuid>`) register that uuid without the test
                 // pre-knowing it.
                 resume_id = args.next();

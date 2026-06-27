@@ -1,10 +1,10 @@
-//! `sb connect <session>` (ADD-26, W1 phase 1) — the human "get me into this
+//! `qd connect <session>` (ADD-26, W1 phase 1) — the human "get me into this
 //! session" verb. Dispatches on the row's PROVIDER HOSTING first, then liveness:
 //!
 //!   - `Hosting::Daemon` (codex) → LOUD redirect (no terminal to attach), exit 1.
 //!   - `Hosting::MuxPane` (claude) → live → reuse the shared attach mechanic;
 //!     cold → AUTO-REVIVE (W1 phase 2) then attach the live pane. Revive FAILS →
-//!     the SHARED cold-error pointing at `sb connect`, exit 1.
+//!     the SHARED cold-error pointing at `qd connect`, exit 1.
 //!   - opencode → parked message (mirrors lifecycle.rs run_attach).
 //!   - unknown provider → `refuse_unknown_provider`.
 //!
@@ -27,7 +27,7 @@ use super::lifecycle;
 use super::lifecycle::AttachOutcome;
 use super::resume;
 
-/// `sb connect <session>` — resolve the row, then hand to the shared attach
+/// `qd connect <session>` — resolve the row, then hand to the shared attach
 /// mechanic (provider dispatch + cold-vs-live). No `--json` (interactive verb).
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
@@ -75,14 +75,14 @@ pub fn run(m: &ArgMatches) -> i32 {
                 match mux.attach(&dir, &handle.zmx_name) {
                     Ok(code) => code,
                     Err(e) => {
-                        eprintln!("sb connect: {e}");
+                        eprintln!("qd connect: {e}");
                         1
                     }
                 }
             }
-            // revive_claude already printed its own loud, `sb connect:`-prefixed
+            // revive_claude already printed its own loud, `qd connect:`-prefixed
             // error explaining the failure. Return that code as-is — do NOT append
-            // the cold-error pointer (it says "revive with `sb connect`", i.e. re-run
+            // the cold-error pointer (it says "revive with `qd connect`", i.e. re-run
             // the command that just failed — circular/confusing on the human verb).
             Err(code) => code,
         },

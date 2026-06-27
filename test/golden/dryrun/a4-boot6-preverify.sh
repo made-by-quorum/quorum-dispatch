@@ -7,13 +7,13 @@
 #   1. perl-alarm timeout wrapper mechanics: fires on a sleeping command (exit 124)
 #      AND propagates a real exit code on a fast command (no timeout). Replaces the
 #      missing macOS timeout(1) — there is NO timeout(1) anywhere in the driver.
-#   2. sb wait rows — STATUS-KEYED, so pre-verifiable: fakerepl writes pid-file
-#      status transitions (idle->busy->idle on submit). Drive: sb wait on a busy
-#      session -> " done" exit 0; sb wait with --timeout against a kept-busy session
-#      -> " timeout" exit 1; sb wait on idle -> "is idle" exit 0.
+#   2. qd wait rows — STATUS-KEYED, so pre-verifiable: fakerepl writes pid-file
+#      status transitions (idle->busy->idle on submit). Drive: qd wait on a busy
+#      session -> " done" exit 0; qd wait with --timeout against a kept-busy session
+#      -> " timeout" exit 1; qd wait on idle -> "is idle" exit 0.
 #   3. the send path — fakerepl accepts send:pty (real PTY) -> "Message sent".
 #   4. the --wait DOCUMENTED FAILURE MODE — fakerepl writes NO conversation JSONL,
-#      so `sb send:pty <fake> "msg" --wait` must print "Cannot find conversation
+#      so `qd send:pty <fake> "msg" --wait` must print "Cannot find conversation
 #      JSONL file." and exit 1 (CLEAN), NOT rc=127. This proves the --wait verb is
 #      wired and fails in the documented way, not in a wrapper/shell-127 way.
 #
@@ -22,7 +22,7 @@
 set -u
 WT="$(cd "$(dirname "$0")/../../.." && pwd -P)"   # worktree root, NOT hardcoded
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 FAKEREPL_SRC="$WT/target/debug/fakerepl"
 . test/golden/lib/jail.sh
@@ -39,7 +39,7 @@ tmo(){ local s="$1"; shift; perl -e 'my $t=shift; my $pid=fork; if($pid==0){exec
 log "=== A4 BOOT-#6 PHASE A PRE-VERIFICATION (no real claude) ==="
 log "  date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 log "  worktree: $WT"
-log "  sb: $("$JAIL_SB_CMD" --version 2>&1 | head -1)"
+log "  qd: $("$JAIL_SB_CMD" --version 2>&1 | head -1)"
 
 # Prove the driver has NO timeout(1) anywhere (brief: grep it to prove).
 log ""
@@ -99,41 +99,41 @@ status_of(){ local pf; pf="$(pidfile_for "$1")"||{ echo NONE; return; }; python3
 ws(){ local n="$1" w="$2" to="$3" i=0; while [ "$i" -lt "$((to*4))" ]; do [ "$(status_of "$n")" = "$w" ]&&return 0; sleep 0.25; i=$((i+1)); done; return 1; }
 
 # ---------------------------------------------------------------------------
-# CHECK 2: boot a fakerepl session; sb wait rows are status-keyed -> pre-verifiable
+# CHECK 2: boot a fakerepl session; qd wait rows are status-keyed -> pre-verifiable
 # ---------------------------------------------------------------------------
 log ""
-log "=== CHECK 2: fakerepl boot + sb wait rows (status-keyed) ==="
+log "=== CHECK 2: fakerepl boot + qd wait rows (status-keyed) ==="
 NAME="${JAIL_PREFIX}fr"
 # Long busy hold so a kept-busy --timeout row can observe 'busy' across a 5s wait.
 export SB_FAKEREPL_BUSY_MS=6000
 ( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 code=$?
-log "  sb new exit=$code : $(cat "$JAIL_ROOT/o")"
+log "  qd new exit=$code : $(cat "$JAIL_ROOT/o")"
 [ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; sed 's/^/    /' "$JAIL_ROOT/e" | tee -a "$EV"; }
 ws "$NAME" idle 20 || log "  WARN: not idle after boot (status=$(status_of "$NAME"))"
 jail_assert_resolves_in_jail "$NAME" || { log "  RESOLUTION BELT REFUSED for $NAME"; exit 4; }
 log "  resolution belt: $NAME resolves uniquely in-jail (OK)"
 
-# 2a. sb wait on an IDLE session -> exit 0, 'is idle'
+# 2a. qd wait on an IDLE session -> exit 0, 'is idle'
 out="$(tmo 10 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
-log "  2a sb wait (idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
+log "  2a qd wait (idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { [ "$rc" = "0" ] && printf '%s' "$out" | grep -qi "idle"; } && log "    PASS: idle-at-entry -> 'is idle' exit 0" || { log "    FAIL"; FAIL2a=1; }
 
-# 2b. sb wait on a BUSY session -> blocks until busy->idle then exit 0 ' done'.
+# 2b. qd wait on a BUSY session -> blocks until busy->idle then exit 0 ' done'.
 #     Drive busy via a submit (send msg, fakerepl goes busy for BUSY_MS).
 "$JAIL_SB_CMD" send:pty "$NAME" "drive a turn 2b" >/dev/null 2>&1
 ws "$NAME" busy 5 >/dev/null 2>&1 || log "    WARN: did not observe busy for 2b"
 out="$(tmo 20 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
-log "  2b sb wait (busy->idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
+log "  2b qd wait (busy->idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { [ "$rc" = "0" ] && printf '%s' "$out" | grep -qi "done"; } && log "    PASS: busy -> ' done' exit 0" || { log "    FAIL"; FAIL2b=1; }
 ws "$NAME" idle 15 || true
 
-# 2c. sb wait --timeout 5 against a KEPT-BUSY session -> ' timeout' exit 1.
+# 2c. qd wait --timeout 5 against a KEPT-BUSY session -> ' timeout' exit 1.
 #     BUSY_MS=6000 > 5s timeout, so the wait must time out while still busy.
 "$JAIL_SB_CMD" send:pty "$NAME" "drive a long turn 2c" >/dev/null 2>&1
 ws "$NAME" busy 5 >/dev/null 2>&1 || log "    WARN: did not observe busy for 2c"
 out="$(tmo 20 "$JAIL_SB_CMD" wait "$NAME" --timeout 5 2>&1)"; rc=$?
-log "  2c sb wait --timeout 5 (kept busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
+log "  2c qd wait --timeout 5 (kept busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { [ "$rc" = "1" ] && printf '%s' "$out" | grep -qi "timeout"; } && log "    PASS: kept-busy --timeout 5 -> ' timeout' exit 1" || { log "    FAIL (rc=$rc)"; FAIL2c=1; }
 ws "$NAME" idle 15 || true
 
@@ -188,7 +188,7 @@ for f in FAIL1a FAIL1b FAIL1c FAIL2a FAIL2b FAIL2c FAIL3 FAIL4; do
     [ -n "$v" ] && { log "  $f: FAILED"; ANYFAIL=1; }
 done
 if [ "$ANYFAIL" = "0" ]; then
-    log "  ALL PRE-VERIFICATION CHECKS PASSED — wrapper mechanics + sb wait + send"
+    log "  ALL PRE-VERIFICATION CHECKS PASSED — wrapper mechanics + qd wait + send"
     log "  path + --wait clean-failure all GREEN. No rc=127-class anomaly. GO for boot."
 else
     log "  !!! PRE-VERIFICATION HAD FAILURES — DO NOT BOOT. Report instead."

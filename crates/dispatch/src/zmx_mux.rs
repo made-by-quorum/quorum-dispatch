@@ -56,7 +56,7 @@ impl<E: Exec> ZmxMux<E> {
         let out = match self.zmx(socket_dir, &["list".to_string()], None, None) {
             Ok(r) => r.stdout,
             // Even a spawn-level error degrades to [] here — list must never crash
-            // `sb ls` when a legacy dir is gone (L8 clean-on-corruption posture).
+            // `qd ls` when a legacy dir is gone (L8 clean-on-corruption posture).
             Err(_) => String::new(),
         };
         let dir_str = socket_dir.to_string_lossy().into_owned();

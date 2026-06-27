@@ -1,9 +1,9 @@
-//! Live `sb wait` republish subscriber (WP-B2b-2b, deliverables 2+3) — the REAL
+//! Live `qd wait` republish subscriber (WP-B2b-2b, deliverables 2+3) — the REAL
 //! socket subscriber that backs BOTH B3 channel seams ([`ChannelStatusSource`] +
 //! [`ChannelTurnSource`]) off ONE connection, so "channel-down" is a SINGLE shared
 //! truth (the §6.0 invariant the §H.2 purity test pins).
 //!
-//! `sb wait` is a CLIENT process: it connects to the session's qrmux daemon socket,
+//! `qd wait` is a CLIENT process: it connects to the session's qrmux daemon socket,
 //! does the v3 handshake, sends [`ClientMsg::SubscribeRepublish`], and a background
 //! thread drains `ServerMsg::Republish*` frames into shared state. The two B3 seams
 //! read that state (non-blocking); the disk reads (`pid.json` + the transcript
@@ -29,7 +29,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Bound on the connect + v3 handshake + subscribe send. A socket that exists but
-/// whose daemon is unresponsive must not hang `sb wait`; on timeout the channel is
+/// whose daemon is unresponsive must not hang `qd wait`; on timeout the channel is
 /// simply Down (disk fallback).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -40,7 +40,7 @@ struct SubState {
     /// Until then (and forever if the daemon refuses / the session is not
     /// headless) BOTH seams report Down → the disk fallback answers.
     connect_ok: bool,
-    /// Last known control status (defaults Busy: `sb wait` is only called on a
+    /// Last known control status (defaults Busy: `qd wait` is only called on a
     /// non-idle session, so a freshly-subscribed turn is presumed in flight).
     status: ChannelStatus,
     /// The expected turn's `result` (TurnEnd) was republished, OR a clean EOF
@@ -55,7 +55,7 @@ struct SubState {
     dashboard: crate::observe::DashboardState,
     /// WP-B-CS-2-LIVE: the observe run-loop's per-frame TAP — `Some` only when the
     /// subscriber was built via [`ChannelSubscriber::connect_observing`]; `None` for
-    /// the `sb wait` path (so wait never grows this queue: byte-unchanged behaviour).
+    /// the `qd wait` path (so wait never grows this queue: byte-unchanged behaviour).
     /// CONTROL FACTS ONLY by construction: [`apply_frame`] enqueues ONLY the four
     /// `Republish*` control facts here — content frames (ScreenUpdate/History/
     /// Passthrough/Error) are NEVER tapped, so the run-loop's cutover gate is fed
@@ -75,7 +75,7 @@ impl SubState {
     }
 
     /// The observe-path variant: identical to [`Self::new`] but with the per-frame
-    /// control-fact TAP armed (`sb connect` observe run-loop only).
+    /// control-fact TAP armed (`qd connect` observe run-loop only).
     fn new_observing() -> Self {
         Self {
             tap: Some(VecDeque::new()),
@@ -118,9 +118,9 @@ impl ChannelSubscriber {
     }
 
     /// WP-B-CS-2-LIVE — the OBSERVE-path subscriber: identical to [`Self::connect`]
-    /// but with the per-frame control-fact TAP armed, so the `sb connect` observe
+    /// but with the per-frame control-fact TAP armed, so the `qd connect` observe
     /// run-loop can drain the live `Republish*` stream into its cutover gate
-    /// (`gate.observe(frame)` per frame). `sb wait` keeps using [`Self::connect`]
+    /// (`gate.observe(frame)` per frame). `qd wait` keeps using [`Self::connect`]
     /// (tap disabled) — byte-unchanged.
     pub fn connect_observing(socket_path: PathBuf, expected_session: String) -> Self {
         Self::connect_with_state(socket_path, expected_session, SubState::new_observing())
@@ -132,7 +132,7 @@ impl ChannelSubscriber {
         let thread_state = state.clone();
         let thread_stop = stop.clone();
         let handle = std::thread::Builder::new()
-            .name("sb-wait-republish".into())
+            .name("qd-wait-republish".into())
             .spawn(move || {
                 // A dedicated current-thread runtime isolates the async socket I/O
                 // from the synchronous wait loop (which blocks on RealSleeper).
@@ -219,7 +219,7 @@ impl ChannelSubscriber {
 
     /// WP-B-CS-2 ADDITIVE observation accessor — a SNAPSHOT of the observe
     /// dashboard's latest control facts (folded from the same `Republish*` stream
-    /// the wait seams read). The read-only `sb connect` OBSERVE dashboard renders
+    /// the wait seams read). The read-only `qd connect` OBSERVE dashboard renders
     /// this. Purely additive: it neither changes nor depends on the wait seams'
     /// `connect_ok`/`status`/`result_seen` semantics. CONTROL FACTS ONLY (§2a) —
     /// the snapshot has no assistant-text field by construction.
@@ -234,7 +234,7 @@ impl ChannelSubscriber {
     /// WP-B-CS-2-LIVE — drain the per-frame control-fact TAP (observe path only):
     /// every `Republish*` control fact that has landed since the last drain, in
     /// arrival order, for the run-loop to fold into its cutover gate. Returns empty
-    /// when the tap is disabled (`sb wait` path) or no new frame has arrived.
+    /// when the tap is disabled (`qd wait` path) or no new frame has arrived.
     /// CONTROL FACTS ONLY: the tap never carries a content frame (see
     /// [`is_republish_control`]).
     pub fn drain_control_frames(&self) -> Vec<ServerMsg> {
@@ -693,7 +693,7 @@ mod tests {
         // returns Down promptly (well within the timeout — proving the is_finished
         // short-circuit, not a full-timeout wait).
         let sub = ChannelSubscriber::connect(
-            PathBuf::from("/nonexistent/sb-wait-test/missing.sock"),
+            PathBuf::from("/nonexistent/qd-wait-test/missing.sock"),
             "ghost".to_string(),
         );
         let t = Instant::now();

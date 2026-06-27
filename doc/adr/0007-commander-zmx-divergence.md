@@ -5,7 +5,7 @@
 
 ## Context
 
-The TS sb's outermost layers are commander.js (CLI parsing) and ad-hoc Bun.spawn
+The TS qd's outermost layers are commander.js (CLI parsing) and ad-hoc Bun.spawn
 calls (zmx driving). Neither is a parity surface worth replicating bug-for-bug,
 but "not parity" must be NAMED and bounded, or drift hides in it. This ADR
 enumerates the sanctioned divergences for both layers; anything outside these
@@ -41,10 +41,10 @@ socket dir (L1), missing-dir list → `[]`, kill returns the exit code, ENOENT �
 the missing-zmx guidance (never a raw trace).
 
 **Class 4 — create-path hardenings (diverge, they ARE the deliverable):**
-`sb new --agent <unresolvable>` fails closed (TS boots a generic session;
+`qd new --agent <unresolvable>` fails closed (TS boots a generic session;
 prior art spawn.ts:213-230); name uniqueness is enforced by an O_EXCL claim at
 create (TS has a check-then-create race); boot is dialog-free per ADR 0005.
-`sb new <name>` REJECTS a name containing `/`, `\`, `..`, or NUL at the create
+`qd new <name>` REJECTS a name containing `/`, `\`, `..`, or NUL at the create
 boundary before the claim (A4 §3.6, redteam-retro #4) — TS passes such names
 through to zmx; we narrow accepted inputs so distinct raw names can never
 collide on a sanitized claim stem and a crafted name can never escape claims_dir.

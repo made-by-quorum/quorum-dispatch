@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # test/golden/dryrun/run_dryrun.sh — Part-1 dry-run driver.
 #
-# Runs the scenario scripts against the CURRENT TS sb main (NOT a pinned commit)
-# to prove each scenario drives real sb and to shape the normalizers. Every
+# Runs the scenario scripts against the CURRENT TS qd main (NOT a pinned commit)
+# to prove each scenario drives real qd and to shape the normalizers. Every
 # capture is stamped DRYRUN-NOT-ORACLE and written under dryrun/captures/ — these
 # are EVIDENCE, never committed as fixtures/<corpus>/normalized/ expectations.
 #
 # HARD BOUNDARY (spec §0): this is Part 1. It does NOT record golden expectations.
-# Captures here are throwaway evidence of scenario-drives-sb, full stop.
+# Captures here are throwaway evidence of scenario-drives-qd, full stop.
 #
 # Runs entirely inside the jail (HOME/SB_HOME/ZMX_DIR/... sandboxed). The org's
-# real sb on brano is invisible to this run.
+# real qd on brano is invisible to this run.
 #
 # Usage: run_dryrun.sh [scenario-name ...]   (default: the dry-run-safe set)
 # Bash 3.2 floor.
@@ -48,7 +48,7 @@ fi
 
 # Always tear down the active jail on exit/interrupt so a detached jailed daemon
 # (a prefixed claude/zmx a scenario started) is never left running on brano. This
-# is the cleanup-on-interrupt guarantee that keeps us invisible to the org's sb.
+# is the cleanup-on-interrupt guarantee that keeps us invisible to the org's qd.
 trap 'jail_teardown 2>/dev/null || true' EXIT INT TERM
 
 # Dry-run-safe scenarios: the surfaces that drive cleanly against current TS main
@@ -66,10 +66,10 @@ run_one() {
         printf '[dryrun] jail refused for %s\n' "$scn_base" >&2
         return 3
     fi
-    # Point the sb-under-test at the TS entrypoint via bun. JAIL_SB_CMD must be a
+    # Point the qd-under-test at the TS entrypoint via bun. JAIL_SB_CMD must be a
     # single executable (jail_sb/jail_kill_session/teardown invoke "$JAIL_SB_CMD"
     # <args>), so wrap `bun <entry>` in a tiny shim inside the jail.
-    local shim="$JAIL_ROOT/sb-shim"
+    local shim="$JAIL_ROOT/qd-shim"
     {
         printf '#!/usr/bin/env bash\n'
         printf 'exec bun %q "$@"\n' "$TS_ENTRY"

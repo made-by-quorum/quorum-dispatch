@@ -1,7 +1,7 @@
 # ACK-3 mutation-evidence run (ADD-17 / CR-3) | 0d4b6c5 | 2026-06-06 12:55 EDT
-# Command: scripts/build-lock.sh cargo test -p sb --features mutation-evidence
+# Command: scripts/build-lock.sh cargo test -p qd --features mutation-evidence
 
-     Running unittests src/lib.rs (target/debug/deps/sb-9b6baa9dc17fbf4f)
+     Running unittests src/lib.rs (target/debug/deps/qd-9b6baa9dc17fbf4f)
 test backends::tests::unknown_name_message_carries_no_values ... ok
 test bootstrap::tests::bootstrap_idempotent_same_state_both_runs ... ok
 test bootstrap::tests::paths_default_to_home_dot_sb ... ok
@@ -63,7 +63,7 @@ test survey::tests::format_name_width_floor_is_5 ... ok
 test telemetry::tests::fold_name_reuse_misattributes_via_name_fallback_named_limitation ... ok
 test zmx_dir::tests::tier_xdg_runtime_dir ... ok
 test result: ok. 698 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
-     Running unittests src/bin/sb/main.rs (target/debug/deps/sb-08bf3176d785b11d)
+     Running unittests src/bin/qd/main.rs (target/debug/deps/qd-08bf3176d785b11d)
 test cli::tests::whoami_alias_name_parses ... ok
 test verbs::lifecycle::tests::deliver_outcome_accepted_is_0 ... ok
 test verbs::lifecycle::tests::deliver_outcome_pidfile_missing_is_1_not_10 ... ok
@@ -118,5 +118,5 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
      Running tests/verbs_a4.rs (target/debug/deps/verbs_a4-dba6a58dd5832fb4)
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
-   Doc-tests sb
+   Doc-tests qd
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

@@ -18,7 +18,7 @@
 # on a WHOLE-LINE, CR-stripped extraction — catching DUPLICATES and BANNER-PREFIX
 # corruption around present lines (which the -o substring ordering view cannot see).
 #
-# §S: boot a stub-backed session DETACHED (sb new -d, clients=0), drive the stub's
+# §S: boot a stub-backed session DETACHED (qd new -d, clients=0), drive the stub's
 # deterministic backlog generator ("EMIT N" -> SBLINE 1..N) while detached, then read
 # the server-side VT (zmx history — the exact source reattach replays from) and assert
 # every detached-produced line survived in order AND content-intact AND the replay

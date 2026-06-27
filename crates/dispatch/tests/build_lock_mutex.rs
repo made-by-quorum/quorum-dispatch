@@ -25,13 +25,13 @@
 //! never be missed for overlap ≥ the section length.
 //!
 //! Hermetic per Rule 9: SB_RUST_LOCK_DIR points at a per-test temp dir — the
-//! real ~/.sb-rust is never touched.
+//! real ~/.quorum/dispatch-rust is never touched.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Repo-root scripts/build-lock.sh (CARGO_MANIFEST_DIR = crates/sb).
+/// Repo-root scripts/build-lock.sh (CARGO_MANIFEST_DIR = crates/qd).
 fn build_lock_script() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts/build-lock.sh")

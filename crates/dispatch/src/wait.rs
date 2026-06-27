@@ -1,8 +1,8 @@
-//! `sb wait` poll loop — STATUS + TRANSCRIPT-CONTENT keyed (wart-wave W6+W7,
+//! `qd wait` poll loop — STATUS + TRANSCRIPT-CONTENT keyed (wart-wave W6+W7,
 //! ADD-15), PURE over injected deps.
 //!
 //! HISTORY: the A4 port (status.ts:359-390) was status-keyed ONLY, with an
-//! explicit anti-"fix" note ("sb wait stays STATUS-keyed") guarding against an
+//! explicit anti-"fix" note ("qd wait stays STATUS-keyed") guarding against an
 //! UNSANCTIONED semantic fork. Pete sanctioned the fork 2026-06-05 19:47 EDT
 //! (ADD-15 W7: continuity WAIVED; W6: close the busy-poll window where cheap) —
 //! the note retired WITH that ruling, carrier: coverage-matrix wait row +
@@ -100,7 +100,7 @@ pub trait WaitContentDeps {
     fn now_ms(&self) -> i64;
 }
 
-/// Terminal outcome of the `sb wait` loop. The bin maps each to its stderr
+/// Terminal outcome of the `qd wait` loop. The bin maps each to its stderr
 /// suffix + exit code (UNCHANGED surface: " done"/" session exited"/" timeout").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitStatusOutcome {
@@ -114,7 +114,7 @@ pub enum WaitStatusOutcome {
     Timeout,
 }
 
-/// The `sb wait` poll loop, PURE over [`WaitContentDeps`] (W6+W7 shape; see
+/// The `qd wait` poll loop, PURE over [`WaitContentDeps`] (W6+W7 shape; see
 /// module doc for the contract and its sanction).
 ///
 /// Each iteration (while `now - start < timeout_ms`): read status (`None` →
@@ -148,7 +148,7 @@ pub fn run_wait_content_loop(
                 Ok(false) => {}
                 Err(why) => {
                     deps.warn(&format!(
-                        "sb wait: transcript unavailable mid-wait ({why}) — continuing status-keyed only"
+                        "qd wait: transcript unavailable mid-wait ({why}) — continuing status-keyed only"
                     ));
                     content_alive = false;
                 }
@@ -275,7 +275,7 @@ pub trait ChannelStatusSource {
 }
 
 /// RESIDUAL #1 (BINDING, supervisor-ruled): resolve the PRE-LOOP entry-idle control
-/// gate (`sb wait` short-circuits "is idle" / exit 0 when the session is already
+/// gate (`qd wait` short-circuits "is idle" / exit 0 when the session is already
 /// idle at entry — `bin/dispatch/verbs/wait.rs`). On the HEALTHY channel (`Live`) the
 /// answer is the daemon-written control status; the disk-resolved status
 /// (`disk_idle`) is the channel-DOWN fallback ONLY. This EXTENDS the §6.0 invariant
@@ -476,7 +476,7 @@ impl WaitContentDeps for RealWaitContentDeps<'_> {
 // ===========================================================================
 //
 // A codex session is a daemon-hosted protocol thread, not a mux pane with a pid
-// file + a claude transcript — so it has its OWN wait loop. `sb wait <codex-row>`
+// file + a claude transcript — so it has its OWN wait loop. `qd wait <codex-row>`
 // blocks until the thread goes IDLE. The status comes from one of two channels,
 // abstracted behind [`CodexWaitDeps::poll_status`]:
 //
@@ -962,7 +962,7 @@ mod tests {
     /// (iii) DAEMON-DEAD STALE-BUSY → TIMEOUT (the deadline exit). In channel-down
     /// mode (production today) a dead daemon leaves `pid.json` stuck at the last
     /// `busy` — nobody flips it idle — and the completion stays Pending (no result).
-    /// The loop is BOUNDED by the deadline → Timeout. Proves `sb wait` does NOT
+    /// The loop is BOUNDED by the deadline → Timeout. Proves `qd wait` does NOT
     /// hang on a dead daemon even when the status never resolves.
     #[test]
     fn b5ii_iii_dead_daemon_stale_busy_times_out_not_hangs() {
@@ -1105,7 +1105,7 @@ mod tests {
     #[test]
     fn probe_absent_file_keeps_polling() {
         // Absent transcript is NOT integrity loss for the additive probe.
-        let probe = RealTurnEndProbe::new(PathBuf::from("/nonexistent/sb-wait/t.jsonl"), 0);
+        let probe = RealTurnEndProbe::new(PathBuf::from("/nonexistent/qd-wait/t.jsonl"), 0);
         assert_eq!(probe.poll(), Ok(false));
     }
 

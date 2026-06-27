@@ -5,15 +5,15 @@
 # THE PANEL'S POINT (P4 / rider R2): the R2 seams previously had NO RECORDED
 # failure-shape fixtures — a "swallow-failure-as-success" engine (one that exits 0
 # / prints nothing on a misbehaving counterpart) would be UNDETECTABLE by the
-# oracle. This row RECORDS sb's FAILURE SHAPE (rc + normalized stderr token) when
+# oracle. This row RECORDS qd's FAILURE SHAPE (rc + normalized stderr token) when
 # the counterpart withholds the PID file, so a regression that swallows the boot
 # failure DIFFS.
 #
 # SEAM (INLINE recording mode, principle 3): STUB_WITHHOLD_PID=1 set INLINE in
 # scn_run (the STUB_BUSY_HOLD_MS precedent) — the stub renders the popup, consumes
-# the dismiss CR, then HOLDS OPEN without ever writing the PID file. sb's
+# the dismiss CR, then HOLDS OPEN without ever writing the PID file. qd's
 # waitForSessionReady (lifecycle.ts:194-262) polls for the name-matched PID file;
-# it never appears, so after the PID-phase deadline sb FAILS the readiness wait,
+# it never appears, so after the PID-phase deadline qd FAILS the readiness wait,
 # best-effort-reaps the stray wrapper, prints the readiness-timeout error to
 # stderr, and exits 1 (lifecycle.ts:929-945). recording_mode stamped documentary in
 # RECORDED-FROM; defended load-bearing by scenario-sha-in-MATCH-PROOF.
@@ -25,7 +25,7 @@
 # substring of the readiness-timeout message). The volatile boot trace is kept as a
 # forensic sibling, never the comparison target.
 #
-# BUDGET: sb's PID-not-found phase caps at ~40s (lifecycle.ts:215
+# BUDGET: qd's PID-not-found phase caps at ~40s (lifecycle.ts:215
 # pidPhaseDeadline = min(deadline, now+40000)). The driven timeout is therefore
 # bounded by the ENGINE, not the scenario; SCN_BUDGET_MS absorbs it (×1 run; record
 # does two serially).

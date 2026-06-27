@@ -1,10 +1,10 @@
-//! `sb bootstrap` — ENGINE-ONLY (A5 spec §4.1/§4.2; named divergence §9 item 4).
+//! `qd bootstrap` — ENGINE-ONLY (A5 spec §4.1/§4.2; named divergence §9 item 4).
 //!
 //! Ported from `0d0fa9e:src/commands/bootstrap.ts`, SHRUNK to the engine core:
-//! the sbx-owned deploy steps (artifact deploy, shell-profile patch, plugin
-//! registration) are DROPPED (ruled — that content is the sbx deploy's, not the
+//! the qb-owned deploy steps (artifact deploy, shell-profile patch, plugin
+//! registration) are DROPPED (ruled — that content is the qb deploy's, not the
 //! engine's; the dropped TS step names live in the A5 spec, never in this
-//! repo). What survives is the state-dir creation (`~/.sb` + `~/.sb/state`) and
+//! repo). What survives is the state-dir creation (`~/.quorum/dispatch` + `~/.quorum/dispatch/state`) and
 //! the zmx capability notice (`decideZmxAction`/`checkZmx`, the engine core the
 //! TS test "decideZmxAction (pure decider — every branch)" pins). On top of
 //! that, A5 adds the ADD-5 relay-driver detect→offer→self-install step (§4.2).
@@ -16,7 +16,7 @@
 //! install`, or shell out a real relay installer.
 //!
 //! Output is `[bootstrap]`-prefixed, engine-truthful, and CONTENT-FREE: it
-//! names none of the sbx-side content concepts (carry 5; the forbidden-token
+//! names none of the qb-side content concepts (carry 5; the forbidden-token
 //! set lives in `scenarios/bootstrap_output_audit.sh`, which runtime-asserts
 //! the shipped binary's output, gate row G-B5).
 
@@ -31,9 +31,9 @@ use crate::relay;
 // ----------------------------------------------------------------------------
 // Paths (shrunk port of resolveBootstrapPaths, 0d0fa9e:src/commands/bootstrap.ts:87).
 //
-// The TS struct carried five sbx-deploy-owned dirs + a provenance stamp — ALL
+// The TS struct carried five qb-deploy-owned dirs + a provenance stamp — ALL
 // DROPPED here (engine is content-free; the dropped field names live in the A5
-// spec). The engine owns ONLY its state home: `~/.sb` and `~/.sb/state`. SB_HOME
+// spec). The engine owns ONLY its state home: `~/.quorum/dispatch` and `~/.quorum/dispatch/state`. SB_HOME
 // comes through the injected `Env` seam (L9a — nothing resolves the real home),
 // never raw `std::env`.
 // ----------------------------------------------------------------------------
@@ -41,14 +41,14 @@ use crate::relay;
 /// The engine's state-dir layout (shrunk `BootstrapPaths`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapPaths {
-    /// The sb data root, `SB_HOME` or `<home>/.sb` (bootstrap.ts:88-96).
+    /// The qd data root, `SB_HOME` or `<home>/.quorum/dispatch` (bootstrap.ts:88-96).
     pub sb_home: PathBuf,
     /// Reserved hot-state dir, `<sbHome>/state` (bootstrap.ts:90 stateDir).
     pub state_dir: PathBuf,
 }
 
 /// Resolve the engine's bootstrap paths from the injected home + env
-/// (`sbHome = SB_HOME || <home>/.sb`, bootstrap.ts:88-96). The home is injected
+/// (`sbHome = SB_HOME || <home>/.quorum/dispatch`, bootstrap.ts:88-96). The home is injected
 /// (never resolved from the real environment here, L9a); SB_HOME is read ONLY
 /// through `env`.
 pub fn resolve_bootstrap_paths(home: &Path, env: &dyn Env) -> BootstrapPaths {
@@ -64,7 +64,7 @@ pub fn resolve_bootstrap_paths(home: &Path, env: &dyn Env) -> BootstrapPaths {
 // ----------------------------------------------------------------------------
 // zmx step (port of decideZmxAction/checkZmx, bootstrap.ts:786-925).
 //
-// zmx (the terminal multiplexer sb sessions run inside) is NOT in homebrew-core
+// zmx (the terminal multiplexer qd sessions run inside) is NOT in homebrew-core
 // — it ships as the tap formula `neurosnap/tap/zmx` (macOS/brew only). bootstrap
 // DETECTS it and, only in an interactive macOS+brew context, OFFERS to install
 // it (default No). It NEVER installs silently and NEVER fails bootstrap on a
@@ -81,9 +81,9 @@ pub const ZMX_BREW_FORMULA: &str = "neurosnap/tap/zmx";
 /// bootstrap.ts:759-764). Byte-matches the TS strings.
 pub fn zmx_guidance(platform: &str) -> String {
     if platform == "darwin" || platform == "macos" {
-        format!("Install zmx (needed for sb sessions):  brew install {ZMX_BREW_FORMULA}")
+        format!("Install zmx (needed for qd sessions):  brew install {ZMX_BREW_FORMULA}")
     } else {
-        "Install zmx (needed for sb sessions): see https://github.com/neurosnap/zmx".to_string()
+        "Install zmx (needed for qd sessions): see https://github.com/neurosnap/zmx".to_string()
     }
 }
 
@@ -225,7 +225,7 @@ pub fn check_zmx(deps: &ZmxDeps) -> ZmxResult {
             // interactive macOS + brew — offer the opt-in install (default N),
             // bootstrap.ts:907-921.
             let question = format!(
-                "zmx not found (needed for sb sessions). Install via \
+                "zmx not found (needed for qd sessions). Install via \
                  `brew install {ZMX_BREW_FORMULA}` now? [y/N] "
             );
             if !(deps.prompt_yes_no)(&question) {
@@ -263,7 +263,7 @@ fn zmx_status_word(status: ZmxStatus) -> &'static str {
 // Relay step (2026-06-10 ruling; SUPERSEDES the ~/.claude/.mcp.json target of
 // ADR 0016 — see doc/adr/0017-relay-via-claude-mcp.md).
 //
-// The relay transport is NATIVE (`sb relay:serve` IS the MCP server), but
+// The relay transport is NATIVE (`qd relay:serve` IS the MCP server), but
 // Claude Code loads MCP servers from ITS OWN user-scope config, whose location
 // has moved across versions — `~/.claude/.mcp.json` (what ADR 0016 wrote) is
 // NOT read by Claude Code 2.1.x. Rather than track Claude Code's storage, we
@@ -317,7 +317,7 @@ pub enum RelayStepOutcome {
     /// already registered + TTY, user DECLINED the re-point — left as-is.
     RepointDeclined,
     /// already registered + TTY, user accepted the re-point — the command path
-    /// was re-pointed at the running binary (the recurrence fix: a moved `sb`
+    /// was re-pointed at the running binary (the recurrence fix: a moved `qd`
     /// orphans the relay path until something re-points it; bootstrap does).
     Repointed { command: String },
     /// already registered + TTY, user accepted but the re-point FAILED (the old
@@ -349,11 +349,11 @@ pub struct RelayDeps<'a> {
     pub relay_registered: Option<bool>,
     /// Ask a yes/no question; default No (real: visible `[y/N]` prompt).
     pub prompt_yes_no: &'a dyn Fn(&str) -> bool,
-    /// Register/re-point the relay at user scope as the BARE `sb` command
+    /// Register/re-point the relay at user scope as the BARE `qd` command
     /// (real: `register::register_relay`, which remove-then-adds → idempotently
     /// re-points the command). The bare command is resolved via PATH and never
     /// goes stale on a binary move (relay-path hardening v2). Returns the
-    /// now-registered command (the bare `sb`). Used BOTH for the first-time
+    /// now-registered command (the bare `qd`). Used BOTH for the first-time
     /// registration (not-registered path) and the re-point (already-registered
     /// path) — the action is the same idempotent re-point; only the consent
     /// prompt differs. Only called on an explicit interactive yes.
@@ -383,7 +383,7 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
     if !deps.claude_present {
         let mut lines = vec![
             "relay: cannot configure — `claude` is not on PATH. Install Claude Code, \
-             then run: sb relay:register"
+             then run: qd relay:register"
                 .to_string(),
         ];
         push_relay_health_fyi(relays, &mut lines);
@@ -400,8 +400,8 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
 
     if registered {
         // RECURRENCE FIX (relay-path hardening v2): an absolute-path relay command
-        // went stale whenever the `sb` binary moved, so sessions born after the
-        // move couldn't spawn their relay sidecar. We now register the BARE `sb`
+        // went stale whenever the `qd` binary moved, so sessions born after the
+        // move couldn't spawn their relay sidecar. We now register the BARE `qd`
         // command (resolved via PATH), which never goes stale on a move. This
         // offered re-point exists to migrate a LEGACY absolute-path entry to the
         // bare form (`register` remove-then-adds the bare command, an idempotent
@@ -410,15 +410,15 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
         // and prints a how-to FYI, never hanging.
         if !deps.interactive {
             lines.push(
-                "relay: re-point to this binary later (after moving `sb`) with: sb relay:repoint"
+                "relay: re-point to this binary later (after moving `qd`) with: qd relay:repoint"
                     .to_string(),
             );
             return (RelayStepOutcome::ConfiguredAlready, lines);
         }
-        let question = "Re-point the relay registration at THIS sb binary (idempotent; \
-             fixes a stale path after the `sb` binary moves)? [y/N] ";
+        let question = "Re-point the relay registration at THIS qd binary (idempotent; \
+             fixes a stale path after the `qd` binary moves)? [y/N] ";
         if !(deps.prompt_yes_no)(question) {
-            lines.push("relay: left as-is — re-point later with: sb relay:repoint".to_string());
+            lines.push("relay: left as-is — re-point later with: qd relay:repoint".to_string());
             return (RelayStepOutcome::RepointDeclined, lines);
         }
         return match (deps.register)() {
@@ -431,7 +431,7 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
             Err(error) => {
                 lines.push(format!(
                     "relay: re-point FAILED ({error}) — old registration kept; \
-                     retry with: sb relay:repoint"
+                     retry with: qd relay:repoint"
                 ));
                 (RelayStepOutcome::RepointFailed { error }, lines)
             }
@@ -440,14 +440,14 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
 
     // Not registered. Offer only on a TTY.
     if !deps.interactive {
-        lines.push("relay: register later with: sb relay:register".to_string());
+        lines.push("relay: register later with: qd relay:register".to_string());
         return (RelayStepOutcome::NotOffered, lines);
     }
 
-    let question = "Register sb's relay MCP server with Claude Code (runs \
+    let question = "Register qd's relay MCP server with Claude Code (runs \
          `claude mcp add`; enables cross-session messaging in NEW sessions)? [y/N] ";
     if !(deps.prompt_yes_no)(question) {
-        lines.push("relay: skipped — register later with: sb relay:register".to_string());
+        lines.push("relay: skipped — register later with: qd relay:register".to_string());
         return (RelayStepOutcome::Declined, lines);
     }
 
@@ -460,7 +460,7 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
         }
         Err(error) => {
             lines.push(format!(
-                "relay: registration FAILED ({error}) — register later with: sb relay:register"
+                "relay: registration FAILED ({error}) — register later with: qd relay:register"
             ));
             (RelayStepOutcome::RegisterFailed { error }, lines)
         }
@@ -473,10 +473,10 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
 // doc/adr/0016-native-relay-and-eval-init.md).
 //
 // Bootstrap OFFERS (TTY only, default No) to add the ONE-LINE eval-init hook
-// to the user's shell rc file (`eval "$(sb init bash)"` / zsh / fish conf.d).
+// to the user's shell rc file (`eval "$(qd init bash)"` / zsh / fish conf.d).
 // The wrapper BODY is never written into the rc file — it ships in the binary
-// via `sb init` (crate::shell_init), so it cannot fossilize the way the
-// TS-era baked block did. The retired baked block (the `>>> sb bootstrap >>>`
+// via `qd init` (crate::shell_init), so it cannot fossilize the way the
+// TS-era baked block did. The retired baked block (the `>>> qd bootstrap >>>`
 // markers) is DETECTED + REPORTED — a live function defined after the eval
 // line would shadow the shipped wrapper — but never edited: bootstrap adds
 // one line with consent; it does not rewrite user rc files.
@@ -552,7 +552,7 @@ pub fn check_wrapper(deps: &WrapperDeps) -> (WrapperStepOutcome, Vec<String>) {
         .unwrap_or(false)
     {
         lines.push(format!(
-            "shell: RETIRED baked wrapper block detected in {} (the `>>> sb bootstrap >>>` \
+            "shell: RETIRED baked wrapper block detected in {} (the `>>> qd bootstrap >>>` \
              markers) — remove it; the init line replaces it.",
             deps.rc_display
         ));
@@ -563,7 +563,7 @@ pub fn check_wrapper(deps: &WrapperDeps) -> (WrapperStepOutcome, Vec<String>) {
         None => {
             lines.push(
                 "shell: unrecognised $SHELL — add the integration manually: \
-                 eval \"$(sb init bash|zsh)\" or `sb init fish | source`."
+                 eval \"$(qd init bash|zsh)\" or `qd init fish | source`."
                     .to_string(),
             );
             return (WrapperStepOutcome::UnknownShell, lines);
@@ -594,7 +594,7 @@ pub fn check_wrapper(deps: &WrapperDeps) -> (WrapperStepOutcome, Vec<String>) {
 
     let question = format!(
         "Add the claude shell wrapper to {} (routes a bare `claude` into a tracked \
-         sb session; adds one line: {})? [y/N] ",
+         qd session; adds one line: {})? [y/N] ",
         deps.rc_display, line
     );
     if !(deps.prompt_yes_no)(&question) {
@@ -627,8 +627,8 @@ pub fn check_wrapper(deps: &WrapperDeps) -> (WrapperStepOutcome, Vec<String>) {
 // Extension-install step (plan 0001 child D-install; ADR 0018).
 //
 // After the engine's own state/relay/shell steps, bootstrap OFFERS (consent-
-// gated, default No, TTY only) to install the PINNED extensions this `sb`
-// blesses: (a) the `sbx` engine-extension binary, (b) the work-model plugin.
+// gated, default No, TTY only) to install the PINNED extensions this `qd`
+// blesses: (a) the `qb` engine-extension binary, (b) the work-model plugin.
 //
 // CONTENT-FREE ENGINE (scope-audit, success criterion #7): the engine owns ONLY
 // the consent + the invocation. The ACTUAL install actions — which must name the
@@ -657,8 +657,8 @@ pub enum ExtInstallOutcome {
 /// The extension-cascade outcome (one per offered extension).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionsStepOutcome {
-    /// The pinned `sbx` binary install.
-    pub sbx: ExtInstallOutcome,
+    /// The pinned `qb` binary install.
+    pub qb: ExtInstallOutcome,
     /// The pinned work-model plugin install.
     pub plugin: ExtInstallOutcome,
 }
@@ -670,14 +670,14 @@ pub struct ExtensionsStepOutcome {
 /// step stays content-free.
 pub struct ExtensionsDeps<'a> {
     pub interactive: bool,
-    /// A short opaque label for the pinned `sbx` ref (e.g. a short sha), for the
+    /// A short opaque label for the pinned `qb` ref (e.g. a short sha), for the
     /// report line. Engine-truthful, content-free.
     pub sbx_pin_label: String,
     /// A short opaque label for the pinned plugin ref, for the report line.
     pub plugin_pin_label: String,
     /// Ask a yes/no question; default No.
     pub prompt_yes_no: &'a dyn Fn(&str) -> bool,
-    /// Run the external installer for the `sbx` extension. Returns Ok on success,
+    /// Run the external installer for the `qb` extension. Returns Ok on success,
     /// Err(message) on failure (toolchain/auth/build). Only called on a yes.
     pub install_sbx: &'a dyn Fn() -> Result<(), String>,
     /// Run the external installer for the work-model plugin. Same contract.
@@ -717,14 +717,14 @@ fn offer_install(
     }
 }
 
-/// The extension-install step: offer (TTY only) to install the pinned `sbx`
+/// The extension-install step: offer (TTY only) to install the pinned `qb`
 /// binary, then the pinned work-model plugin. Returns the outcomes + report
 /// lines. Partial-safe (the two offers are independent); non-interactive-safe;
 /// never fails bootstrap.
 pub fn check_extensions(deps: &ExtensionsDeps) -> (ExtensionsStepOutcome, Vec<String>) {
     let mut lines = Vec::new();
 
-    let sbx = offer_install(
+    let qb = offer_install(
         deps.interactive,
         &format!(
             "Install the pinned extension binary ({}) via the install script? [y/N] ",
@@ -732,7 +732,7 @@ pub fn check_extensions(deps: &ExtensionsDeps) -> (ExtensionsStepOutcome, Vec<St
         ),
         deps.install_sbx,
         deps.prompt_yes_no,
-        "extensions: binary — install later with: sb bootstrap (on a TTY)",
+        "extensions: binary — install later with: qd bootstrap (on a TTY)",
         &format!(
             "extensions: binary — installed (pinned {}).",
             deps.sbx_pin_label
@@ -749,7 +749,7 @@ pub fn check_extensions(deps: &ExtensionsDeps) -> (ExtensionsStepOutcome, Vec<St
         ),
         deps.install_plugin,
         deps.prompt_yes_no,
-        "extensions: plugin — install later with: sb bootstrap (on a TTY)",
+        "extensions: plugin — install later with: qd bootstrap (on a TTY)",
         &format!(
             "extensions: plugin — installed (pinned {}).",
             deps.plugin_pin_label
@@ -758,7 +758,7 @@ pub fn check_extensions(deps: &ExtensionsDeps) -> (ExtensionsStepOutcome, Vec<St
         &mut lines,
     );
 
-    (ExtensionsStepOutcome { sbx, plugin }, lines)
+    (ExtensionsStepOutcome { qb, plugin }, lines)
 }
 
 // ----------------------------------------------------------------------------
@@ -1214,7 +1214,7 @@ mod tests {
         let register = || {
             fx.registered.set(true);
             if fx.register_ok {
-                Ok("/jail/deployed/sb".to_string())
+                Ok("/jail/deployed/qd".to_string())
             } else {
                 Err("config write failed".to_string())
             }
@@ -1270,7 +1270,7 @@ mod tests {
         assert!(!f.prompted.get(), "non-TTY must NEVER prompt");
         assert!(!f.registered.get());
         assert!(lines.iter().any(|l| l.contains("configured")));
-        assert!(lines.iter().any(|l| l.contains("sb relay:repoint")));
+        assert!(lines.iter().any(|l| l.contains("qd relay:repoint")));
     }
 
     #[test]
@@ -1304,7 +1304,7 @@ mod tests {
         assert_eq!(
             o,
             RelayStepOutcome::Repointed {
-                command: "/jail/deployed/sb".to_string()
+                command: "/jail/deployed/qd".to_string()
             }
         );
         assert!(f.registered.get(), "accepted → re-point ran");
@@ -1370,7 +1370,7 @@ mod tests {
         assert_eq!(o, RelayStepOutcome::NotOffered);
         assert!(!f.prompted.get(), "non-TTY must NEVER prompt");
         assert!(!f.registered.get());
-        assert!(lines.iter().any(|l| l.contains("sb relay:register")));
+        assert!(lines.iter().any(|l| l.contains("qd relay:register")));
     }
 
     #[test]
@@ -1399,7 +1399,7 @@ mod tests {
         assert_eq!(
             o,
             RelayStepOutcome::Registered {
-                command: "/jail/deployed/sb".to_string()
+                command: "/jail/deployed/qd".to_string()
             }
         );
         assert!(f.registered.get());
@@ -1478,7 +1478,7 @@ mod tests {
     fn check_wrapper_already_configured_no_prompt() {
         let f = WrapFx {
             interactive: true,
-            rc_contents: Some("eval \"$(sb init bash)\"\n".to_string()),
+            rc_contents: Some("eval \"$(qd init bash)\"\n".to_string()),
             ..wfx()
         };
         let (o, lines) = run_wrap(&f);
@@ -1511,7 +1511,7 @@ mod tests {
         assert_eq!(o, WrapperStepOutcome::NotOffered);
         assert!(!f.prompted.get(), "non-TTY must NEVER prompt");
         assert!(!f.added.get());
-        assert!(lines.iter().any(|l| l.contains("sb init bash")));
+        assert!(lines.iter().any(|l| l.contains("qd init bash")));
     }
 
     #[test]
@@ -1565,8 +1565,8 @@ mod tests {
         let f = WrapFx {
             interactive: true,
             rc_contents: Some(
-                "# >>> sb bootstrap >>>\nclaude() { :; }\n# <<< sb bootstrap <<<\n\
-                 eval \"$(sb init bash)\"\n"
+                "# >>> qd bootstrap >>>\nclaude() { :; }\n# <<< qd bootstrap <<<\n\
+                 eval \"$(qd init bash)\"\n"
                     .to_string(),
             ),
             ..wfx()
@@ -1634,7 +1634,7 @@ mod tests {
     fn check_extensions_non_tty_never_offers_never_installs() {
         let f = efx();
         let (o, lines) = run_ext(&f);
-        assert_eq!(o.sbx, ExtInstallOutcome::NotOffered);
+        assert_eq!(o.qb, ExtInstallOutcome::NotOffered);
         assert_eq!(o.plugin, ExtInstallOutcome::NotOffered);
         assert!(!f.sbx_called.get(), "non-TTY must NEVER install");
         assert!(!f.plugin_called.get(), "non-TTY must NEVER install");
@@ -1649,7 +1649,7 @@ mod tests {
             ..efx()
         };
         let (o, _) = run_ext(&f);
-        assert_eq!(o.sbx, ExtInstallOutcome::Declined);
+        assert_eq!(o.qb, ExtInstallOutcome::Declined);
         assert_eq!(o.plugin, ExtInstallOutcome::Declined);
         assert!(!f.sbx_called.get(), "declined → no install");
         assert!(!f.plugin_called.get(), "declined → no install");
@@ -1663,7 +1663,7 @@ mod tests {
             ..efx()
         };
         let (o, lines) = run_ext(&f);
-        assert_eq!(o.sbx, ExtInstallOutcome::Installed);
+        assert_eq!(o.qb, ExtInstallOutcome::Installed);
         assert_eq!(o.plugin, ExtInstallOutcome::Installed);
         assert!(f.sbx_called.get());
         assert!(f.plugin_called.get());
@@ -1673,7 +1673,7 @@ mod tests {
 
     #[test]
     fn check_extensions_partial_safe_sbx_fails_plugin_still_offered() {
-        // Partial-safe: an sbx install FAILURE does NOT short-circuit the plugin
+        // Partial-safe: an qb install FAILURE does NOT short-circuit the plugin
         // offer — the two are independent.
         let f = ExtFx {
             interactive: true,
@@ -1683,11 +1683,11 @@ mod tests {
             ..efx()
         };
         let (o, lines) = run_ext(&f);
-        assert!(matches!(o.sbx, ExtInstallOutcome::Failed { .. }));
+        assert!(matches!(o.qb, ExtInstallOutcome::Failed { .. }));
         assert_eq!(o.plugin, ExtInstallOutcome::Installed);
         assert!(
             f.plugin_called.get(),
-            "plugin still attempted after sbx fail"
+            "plugin still attempted after qb fail"
         );
         assert!(lines.iter().any(|l| l.contains("binary — install FAILED")));
     }
@@ -1726,7 +1726,7 @@ mod tests {
             install_zmx: &install_zmx,
         };
         let r_prompt = |_q: &str| false;
-        let r_register = || Ok("/jail/deployed/sb".to_string());
+        let r_register = || Ok("/jail/deployed/qd".to_string());
         // relay: already registered (claude present) → no offer, clean report.
         let relay_deps = RelayDeps {
             interactive: false,
@@ -1740,7 +1740,7 @@ mod tests {
         let wrapper_deps = WrapperDeps {
             shell: Some(crate::shell_init::Shell::Bash),
             rc_display: "~/.bashrc".to_string(),
-            rc_contents: Some("eval \"$(sb init bash)\"\n".to_string()),
+            rc_contents: Some("eval \"$(qd init bash)\"\n".to_string()),
             interactive: false,
             prompt_yes_no: &w_prompt,
             add_init_line: &w_add,

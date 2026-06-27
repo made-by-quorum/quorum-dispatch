@@ -1,6 +1,6 @@
-//! WP-D part (a) — the `sb ls` LIVENESS GATE, CONSUMER-EXERCISING red/green over
-//! the REAL `sb` binary (not the pure unit). A single registry row backed by a
-//! REAL pid is observed through `sb ls --json` across the pid's alive→reaped
+//! WP-D part (a) — the `qd ls` LIVENESS GATE, CONSUMER-EXERCISING red/green over
+//! the REAL `qd` binary (not the pure unit). A single registry row backed by a
+//! REAL pid is observed through `qd ls --json` across the pid's alive→reaped
 //! transition:
 //!
 //!   - pid ALIVE  → the row shows its registry status `idle` (LIVE) — NOT gated.
@@ -49,8 +49,8 @@ impl Jail {
             .env_remove("SB_HOME")
             .env_remove("SB_MUX")
             .output()
-            .expect("spawn sb ls --json");
-        assert_eq!(out.status.code(), Some(0), "sb ls --json exit 0");
+            .expect("spawn qd ls --json");
+        assert_eq!(out.status.code(), Some(0), "qd ls --json exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout);
         serde_json::from_str::<Vec<serde_json::Value>>(&stdout).expect("ls --json is an array")
     }

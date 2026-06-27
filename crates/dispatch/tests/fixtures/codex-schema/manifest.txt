@@ -1,6 +1,6 @@
 # Codex P2 bound-surface manifest (spec section 5).
 # Each line: <quoted-name-to-find> <fixture-relative-file-to-search>.
-# The always-on test (crates/sb/tests/codex_schema.rs) asserts every name
+# The always-on test (crates/qd/tests/codex_schema.rs) asserts every name
 # appears (quoted) in its file; dropping a bound message from the schema
 # fixture reds the suite. Names = the protocol surface P2 binds (W2/W6).
 # Core protocol (v2 rollup):

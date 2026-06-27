@@ -1,4 +1,4 @@
-//! Rust relay server — `sb relay:serve` (M2: localhost HTTP server + lifecycle).
+//! Rust relay server — `qd relay:serve` (M2: localhost HTTP server + lifecycle).
 //!
 //! This module is the server half of the relay system, replacing the bun/TS
 //! `~/work/cc-relay/server.ts` (374L). The existing Rust `CcRelay` client
@@ -599,7 +599,7 @@ impl RelayServer {
 /// session the model must send a fresh message and restate its substance. Appended
 /// to every NOT-DELIVERED outcome so the model is never left thinking a failed
 /// reply silently succeeded.
-const FRESH_MESSAGE_GUIDANCE: &str = "The text is buffered 5 minutes for --wait retries only. To actually reach the other session, send a fresh message — sb send:relay <session-name-or-id> — and restate your substance.";
+const FRESH_MESSAGE_GUIDANCE: &str = "The text is buffered 5 minutes for --wait retries only. To actually reach the other session, send a fresh message — qd send:relay <session-name-or-id> — and restate your substance.";
 
 /// Build the HONEST NOT-DELIVERED outcome (P-E6 / cond 3): `is_error = true` +
 /// the reason + the fresh-message guidance. NEVER a silent success — the reply
@@ -781,7 +781,7 @@ fn sidecar_pid(path: &Path) -> Option<u32> {
         .filter(|p| *p != 0)
 }
 
-/// Entry point for `sb relay:serve`. Boots the real HTTP server (M2).
+/// Entry point for `qd relay:serve`. Boots the real HTTP server (M2).
 pub fn run() -> i32 {
     run_with_env(&RealEnv)
 }
@@ -801,15 +801,15 @@ pub fn run_with_env(env: &dyn Env) -> i32 {
     let paths = SbPaths::from_home_env(&home, env);
 
     // SELF-HEAL ON USE (relay-path hardening): the strongest guarantee against a
-    // moved/upgraded `sb` orphaning its own MCP registration. Claude Code spawns
+    // moved/upgraded `qd` orphaning its own MCP registration. Claude Code spawns
     // THIS process via the `relay.command` it stored in `~/.claude.json` — an
-    // ABSOLUTE PATH to the `sb` binary. If that binary was later moved or replaced
+    // ABSOLUTE PATH to the `qd` binary. If that binary was later moved or replaced
     // and the stored path went stale, every NEW session would fail to spawn its
     // relay. Here, at the start of EVERY relay boot, we compare the stored command
     // against the binary actually running (`current_exe`); a mismatch (or a stored
     // path that no longer exists) is re-pointed at the running binary in place.
     // So the very act of a session starting its relay corrects the stale entry —
-    // even bootstrap-less, even if `sb update` was never run. Best-effort and
+    // even bootstrap-less, even if `qd update` was never run. Best-effort and
     // NON-FATAL: it never blocks or fails the boot (the common steady state is a
     // cheap file-read + stat with NO subprocess; we shell to `claude` only on a
     // genuine mismatch). It only CORRECTS an existing entry — it never fabricates
@@ -1134,12 +1134,12 @@ fn emit_seen_failed_for_unpulled(server: &RelayServer) {
 /// SELF-HEAL the relay MCP registration at relay-boot time (relay-path
 /// hardening v2, owner ruling). Reads `~/.claude.json` and — ONLY if the stored
 /// `relay.command` is genuinely BROKEN (an ABSOLUTE path naming a file that no
-/// longer exists) — repairs it by re-pointing to the BARE `sb` command via
+/// longer exists) — repairs it by re-pointing to the BARE `qd` command via
 /// `claude mcp add` (remove-then-add, the idempotent re-point in
 /// [`register::register_relay`]).
 ///
 /// This is now purely a BACKSTOP for a broken LEGACY absolute-path entry. The
-/// form we register today is the bare `sb` (resolved via PATH), which never goes
+/// form we register today is the bare `qd` (resolved via PATH), which never goes
 /// stale on a binary move — so self-heal must NOT touch it (rewriting bare →
 /// absolute would re-introduce the very staleness class this closes). A bare
 /// command, or an absolute path that still exists, is VALID and left alone.
@@ -1175,8 +1175,8 @@ fn self_heal_registration(home: &Path, exec: &impl Exec, command_exists: impl Fn
     // fatal.
     if !command_exists("claude") {
         eprintln!(
-            "relay: registration points at a stale `sb` path but `claude` is not on PATH — \
-             cannot self-heal now; run `sb relay:repoint` after installing Claude Code."
+            "relay: registration points at a stale `qd` path but `claude` is not on PATH — \
+             cannot self-heal now; run `qd relay:repoint` after installing Claude Code."
         );
         return;
     }
@@ -1425,12 +1425,12 @@ mod tests {
     #[test]
     fn self_heal_repairs_a_broken_absolute_path() {
         // Seed a `~/.claude.json` whose relay command is a legacy ABSOLUTE path
-        // naming a file that is gone — the only BROKEN shape under v2. Self-heal
-        // must drive `claude mcp add` to re-point it at the bare `dispatch`.
+        // naming a file that is gone — broken under v2. Self-heal must drive
+        // `claude mcp add` to re-point it at the bare `qd`.
         let home = tempfile::tempdir().unwrap();
         std::fs::write(
             home.path().join(".claude.json"),
-            r#"{"mcpServers":{"relay":{"command":"/old/gone/sb","args":["relay:serve"]}}}"#,
+            r#"{"mcpServers":{"relay":{"command":"/old/gone/qd","args":["relay:serve"]}}}"#,
         )
         .unwrap();
         let exec = ScriptedExec::new().on(
@@ -1443,7 +1443,7 @@ mod tests {
         // `claude` present; the stored bogus absolute path does NOT exist.
         let command_exists = |c: &str| c == "claude";
         self_heal_registration(home.path(), &exec, command_exists);
-        // It re-points to the BARE `dispatch` (NOT an absolute path).
+        // It re-points to the BARE `qd` (NOT an absolute path).
         assert!(
             exec.ran(
                 "claude",
@@ -1454,11 +1454,11 @@ mod tests {
                     "user",
                     "relay",
                     "--",
-                    "dispatch",
+                    "qd",
                     "relay:serve"
                 ]
             ),
-            "broken registration must be re-pointed to bare `dispatch` via `claude mcp add`: {:?}",
+            "broken registration must be re-pointed to bare `qd` via `claude mcp add`: {:?}",
             exec.log()
         );
         // And it remove-then-adds (the idempotent re-point) BEFORE the add.
@@ -1467,13 +1467,13 @@ mod tests {
 
     #[test]
     fn self_heal_noop_for_bare_command() {
-        // The form we register today: bare `sb`. It NEVER goes stale (resolved via
+        // The form we register today: bare `qd`. It NEVER goes stale (resolved via
         // PATH), so self-heal must leave it untouched — NOT rewrite it to an
         // absolute path (which would re-introduce the staleness class). NO shell-out.
         let home = tempfile::tempdir().unwrap();
         std::fs::write(
             home.path().join(".claude.json"),
-            r#"{"mcpServers":{"relay":{"command":"sb","args":["relay:serve"]}}}"#,
+            r#"{"mcpServers":{"relay":{"command":"qd","args":["relay:serve"]}}}"#,
         )
         .unwrap();
         let exec = ScriptedExec::new();
@@ -1486,17 +1486,46 @@ mod tests {
     }
 
     #[test]
+    fn self_heal_repairs_legacy_bare_dispatch_command() {
+        // A leftover bare `dispatch` registration from the dispatch→qd rename is
+        // stale (not the current RELAY_BARE_COMMAND). Self-heal re-points it to
+        // bare `qd`.
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join(".claude.json"),
+            r#"{"mcpServers":{"relay":{"command":"dispatch","args":["relay:serve"]}}}"#,
+        )
+        .unwrap();
+        let exec = ScriptedExec::new().on(
+            "claude",
+            &["mcp", "add"],
+            Some(0),
+            "Added stdio MCP server relay",
+            "",
+        );
+        self_heal_registration(home.path(), &exec, |c| c == "claude");
+        assert!(
+            exec.ran(
+                "claude",
+                &["mcp", "add", "-s", "user", "relay", "--", "qd", "relay:serve"]
+            ),
+            "legacy bare `dispatch` must be re-pointed to bare `qd`: {:?}",
+            exec.log()
+        );
+    }
+
+    #[test]
     fn self_heal_noop_for_existing_absolute_path() {
         // A legacy absolute-path entry that still EXISTS is valid — leave it alone.
         let home = tempfile::tempdir().unwrap();
         std::fs::write(
             home.path().join(".claude.json"),
-            r#"{"mcpServers":{"relay":{"command":"/here/sb"}}}"#,
+            r#"{"mcpServers":{"relay":{"command":"/here/qd"}}}"#,
         )
         .unwrap();
         let exec = ScriptedExec::new();
         // claude present AND the stored absolute path exists → not broken.
-        self_heal_registration(home.path(), &exec, |c| c == "claude" || c == "/here/sb");
+        self_heal_registration(home.path(), &exec, |c| c == "claude" || c == "/here/qd");
         assert!(
             exec.log().is_empty(),
             "an existing absolute-path registration must not be disturbed: {:?}",
@@ -1538,7 +1567,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(
             home.path().join(".claude.json"),
-            r#"{"mcpServers":{"relay":{"command":"/old/gone/sb"}}}"#,
+            r#"{"mcpServers":{"relay":{"command":"/old/gone/qd"}}}"#,
         )
         .unwrap();
         let exec = ScriptedExec::new();

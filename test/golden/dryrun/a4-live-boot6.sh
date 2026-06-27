@@ -2,7 +2,7 @@
 # a4-live-boot6.sh — A4 BOOT-#6 (the ONE sanctioned real-claude boot).
 #
 # Sanction: orc-2 ruling relay-1780631655040-9 item 3 (ONE boot, dual purpose,
-# ledgered R5). Closes R3 (the ×5 unattested send:pty --wait + sb wait rows) and
+# ledgered R5). Closes R3 (the ×5 unattested send:pty --wait + qd wait rows) and
 # confirms R4 fixed LIVE (the ≥4.2KB idle-path paste that was RED in M5).
 #
 # Assembled from the M5 pieces (a4-live-boot1-soak.sh + a4-paste-investigate.sh):
@@ -19,14 +19,14 @@
 #   b. send:pty --wait #1 (idle): short msg, --timeout 60 -> reply printed, exit 0
 #   c. send:pty --wait #2 (busy): long turn, then --wait while busy -> queued-then-
 #      answered attribution (reply == OUR message), exit 0
-#   d. sb wait x3: busy->' done' exit 0; idle-at-entry->'is idle' exit 0;
+#   d. qd wait x3: busy->' done' exit 0; idle-at-entry->'is idle' exit 0;
 #      --timeout 5 kept-busy->' timeout' exit 1
 #   e. R4 LIVE CONFIRM: idle-path >=4.2KB single message -> user-record DELTA==1
 #      (the paste LANDS) + session went busy. RED in M5; must be GREEN now.
 set -u
 WT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -82,10 +82,10 @@ mark(){ if [ "$1" = G ]; then GREEN=$((GREEN+1)); else RED=$((RED+1)); fi; }
 
 # --- BOOT ------------------------------------------------------------------
 log ""
-log "=== sb new (real claude) ==="
+log "=== qd new (real claude) ==="
 ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 code=$?
-log "  sb new exit=$code : $(cat "$JAIL_ROOT/o")"
+log "  qd new exit=$code : $(cat "$JAIL_ROOT/o")"
 [ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; head -5 "$JAIL_ROOT/e"|sed 's/^/    /'|tee -a "$EV"; }
 if [ "$code" != 0 ]; then log "!!! BOOT FAILED — capturing + stop"; jail_zmx history "$NAME" 2>/dev/null|strip|tail -20|sed 's/^/  /'|tee -a "$EV"; exit 1; fi
 ws "$NAME" idle 30 || log "  WARN not idle after boot (status=$(status_of "$NAME"))"
@@ -143,15 +143,15 @@ else
 fi
 ws "$NAME" idle 90 || true
 
-# --- (d) sb wait x3 --------------------------------------------------------
+# --- (d) qd wait x3 --------------------------------------------------------
 log ""
-log "=== (d) sb wait x3 ==="
+log "=== (d) qd wait x3 ==="
 # d1: busy -> ' done' exit 0
 ws "$NAME" idle 40 || log "  (d1) WARN not idle pre"
 "$JAIL_SB_CMD" send:pty "$NAME" "Count slowly from 1 to 15, one per line, then say WAITDONE_1." >/dev/null 2>&1
 if ws "$NAME" busy 15; then
     out="$(tmo 180 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
-    log "  (d1) sb wait (busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
+    log "  (d1) qd wait (busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
     { [ "$rc" = 0 ] && printf '%s' "$out"|grep -qi "done"; } && { log "  (d1) GREEN: busy -> ' done' exit 0"; mark G; } || { log "  (d1) RED"; mark R; }
 else
     log "  (d1) RED: could not drive busy"; mark R
@@ -160,14 +160,14 @@ ws "$NAME" idle 60 || true
 # d2: idle-at-entry -> 'is idle' exit 0
 ws "$NAME" idle 40 || log "  (d2) WARN not idle pre"
 out="$(tmo 20 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
-log "  (d2) sb wait (idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
+log "  (d2) qd wait (idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { [ "$rc" = 0 ] && printf '%s' "$out"|grep -qi "idle"; } && { log "  (d2) GREEN: idle-at-entry -> 'is idle' exit 0"; mark G; } || { log "  (d2) RED"; mark R; }
 # d3: --timeout 5 kept-busy -> ' timeout' exit 1
 ws "$NAME" idle 40 || log "  (d3) WARN not idle pre"
 "$JAIL_SB_CMD" send:pty "$NAME" "Count VERY slowly from 1 to 60, one number per line, pause between each, then say LONGDONE." >/dev/null 2>&1
 if ws "$NAME" busy 15; then
     out="$(tmo 20 "$JAIL_SB_CMD" wait "$NAME" --timeout 5 2>&1)"; rc=$?
-    log "  (d3) sb wait --timeout 5 (kept busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
+    log "  (d3) qd wait --timeout 5 (kept busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
     { [ "$rc" = 1 ] && printf '%s' "$out"|grep -qi "timeout"; } && { log "  (d3) GREEN: kept-busy --timeout 5 -> ' timeout' exit 1"; mark G; } || { log "  (d3) RED (rc=$rc)"; mark R; }
 else
     log "  (d3) RED: could not drive busy"; mark R
@@ -231,6 +231,6 @@ log "=== REAL-HOME BELT after: $ra ($([ "$rb" = "$ra" ]&&echo HOLDS||echo VIOLAT
 
 log ""
 log "=== BOOT-#6 TALLY ==="
-log "  rows attempted: 6 (a warm-up, b/c --wait x2, d sb-wait x3 counted as one group of 3, e R4)"
+log "  rows attempted: 6 (a warm-up, b/c --wait x2, d qd-wait x3 counted as one group of 3, e R4)"
 log "  GREEN: $GREEN   RED: $RED"
 log "=== DONE (teardown via trap) ==="

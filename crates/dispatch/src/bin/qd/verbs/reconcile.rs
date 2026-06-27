@@ -1,4 +1,4 @@
-//! REAL `sb reconcile` backend (spec §5.4; TS `session.ts:1098-1177` +
+//! REAL `qd reconcile` backend (spec §5.4; TS `session.ts:1098-1177` +
 //! `commands/lifecycle.ts:937-971`).
 //!
 //! The I1/I3/I5 repair plan is the pure `dispatch::reconcile::plan`; this verb gathers
@@ -25,7 +25,7 @@ use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 
 use super::common;
 
-/// `sb reconcile [--dry-run]`.
+/// `qd reconcile [--dry-run]`.
 pub fn run(m: &ArgMatches) -> i32 {
     let dry_run = m.get_flag("dry-run");
 
@@ -33,7 +33,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("sb reconcile: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd reconcile: HOME is not set — cannot resolve the session state dir.");
             return 1;
         }
     };
@@ -72,7 +72,7 @@ pub fn run(m: &ArgMatches) -> i32 {
             match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
-                    eprintln!("sb reconcile: {msg}");
+                    eprintln!("qd reconcile: {msg}");
                     return 1;
                 }
             }

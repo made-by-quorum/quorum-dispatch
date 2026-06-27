@@ -1,9 +1,9 @@
 //! The ONE place the home→state-layout mapping lives.
 //!
-//! TS sb derives its CLAUDE state dirs from `homedir()` (src/session.ts:6-8:
+//! TS qd derives its CLAUDE state dirs from `homedir()` (src/session.ts:6-8:
 //! `const HOME = homedir(); SESSIONS_DIR = ~/.claude/sessions; PROJECTS_DIR =
 //! ~/.claude/projects`; RELAY_DIR = ~/.claude/relay, src/session.ts:150) — these
-//! derive from HOME ONLY. The sb DATA root is separate and SB_HOME-overridable:
+//! derive from HOME ONLY. The qd DATA root is separate and SB_HOME-overridable:
 //! `sbHome = env.SB_HOME || join(HOME, ".quorum", "dispatch")`, and the hot-state dir is
 //! `<sbHome>/state` (bootstrap.ts:88-96 `resolveBootstrapPaths` +
 //! BootstrapPaths.stateDir doc, bootstrap.ts:~54). `marks.jsonl` (A3 ADD-3)
@@ -37,14 +37,14 @@ pub struct SbPaths {
     /// `join(homedir(), '.claude', 'channels', 'relay', 'inbox')`). Distinct
     /// from `relay_dir` which holds sidecar files. P-C2.
     pub inbox_dir: PathBuf,
-    /// sb hot-state dir, `<sbHome>/state` where `sbHome = SB_HOME || <home>/.quorum/dispatch`
+    /// qd hot-state dir, `<sbHome>/state` where `sbHome = SB_HOME || <home>/.quorum/dispatch`
     /// (bootstrap.ts:88-96). Holds `marks.jsonl` (ADD-3). SB_HOME comes through
     /// the injected `Env` seam (L9a), never raw `std::env`.
     pub state_dir: PathBuf,
 }
 
 impl SbPaths {
-    /// Mirror of src/session.ts:6-8 + :150 for the `.claude` dirs, plus the sb
+    /// Mirror of src/session.ts:6-8 + :150 for the `.claude` dirs, plus the qd
     /// DATA `state_dir`. With NO injected env this assumes SB_HOME is unset, so
     /// `state_dir = <home>/.quorum/dispatch/state` (the default). Callers that must honor an
     /// SB_HOME override use [`SbPaths::from_home_env`].
@@ -52,7 +52,7 @@ impl SbPaths {
         Self::build(home, home.join(".quorum").join("dispatch"))
     }
 
-    /// As [`from_home`], but resolves the sb data root via the injected `Env`
+    /// As [`from_home`], but resolves the qd data root via the injected `Env`
     /// seam: `sbHome = SB_HOME || <home>/.quorum/dispatch` (bootstrap.ts:88-96), so `state_dir`
     /// honors an SB_HOME override (H4). SB_HOME is read ONLY through `env` (L9a),
     /// never raw `std::env`. The `.claude` dirs are unchanged (HOME-only).

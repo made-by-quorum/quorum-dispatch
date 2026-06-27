@@ -26,9 +26,9 @@ scn_run() {
     a5_make_fake_claude >/dev/null
     {
         echo "# RECORDED-FROM pin=8c59ec4 verb=kill (wart-wave re-mint: ADD-15 W3 direct-kill + W4 line; belt pre-asserts destructive runs)"
-        echo "\$ sb kill --force sbrg-nope (no such session)"
+        echo "\$ qd kill --force sbrg-nope (no such session)"
         scn_sb kill --force "${JAIL_PREFIX}nope" 2>&1; echo "exit=$?"
-        echo "\$ sb kill sbrg-nope </dev/null (no --force, non-TTY, no such session)"
+        echo "\$ qd kill sbrg-nope </dev/null (no --force, non-TTY, no such session)"
         scn_sb kill "${JAIL_PREFIX}nope" </dev/null 2>&1; echo "exit=$?"
     } > "$SCN_OUT"
 
@@ -38,7 +38,7 @@ scn_run() {
     if a5_spawn_fake "$NAME"; then
         if jail_assert_resolves_in_jail "$NAME" >/dev/null 2>&1; then
             {
-                echo "\$ sb kill sbrg-k1 </dev/null (LIVE, no --force, non-TTY — W3 direct kill)"
+                echo "\$ qd kill sbrg-k1 </dev/null (LIVE, no --force, non-TTY — W3 direct kill)"
                 scn_sb kill "$NAME" </dev/null 2>&1; echo "exit=$?"
             } >> "$SCN_OUT"
         else
@@ -54,7 +54,7 @@ scn_run() {
     if a5_spawn_fake "$NAME2"; then
         if jail_assert_resolves_in_jail "$NAME2" >/dev/null 2>&1; then
             {
-                echo "\$ sb kill --force sbrg-k2 (LIVE, deprecated no-op flag accepted)"
+                echo "\$ qd kill --force sbrg-k2 (LIVE, deprecated no-op flag accepted)"
                 scn_sb kill --force "$NAME2" 2>&1; echo "exit=$?"
             } >> "$SCN_OUT"
         else
@@ -75,7 +75,7 @@ scn_run() {
         local alive
         alive="$( (jail_zmx list --short 2>/dev/null || jail_zmx ls --short 2>/dev/null) | grep -c "${JAIL_PREFIX}amb" || true)"
         {
-            echo "\$ sb kill sbrg-amb (ambiguous prefix — LOUD refusal, kills neither)"
+            echo "\$ qd kill sbrg-amb (ambiguous prefix — LOUD refusal, kills neither)"
             echo "ambiguous_exit=$ambrc"
             printf 'ambiguous_loud=%s\n' "$(printf '%s' "$ambout" | grep -q 'Ambiguous' && echo 1 || echo 0)"
             echo "ambiguous_survivors=$alive"

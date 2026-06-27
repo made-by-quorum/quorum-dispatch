@@ -2,7 +2,7 @@
 //! exercising the PRODUCTION code paths against REAL effects:
 //!
 //! - **G-C1 shape** (file backend, real temp-HOME): a `set → get → unset`
-//!   round-trip lands a real `~/.sb/config.toml` with `chmod 600` on disk (the
+//!   round-trip lands a real `~/.quorum/dispatch/config.toml` with `chmod 600` on disk (the
 //!   permission posture asserted in ADR 0010 rider (a)).
 //! - **G-C3 shape** (locked-keychain fallback, real subprocess): a PATH-shimmed
 //!   fake `security` that emits the `User interaction is not allowed` signature

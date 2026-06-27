@@ -1,15 +1,15 @@
 //! WP-B-CS-2-LIVE — the live OBSERVE run-loop + turn-boundary cutover EXECUTION,
-//! driven END-TO-END through the REAL `sb` binary against a JAILED HOME with a real
+//! driven END-TO-END through the REAL `qd` binary against a JAILED HOME with a real
 //! per-session qrmux daemon, a real registry, a real socket — ONLY `claude` is faked
 //! (a `CLAUDE_BIN` fixture script, the `headless_cli_addressability` pattern).
 //!
-//! Two `#[ignore]` integration proofs (run explicitly — they spawn real `sb`
+//! Two `#[ignore]` integration proofs (run explicitly — they spawn real `qd`
 //! subprocesses + a detached daemon + sleep):
 //!
 //!   cargo test -p dispatch --test headless_observe_cutover -- --ignored --nocapture
 //!
 //!  (A) `live_observe_rerenders_control_facts_only_busy_to_idle` — across ONE
-//!      `sb connect`, the read-only dashboard RE-RENDERS live as the turn goes
+//!      `qd connect`, the read-only dashboard RE-RENDERS live as the turn goes
 //!      busy→idle (in-turn: yes → in-turn: no), and NEVER leaks the agent's
 //!      assistant text — §2a CONTROL FACTS ONLY proven through the real socket path,
 //!      not just the pure fold.
@@ -34,7 +34,7 @@ fn sb_bin() -> &'static str {
 const SESSION: &str = "hlobs";
 const SID: &str = "fa4ec110-0000-4000-8000-0000000000c2";
 /// The assistant text the fake emits in its stream-json — the §2a tripwire: it must
-/// NEVER appear in `sb connect`'s observe output (the dashboard is control-facts
+/// NEVER appear in `qd connect`'s observe output (the dashboard is control-facts
 /// only; the republish protocol carries no content).
 const SECRET: &str = "SECRET_ASSISTANT_SCROLLBACK_must_never_render";
 
@@ -112,9 +112,9 @@ impl Jail {
         c
     }
 
-    /// Blocking `sb <args>` with the jailed env (stdin closed by `output()`).
+    /// Blocking `qd <args>` with the jailed env (stdin closed by `output()`).
     fn run(&self, args: &[&str]) -> std::process::Output {
-        self.cmd(args, false).output().expect("spawn sb")
+        self.cmd(args, false).output().expect("spawn qd")
     }
 }
 
@@ -142,7 +142,7 @@ fn start_headless_busy(j: &Jail) -> i64 {
     assert_eq!(
         start.status.code(),
         Some(0),
-        "sb start --headless must exit 0; stderr={}",
+        "qd start --headless must exit 0; stderr={}",
         String::from_utf8_lossy(&start.stderr)
     );
     let sessions_dir = j.sessions_dir();
@@ -178,11 +178,11 @@ fn start_headless_busy(j: &Jail) -> i64 {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "spawns real sb subprocesses + a detached daemon + sleeps; run with --ignored --nocapture"]
+#[ignore = "spawns real qd subprocesses + a detached daemon + sleeps; run with --ignored --nocapture"]
 fn live_observe_rerenders_control_facts_only_busy_to_idle() {
     let root = tempfile::tempdir().unwrap();
     // Short busy window + exit-after-result so the daemon closes the stream cleanly
-    // (RepublishEnd) and `sb connect` terminates without us managing its stdin.
+    // (RepublishEnd) and `qd connect` terminates without us managing its stdin.
     let j = jail(root.path(), 3);
     let _pid = start_headless_busy(&j);
 
@@ -195,7 +195,7 @@ fn live_observe_rerenders_control_facts_only_busy_to_idle() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn sb connect");
+        .expect("spawn qd connect");
     // Let the turn complete (busy 3s + the result frame) so the loop re-renders idle.
     std::thread::sleep(Duration::from_secs(6));
     // Close stdin → the loop's stdin reader hits EOF → it terminates (if it hasn't
@@ -241,7 +241,7 @@ fn live_observe_rerenders_control_facts_only_busy_to_idle() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "spawns real sb subprocesses + a detached daemon + sleeps; run with --ignored --nocapture"]
+#[ignore = "spawns real qd subprocesses + a detached daemon + sleeps; run with --ignored --nocapture"]
 fn cutover_choice2_fires_at_boundary_and_reaps_headless() {
     let root = tempfile::tempdir().unwrap();
     // A longer busy window so we can drive choice 2 DURING the turn; the fake STAYS
@@ -259,7 +259,7 @@ fn cutover_choice2_fires_at_boundary_and_reaps_headless() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn sb connect");
+        .expect("spawn qd connect");
 
     // Drive the menu: choose 2 (cut over), then a BUFFERED input line — DURING the
     // busy window, so the cutover DEFERS to the boundary.

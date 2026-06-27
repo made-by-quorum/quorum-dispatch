@@ -5,7 +5,7 @@
 
 ## Context
 
-Golden captures are timing- and environment-sensitive: the same logical sb/zmx
+Golden captures are timing- and environment-sensitive: the same logical qd/zmx
 behavior emits different bytes across runs (timestamps, PIDs, hermetic temp
 paths, per-run ids/ports, and non-semantic PTY chunk boundaries). A byte-exact
 comparator would false-diff on all of these. But over-normalization is worse than

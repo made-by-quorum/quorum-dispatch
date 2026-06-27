@@ -202,7 +202,7 @@ fn timeout_ms(raw: &str) -> i64 {
 // send:pty (a4-spec §3.1)
 // ===========================================================================
 
-/// `sb send:pty <session> <message>` — REAL (replaces the A4 stub). Port of the
+/// `qd send:pty <session> <message>` — REAL (replaces the A4 stub). Port of the
 /// send:pty action (qa/hardening@3dd9f1e:src/commands/send.ts:100-336).
 pub fn run_send_pty(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
@@ -231,7 +231,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
 
     // cold → dead (send.ts:105-108); no zmxName → not-in-zmx (send.ts:110-113).
     if session.status == SessionStatus::Cold {
-        eprintln!("Session is dead. Use 'sb resume' first.");
+        eprintln!("Session is dead. Use 'qd resume' first.");
         return 1;
     }
     let Some(zmx_name) = session.zmx_name.clone() else {
@@ -459,7 +459,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                     // TS WARNING wording verbatim (send.ts:172-176).
                     eprintln!(
                         "WARNING: message may be stuck unsubmitted in \"{label}\"'s composer \
-                         — check with: sb connect {label}"
+                         — check with: qd connect {label}"
                     );
                 }
                 println!("Message queued in \"{label}\" (session busy)");
@@ -514,7 +514,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                 eprintln!(
                                     "WARNING: could not verify the queued payload landed in \
                                      \"{label}\"'s transcript within {}s (the promise stays \
-                                     PENDING) — check: sb connect {label}",
+                                     PENDING) — check: qd connect {label}",
                                     dispatch::submit::BUSY_QUEUED_VERIFY_TIMEOUT_S
                                 );
                             }
@@ -529,7 +529,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                         // change self-scoped to the busy-queued path, constraint 4).
                         eprintln!(
                             "WARNING: could not resolve \"{label}\"'s transcript to verify the \
-                             queued payload (the promise stays PENDING) — check: sb connect {label}"
+                             queued payload (the promise stays PENDING) — check: qd connect {label}"
                         );
                     }
                 }
@@ -703,7 +703,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                     eprintln!(
                                         "ERROR: payload truncated in delivery to \"{label}\": expected \
                                          {expected} bytes, recorded {recorded}.\n  The message submitted — \
-                                         do NOT blindly resend (double-submit risk).\n  Attach: sb connect {label}"
+                                         do NOT blindly resend (double-submit risk).\n  Attach: qd connect {label}"
                                     );
                                     return 1;
                                 }
@@ -715,7 +715,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                 eprintln!(
                                     "WARNING: could not fully verify the short payload to \"{label}\" \
                                      (read-back truncated: expected {expected}, recorded {recorded}) — \
-                                     check: sb connect {label}"
+                                     check: qd connect {label}"
                                 );
                             }
                             dispatch::submit::PayloadVerifyOutcome::NoRecord => {
@@ -724,7 +724,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                     eprintln!(
                                         "ERROR: could not verify payload arrival in \"{label}\"'s \
                                          transcript within {}s (no user record appeared).\n  \
-                                         Attach: sb connect {label}",
+                                         Attach: qd connect {label}",
                                         dispatch::submit::VERIFY_TIMEOUT_S
                                     );
                                     return 1;
@@ -736,20 +736,20 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                 // W8) — pty's accepted reliability (§X.6).
                                 eprintln!(
                                     "WARNING: could not verify short-payload arrival in \"{label}\"'s \
-                                     transcript within {}s — check: sb connect {label}",
+                                     transcript within {}s — check: qd connect {label}",
                                     dispatch::submit::VERIFY_TIMEOUT_S
                                 );
                             }
                             dispatch::submit::PayloadVerifyOutcome::Unattributable => {
                                 eprintln!(
                                     "WARNING: could not attribute the delivered payload in \
-                                     \"{label}\"'s transcript — check: sb connect {label}"
+                                     \"{label}\"'s transcript — check: qd connect {label}"
                                 );
                             }
                             dispatch::submit::PayloadVerifyOutcome::SourceUnavailable(why) => {
                                 eprintln!(
                                     "WARNING: could not verify payload delivery to \"{label}\" \
-                                     ({why}) — check: sb connect {label}"
+                                     ({why}) — check: qd connect {label}"
                                 );
                             }
                         }
@@ -794,7 +794,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                     "WARNING: could not verify payload delivery to \"{label}\" \
                                      (fresh-child transcript did not resolve/anchor within the \
                                      deferred window — the promise stays PENDING) — check: \
-                                     sb connect {label}"
+                                     qd connect {label}"
                                 );
                             }
                         }
@@ -1252,7 +1252,7 @@ impl WaitDeps for RealWaitDeps<'_> {
 // send:http — error path REAL, success path parked (a4-spec §3.3)
 // ===========================================================================
 
-/// `sb send:http <session> <message>` — engine sessions are NEVER
+/// `qd send:http <session> <message>` — engine sessions are NEVER
 /// provider=opencode, so this always takes the "not an OpenCode session" ERROR
 /// path (send.ts:509-521), exit 1. The OpenCode success path is a named parked
 /// exclusion (A3 spec row 10 carries). Flags are parse-accepted (clap) but
@@ -1278,8 +1278,8 @@ pub fn run_send_http(m: &ArgMatches) -> i32 {
         .unwrap_or_else(|| session.session_id.clone());
     eprintln!("ERROR: Session '{name}' is not an OpenCode session.");
     eprintln!("send:http only works with OpenCode sessions.");
-    eprintln!("  • For Claude Code sessions, use: sb send:relay {query} \"message\"");
-    eprintln!("  • Or via PTY: sb send:pty {query} \"message\"");
+    eprintln!("  • For Claude Code sessions, use: qd send:relay {query} \"message\"");
+    eprintln!("  • Or via PTY: qd send:pty {query} \"message\"");
     1
 }
 

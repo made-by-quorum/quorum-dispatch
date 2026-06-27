@@ -1,42 +1,42 @@
 //! Moved-stubs with exact ported stderr (commands/send.ts:42-47, 524-528).
 //!
-//! (A5 M5: `sb ping` is now a REAL verb — its no-arg exit-3 validation moved to
+//! (A5 M5: `qd ping` is now a REAL verb — its no-arg exit-3 validation moved to
 //! `verbs/ping.rs` alongside the classifier wiring; this file keeps only the
 //! send/relay moved-pointer stubs, which ARE the intended behavior.)
 
-/// `sb send` moved stub (commands/send.ts:41-47): the 5-line stderr pointer, exit 1. THE
+/// `qd send` moved stub (commands/send.ts:41-47): the 5-line stderr pointer, exit 1. THE
 /// STUB IS THE BEHAVIOR (spec §3 row 7) — not an A4/A5 deferral.
 pub fn run_send_moved() -> i32 {
-    eprintln!("\"sb send\" has been split into explicit channels:\n");
-    eprintln!("  sb send:pty <session> <message>     Send via zmx PTY (types into terminal)");
-    eprintln!("  sb send:relay <session> <message>   Send via relay HTTP endpoint");
-    eprintln!("  sb send:http <session> <message>    Send via OpenCode HTTP API\n");
+    eprintln!("\"qd send\" has been split into explicit channels:\n");
+    eprintln!("  qd send:pty <session> <message>     Send via zmx PTY (types into terminal)");
+    eprintln!("  qd send:relay <session> <message>   Send via relay HTTP endpoint");
+    eprintln!("  qd send:http <session> <message>    Send via OpenCode HTTP API\n");
     eprintln!("Pick the channel that matches how you want to communicate.");
     1
 }
 
-/// `sb relay` moved stub (commands/send.ts:523-528): stderr pointer, exit 1.
+/// `qd relay` moved stub (commands/send.ts:523-528): stderr pointer, exit 1.
 pub fn run_relay_moved() -> i32 {
-    eprintln!("\"sb relay\" has moved to \"sb send:relay\".\n");
-    eprintln!("  sb send:relay <session> <message>          async (returns message ID)");
-    eprintln!("  sb send:relay <session> <message> --wait   block until reply\n");
+    eprintln!("\"qd relay\" has moved to \"qd send:relay\".\n");
+    eprintln!("  qd send:relay <session> <message>          async (returns message ID)");
+    eprintln!("  qd send:relay <session> <message> --wait   block until reply\n");
     eprintln!("The relay channel is unchanged — just the command name.");
     1
 }
 
-/// P0 W1 (sbx spec-cli §11): the retired `new` stub's exact stderr line.
+/// P0 W1 (qb spec-cli §11): the retired `new` stub's exact stderr line.
 /// Factored so the wording is pinned by a unit test (the house pattern, see
 /// `codex_already_running_line` in verbs/resume.rs).
 pub fn new_retired_line() -> &'static str {
-    "sb new: `new` is retired; use `sb start`"
+    "qd new: `new` is retired; use `qd start`"
 }
 
-/// P0 W1 (sbx spec-cli §11): the retired `kill` stub's exact stderr line.
+/// P0 W1 (qb spec-cli §11): the retired `kill` stub's exact stderr line.
 pub fn kill_retired_line() -> &'static str {
-    "sb kill: `kill` is retired; use `sb stop`"
+    "qd kill: `kill` is retired; use `qd stop`"
 }
 
-/// `sb new …` retired stub: helpful stderr, exit 1. Never touches any state;
+/// `qd new …` retired stub: helpful stderr, exit 1. Never touches any state;
 /// the clap registration swallows all args (trailing var-args) so this fires
 /// instead of a clap usage error.
 pub fn run_new_retired() -> i32 {
@@ -44,7 +44,7 @@ pub fn run_new_retired() -> i32 {
     1
 }
 
-/// `sb kill …` retired stub: helpful stderr, exit 1. Same contract as `new`.
+/// `qd kill …` retired stub: helpful stderr, exit 1. Same contract as `new`.
 pub fn run_kill_retired() -> i32 {
     eprintln!("{}", kill_retired_line());
     1
@@ -53,32 +53,32 @@ pub fn run_kill_retired() -> i32 {
 /// P0 start-surface rework (STATE 22 ruling): the retired `attach` stub's exact
 /// stderr line. `connect` already covers attach-or-resume for humans (live →
 /// attach; cold → auto-revive → attach; codex → loud daemon redirect), and
-/// agents drive sessions via `sb send:relay`; `attach` was already internally
+/// agents drive sessions via `qd send:relay`; `attach` was already internally
 /// demoted/hidden — this completes the retirement (the new/kill pattern).
 pub fn attach_retired_line() -> &'static str {
-    "sb attach: `attach` is retired; humans use `sb connect`, agents use `sb send:relay`"
+    "qd attach: `attach` is retired; humans use `qd connect`, agents use `qd send:relay`"
 }
 
-/// `sb attach …` retired stub: helpful stderr, exit 1. Same contract as
+/// `qd attach …` retired stub: helpful stderr, exit 1. Same contract as
 /// `new`/`kill` (trailing pass-through swallows any args, never touches state).
 pub fn run_attach_retired() -> i32 {
     eprintln!("{}", attach_retired_line());
     1
 }
 
-/// The retired `sb start --agent` stub's exact stderr line. Role/agent CONTENT
+/// The retired `qd start --agent` stub's exact stderr line. Role/agent CONTENT
 /// (the `<name>.md` definitions the old static-agent path resolved under
-/// `~/.sb/plugins/core/agents/`) now lives in the work-model PLUGIN; spawning a
+/// `~/.quorum/dispatch/plugins/core/agents/`) now lives in the work-model PLUGIN; spawning a
 /// role is `bond commission <role>.md`, not the engine's native `--agent`. The
 /// engine refuses the flag with this teaching error instead of resolving a
 /// path it no longer owns (the new/kill/attach retirement pattern). Pinned
 /// by a unit test so the wording can't drift.
 pub fn start_agent_retired_line() -> &'static str {
-    "sb start --agent is retired: role/agent content lives in the work-model plugin now. \
+    "qd start --agent is retired: role/agent content lives in the work-model plugin now. \
      Commission a role via `bond commission <path-to-role>.md --name … --goal …` instead."
 }
 
-/// `sb start --agent <name>` retired guard: helpful stderr, exit 1. Fires from
+/// `qd start --agent <name>` retired guard: helpful stderr, exit 1. Fires from
 /// `run_new` BEFORE any preflight/claim/launch, so nothing is created. Same
 /// contract as the other retired stubs.
 pub fn run_start_agent_retired() -> i32 {
@@ -97,19 +97,19 @@ mod tests {
     fn retired_stub_lines_are_pinned() {
         assert_eq!(
             new_retired_line(),
-            "sb new: `new` is retired; use `sb start`"
+            "qd new: `new` is retired; use `qd start`"
         );
         assert_eq!(
             kill_retired_line(),
-            "sb kill: `kill` is retired; use `sb stop`"
+            "qd kill: `kill` is retired; use `qd stop`"
         );
         assert_eq!(
             attach_retired_line(),
-            "sb attach: `attach` is retired; humans use `sb connect`, agents use `sb send:relay`"
+            "qd attach: `attach` is retired; humans use `qd connect`, agents use `qd send:relay`"
         );
         assert_eq!(
             start_agent_retired_line(),
-            "sb start --agent is retired: role/agent content lives in the work-model plugin now. \
+            "qd start --agent is retired: role/agent content lives in the work-model plugin now. \
              Commission a role via `bond commission <path-to-role>.md --name … --goal …` instead."
         );
     }

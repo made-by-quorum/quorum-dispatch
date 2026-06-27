@@ -1,4 +1,4 @@
-G-ADOPTED G-ALT VERDICT: PASS — render-during + no-altscreen-leak (client + reattach replay) + restore-equivalence through sb attach (ADR-0004)
+G-ADOPTED G-ALT VERDICT: PASS — render-during + no-altscreen-leak (client + reattach replay) + restore-equivalence through qd attach (ADR-0004)
 
 render-during (less content visible while attached)=true
 no-altscreen-leak: PASS

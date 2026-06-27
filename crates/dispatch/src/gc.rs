@@ -1,4 +1,4 @@
-//! `sb gc` core (spec §5.2; TS `commands/gc.ts`).
+//! `qd gc` core (spec §5.2; TS `commands/gc.ts`).
 //!
 //! Prune stale, DEAD, file-class artifacts to recoverable trash:
 //!   - dead CC JSONL transcripts (≥7d old AND no live PID),

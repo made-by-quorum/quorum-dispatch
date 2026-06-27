@@ -18,7 +18,7 @@ _run_seam() {
     . lib/jail.sh; . lib/normalize.sh; . lib/check_python.sh; . lib/compare.sh
     . lib/stub_claude/stub_install.sh
     jail_establish; stub_install
-    export JAIL_SB_CMD=sb JAIL_ZMX_CMD=zmx
+    export JAIL_SB_CMD=qd JAIL_ZMX_CMD=zmx
     eval "export '"$seam_env"'"
     SCN_OUT=$JAIL_ROOT/out.raw
     . '"$scn"'

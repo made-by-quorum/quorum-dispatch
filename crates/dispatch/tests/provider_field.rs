@@ -1,5 +1,5 @@
 //! codex P1, R2 (codex-p1-spec section 4) — provider-field byte-stability +
-//! read-back + acting-verb refusal, driving the REAL `sb` binary
+//! read-back + acting-verb refusal, driving the REAL `qd` binary
 //! (`CARGO_BIN_EXE_qd`) against a JAILED, empty HOME (L9a / ADD-4 — never the real
 //! home; HOME + ZMX_DIR point into a per-test tempdir).
 //!
@@ -20,7 +20,7 @@ fn sb_bin() -> &'static str {
 }
 
 /// Forge a single registry row `<pid>.json` under a freshly-jailed HOME and run
-/// `sb <args...>`. Returns (exit_code, stdout, stderr). The jail mirrors
+/// `qd <args...>`. Returns (exit_code, stdout, stderr). The jail mirrors
 /// verbs_a4.rs: HOME → `<dir>/home`, ZMX_DIR → an empty `<dir>/zmx`.
 fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
@@ -36,7 +36,7 @@ fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32,
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -114,13 +114,13 @@ fn weird_provider_survives_render_but_acting_verb_refuses() {
         "the unknown provider value renders verbatim, got: {json}"
     );
 
-    // Acting-verb refusal: `sb connect` refuses with the EXACT message + exit 1.
+    // Acting-verb refusal: `qd connect` refuses with the EXACT message + exit 1.
     let t2 = tempfile::tempdir().unwrap();
     let (code, _out, err) = run_sb_with_row(t2.path(), 90201, row, &["connect", "wp"]);
     assert_eq!(code, 1, "connect refuses an unknown provider with exit 1");
     assert_eq!(
         err.trim_end(),
-        "sb connect: unknown provider \"weird-prov\" — this engine supports: claude-code.",
+        "qd connect: unknown provider \"weird-prov\" — this engine supports: claude-code.",
         "exact refusal wording (one source of truth: refuse_unknown_provider)"
     );
 }

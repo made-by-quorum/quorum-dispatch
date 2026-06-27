@@ -1,4 +1,4 @@
-//! REAL `sb bootstrap` backend. Thin binding over the pure [`dispatch::bootstrap`]
+//! REAL `qd bootstrap` backend. Thin binding over the pure [`dispatch::bootstrap`]
 //! library: resolve HOME → engine paths, wire the real seams (fs / `RealExec` /
 //! TTY prompt / relay probe / native relay registration / shell-integration
 //! offer), run, and print the `[bootstrap]` report. Exit 0/1 ONLY (ADR 0008):
@@ -11,7 +11,7 @@
 //! Code owns its own MCP config location/format (the hand-written
 //! `~/.claude/.mcp.json` of ADR 0016 is NOT read by CC 2.1.x). The shell step
 //! offers the ONE-LINE eval-init hook; the wrapper body ships in the binary via
-//! `sb init` and is never baked into rc files.
+//! `qd init` and is never baked into rc files.
 
 use std::path::Path;
 
@@ -28,9 +28,9 @@ use dispatch::shell_init::{init_line, rc_path, Shell};
 
 use super::super::tty;
 
-/// `sb bootstrap` — set up the engine's local data dir (`~/.sb` + `~/.sb/state`),
+/// `qd bootstrap` — set up the engine's local data dir (`~/.quorum/dispatch` + `~/.quorum/dispatch/state`),
 /// run the zmx capability notice, the native relay-registration offer, and the
-/// shell-integration offer. Idempotent: a re-run on an existing `~/.sb` is a
+/// shell-integration offer. Idempotent: a re-run on an existing `~/.quorum/dispatch` is a
 /// no-op apart from re-checks.
 pub fn run() -> i32 {
     let env = RealEnv;
@@ -40,7 +40,7 @@ pub fn run() -> i32 {
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => h,
         None => {
-            eprintln!("sb bootstrap: HOME is not set — cannot resolve the engine state dir.");
+            eprintln!("qd bootstrap: HOME is not set — cannot resolve the engine state dir.");
             return 1;
         }
     };
@@ -115,7 +115,7 @@ pub fn run() -> i32 {
         None
     };
     let register = || -> Result<String, String> {
-        // Register the BARE `sb` command (resolved via PATH) — never goes stale on
+        // Register the BARE `qd` command (resolved via PATH) — never goes stale on
         // a binary move/upgrade (relay-path hardening v2). Return the command for
         // the report line.
         register::register_relay(&exec).map(|_| register::RELAY_BARE_COMMAND.to_string())
@@ -159,7 +159,7 @@ pub fn run() -> i32 {
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
-        out.push_str("\n# sb shell integration (claude wrapper) — see `sb init --help`.\n");
+        out.push_str("\n# qd shell integration (claude wrapper) — see `qd init --help`.\n");
         out.push_str(init_line(shell));
         out.push('\n');
         std::fs::write(rc, out).map_err(|e| e.to_string())
@@ -194,7 +194,7 @@ pub fn run() -> i32 {
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let ext_interactive = interactive && install_extensions_enabled;
     let pins = dispatch::extensions::pinned();
-    let sbx_pin_label = short_pin(&pins.sbx.rev);
+    let sbx_pin_label = short_pin(&pins.qb.rev);
     let plugin_pin_label = short_pin(&pins.plugins.rev);
     let install_script = resolve_install_script(&env);
     let run_installer = |sub: &str| -> Result<(), String> {
@@ -215,7 +215,7 @@ pub fn run() -> i32 {
         }
     };
     let e_prompt = |q: &str| tty::prompt_yes_no_default_no(q);
-    let install_sbx = || run_installer("sbx");
+    let install_sbx = || run_installer("qb");
     let install_plugin = || run_installer("plugin");
     let extensions_deps = ExtensionsDeps {
         interactive: ext_interactive,
@@ -242,7 +242,7 @@ pub fn run() -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("sb bootstrap: {e}");
+            eprintln!("qd bootstrap: {e}");
             1
         }
     }
@@ -281,7 +281,7 @@ fn resolve_install_script(env: &impl Env) -> Option<std::path::PathBuf> {
     let candidates = [
         dir.join("scripts/install-extensions.sh"),
         dir.join("../scripts/install-extensions.sh"),
-        // target/release/sb → repo-root/scripts.
+        // target/release/qd → repo-root/scripts.
         dir.join("../../scripts/install-extensions.sh"),
         dir.join("../../../scripts/install-extensions.sh"),
     ];

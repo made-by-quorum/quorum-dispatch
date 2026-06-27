@@ -1,19 +1,19 @@
 //! WP-B5-i (D) — the live-CLI addressability round-trip (the headline DoD).
 //!
-//! Drives the REAL `sb` binary end-to-end (`sb start --headless` → `sb ls` →
-//! `sb connect` by id AND name) against a JAILED HOME, with a real per-session
+//! Drives the REAL `qd` binary end-to-end (`qd start --headless` → `qd ls` →
+//! `qd connect` by id AND name) against a JAILED HOME, with a real per-session
 //! qrmux daemon, a real registry, and a real socket — ONLY `claude` is faked
 //! (a fixture script via `CLAUDE_BIN`, the existing `headless_b2b2b` pattern,
 //! lifted to the CLI surface). The fixture HOLDS BUSY for a controlled window so
 //! the `connect → Observe` dispatch (which is inherently BUSY-window behaviour —
 //! a child-pid-keyed headless row whose claude child has exited is correctly
 //! Cold→revive) is DETERMINISTIC, not racy. This is `#[ignore]` (it spawns real
-//! `sb` subprocesses + a detached daemon + sleeps), run explicitly:
+//! `qd` subprocesses + a detached daemon + sleeps), run explicitly:
 //!
 //!   cargo test -p dispatch --test headless_cli_addressability -- --ignored --nocapture
 //!
 //! Proves (lead's D requirements):
-//!  (1) in the held-busy window: `sb connect <name>` AND `sb connect <id>` both
+//!  (1) in the held-busy window: `qd connect <name>` AND `qd connect <id>` both
 //!      reach OBSERVE (the read-only dashboard), NOT Cold→revive; the raw
 //!      registry status flips busy→idle across the turn.
 //!  (2) the minted row is ls/resolve-addressable by id AND name — asserted both
@@ -34,7 +34,7 @@ fn sb_bin() -> &'static str {
 
 const SESSION: &str = "hlcli";
 /// The fixture's fixed `system/init` session_id — the minted row's stable id, so
-/// the round-trip can `sb connect <id>` deterministically.
+/// the round-trip can `qd connect <id>` deterministically.
 const SID: &str = "fa4ec110-0000-4000-8000-000000000001";
 
 /// A fake `claude -p` that mints a busy row, HOLDS busy for `SBX_FAKE_BUSY_SECS`,
@@ -90,8 +90,8 @@ impl Jail {
         self.home.join(".claude").join("sessions")
     }
 
-    /// Run `sb <args>` with the jailed env; `current_dir` = the jailed HOME so the
-    /// per-session cwd threaded onto `sb start` (WP-B5-i C) is the jail home — a
+    /// Run `qd <args>` with the jailed env; `current_dir` = the jailed HOME so the
+    /// per-session cwd threaded onto `qd start` (WP-B5-i C) is the jail home — a
     /// bonus end-to-end check of (C) through the real CLI.
     fn run(&self, args: &[&str]) -> std::process::Output {
         Command::new(sb_bin())
@@ -105,11 +105,11 @@ impl Jail {
             .env_remove("SB_MUX")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .output()
-            .expect("spawn sb")
+            .expect("spawn qd")
     }
 }
 
-/// Parse `sb ls --json` stdout (a top-level array) and find the row named `name`.
+/// Parse `qd ls --json` stdout (a top-level array) and find the row named `name`.
 fn ls_find(out_stdout: &str, name: &str) -> Option<serde_json::Value> {
     serde_json::from_str::<Vec<serde_json::Value>>(out_stdout)
         .ok()?
@@ -130,20 +130,20 @@ fn pid_alive(pid: i64) -> bool {
 }
 
 #[test]
-#[ignore = "spawns real sb subprocesses + a detached daemon + sleeps; run explicitly with --ignored --nocapture"]
+#[ignore = "spawns real qd subprocesses + a detached daemon + sleeps; run explicitly with --ignored --nocapture"]
 fn live_cli_addressability_round_trip_fake_claude() {
     let root = tempfile::tempdir().unwrap();
     let j = jail(root.path(), 18);
     let sessions_dir = j.sessions_dir();
 
-    // --- sb start --headless: launch the headless turn via the real CLI -------
+    // --- qd start --headless: launch the headless turn via the real CLI -------
     let start = j.run(&["start", SESSION, "--headless", "-p", "hi"]);
     let s_out = String::from_utf8_lossy(&start.stdout);
     let s_err = String::from_utf8_lossy(&start.stderr);
     assert_eq!(
         start.status.code(),
         Some(0),
-        "sb start --headless must exit 0; stdout={s_out} stderr={s_err}"
+        "qd start --headless must exit 0; stdout={s_out} stderr={s_err}"
     );
     assert!(
         s_out.contains("Launched headless session"),
@@ -151,12 +151,12 @@ fn live_cli_addressability_round_trip_fake_claude() {
     );
     println!("[start] {}", s_out.trim());
 
-    // --- poll `sb ls --json` until the minted row appears (busy) --------------
+    // --- poll `qd ls --json` until the minted row appears (busy) --------------
     let deadline = Instant::now() + Duration::from_secs(8);
     let (pid, mut ls_row) = loop {
         assert!(
             Instant::now() < deadline,
-            "minted row never appeared in `sb ls --json` within 8s"
+            "minted row never appeared in `qd ls --json` within 8s"
         );
         let ls = j.run(&["ls", "--json"]);
         if ls.status.code() == Some(0) {
@@ -172,7 +172,7 @@ fn live_cli_addressability_round_trip_fake_claude() {
     };
     println!("[ls] minted row appeared: pid={pid} status=busy row={ls_row}");
 
-    // (2) addressable by id AND name in the `sb ls` machine surface (DURING busy).
+    // (2) addressable by id AND name in the `qd ls` machine surface (DURING busy).
     assert_eq!(
         ls_row.get("name").and_then(|v| v.as_str()),
         Some(SESSION),
@@ -183,7 +183,7 @@ fn live_cli_addressability_round_trip_fake_claude() {
         Some(SID),
         "ls row addressable by stable id (sessionId)"
     );
-    // (C bonus) the per-session cwd threaded onto `sb start` landed on the row.
+    // (C bonus) the per-session cwd threaded onto `qd start` landed on the row.
     let home_canon = std::fs::canonicalize(&j.home).unwrap();
     assert_eq!(
         ls_row
@@ -191,7 +191,7 @@ fn live_cli_addressability_round_trip_fake_claude() {
             .and_then(|v| v.as_str())
             .map(PathBuf::from),
         Some(home_canon.clone()),
-        "minted row records the per-session cwd threaded onto sb start (WP-B5-i C)"
+        "minted row records the per-session cwd threaded onto qd start (WP-B5-i C)"
     );
 
     // (+) CHILD-PID keying at the CLI level: the addressable pid is the LIVE
@@ -221,15 +221,15 @@ fn live_cli_addressability_round_trip_fake_claude() {
         assert_eq!(
             c.status.code(),
             Some(0),
-            "sb connect by {label} must exit 0; stdout={c_out} stderr={c_err}"
+            "qd connect by {label} must exit 0; stdout={c_out} stderr={c_err}"
         );
         assert!(
             c_out.contains("Observing headless session"),
-            "sb connect by {label} must reach OBSERVE (not Cold→revive); stdout={c_out}"
+            "qd connect by {label} must reach OBSERVE (not Cold→revive); stdout={c_out}"
         );
         assert!(
             !c_out.contains("Revived") && !c_err.contains("Revived"),
-            "sb connect by {label} must NOT revive a live headless target; out={c_out} err={c_err}"
+            "qd connect by {label} must NOT revive a live headless target; out={c_out} err={c_err}"
         );
         println!(
             "[connect {label}] {}",

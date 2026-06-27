@@ -17,7 +17,7 @@
 //! `pid<TAB>identity` to `<jail_root>/daemons.pids`. The identity is the daemon's
 //! `--socket-dir` path (unique per run dir) — a pid-reuse impostor cannot carry it
 //! in its argv. (The qrmux harness spawns daemons directly, so the pid is always
-//! known at spawn — no post-boot lookup is needed here, unlike the engine `sb new`
+//! known at spawn — no post-boot lookup is needed here, unlike the engine `qd new`
 //! family.)
 //!
 //! REAP-AT-SETUP: when a NEW jail initializes (`Jail::establish`), scan the family
@@ -30,7 +30,7 @@
 //! INDEPENDENT of `client::sweep_orphan_daemons` (ppid==1 + exact-binary-path
 //! sweep, fires per spawn): that one is binary-scoped; this one is run-dir-scoped,
 //! owner-gated, and identity-pinned by recorded pidfile. ~Mirror of the engine-side
-//! `crates/sb/tests/c1_gate_inc/daemon_reaper.rs` (cross-crate dup is intentional
+//! `crates/qd/tests/c1_gate_inc/daemon_reaper.rs` (cross-crate dup is intentional
 //! — no shared dependency forced; WS-C follow-up scope note).
 
 use std::path::Path;

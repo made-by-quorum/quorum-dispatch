@@ -389,7 +389,7 @@ pub async fn run_server_ctrl(
         claim_reset: Some(claim_reset.clone()),
         ended: Some(ended.clone()),
         in_flight: Some(in_flight.clone()),
-        // WP-B2b-2b: the injected headless launch factory (sb daemon entry → Some;
+        // WP-B2b-2b: the injected headless launch factory (qd daemon entry → Some;
         // bare qrmux → None). `LaunchHeadless` is refused when None.
         headless: headless.clone(),
     };

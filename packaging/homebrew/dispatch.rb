@@ -2,11 +2,11 @@
 #
 # A7 packaging deliverable (plan §A7: "brew formula + cargo build of single dispatch
 # binary (+ pinned zmx)"). Stage-1 reality, stated plainly:
-#   - The repo (private-org/sb-rust) is PRIVATE: a public `url` cannot resolve
+#   - The repo (private-org/qd-rust) is PRIVATE: a public `url` cannot resolve
 #     without auth. Until the D-phase cutover publishes a release asset, install
 #     from a LOCAL source tarball:
-#       cd <repo> && git archive --prefix=sb-rust/ -o /tmp/sb-rust-local.tar.gz HEAD
-#       SB_FORMULA_LOCAL=/tmp/sb-rust-local.tar.gz \
+#       cd <repo> && git archive --prefix=qd-rust/ -o /tmp/qd-rust-local.tar.gz HEAD
+#       SB_FORMULA_LOCAL=/tmp/qd-rust-local.tar.gz \
 #         brew install --build-from-source --formula packaging/homebrew/dispatch.rb
 #     (the formula prefers $SB_FORMULA_LOCAL when set; the canonical url is the
 #     placeholder the D-phase release will make real).
@@ -18,8 +18,8 @@
 #     (B-track); Stage 1 deliberately pins and ships zmx alongside.
 class Dispatch < Formula
   desc "Session engine for orchestrating Claude Code sessions (Rust port)"
-  homepage "https://github.com/private-org/sb-rust"
-  url ENV.fetch("SB_FORMULA_LOCAL", "https://github.com/private-org/sb-rust/archive/refs/tags/phase-a7.tar.gz")
+  homepage "https://github.com/private-org/qd-rust"
+  url ENV.fetch("SB_FORMULA_LOCAL", "https://github.com/private-org/qd-rust/archive/refs/tags/phase-a7.tar.gz")
   version "0.0.0-a7"
   sha256 ENV["SB_FORMULA_LOCAL"] ? :no_check : "PLACEHOLDER_UNTIL_RELEASE_ASSET_PUBLISHED"
   license :cannot_represent

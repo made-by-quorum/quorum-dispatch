@@ -195,7 +195,7 @@ normalize_ansi_chunks() {
 
 # normalize_durations: collapse volatile elapsed-duration counters to <DUR>.
 #
-# The `sb ping` classifier prints `age=<N>s` and `uptime=<N>s` (and `--prefix`
+# The `qd ping` classifier prints `age=<N>s` and `uptime=<N>s` (and `--prefix`
 # repeats them per session). These are WALL-CLOCK ELAPSED counters derived from
 # now() minus a registry timestamp — volatile across runs the same way a raw
 # timestamp is, but they are NOT in the timestamp shapes above (they are bare

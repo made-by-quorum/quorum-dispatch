@@ -3,9 +3,9 @@ growthbook flags seeded: 19805 bytes
 credentials seeded: yes
 
 ############################################################
-### BOOT 1 -- sb new (default flags) -- REAL CLAUDE #1   ###
+### BOOT 1 -- qd new (default flags) -- REAL CLAUDE #1   ###
 ############################################################
-sb new exit=0
+qd new exit=0
   stdout: Started detached session "sbrg-79329178063075315738-soak"
   stderr: 
   pidfile: /tmp/claude-501/sbrg-runs/79329178063075315738/home/.claude/sessions/79501.json  status=idle
@@ -78,16 +78,16 @@ Message sent to sbrg-79329178063075315738-soak]
   (d3) user-records: before=19 after=19 DELTA=0
   (d3) ANOMALY: expected 1 user-record, got delta=0
 
-=== GROUP (e): 3 x sb wait during busy ===
-  (e1) session busy; calling sb wait
-  (e1) sb wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
-  (e1) ANOMALY: sb wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
-  (e2) session busy; calling sb wait
-  (e2) sb wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
-  (e2) ANOMALY: sb wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
-  (e3) session busy; calling sb wait
-  (e3) sb wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
-  (e3) ANOMALY: sb wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
+=== GROUP (e): 3 x qd wait during busy ===
+  (e1) session busy; calling qd wait
+  (e1) qd wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
+  (e1) ANOMALY: qd wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
+  (e2) session busy; calling qd wait
+  (e2) qd wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
+  (e2) ANOMALY: qd wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
+  (e3) session busy; calling qd wait
+  (e3) qd wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
+  (e3) ANOMALY: qd wait rc=127 out=[test/golden/dryrun/a4-live-boot1-soak.sh: line 304: timeout: command not found]
 
 ############################################################
 ### SOAK TALLY (BOOT 1)                                   ###
@@ -102,9 +102,9 @@ Message sent to sbrg-79329178063075315738-soak]
   BELT HOLDS (728 -> 728, zero leaked prefixed rows)
 
 ############################################################
-### EXIT-CONTRACT SPOT-CHECK (sb new -p) -- REAL CLAUDE #2 ###
+### EXIT-CONTRACT SPOT-CHECK (qd new -p) -- REAL CLAUDE #2 ###
 ############################################################
-  sb new -p exit code (echo $?): 0
+  qd new -p exit code (echo $?): 0
   stdout:
     Started detached session "sbrg-79329178063075315738-exitp"
     Prompt delivered to "sbrg-79329178063075315738-exitp"

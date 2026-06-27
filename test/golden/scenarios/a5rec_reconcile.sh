@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# scenario: a5rec reconcile — TS sb `reconcile --dry-run` shapes (READ-ONLY).
+# scenario: a5rec reconcile — TS qd `reconcile --dry-run` shapes (READ-ONLY).
 #
-# ADD-12 (binding): destructive `sb reconcile` (no --dry-run) is OFF on macOS —
+# ADD-12 (binding): destructive `qd reconcile` (no --dry-run) is OFF on macOS —
 # TS legacyZmxDirs() defaults scanRoots to ["/tmp"] with the REAL uid
 # (utils.ts:113 at pin 0d0fa9e), so a non-dry run would sweep the HOST's /tmp
 # org sessions. We record DRY-RUN ONLY: the verb's dry-run guard blocks every
@@ -25,7 +25,7 @@ scn_run() {
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=reconcile mode=--dry-run (ADD-12: destructive OFF on macOS)"
         echo "# NON-DRY 'Repaired' line: LIMA-DEFERRED (G-X1) — TS sweeps literal /tmp; sweep-belt refuses on brano."
-        echo "\$ sb reconcile --dry-run (clean — all agree)"
+        echo "\$ qd reconcile --dry-run (clean — all agree)"
         scn_sb reconcile --dry-run 2>&1
     } > "$SCN_OUT"
     # Forge I1: a LIVE registry entry whose PID is dead (HOME-bounded forged file).
@@ -33,7 +33,7 @@ scn_run() {
     printf '{"pid":%d,"name":"%sdeadreg","status":"idle","sessionId":"deadreg-rec","cwd":"%s","startedAt":1700000000000,"updatedAt":1700000000000}\n' \
         "$DEADPID" "$JAIL_PREFIX" "$JAIL_ROOT/tmp" > "$HOME/.claude/sessions/$DEADPID.json"
     {
-        echo "\$ sb reconcile --dry-run (forged I1 dead-PID registry → Would repair)"
+        echo "\$ qd reconcile --dry-run (forged I1 dead-PID registry → Would repair)"
         scn_sb reconcile --dry-run 2>&1
     } >> "$SCN_OUT"
     printf '0\n' > "$SCN_OUT.exit"

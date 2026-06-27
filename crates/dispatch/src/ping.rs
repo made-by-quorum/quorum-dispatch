@@ -1,4 +1,4 @@
-//! `sb ping` — generic session-liveness classifier (Phase G), ported from
+//! `qd ping` — generic session-liveness classifier (Phase G), ported from
 //! `0d0fa9e:src/commands/ping.ts`. Absorbs the legacy `monitor.sh` health-checker
 //! + its multi-session sweep into the engine.
 //!

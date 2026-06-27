@@ -1,7 +1,7 @@
 === A4 BOOT-#6 PHASE A PRE-VERIFICATION (no real claude) ===
   date: 2026-06-05 00:35:34 EDT
-  worktree: /home/u/work/sb-rust/.claude/worktrees/agent-ab1242104580d00ca
-  sb: 0.1.0
+  worktree: /home/u/work/qd-rust/.claude/worktrees/agent-ab1242104580d00ca
+  qd: 0.1.0
 
 --- GREP PROOF: no timeout(1) in this driver ---
   OK: no bare timeout(1) invocation in the driver (only --timeout flag / wrapper prose)
@@ -17,14 +17,14 @@
     PASS: wrapper propagates non-zero exactly
   1d tmo 5 <missing-cmd> -> rc=127 (child exec-fail surfaces as 127, wrapper intact)
 
-=== CHECK 2: fakerepl boot + sb wait rows (status-keyed) ===
-  sb new exit=0 : Started detached session "sbrg-92840178063413432593-fr"
+=== CHECK 2: fakerepl boot + qd wait rows (status-keyed) ===
+  qd new exit=0 : Started detached session "sbrg-92840178063413432593-fr"
   resolution belt: sbrg-92840178063413432593-fr resolves uniquely in-jail (OK)
-  2a sb wait (idle) rc=0 out=[sbrg-92840178063413432593-fr is idle]
+  2a qd wait (idle) rc=0 out=[sbrg-92840178063413432593-fr is idle]
     PASS: idle-at-entry -> 'is idle' exit 0
-  2b sb wait (busy->idle) rc=0 out=[Waiting for sbrg-92840178063413432593-fr... done]
+  2b qd wait (busy->idle) rc=0 out=[Waiting for sbrg-92840178063413432593-fr... done]
     PASS: busy -> ' done' exit 0
-  2c sb wait --timeout 5 (kept busy) rc=1 out=[Waiting for sbrg-92840178063413432593-fr... timeout]
+  2c qd wait --timeout 5 (kept busy) rc=1 out=[Waiting for sbrg-92840178063413432593-fr... timeout]
     PASS: kept-busy --timeout 5 -> ' timeout' exit 1
 
 === CHECK 3: send:pty path ===
@@ -38,6 +38,6 @@
 === REAL-HOME BELT after: 728 (HOLDS) ===
 
 === PRE-VERIFICATION SUMMARY ===
-  ALL PRE-VERIFICATION CHECKS PASSED — wrapper mechanics + sb wait + send
+  ALL PRE-VERIFICATION CHECKS PASSED — wrapper mechanics + qd wait + send
   path + --wait clean-failure all GREEN. No rc=127-class anomaly. GO for boot.
 === DONE (teardown via trap) ===

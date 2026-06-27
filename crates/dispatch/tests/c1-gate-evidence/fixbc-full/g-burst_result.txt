@@ -3,5 +3,5 @@ G-BURST VERDICT: PASS — 64KB single-write burst via engine send path; app-outp
 burst bytes=65536, expected sha256(payload)=b043d142c5142b55f5cce53cb7c88632b7dfc1f768c0f4efc53c38d4420daf9f
 engine send path (send_text_chunked, 1024B code-point-safe chunks) delivered the burst
 app-output byte-exact (sha256 of raw-captured outfile)=true, outfile_len=65536, recovered_sha=b043d142c5142b55f5cce53cb7c88632b7dfc1f768c0f4efc53c38d4420daf9f
-soak-ledger-entry.md written: /home/u/work/wt-c1-panelfix/crates/sb/tests/c1-gate-evidence/fixbc-full/soak-ledger-entry.md
+soak-ledger-entry.md written: /home/u/work/wt-c1-panelfix/crates/qd/tests/c1-gate-evidence/fixbc-full/soak-ledger-entry.md
 

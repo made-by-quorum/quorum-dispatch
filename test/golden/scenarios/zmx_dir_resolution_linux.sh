@@ -12,9 +12,9 @@
 # collapse(TMPDIR)/zmx-<uid>. The macOS row records the EXPLICIT ZMX_DIR tier; this
 # row records the two tiers BELOW it that only resolve meaningfully on Linux. The
 # load-bearing property is the OUTCOME (which dir the session's socket lands in),
-# not a fabricated print-line — sb exposes no "print resolved zmx dir" surface.
+# not a fabricated print-line — qd exposes no "print resolved zmx dir" surface.
 #
-# STUB-BACKED (§S): drives the pinned-TS `sb new` against the deterministic stub
+# STUB-BACKED (§S): drives the pinned-TS `qd new` against the deterministic stub
 # (CLAUDE_BIN=jail-rooted shim) through REAL zmx 0.6.0 so a real zmx session is
 # created, then OBSERVES where its socket landed on the filesystem and asserts it
 # equals the dir resolveZmxDir's rule selects for that tier.
@@ -38,7 +38,7 @@ _zd_uid() { id -u 2>/dev/null || echo 0; }
 
 # _zd_collapse <path> — mirror utils.ts collapseRepeatedSegments: drop CONSECUTIVE
 # duplicate path segments. Used to compute the EXPECTED collapsed TMPDIR dir
-# INDEPENDENTLY of sb (so the assert is non-vacuous: a real divergence in sb's
+# INDEPENDENTLY of qd (so the assert is non-vacuous: a real divergence in qd's
 # collapse would make resolved != expected).
 _zd_collapse() {
     printf '%s' "$1" | awk '
@@ -57,7 +57,7 @@ _zd_collapse() {
 }
 
 # _zd_drive_and_observe <name> <expected_dir> <env-overrides...>
-# Boot a stub-backed `sb new <name>` with the given env overrides (e.g. ZMX_DIR
+# Boot a stub-backed `qd new <name>` with the given env overrides (e.g. ZMX_DIR
 # unset, a compounded TMPDIR), then find where the session's zmx socket landed.
 # Emits the resolved dir on stdout (empty on miss). The session is killed (pinned
 # to the dir it actually landed in) before return so teardown finds nothing live.
@@ -71,7 +71,7 @@ _zd_drive_and_observe() {
         sh -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1
 
     # Observe: poll for the session socket appearing under the EXPECTED dir. We
-    # check the rule's predicted dir; if sb resolved elsewhere the socket is NOT
+    # check the rule's predicted dir; if qd resolved elsewhere the socket is NOT
     # there and resolved stays empty (-> assert fails, non-vacuous).
     local resolved="" i=0
     while [ "$i" -lt 20 ]; do
@@ -83,7 +83,7 @@ _zd_drive_and_observe() {
     done
     # Kill the session pinned to where it actually lives (resolved or expected),
     # via zmx directly under the jail env (the socket is under JAIL_ROOT, so this
-    # is hermetic). jail_kill_session uses sb's resolution which may differ per
+    # is hermetic). jail_kill_session uses qd's resolution which may differ per
     # tier, so we kill by the observed dir explicitly + belt with teardown.
     local killdir="${resolved:-$expected}"
     ZMX_DIR="$killdir" "$JAIL_ZMX_CMD" kill "$name" --force >/dev/null 2>&1 \

@@ -3,7 +3,7 @@
 //! ## The bug
 //! The warranty belt (`lifecycle.rs:586`) reads `~/.claude.json` ONCE and nags
 //! when the user-scope `relay` MCP key is absent. But the writer set is **claude
-//! processes only** (`sb` never writes that file — it mutates only via
+//! processes only** (`qd` never writes that file — it mutates only via
 //! `claude mcp add/remove`): concurrent claude sessions share the user-global
 //! file and atomically temp+fsync+rename it ~10×/turn with **no cross-process
 //! lock**. A lost-update — a session writing back a config snapshot it read
@@ -214,7 +214,7 @@ mod tests {
         fn sleep_ms(&self, _ms: u64) {}
     }
 
-    const PRESENT: &str = r#"{"mcpServers":{"relay":{"command":"sb","args":["relay:serve"]}}}"#;
+    const PRESENT: &str = r#"{"mcpServers":{"relay":{"command":"qd","args":["relay:serve"]}}}"#;
     const ABSENT: &str = r#"{"mcpServers":{"playwright":{}}}"#;
 
     fn presence(seq: Vec<Option<&str>>, attempts: usize) -> RelayVerdict {
@@ -314,8 +314,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".claude.json");
         atomic_write(&path, PRESENT);
-        let v1 = r#"{"mcpServers":{"relay":{"command":"sb"},"a":{}}}"#;
-        let v2 = r#"{"mcpServers":{"b":{},"relay":{"command":"sb"}}}"#;
+        let v1 = r#"{"mcpServers":{"relay":{"command":"qd"},"a":{}}}"#;
+        let v2 = r#"{"mcpServers":{"b":{},"relay":{"command":"qd"}}}"#;
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut writers = Vec::new();
         for body in [v1, v2] {

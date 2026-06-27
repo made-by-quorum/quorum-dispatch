@@ -11,9 +11,9 @@
 #     utils.ts:341-346) and completes on status==idle (decideWait 359-365; send.ts
 #     224-294). Works on busy sessions (attribution by record, not busy/idle cycles).
 #
-# §S: drives the pinned-TS `sb send:pty` against the stub. To EXERCISE queue-to-busy
+# §S: drives the pinned-TS `qd send:pty` against the stub. To EXERCISE queue-to-busy
 # (not just the idle path), turn 1 runs with STUB_BUSY_HOLD_MS so the stub stays busy
-# while turn 2 (a >400-char PASTE-BURST, the FINDING-E1 surface) is sent --wait: sb
+# while turn 2 (a >400-char PASTE-BURST, the FINDING-E1 surface) is sent --wait: qd
 # observes status==busy -> send-queue; the queued message drains on idle and --wait
 # anchors on its user record. Session-targeting verbs use scn_sb_target (A4 belt).
 #

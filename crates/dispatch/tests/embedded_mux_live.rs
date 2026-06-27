@@ -18,16 +18,16 @@
 //!
 //! **COLD-START coverage (C1 M4fix):** because these crate-level tests pre-spawn,
 //! they do NOT exercise the PRODUCTION cold-start path where SB ITSELF must launch
-//! the daemon (the Lima a6 bug: `current_exe() server` failed for the `sb` binary).
+//! the daemon (the Lima a6 bug: `current_exe() server` failed for the `qd` binary).
 //! That path is covered at GATE level by `tests/c1_gate.rs::g_coldstart`, which
-//! drives the real `sb new` with NO pre-spawned daemon and asserts SB stood the
-//! daemon up via its hidden `sb qrmux-server` entry (+ a severed-launch mutation
+//! drives the real `qd new` with NO pre-spawned daemon and asserts SB stood the
+//! daemon up via its hidden `qd qrmux-server` entry (+ a severed-launch mutation
 //! control). Do not "fix" this file to cold-start — the cross-crate binary
 //! constraint is real; the gate arm owns cold-start.
 //!
 //! ## sun_path budget
 //!
-//! The jail root sits under literal `/tmp/sb-embedded-runs/` (TEST infra, NOT
+//! The jail root sits under literal `/tmp/qd-embedded-runs/` (TEST infra, NOT
 //! engine code — ADD-14 governs ENGINE writes; the daemon socket at
 //! `<jail>/xdg/qrmux/qrmux.sock` must fit macOS's 104-byte sun_path, so the base
 //! must be short). The engine-resolved dir is asserted to NOT create qrmux-named
@@ -61,7 +61,7 @@ impl Jail {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = PathBuf::from("/tmp/sb-embedded-runs").join(format!("{tag}-{nanos}"));
+        let root = PathBuf::from("/tmp/qd-embedded-runs").join(format!("{tag}-{nanos}"));
         let home = root.join("h");
         let xdg_runtime = root.join("x");
         std::fs::create_dir_all(&home).unwrap();
@@ -114,9 +114,9 @@ fn qrmux_binary() -> PathBuf {
     dir
 }
 
-/// The ADD-14 belt predicate (R-F), SCOPED to qrmux*/sb-shaped names at the /tmp
+/// The ADD-14 belt predicate (R-F), SCOPED to qrmux*/qd-shaped names at the /tmp
 /// ROOT — the production default an un-de-/tmp'd resolver would emit
-/// (`/tmp/qrmux`, `/tmp/qrmux-<uid>`, `/tmp/sb-<uid>`, `/tmp/sb/...`). It must NOT
+/// (`/tmp/qrmux`, `/tmp/qrmux-<uid>`, `/tmp/qd-<uid>`, `/tmp/qd/...`). It must NOT
 /// match a deeper jail path that merely nests under /tmp for the sun_path budget.
 fn is_tmp_root_qrmux_path(dir: &Path) -> bool {
     let s = dir.to_string_lossy();
@@ -124,17 +124,17 @@ fn is_tmp_root_qrmux_path(dir: &Path) -> bool {
         return false;
     };
     // The FIRST /tmp segment must be one of the un-de-/tmp'd PRODUCTION DEFAULTS:
-    // `qrmux`, `qrmux-<uid>`, `sb`, or `sb-<uid-digits>`. (Deliberately NOT a broad
-    // `sb-` prefix — the test's own jail base `sb-embedded-runs` must not match;
-    // `sb-<digits>` is the uid-suffixed default shape only.)
+    // `qrmux`, `qrmux-<uid>`, `qd`, or `qd-<uid-digits>`. (Deliberately NOT a broad
+    // `qd-` prefix — the test's own jail base `qd-embedded-runs` must not match;
+    // `qd-<digits>` is the uid-suffixed default shape only.)
     let first = rest.split('/').next().unwrap_or("");
     first == "qrmux"
-        || first == "sb"
+        || first == "qd"
         || first
             .strip_prefix("qrmux-")
             .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
         || first
-            .strip_prefix("sb-")
+            .strip_prefix("qd-")
             .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
 }
 
@@ -453,7 +453,7 @@ fn adapter_verb_mapping_against_real_daemon() {
 }
 
 /// ADD-14 belt (item 7, spec A14-1 rider R-F): zero NEW literal-/tmp paths with
-/// qrmux*/sb-shaped names created by the engine resolution + adapter — SCOPED to
+/// qrmux*/qd-shaped names created by the engine resolution + adapter — SCOPED to
 /// those name-classes so shared-host /tmp churn can't flake it.
 #[test]
 fn add14_no_new_literal_tmp_qrmux_paths() {
@@ -462,13 +462,13 @@ fn add14_no_new_literal_tmp_qrmux_paths() {
 
     // The engine-resolved dir for a JAILED run (XDG set) lands under the jail's
     // runtime dir, NEVER at the UN-jailed literal-/tmp default. The belt's scope is
-    // the qrmux/sb name-classes at the /tmp ROOT (e.g. `/tmp/qrmux`, `/tmp/sb-uid`)
+    // the qrmux/qd name-classes at the /tmp ROOT (e.g. `/tmp/qrmux`, `/tmp/qd-uid`)
     // — the production default an un-de-/tmp'd resolver would have produced — NOT
     // the test's own jail base (which legitimately nests under /tmp for sun_path).
     let dir = resolve_qrmux_dir(&jail.home, &env).unwrap();
     assert!(
         !is_tmp_root_qrmux_path(&dir),
-        "engine qrmux dir must not be a literal-/tmp-ROOT qrmux/sb path: {dir:?}"
+        "engine qrmux dir must not be a literal-/tmp-ROOT qrmux/qd path: {dir:?}"
     );
     // And it sits under the jailed XDG runtime dir (tier 1) — the agreement that
     // makes the belt above non-trivial (it resolved to the jail, not /tmp).
@@ -478,7 +478,7 @@ fn add14_no_new_literal_tmp_qrmux_paths() {
     );
 
     // Tier 2 (no XDG) lands under the jailed HOME (<home>/.quorum/dispatch/mux), never at a
-    // /tmp-ROOT qrmux/sb default. (The jail HOME itself nests under /tmp for the
+    // /tmp-ROOT qrmux/qd default. (The jail HOME itself nests under /tmp for the
     // sun_path budget — that's test infra, not an engine /tmp write.)
     let env2 = EmbeddedEnv {
         xdg_runtime_dir: None,
@@ -488,7 +488,7 @@ fn add14_no_new_literal_tmp_qrmux_paths() {
     let dir2 = resolve_qrmux_dir(&jail.home, &env2).unwrap();
     assert!(
         !is_tmp_root_qrmux_path(&dir2),
-        "tier-2 dir must not be a /tmp-root qrmux/sb path: {dir2:?}"
+        "tier-2 dir must not be a /tmp-root qrmux/qd path: {dir2:?}"
     );
     assert_eq!(
         dir2,

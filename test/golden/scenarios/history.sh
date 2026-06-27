@@ -4,7 +4,7 @@
 #
 # Corpus entry: `history` — zmx serializes its server-side VT scrollback (the
 # machinery that makes reattach-replay work; EMPIRICAL-RESULTS.md, L6). There is no
-# `sb history` engine verb at the pin (zmx history is used internally, send.ts:146),
+# `qd history` engine verb at the pin (zmx history is used internally, send.ts:146),
 # so this row records the zmx-VT BACKLOG-COMPLETENESS property the engine relies on:
 # lines a DETACHED session produced are retained server-side and surface in
 # `zmx history`. Comparator class = semantic (backlog-completeness): every produced
@@ -18,7 +18,7 @@
 #     -o substring view), so it catches DUPLICATES and BANNER-PREFIX corruption around
 #     present lines (e.g. "BANNER:SBLINE 7") that the -o ordering view cannot see.
 #
-# §S: boot a stub-backed session (detached, clients=0) via the pinned-TS sb, drive
+# §S: boot a stub-backed session (detached, clients=0) via the pinned-TS qd, drive
 # the stub's deterministic backlog generator ("EMIT N" -> SBLINE 1..N to the PTY),
 # then read `zmx history` and assert all N lines survived in order + content-intact.
 # The recorded expectation is the deterministic backlog OUTCOME, not timing-variable
@@ -44,7 +44,7 @@ scn_run() {
         sleep 1; i=$((i + 1))
     done
 
-    # Drive the backlog generator while DETACHED (sb new -d leaves clients=0). The
+    # Drive the backlog generator while DETACHED (qd new -d leaves clients=0). The
     # SBLINE rows enter zmx's server-side VT — the retention property under test.
     scn_sb_target send:pty "$name" "EMIT $SCN_HISTORY_N" >/dev/null 2>&1
     sleep 2

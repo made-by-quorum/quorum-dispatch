@@ -1,11 +1,11 @@
-//! Daemon-side headless launch factory (WP-B2b-2b, design §D-2b) — the sb-side
+//! Daemon-side headless launch factory (WP-B2b-2b, design §D-2b) — the qd-side
 //! object injected into `qrmux`'s `DaemonCtx` so the embedded daemon
 //! ([`crate::bin::dispatch::daemon`] → `run_server`) can launch a `claude -p`
 //! stream-json turn and write the registry status row in real time.
 //!
-//! qrmux cannot reference [`crate::daemon_status::RegistryStatusSink`] (sb depends
+//! qrmux cannot reference [`crate::daemon_status::RegistryStatusSink`] (qd depends
 //! on qrmux, never the reverse — the governing constraint). So the COMPOSITE sink
-//! is assembled sb-side: this factory resolves the launch posture (the SAME
+//! is assembled qd-side: this factory resolves the launch posture (the SAME
 //! `claude_bin`/`claude_flags`/env resolvers the interactive path uses — seam #1)
 //! AND builds the `RegistryStatusSink`; qrmux's `SessionManager::create_headless`
 //! fans that out with its own `SocketFanoutSink` so ONE reader/pump drives both.
@@ -38,12 +38,12 @@ pub struct DaemonHeadlessFactory {
     pub cwd: Option<String>,
     /// The sessions dir holding `<pid>.json` (the registry row this daemon mints).
     pub sessions_dir: PathBuf,
-    /// The idstore path (`<state_dir>/ids.jsonl`) — the SAME store `sb ls` folds.
+    /// The idstore path (`<state_dir>/ids.jsonl`) — the SAME store `qd ls` folds.
     /// WP-B5-ii-b PROOF 3: on a headless RESUME the factory resolves the child's
     /// OWN stable sbId from its recorded `session_id` here (`mint_or_get`) and
     /// injects it as `SB_SESSION_ID` (internal self-identity, parity with the
     /// interactive path). Because it is the same store keyed by the same UUID, the
-    /// injected `SB_SESSION_ID` MATCHES the sbId `sb ls` surfaces for the
+    /// injected `SB_SESSION_ID` MATCHES the sbId `qd ls` surfaces for the
     /// daemon-minted child-pid row (the row↔env consistency invariant).
     pub ids_path: PathBuf,
     /// R3b-Step-0: the per-daemon shared **signal-B** progress producer. Threaded
@@ -63,7 +63,7 @@ pub struct DaemonHeadlessFactory {
 
 impl DaemonHeadlessFactory {
     /// Resolve the production launch posture from the daemon's environment + the
-    /// sb paths. Env-inheriting (`clear_env=false`, `env=[]`): the embedded daemon
+    /// qd paths. Env-inheriting (`clear_env=false`, `env=[]`): the embedded daemon
     /// was itself launched with the correct HOME/PATH, so the headless child
     /// inherits it.
     ///
@@ -102,7 +102,7 @@ impl HeadlessFactory for DaemonHeadlessFactory {
         cwd: Option<&str>,
         claude_args: &[String],
     ) -> anyhow::Result<HeadlessLaunchPlan> {
-        // WP-B5-i: the per-session cwd threaded from `sb start` WINS; fall back to
+        // WP-B5-i: the per-session cwd threaded from `qd start` WINS; fall back to
         // the factory's own `cwd` (None in production) when the request omits it.
         // This is the value BOTH the child spawns in (`launch.cwd`) AND the minted
         // row records (`MintIdentity.cwd`) — they must agree.
@@ -113,14 +113,14 @@ impl HeadlessFactory for DaemonHeadlessFactory {
         // these ahead of `-p PROMPT`).
         let mut flags = self.flags.clone();
         flags.extend(claude_args.iter().cloned());
-        // WP-B5-ii-b PROOF 3 (headless SB_SESSION_ID parity, sb-supervisor-10
+        // WP-B5-ii-b PROOF 3 (headless SB_SESSION_ID parity, qd-supervisor-10
         // ruling): a headless agent must self-identify via `$SB_SESSION_ID` exactly
         // as the interactive path does (whoami.rs PREFERS it; relay self-registration
-        // + self-directed `sb` need it). The interactive/zmux path injects it via
+        // + self-directed `qd` need it). The interactive/zmux path injects it via
         // `launch_env_pairs` (`resume.rs` → `prepare_claude_resume_env`); the D3
         // headless path DIVERGED and never did — that divergence is the bug this
         // closes. Resolve the child's OWN stable sbId from its RECORDED `session_id`
-        // via the SAME idstore `sb ls` folds (so the injected `SB_SESSION_ID`
+        // via the SAME idstore `qd ls` folds (so the injected `SB_SESSION_ID`
         // MATCHES the sbId of the daemon-minted child-pid row — one identity, two
         // surfaces, the row↔env consistency invariant). A future fork resumes its
         // OWN session_id → mints its OWN sbId (never the parent's) — forward-
@@ -139,7 +139,7 @@ impl HeadlessFactory for DaemonHeadlessFactory {
                 Err(e) => {
                     // Self-id is best-effort — never fail the launch on an idstore
                     // hiccup; the external child-pid row identity still lands.
-                    eprintln!("sb[daemon_headless]: SB_SESSION_ID resolve skipped: {e}");
+                    eprintln!("qd[daemon_headless]: SB_SESSION_ID resolve skipped: {e}");
                     None
                 }
             }
@@ -167,7 +167,7 @@ impl HeadlessFactory for DaemonHeadlessFactory {
         // WP-B5-i: the registry-write half of the composite, DEFERRED until the
         // claude child pid is known (post-spawn). The factory mints the
         // CHILD-PID-keyed row on the first `Republish::Ready` (the daemon-mint
-        // fallback — claude writes no row headless), carrying the sb `name`, the
+        // fallback — claude writes no row headless), carrying the qd `name`, the
         // per-session `cwd`, the `headless` discriminant, and NO provider field.
         let sessions_dir = self.sessions_dir.clone();
         let identity = MintIdentity {
@@ -179,7 +179,7 @@ impl HeadlessFactory for DaemonHeadlessFactory {
             // "writes no provider field for claude rows"; the join defaults absent
             // → "claude-code", model.rs). Writing an explicit "claude" here (the
             // initial banked mistake) is REJECTED by provider_for/
-            // refuse_unknown_provider → `sb connect` refuses the row "unknown
+            // refuse_unknown_provider → `qd connect` refuses the row "unknown
             // provider" BEFORE the observe resolver runs. `None` mirrors the
             // interactive `<pid>.json` model exactly (the point of option-B
             // identity) so connect/ls/resolve dispatch on the row uniformly.
@@ -228,7 +228,7 @@ mod tests {
         }
     }
 
-    /// WP-B5-i (C): the per-session `cwd` threaded from `sb start` WINS over the
+    /// WP-B5-i (C): the per-session `cwd` threaded from `qd start` WINS over the
     /// factory's own cwd, and `claude_args` are APPENDED to the daemon's resolved
     /// posture flags (posture FIRST). The resolved argv keeps the appended args
     /// ahead of `-p PROMPT` (flags-first byte-stability).
@@ -329,7 +329,7 @@ mod tests {
     /// WP-B5-ii-b PROOF 3 (cheap default-floor mirror of the a1/a4 end-to-end
     /// seeds): a headless RESUME injects `SB_SESSION_ID` LAST, resolved from the
     /// child's OWN recorded `session_id` via the SAME idstore — so the env self-id
-    /// MATCHES the sbId `sb ls` surfaces for the daemon-minted row (the row↔env
+    /// MATCHES the sbId `qd ls` surfaces for the daemon-minted row (the row↔env
     /// consistency invariant). A START launch (`resume_session_id == None`) injects
     /// NONE (byte-stable with pre-B5-ii-b start: FORCE only, no `SB_SESSION_ID`).
     ///
@@ -355,7 +355,7 @@ mod tests {
         let uuid = "11111111-2222-3333-4444-555555555555";
 
         // RESUME: the injected SB_SESSION_ID is the sbId the SAME idstore resolves for
-        // this session_id (the row↔env match — `sb ls` folds the same store/UUID).
+        // this session_id (the row↔env match — `qd ls` folds the same store/UUID).
         let plan = f.resolve("wk", "p", Some(uuid), None, &[]).unwrap();
         let want =
             crate::idstore::mint_or_get(&ids_path, uuid, Some("wk"), &crate::effects::RealClock)
@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(
             sid.as_deref(),
             Some(want.as_str()),
-            "resume injects the child's OWN recorded sbId (matches `sb ls` for the row)"
+            "resume injects the child's OWN recorded sbId (matches `qd ls` for the row)"
         );
         // It lands LAST (the launch_env_pairs discipline).
         assert_eq!(

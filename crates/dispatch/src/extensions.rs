@@ -1,18 +1,18 @@
-//! The pinned-extensions manifest — the SINGLE pin this `sb` blesses (plan 0001
+//! The pinned-extensions manifest — the SINGLE pin this `qd` blesses (plan 0001
 //! child C; ADR 0018).
 //!
 //! ## What this is
-//! One version pin in `sb` determines the matched extension binary (`sbx`) and
+//! One version pin in `qd` determines the matched extension binary (`qb`) and
 //! the work-model plugin. The authoritative pin lives in `extensions.toml` at
 //! the repo root; it is baked into the binary here via [`include_str!`] and
-//! exposed through [`pinned`]. `sb bootstrap`'s extension cascade reads it to
-//! install the EXACT pinned refs, so two clean machines installing the same `sb`
+//! exposed through [`pinned`]. `qd bootstrap`'s extension cascade reads it to
+//! install the EXACT pinned refs, so two clean machines installing the same `qd`
 //! converge on the same combo.
 //!
 //! ## Schema (mirrors the comment in `extensions.toml`)
 //! Two flat sections of double-quoted `key = "value"` pairs:
 //! ```text
-//! [sbx]
+//! [qb]
 //!   repo = "<git remote URL>"        # installed from here
 //!   rev  = "<full git sha>"          # the exact pinned commit
 //! [plugins]
@@ -60,7 +60,7 @@ pub struct Pin {
 pub struct PluginPin {
     pub repo: String,
     pub rev: String,
-    /// The deploy-channel name (e.g. `sbx`). KEEP STABLE.
+    /// The deploy-channel name (e.g. `qb`). KEEP STABLE.
     pub market: String,
     /// The plugin name (e.g. `core`). KEEP STABLE.
     pub plugin: String,
@@ -71,13 +71,13 @@ pub struct PluginPin {
 /// The full pinned-extensions set.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Extensions {
-    /// The pinned `sbx` engine-extension binary.
-    pub sbx: Pin,
+    /// The pinned `qb` engine-extension binary.
+    pub qb: Pin,
     /// The pinned work-model plugin.
     pub plugins: PluginPin,
 }
 
-/// The pinned extensions this `sb` blesses, parsed from the baked manifest.
+/// The pinned extensions this `qd` blesses, parsed from the baked manifest.
 /// Total: a malformed manifest yields empty fields rather than panicking.
 pub fn pinned() -> Extensions {
     parse(MANIFEST)
@@ -114,9 +114,9 @@ fn parse(src: &str) -> Extensions {
         let key = key.trim();
         let val = val.trim().trim_matches('"').to_string();
         match section.as_str() {
-            "sbx" => match key {
-                "repo" => ext.sbx.repo = val,
-                "rev" => ext.sbx.rev = val,
+            "qb" => match key {
+                "repo" => ext.qb.repo = val,
+                "rev" => ext.qb.rev = val,
                 _ => {}
             },
             "plugins" => {
@@ -145,17 +145,17 @@ mod tests {
     #[test]
     fn baked_manifest_parses_with_all_fields_present() {
         let e = pinned();
-        // sbx pin.
+        // qb pin.
         // ssh:// form (NOT scp-style git@github.com:…) — matches extensions.toml
         // after caf8ff2 (cargo install --git rejects scp-style URLs).
-        assert_eq!(e.sbx.repo, "ssh://git@github.com/private-org/sbx.git");
+        assert_eq!(e.qb.repo, "ssh://git@github.com/private-org/qb.git");
         assert_eq!(
-            e.sbx.rev.len(),
+            e.qb.rev.len(),
             40,
-            "sbx rev should be a full sha: {:?}",
-            e.sbx.rev
+            "qb rev should be a full sha: {:?}",
+            e.qb.rev
         );
-        assert!(e.sbx.rev.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(e.qb.rev.chars().all(|c| c.is_ascii_hexdigit()));
         // plugins pin.
         assert_eq!(
             e.plugins.repo,
@@ -164,7 +164,7 @@ mod tests {
         assert_eq!(e.plugins.rev.len(), 40);
         assert!(e.plugins.rev.chars().all(|c| c.is_ascii_hexdigit()));
         // The STABLE deploy coordinates (cache-path inputs) — must not churn.
-        assert_eq!(e.plugins.market, "sbx");
+        assert_eq!(e.plugins.market, "qb");
         assert_eq!(e.plugins.plugin, "core");
         assert_eq!(e.plugins.version, "0.1.0");
     }
@@ -172,25 +172,25 @@ mod tests {
     #[test]
     fn parse_is_total_on_garbage() {
         // No panic, no partial-key corruption — absent fields are empty.
-        let e = parse("garbage\n[sbx]\nrepo = \"x\"\n\n# comment\nnope");
-        assert_eq!(e.sbx.repo, "x");
-        assert_eq!(e.sbx.rev, "");
+        let e = parse("garbage\n[qb]\nrepo = \"x\"\n\n# comment\nnope");
+        assert_eq!(e.qb.repo, "x");
+        assert_eq!(e.qb.rev, "");
         assert_eq!(e.plugins.plugin, "");
     }
 
     #[test]
     fn parse_ignores_unknown_sections_and_keys() {
-        let e = parse("[other]\nrepo = \"ignored\"\n[sbx]\nfoo = \"bar\"\nrev = \"abc\"");
-        assert_eq!(e.sbx.repo, "");
-        assert_eq!(e.sbx.rev, "abc");
+        let e = parse("[other]\nrepo = \"ignored\"\n[qb]\nfoo = \"bar\"\nrev = \"abc\"");
+        assert_eq!(e.qb.repo, "");
+        assert_eq!(e.qb.rev, "abc");
     }
 
     #[test]
     fn parse_reads_the_deploy_market_name() {
         // Build the key from pieces (the literal is banned in engine source).
-        let src = format!("[plugins]\nmarket{} = \"sbx\"\nplugin = \"core\"", "place");
+        let src = format!("[plugins]\nmarket{} = \"qb\"\nplugin = \"core\"", "place");
         let e = parse(&src);
-        assert_eq!(e.plugins.market, "sbx");
+        assert_eq!(e.plugins.market, "qb");
         assert_eq!(e.plugins.plugin, "core");
     }
 }

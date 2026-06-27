@@ -57,8 +57,8 @@ cargo test -p qrmux --lib
 Every test runs under a hermetic per-run jail:
 
 **Environment variables set:**
-- `HOME` — load-bearing for sb registry (captured @ `$JAIL_ROOT/home`)
-- `SB_HOME`, `ZMX_DIR` — sb-specific state
+- `HOME` — load-bearing for qd registry (captured @ `$JAIL_ROOT/home`)
+- `SB_HOME`, `ZMX_DIR` — qd-specific state
 - `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` — XDG dirs
 - `TMPDIR` — per-run temp
 - `SB_RUST_LOCK_DIR` — build lock (scoped to jail)
@@ -69,7 +69,7 @@ Every test runs under a hermetic per-run jail:
 
 **Safety:**
 - Jail prefix: `qrmux-<runid>-` on session names (guards against accidental production kills)
-- Production-path refusal belt: actively forbids touching real HOME, `.sb`, `.claude`, etc.
+- Production-path refusal belt: actively forbids touching real HOME, `.qd`, `.claude`, etc.
 - Fail-closed: if jail setup detects any production path, the test fails immediately
 
 **Cleanup:**
@@ -173,7 +173,7 @@ Evidence tree supports:
 ## References
 
 - **Spec:** `exec/b2-spec.md` (deliverable #4, ground rule 3)
-- **B1 baseline:** `~/work/sb-rust-b1/gate/evidence/attempt2/` (cold-verified)
+- **B1 baseline:** `~/work/qd-rust-b1/gate/evidence/attempt2/` (cold-verified)
 - **B1 decision memo:** `exec/b1-decision-memo.md` (6/6 green, fork recommendation)
 - **Jail pattern:** `test/golden/lib/jail.sh` (tag phase-0b-part1, ADD-4)
 - **Addenda:** `exec/plan-addenda.md` (ADD-1 through ADD-6)

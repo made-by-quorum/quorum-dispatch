@@ -17,12 +17,12 @@
 //      `<run-root>/daemons.pids`. The identity is the daemon's `--socket-dir`
 //      path (unique per run dir) — a pid-reuse impostor can't carry it in argv.
 //      * Direct spawns (`start_daemon`) record at spawn (pid known immediately).
-//      * ENGINE-cold-started daemons (`sb new` auto-launches them) are recorded
+//      * ENGINE-cold-started daemons (`qd new` auto-launches them) are recorded
 //        POST-BOOT via the exact-socket-dir `ps` lookup (`record_engine_daemons`,
 //        mirroring `all_session_daemon_pids`) — per-target because the run dir
 //        is unique to this jail.
 //   3. REAP-AT-SETUP: when a NEW jail of this family initializes, scan the family
-//      root (`/tmp/sb-c1gate-runs/*`) for run dirs whose OWNER PID IS DEAD (prior
+//      root (`/tmp/qd-c1gate-runs/*`) for run dirs whose OWNER PID IS DEAD (prior
 //      runs); for each recorded `pid<TAB>identity`, kill ONLY if the daemon pid is
 //      ALIVE *and* its CURRENT argv still carries the recorded identity (the
 //      pid-reuse belt — never kill on pid alone), then remove the stale dir.
@@ -35,7 +35,7 @@
 // ===========================================================================
 
 /// The fixed family root all c1_gate jails live under (see `Jail::establish`).
-const C1GATE_FAMILY_ROOT: &str = "/tmp/sb-c1gate-runs";
+const C1GATE_FAMILY_ROOT: &str = "/tmp/qd-c1gate-runs";
 
 /// Stamp the OWNING test-harness pid into `<run_root>/owner.pid`. The reaper uses
 /// this to tell a PRIOR (dead-owner) run from a CONCURRENT (live-owner) sibling in
@@ -86,7 +86,7 @@ fn record_daemon_pid(run_root: &Path, pid: u32, identity: &str) {
 
 /// Record EVERY engine-cold-started per-session daemon bound to `dir` (the jail's
 /// resolved socket dir) into `<run_root>/daemons.pids`. Uses the exact-socket-dir
-/// `ps` lookup (`all_session_daemon_pids` shape) — `sb new` auto-launches these,
+/// `ps` lookup (`all_session_daemon_pids` shape) — `qd new` auto-launches these,
 /// so the harness never sees their pid at spawn. Call AFTER the session is live.
 /// Identity recorded is `dir` (carried in the daemon's `--socket-dir` argv).
 #[allow(dead_code)]

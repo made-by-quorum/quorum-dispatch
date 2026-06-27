@@ -26,14 +26,14 @@ pub fn paths_from_home(env: &dyn Env) -> Result<SbPaths, i32> {
     match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => Ok(SbPaths::from_home(std::path::Path::new(&h))),
         None => {
-            eprintln!("sb: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd: HOME is not set — cannot resolve the session state dir.");
             Err(1)
         }
     }
 }
 
 /// The stable-id store path: `<sbHome>/state/ids.jsonl` where `sbHome =
-/// SB_HOME || <home>/.sb` (P0 wave-1; the SB_HOME-honoring `from_home_env`
+/// SB_HOME || <home>/.quorum/dispatch` (P0 wave-1; the SB_HOME-honoring `from_home_env`
 /// resolution, same as marks.jsonl). Returns `Err(exit)` if HOME is unset.
 pub fn ids_store_path(env: &dyn Env) -> Result<std::path::PathBuf, i32> {
     let home = home_path(env)?;
@@ -47,7 +47,7 @@ fn home_path(env: &dyn Env) -> Result<std::path::PathBuf, i32> {
     match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => Ok(std::path::PathBuf::from(h)),
         None => {
-            eprintln!("sb: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd: HOME is not set — cannot resolve the session state dir.");
             Err(1)
         }
     }
@@ -115,7 +115,7 @@ pub fn build_mux_dirs(
         }
         Backend::Embedded => {
             let dir = dispatch::qrmux_dir::resolve_qrmux_dir(home, env).map_err(|msg| {
-                eprintln!("sb: {msg}");
+                eprintln!("qd: {msg}");
                 1
             })?;
             Ok(MuxDirs::embedded(dir))
@@ -172,7 +172,7 @@ pub fn all_sessions_counted(opts: JoinOpts) -> Result<(Vec<Session>, usize), i32
 
     // P0 wave-1: fill stable ids from a READ-ONLY fold of the idstore — no lock
     // taken (torn trailing lines are tolerated by the fold). Reading never
-    // writes; the lazy-mint backfill is `sb ls`'s alone (ls.rs).
+    // writes; the lazy-mint backfill is `qd ls`'s alone (ls.rs).
     let ids = dispatch::idstore::fold(&ids_store_path(&env)?);
     dispatch::idstore::fill_sb_ids(&mut sessions, &ids);
     // WP-B5-iii obl-4: fill a fork's lineage (parent sbId) from the SAME fold —
@@ -266,7 +266,7 @@ pub fn refuse_unknown_provider(verb: &str, s: &Session) -> Option<i32> {
         "claude-code" | "opencode" => None,
         other => {
             eprintln!(
-                "sb {verb}: unknown provider \"{other}\" — this engine supports: claude-code."
+                "qd {verb}: unknown provider \"{other}\" — this engine supports: claude-code."
             );
             Some(1)
         }
@@ -279,12 +279,12 @@ pub fn refuse_unknown_provider(verb: &str, s: &Session) -> Option<i32> {
 // failure), so no caller remained.
 
 /// SHARED codex (daemon-hosted) redirect (W1 ADD-26): a `Hosting::Daemon`
-/// session has NO terminal to attach. Emitted by `sb connect` (codex IS
+/// session has NO terminal to attach. Emitted by `qd connect` (codex IS
 /// supported, just not attachable — the verb-agnostic wording survived the
 /// attach-verb retirement, STATE 22). eprintln!s + returns exit 1.
 pub fn daemon_redirect(name: &str) -> i32 {
     eprintln!(
-        "codex sessions are daemon-hosted (no terminal to attach). Drive it with: sb send:relay {name} <text>   ·   revive it with: sb resume {name}"
+        "codex sessions are daemon-hosted (no terminal to attach). Drive it with: qd send:relay {name} <text>   ·   revive it with: qd resume {name}"
     );
     1
 }
@@ -297,7 +297,7 @@ pub fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Se
     // PID-AWARE liveness for the live-refinement (dup-session fix): a row counts as
     // "live" only when its status is live AND its process is genuinely alive. A
     // stale leftover whose on-disk status still says idle/busy but whose pid is DEAD
-    // no longer collides with the real ALIVE row, so `sb resume/connect/attach <code
+    // no longer collides with the real ALIVE row, so `qd resume/connect/attach <code
     // or name>` resolves to the one true session instead of dying with
     // "Ambiguous — matches 2 sessions". A pid of `None` or `0` means "no pid
     // recorded" (e.g. ZmxOnly rows) — fall back to the status-only view there so we
@@ -381,7 +381,7 @@ pub fn refuse_id_collision(verb: &str, target_id: &str, sessions_dir: &Path) -> 
     let alive = alive_rows_with_id(sessions_dir, target_id);
     if let LiveIdCollision::Collision(rows) = detect_live_id_collision(target_id, &alive) {
         eprintln!(
-            "sb {verb}: id collision — {} live sessions share id {} — refusing to act \
+            "qd {verb}: id collision — {} live sessions share id {} — refusing to act \
              (cannot disambiguate). Kill the duplicate(s) first:",
             rows.len(),
             dispatch::fmt::truncate_id_default(target_id)
@@ -458,7 +458,7 @@ pub fn live_zmx_name_holder(
 /// The D4 guard's EXACT error line (factored so a unit pins the wording).
 pub fn held_name_error_line(verb: &str, zmx_name: &str, holder: &str) -> String {
     format!(
-        "sb {verb}: name \"{zmx_name}\" is held by running session {holder}; \
+        "qd {verb}: name \"{zmx_name}\" is held by running session {holder}; \
          rename or stop it first"
     )
 }
@@ -482,8 +482,8 @@ pub fn refuse_held_zmx_name(
 /// The live-pane refusal's EXACT error line (factored so a unit pins it).
 pub fn live_pane_error_line(verb: &str, pane: &str, pid: i32) -> String {
     format!(
-        "sb {verb}: a RUNNING pane named \"{pane}\" (pid {pid}) holds this name — \
-         refusing to kill a live process. Stop it first (sb stop {pane}) or rename."
+        "qd {verb}: a RUNNING pane named \"{pane}\" (pid {pid}) holds this name — \
+         refusing to kill a live process. Stop it first (qd stop {pane}) or rename."
     )
 }
 
@@ -521,7 +521,7 @@ pub fn clear_stale_panes(
             // refuse on missing evidence rather than kill.
             if pane.pid <= 0 {
                 eprintln!(
-                    "sb {verb}: pane \"{}\" reports no readable pid — cannot prove it is \
+                    "qd {verb}: pane \"{}\" reports no readable pid — cannot prove it is \
                      dead; refusing to clear it. Inspect with: zmx ls",
                     pane.name
                 );
@@ -859,12 +859,12 @@ mod tests {
     fn held_name_error_line_is_pinned() {
         assert_eq!(
             held_name_error_line("resume", "wk", "ab3kx9mq"),
-            "sb resume: name \"wk\" is held by running session ab3kx9mq; \
+            "qd resume: name \"wk\" is held by running session ab3kx9mq; \
              rename or stop it first"
         );
         assert_eq!(
             held_name_error_line("connect", "wk", "ab3kx9mq"),
-            "sb connect: name \"wk\" is held by running session ab3kx9mq; \
+            "qd connect: name \"wk\" is held by running session ab3kx9mq; \
              rename or stop it first"
         );
     }

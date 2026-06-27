@@ -1,5 +1,5 @@
-//! `sb` CLI — the full ENGINE verb surface (A3, spec §2/§3). Replaces A2's
-//! minimal hand-rolled new/attach binary (`bin/sb.rs:1-9` said A3 owns the real
+//! `qd` CLI — the full ENGINE verb surface (A3, spec §2/§3). Replaces A2's
+//! minimal hand-rolled new/attach binary (`bin/qd.rs:1-9` said A3 owns the real
 //! surface).
 //!
 //! Architecture (spec §2, BINDING):
@@ -15,7 +15,7 @@
 //!   tail to ported `config::run_config_logic` / `survey::parse_survey_args` so
 //!   clap never reshapes their errors / exit conventions (survey parse error → 2,
 //!   config bare/--help → 0, unknown subcommand → 2).
-//! - **Default action:** bare `sb` (no verb) runs `ls` (index.ts:202-204).
+//! - **Default action:** bare `qd` (no verb) runs `ls` (index.ts:202-204).
 //!
 //! Real-deps wiring (kept from A2's pattern): `RealExec` / `ZmxMux` / `RealEnv` /
 //! `RealClock` / `SbPaths::from_home(HOME)` / `EventBootWaiter`.
@@ -45,9 +45,9 @@ fn run(argv: &[String]) -> i32 {
     // config / survey: hand-parsed, pre-clap (spec §2). The argv tail after the
     // verb is handed verbatim to the ported pure logic.
     //
-    // qrmux-server: the HIDDEN embedded-daemon entry (C1 M4fix). The sb binary IS
+    // qrmux-server: the HIDDEN embedded-daemon entry (C1 M4fix). The qd binary IS
     // the embedded qrmux daemon — it links qrmux — so the client launcher re-execs
-    // `sb qrmux-server [--socket-dir DIR]` (NOT `sb server`, which has no verb).
+    // `qd qrmux-server [--socket-dir DIR]` (NOT `qd server`, which has no verb).
     // Dispatched PRE-CLAP so it never enters the user-facing clap surface: the a3
     // help/exit-byte surface stays byte-unchanged and the daemon entry can't be
     // commander-error-mangled. Internal-only; not advertised in help.

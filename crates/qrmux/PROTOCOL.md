@@ -278,7 +278,7 @@ is NOT empty and is kept. Empty lines *between* content are preserved — only t
 trailing run of blank visible rows is dropped. Scrollback is never trimmed.
 
 **Why visible rows are included (differs from attach-replay):** the primary
-consumer is the engine boot answerer (`crates/sb` boot path), which ANSI-strips
+consumer is the engine boot answerer (`crates/qd` boot path), which ANSI-strips
 the history and content-matches *dialog text*. Dialogs sit on the VISIBLE screen
 and usually never scroll out, so a scrollback-only reply would be blind to
 exactly what the answerer exists to find. `GetHistory` is a **content-inspection**
@@ -296,7 +296,7 @@ bearing for the boot answerer.
 #### Dev-daemon skew window (named risk, C1 D1/R23; v3 per-session form)
 
 vN↔vM mismatch is a clean refusal **by design**. Production carries NO
-pre-existing qrmux daemons (the Rust `sb` never ran against real state; the
+pre-existing qrmux daemons (the Rust `qd` never ran against real state; the
 B2/B3 daemons were jailed), so the only residual skew risk is a **dev/test
 daemon** left running from an older build while a newer client connects (or
 vice versa). The contract for that case:
@@ -349,7 +349,7 @@ not on echo render. Evidence chain: B1 decision memo divergence #2 + ADD-6.
 Socket dir resolves in **two tiers** (`src/server/socket.rs`):
 
 1. `$XDG_RUNTIME_DIR/qrmux`
-2. `<sbHome>/mux` where `sbHome = $SB_HOME || $HOME/.sb`
+2. `<sbHome>/mux` where `sbHome = $SB_HOME || $HOME/.quorum/dispatch`
 
 Socket file: `<dir>/qrmux.sock`; lockfile `<dir>/qrmux.lock`.
 
@@ -359,7 +359,7 @@ Socket file: `<dir>/qrmux.sock`; lockfile `<dir>/qrmux.lock`.
 the C1 spec and named in ADR 0008): the standalone `socket.rs` fallback mirrors
 the engine's `resolve_qrmux_dir`, so a relocated engine state dir or an
 SB_HOME-only jail moves the mux dir too, and engine + standalone agree fully.
-`$HOME/.sb` is used only when SB_HOME is unset; if neither XDG_RUNTIME_DIR,
+`$HOME/.quorum/dispatch` is used only when SB_HOME is unset; if neither XDG_RUNTIME_DIR,
 SB_HOME, nor HOME is set, resolution fails with a named error.
 
 A **`sun_path`-length guard** runs at resolve time: if `<dir>/qrmux.sock` would

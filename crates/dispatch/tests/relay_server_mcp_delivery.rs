@@ -1,5 +1,5 @@
 //! §4a M4 DELIVERY-SUCCESS parity rows — the FULL-STACK reply path through the real
-//! MCP `tools/call` stdin, driven against the live `sb relay:serve` subprocess.
+//! MCP `tools/call` stdin, driven against the live `qd relay:serve` subprocess.
 //!
 //! Written by QA (the CHECKER), SEPARATE from the M4 implementer AND from the
 //! concurrency red-teamer. This file ADDS rows only — it NEVER modifies the server.
@@ -12,13 +12,13 @@
 //! lost-wakeup trials). NEITHER drives the **DELIVERY-SUCCESS** path through the real
 //! MCP `tools/call` stdin — i.e. a reply submitted via the MCP `reply` TOOL actually
 //! (a) resolving a waiting sender (P-E2) or (b) pushing back to an origin (P-E3),
-//! driven through the real `sb relay:serve` subprocess. THAT is the drop-in contract
+//! driven through the real `qd relay:serve` subprocess. THAT is the drop-in contract
 //! Claude Code depends on. These rows close it.
 //!
 //! ## Why a real subprocess
 //! `mcp::serve_stdio` reads the process's REAL stdin and writes its REAL stdout —
 //! there is no in-process seam for it (the in-process `spawn_for_test` drives ONLY
-//! the HTTP half, never the MCP loop). So every row spawns `target/debug/sb
+//! the HTTP half, never the MCP loop). So every row spawns `target/debug/qd
 //! relay:serve` as a child, pipes JSON-RPC frames into its stdin, and reads
 //! response/notification lines off its stdout. The child stdin handle is held ALIVE
 //! for the test; dropping it → EOF → clean exit.
@@ -56,11 +56,11 @@ use dispatch::relay_http::CcRelay;
 /// under this; a read that blocks past it FAILS the row (never hangs the suite).
 const READ_BUDGET: Duration = Duration::from_secs(8);
 
-/// A high port base OUTSIDE the 8900-9000 jail band (sb's own probe scans that band).
+/// A high port base OUTSIDE the 8900-9000 jail band (qd's own probe scans that band).
 /// Two subprocesses under the same HOME bind distinct ports from this base.
 const PORT_BASE: u16 = 31700;
 
-/// A running `sb relay:serve` child with a line-reader thread draining its stdout.
+/// A running `qd relay:serve` child with a line-reader thread draining its stdout.
 struct McpChild {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -73,14 +73,14 @@ struct McpChild {
 }
 
 impl McpChild {
-    /// Spawn `sb relay:serve` with a FRESH hermetic HOME (its own relay_dir + inbox).
+    /// Spawn `qd relay:serve` with a FRESH hermetic HOME (its own relay_dir + inbox).
     fn spawn(session_id: &str) -> Self {
         let home = tempfile::tempdir().expect("tempdir for HOME");
         let home_path = home.path().to_path_buf();
         Self::spawn_with_home(session_id, &home_path, Some(home))
     }
 
-    /// Spawn `sb relay:serve` reusing an EXISTING HOME dir (shared relay_dir) — used
+    /// Spawn `qd relay:serve` reusing an EXISTING HOME dir (shared relay_dir) — used
     /// by the two-subprocess push-back row so A can discover B's sidecar. The caller
     /// owns the tempdir lifetime (the FIRST child's `_home_guard`); this child holds
     /// no guard.
@@ -103,7 +103,7 @@ impl McpChild {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn sb relay:serve");
+            .expect("spawn qd relay:serve");
 
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
@@ -285,7 +285,7 @@ fn mcp_reply_tool_resolves_a_parked_replies_long_poll_end_to_end() {
     );
 
     // (b) On a thread, park a /replies long-poll for M (the "sender waiting in
-    // sb send:relay --wait"). Give it a generous budget; the resolve should win
+    // qd send:relay --wait"). Give it a generous budget; the resolve should win
     // well within it. The thread is bounded by a join-timeout below so a regression
     // (the waiter NEVER resolved) FAILS loudly instead of hanging.
     let poll_port = port;
@@ -472,8 +472,8 @@ fn mcp_reply_tool_unrecorded_id_is_honest_not_delivered() {
         "must carry the fresh-message guidance, got: {text}"
     );
     assert!(
-        text.contains("sb send:relay"),
-        "guidance must name the sb send:relay escape hatch, got: {text}"
+        text.contains("qd send:relay"),
+        "guidance must name the qd send:relay escape hatch, got: {text}"
     );
 }
 

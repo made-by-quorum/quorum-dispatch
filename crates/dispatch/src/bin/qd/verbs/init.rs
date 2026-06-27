@@ -1,4 +1,4 @@
-//! REAL `sb init <shell>` backend — print the shell-integration script (the
+//! REAL `qd init <shell>` backend — print the shell-integration script (the
 //! eval-init pattern; see [`dispatch::shell_init`] module docs for the why).
 //!
 //! Thin binding: parse the shell name, resolve the zmx dir through the real env

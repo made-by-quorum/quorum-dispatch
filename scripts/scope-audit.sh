@@ -4,9 +4,9 @@
 # minimal slice).
 #
 # WHY: plan success criterion #7 — the engine crates are CONTENT-FREE. Layout,
-# org vocabulary, and product concepts live sbx-side; the engine consumes plain
+# org vocabulary, and product concepts live qb-side; the engine consumes plain
 # paths and opaque payloads. The redteam-retro pass found a banned layout-env
-# concept had been ported into crates/sb (create.rs agents-dir tier) — this
+# concept had been ported into crates/qd (create.rs agents-dir tier) — this
 # audit makes that class of drift a CI failure instead of a review catch.
 #
 # DENY (case-insensitive, crates/** source = *.rs + *.toml):
@@ -35,7 +35,7 @@ if [ -n "$matches" ]; then
     echo "scope-audit: FAIL — banned engine-scope token(s) in crates/** source:" >&2
     printf '%s\n' "$matches" >&2
     echo "scope-audit: engine is content-free (success criterion #7);" >&2
-    echo "scope-audit: move the concept sbx-side or record a fixture exemption." >&2
+    echo "scope-audit: move the concept qb-side or record a fixture exemption." >&2
     exit 1
 fi
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # codex-schema-diff.sh — Codex P2 W1 schema fixture-diff harness (spec section 5).
 #
-# The committed fixture (crates/sb/tests/fixtures/codex-schema/) is the
+# The committed fixture (crates/qd/tests/fixtures/codex-schema/) is the
 # `codex app-server generate-json-schema` dump of the PINNED codex version
 # (VERSION.pin), stored in CANONICAL form (sorted keys, 2-space indent — the
 # python3 round-trip below). This script regenerates from the installed
@@ -25,7 +25,7 @@
 # error; 3 = installed codex version != VERSION.pin (named, before any diff).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-FIXTURE="${SB_CODEX_SCHEMA_FIXTURE:-$ROOT/crates/sb/tests/fixtures/codex-schema}"
+FIXTURE="${SB_CODEX_SCHEMA_FIXTURE:-$ROOT/crates/qd/tests/fixtures/codex-schema}"
 [ -d "$FIXTURE" ] || { echo "codex-schema-diff: FAIL — fixture dir missing: $FIXTURE" >&2; exit 2; }
 
 REGEN=""
@@ -63,7 +63,7 @@ for p in root.rglob('*.json'):
 PYEOF
 fi
 
-# VERSION.pin + manifest.txt are sb-side fixture metadata, not binary output.
+# VERSION.pin + manifest.txt are qd-side fixture metadata, not binary output.
 DIFF=$(diff -ru -x VERSION.pin -x manifest.txt "$FIXTURE" "$REGEN" 2>&1)
 RC=$?
 [ -n "$CLEANUP" ] && rm -rf "$CLEANUP"

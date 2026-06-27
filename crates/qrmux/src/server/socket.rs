@@ -218,7 +218,7 @@ const SHARED_FATE_LEAF_STEM: &str = "shared";
 /// multi-session — the machinery still exists; see
 /// `client_handler::DaemonCtx::check_identity`) AND the client-side ServerHello
 /// identity belt is relaxed (`client::session_client::session_handshake`). The
-/// net effect: both `sb new A` and `sb new B` provably reach ONE daemon process on
+/// net effect: both `qd new A` and `qd new B` provably reach ONE daemon process on
 /// `shared.sock`, so SIGKILLing it kills BOTH — the shared-fate RED the G-ISOL
 /// negative control detects.
 ///
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(dir, xdg.join("qrmux"));
 
         // Tier 2a: no XDG, SB_HOME present → <SB_HOME>/mux.
-        let sb_home = Path::new("/home/u/.sb");
+        let sb_home = Path::new("/home/u/.quorum/dispatch");
         let dir = resolve_socket_dir(None, Some(sb_home), Some(Path::new("/home/u"))).unwrap();
         assert_eq!(dir, sb_home.join("mux"));
 

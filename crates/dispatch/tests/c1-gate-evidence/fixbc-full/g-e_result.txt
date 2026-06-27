@@ -3,13 +3,13 @@ G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx 
 zmx binary: /opt/homebrew/bin/zmx
 PROVENANCE: which zmx=/opt/homebrew/bin/zmx
   zmx version: zmx		0.6.0 | ghostty_vt	ghostty-1.3.2-dev-5UdBC8HuDgWFQtz8pKQ-0HH6z0Cb_PKbI0R7AunQhdDF | socket_dir	/tmp/claude-501/zmx-501 | log_dir		/tmp/claude-501/zmx-501/logs
-  vendored pin: /home/u/work/wt-c1-panelfix/crates/sb/../../vendor/zmx/zmx-0.6.0.tar.gz sha256=4b5a155a0956abb812ab52fb5d65e63cc1d745eee566ea7fd8930393284d4673
-sb new (zmx): exit=0
+  vendored pin: /home/u/work/wt-c1-panelfix/crates/qd/../../vendor/zmx/zmx-0.6.0.tar.gz sha256=4b5a155a0956abb812ab52fb5d65e63cc1d745eee566ea7fd8930393284d4673
+qd new (zmx): exit=0
   stdout: Started detached session "ge-sess"
   stderr: 
-sb ls (zmx): exit=0, lists ge-sess=true
-POSITIVE CONTROL (zmx lane live): zmx socket /tmp/sb-c1gate-runs/ge-1780716379407287000/zmxdir/ge-sess present=true; zmx ls (jailed ZMX_DIR) lists ge-sess with server pid=Some(17170), that pid alive=true
-QRMUX ABSENT IN-LANE: no qrmux socket at engine embedded dir /tmp/sb-c1gate-runs/ge-1780716379407287000/x/qrmux/qrmux.sock = true; no sb qrmux-server bound to it = true
-sb kill (zmx): exit=0
+qd ls (zmx): exit=0, lists ge-sess=true
+POSITIVE CONTROL (zmx lane live): zmx socket /tmp/qd-c1gate-runs/ge-1780716379407287000/zmxdir/ge-sess present=true; zmx ls (jailed ZMX_DIR) lists ge-sess with server pid=Some(17170), that pid alive=true
+QRMUX ABSENT IN-LANE: no qrmux socket at engine embedded dir /tmp/qd-c1gate-runs/ge-1780716379407287000/x/qrmux/qrmux.sock = true; no qd qrmux-server bound to it = true
+qd kill (zmx): exit=0
   stderr: 
 

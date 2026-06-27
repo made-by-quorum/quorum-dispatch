@@ -1,6 +1,6 @@
 # Conventions
 
-Repo-wide rules for sb-rust. These are binding for all phases.
+Repo-wide rules for qd-rust. These are binding for all phases.
 
 ## Permissive schema parsing
 

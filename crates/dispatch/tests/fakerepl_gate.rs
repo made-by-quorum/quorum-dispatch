@@ -18,7 +18,7 @@
 //! - jail-refusal: clean env → 13; partial spoof → 13; valid jail → starts.
 //! - coalescing_note (W7): MEASURE portable-pty chunk coalescing for the README.
 //!
-//! Level 2 (the golden `sb new` exit-code scenario through real zmx) is a LATER
+//! Level 2 (the golden `qd new` exit-code scenario through real zmx) is a LATER
 //! milestone (depends on M2) — NOT in this file.
 
 use std::io::{Read, Write};
@@ -40,7 +40,7 @@ use dispatch::submit::{
 // Locating the fakerepl binary.
 //
 // fakerepl is a DIFFERENT workspace crate, so `CARGO_BIN_EXE_fakerepl` is not
-// available to sb's tests. `cargo test --workspace` builds all workspace
+// available to qd's tests. `cargo test --workspace` builds all workspace
 // binaries before running tests, so `<target>/<profile>/fakerepl` exists. We
 // derive `<target>/<profile>` from the running test exe path
 // (`.../target/<profile>/deps/<testbin>`), which is robust to debug/release and

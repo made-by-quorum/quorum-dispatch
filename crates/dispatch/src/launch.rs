@@ -57,7 +57,7 @@ pub fn claude_flags(env: &impl Env, config_toml_path: &Path) -> Vec<String> {
 }
 
 /// Hand-parse the single `claude_flags = "..."` key from a config.toml. We do NOT
-/// add a toml-crate dependency for one read-side key (A2 adds no `sb config`
+/// add a toml-crate dependency for one read-side key (A2 adds no `qd config`
 /// surface; Cargo.toml has no toml dep — keeping the dep tree minimal). This is a
 /// deliberately minimal line-scan: find a non-comment line `claude_flags = "VALUE"`
 /// (single OR double quotes), return VALUE. Anything fancier (multi-line, tables,
@@ -94,7 +94,7 @@ fn split_ws(s: &str) -> Vec<String> {
     s.split_whitespace().map(|t| t.to_string()).collect()
 }
 
-// --- Render mode (sbx punch item 7: alt-screen inline default) ------------------
+// --- Render mode (qb punch item 7: alt-screen inline default) ------------------
 //
 // Inline rendering = fleet default; alt-screen = per-session opt-in (STATE 64/65,
 // Pete-pinned). Mechanism = launch-time BIRTH PROPERTY: the engine injects
@@ -117,7 +117,7 @@ pub const ALT_SCREEN_DISABLE_KEY: &str = "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN";
 /// issued from inside a claude session (any Bash-tool shell) inherits
 /// CHILD_SESSION into the pane through the mux daemon, so the engine's boot
 /// waiter polls a row that is never written → 40s timeout, healthy-but-
-/// unregistered TUI (board STATE 130). A sb-spawned session is a real, top-level
+/// unregistered TUI (board STATE 130). A qd-spawned session is a real, top-level
 /// session that MUST register; forcing persistence is the fix. Setting FORCE is
 /// deliberately preferred over UNSETTING CHILD_SESSION — it preserves whatever
 /// else keys off the nesting signal while still guaranteeing the row.
@@ -141,7 +141,7 @@ pub enum RenderMode {
 /// `flag` is the per-start request (`--alt-screen` / `--inline`), `None` when
 /// neither flag was given. `config_value` is the raw `render-default` config
 /// value, `None` when unset. An UNKNOWN config value falls through to inline
-/// (permissive read, L8 — `sb config set` rejects bad values at write time, so
+/// (permissive read, L8 — `qd config set` rejects bad values at write time, so
 /// this only happens on a hand-edited file).
 pub fn resolve_render_mode(flag: Option<RenderMode>, config_value: Option<&str>) -> RenderMode {
     if let Some(f) = flag {
@@ -154,7 +154,7 @@ pub fn resolve_render_mode(flag: Option<RenderMode>, config_value: Option<&str>)
 }
 
 /// Read the raw `render-default` value from the config file (the SAME
-/// SB_HOME-honoring path `sb config` writes — `secrets::resolve_config_path`),
+/// SB_HOME-honoring path `qd config` writes — `secrets::resolve_config_path`),
 /// or `None` when the file/key is absent. Permissive (L8): a read failure never
 /// hard-fails a launch.
 pub fn render_default_from_config(env: &dyn Env) -> Option<String> {
@@ -169,7 +169,7 @@ pub fn render_default_from_config(env: &dyn Env) -> Option<String> {
 /// `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` — merely omitting the export leaves
 /// the child INHERITING the var from its spawn environment (after cutover the
 /// fleet runs inline, so parent environments carry it: an agent in an inline
-/// session running `sb start child --alt-screen` would get an INLINE child).
+/// session running `qd start child --alt-screen` would get an INLINE child).
 /// Inline needs no unset — its export is an explicit set that clobbers
 /// anything inherited. The birth property is asserted BOTH directions, never
 /// by absence.
@@ -180,7 +180,7 @@ pub fn render_env_unsets(render: RenderMode) -> Vec<String> {
     }
 }
 
-/// Options for a `sb new` launch (mirrors the TS `opts` object, utils.ts:219).
+/// Options for a `qd new` launch (mirrors the TS `opts` object, utils.ts:219).
 #[derive(Debug, Default, Clone)]
 pub struct NewOpts {
     pub resume: Option<String>,
@@ -192,7 +192,7 @@ pub struct NewOpts {
     pub model: Option<String>,
 }
 
-/// Build the `extra` args for a `sb new` claude launch (port of `buildNewExtraArgs`,
+/// Build the `extra` args for a `qd new` claude launch (port of `buildNewExtraArgs`,
 /// utils.ts:217-230).
 ///
 /// The session --name plus resume/fork/agent options, then any PASS-THROUGH claude
@@ -235,7 +235,7 @@ pub fn build_new_extra_args(
 /// utils.ts:232-238).
 ///
 /// `command` (bash builtin) bypasses the claude() wrapper function — so launching
-/// under `bash -lc` never recurses into `sb new` — and PATH-resolves the real
+/// under `bash -lc` never recurses into `qd new` — and PATH-resolves the real
 /// binary on ANY machine. An explicit absolute CLAUDE_BIN also runs fine via
 /// `command`.
 ///
@@ -285,7 +285,7 @@ fn build_claude_cmd_from_tokens(tokens: Vec<&str>) -> String {
 // utils.ts placement) and is available to a future create wiring too.
 //
 // zmx launches sessions via `zmx run <name> bash -lc <claudeCmd>`. The session
-// inherits zmx's spawn env (login shell), NOT the `sb new`/`resume` caller's
+// inherits zmx's spawn env (login shell), NOT the `qd new`/`resume` caller's
 // env. So ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY exported in the runner shell
 // (e.g. to route through claude-code-router) never reach claude. Fix: capture
 // the whitelisted backend vars at resume time, write them to a per-session
@@ -326,7 +326,7 @@ pub fn capture_backend_env(env: &impl Env) -> Vec<(String, String)> {
 ///
 /// `sb_session_id` is `Some` whenever the verb minted/resolved a stable id:
 /// ALWAYS on resume/revive (the UUID is known, `mint_or_get` ran) and on every
-/// production `sb start` (unbound pre-mint); `None` only in unit fixtures.
+/// production `qd start` (unbound pre-mint); `None` only in unit fixtures.
 ///
 /// `render` (punch item 7): [`RenderMode::Inline`] injects
 /// `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` (the fleet-default birth property);
@@ -357,7 +357,7 @@ pub fn launch_env_pairs(
     pairs
 }
 
-/// The per-session env file path, `<home>/.sb/session-env/<name>.env`
+/// The per-session env file path, `<home>/.quorum/dispatch/session-env/<name>.env`
 /// (`sessionEnvFilePath`, utils.ts:584-586). HOME-rooted via the injected `home`
 /// (L9a — never the real home directly).
 pub fn session_env_file_path(home: &Path, session_name: &str) -> PathBuf {
@@ -475,7 +475,7 @@ pub fn session_env_prefix(
     let f = session_env_file_path(home, session_name);
     let f = f.to_string_lossy();
     format!(
-        "{{ . '{f}'; }} || {{ echo 'sb: env file source failed, aborting session' >&2; exit 97; }}; rm -f -- '{f}'; "
+        "{{ . '{f}'; }} || {{ echo 'qd: env file source failed, aborting session' >&2; exit 97; }}; rm -f -- '{f}'; "
     )
 }
 
@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn claude_flags_precedence_env_over_config_over_default() {
-        let nonexistent = Path::new("/tmp/does-not-exist-sb-config.toml");
+        let nonexistent = Path::new("/tmp/does-not-exist-qd-config.toml");
 
         // Default when nothing set.
         assert_eq!(
@@ -614,9 +614,9 @@ mod tests {
         assert_eq!(extra, vec!["--name", "n", "--extra"]);
     }
 
-    // Pete feedback #6 (duplicate session ids) regression pin. sb does NOT mint its
+    // Pete feedback #6 (duplicate session ids) regression pin. qd does NOT mint its
     // own id — a claude fork's id-freshness rides ENTIRELY on `--fork-session` being
-    // emitted on the fork path (`sb start <name> --fork <session>`): claude mints a fresh UUID
+    // emitted on the fork path (`qd start <name> --fork <session>`): claude mints a fresh UUID
     // only when it sees that flag. Without it every fork would INHERIT the parent's
     // UUID → two sessions, same id. This pins the flag on (fork) and its ABSENCE off
     // (no fork), so a silent regression that drops it reds here.
@@ -969,7 +969,7 @@ mod tests {
     }
 
     /// `render_default_from_config` reads the top-level `render-default` key
-    /// from the SB_HOME-honoring config path (the same file `sb config` writes).
+    /// from the SB_HOME-honoring config path (the same file `qd config` writes).
     #[test]
     fn render_default_from_config_reads_sb_home_config() {
         let dir = tempfile::tempdir().unwrap();

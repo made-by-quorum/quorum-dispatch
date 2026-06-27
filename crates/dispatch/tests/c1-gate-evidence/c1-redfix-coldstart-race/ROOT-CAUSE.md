@@ -2,7 +2,7 @@
 
 ## The red
 CI run 27049722958 (phase/c1-swap @ 5f0297f, doc-only over passing 2562cdf):
-macOS `g_coldstart` FAILED at the CHAIN step — `sb send:pty` exit 1,
+macOS `g_coldstart` FAILED at the CHAIN step — `qd send:pty` exit 1,
 stderr "Session is not in zmx — cannot send." with `ls` GREEN
 (`lists cold-sess=true`), pre-spawn-free precondition GREEN, mutation
 control GREEN.
@@ -10,8 +10,8 @@ control GREEN.
 ## Verdict: (a) — a propagation race. NOT (b).
 
 ### (b) refuted by audit
-`sb ls` and `sb send:pty` share the SAME backend-aware session-resolution path:
-`common::all_sessions` (crates/sb/src/bin/sb/verbs/common.rs:100) parses SB_MUX
+`qd ls` and `qd send:pty` share the SAME backend-aware session-resolution path:
+`common::all_sessions` (crates/qd/src/bin/qd/verbs/common.rs:100) parses SB_MUX
 ONCE, builds the embedded mux AND `MuxDirs::embedded(qrmux_dir)`, and scans that
 dir via `join::gather_with_dirs`. There is NO unconditional `resolve_zmx_dir` in
 the resolution path (send.rs:141 `resolve_zmx_dir` is only the `op_dir` fallback,
@@ -30,7 +30,7 @@ Engine instrumentation (SB_DIAG_JOIN) printed, at the FAILING `send`'s gather:
 External `ps` taken microseconds later:
 
     reg pid 7180 ancestors(3)=[7176, 7100]
-    7100  1     sb qrmux-server --socket-dir .../qrmux       (daemon)
+    7100  1     qd qrmux-server --socket-dir .../qrmux       (daemon)
     7176  7100  bash -lc '...fake-claude.sh ...'             (MUX SESSION PID)
     7180  7176  cat                                          (REGISTRY PID)
 
@@ -44,8 +44,8 @@ the snapshot, after the registry row (written by fake-claude's `printf` BEFORE
   - `ls` sees the session (registry row alone gives the NAME) -> GREEN.
   - `send` finds `zmx_name = None` (ancestry walk missed) -> "not mux-live".
 
-This is a REAL user-facing product bug: a user running `sb new` then immediately
-`sb send` hits the same window — claude's registry row lands before its ppid edge
+This is a REAL user-facing product bug: a user running `qd new` then immediately
+`qd send` hits the same window — claude's registry row lands before its ppid edge
 to the mux-tracked shell is visible in `ps`.
 
 ## The fix (eliminates the race window by DESIGN)
@@ -82,5 +82,5 @@ and the zmx session remains a separate ZmxOnly row (byte-stable).
 ## Loop counts
 - PRE-FIX:  15/30 FAIL single-threaded; ~50% under CPU load. (CI: intermittent.)
 - POST-FIX: 30/30 PASS under the same 3x-`yes` CPU load that produced ~50% pre-fix.
-- Full workspace suite: GREEN (sb lib 622 incl. 2 new join tests).
+- Full workspace suite: GREEN (qd lib 622 incl. 2 new join tests).
 - clippy --workspace --all-targets -D warnings: clean. cargo fmt --all --check: clean.

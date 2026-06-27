@@ -1,8 +1,8 @@
-# sb-rust
+# qd-rust
 
-A Rust rewrite of **sb**. This repository hosts two crates:
+A Rust rewrite of **qd**. This repository hosts two crates:
 
-- **`sb`** — the engine crate (`crates/sb`). The core sb engine.
+- **`qd`** — the engine crate (`crates/qd`). The core qd engine.
 - **`qrmux`** — the mux crate (`crates/qrmux`).
 
 At this stage the crates are **content-free scaffolding**: they exist to anchor the
@@ -46,7 +46,7 @@ fields never hard-fail deserialization.
 
 ```
 Cargo.toml            workspace manifest
-crates/sb/            engine crate
+crates/qd/            engine crate
 crates/qrmux/         mux crate
 scripts/build-lock.sh build mutex (mkdir-based, stale-recovery)
 .github/workflows/    CI (macOS arm64 + Linux x86_64)

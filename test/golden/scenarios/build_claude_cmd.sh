@@ -8,7 +8,7 @@
 # --dangerously-skip-permissions --dangerously-load-development-channels server:relay
 # (NOT config-sourced — ADR-0004 ADD-9a note; "from config" is the Rust target).
 #
-# §S: sb has no print-cmd surface at the pin, so we observe buildClaudeCmd's REAL
+# §S: qd has no print-cmd surface at the pin, so we observe buildClaudeCmd's REAL
 # output via the STUB: the shell expands `command '<shim>' <flags> --name <name>`
 # into the stub's argv, which the stub dumps to ~/.claude/stub-launch-argv.txt. The
 # scenario boots a stub-backed session and reads that argv to assert the exact flag

@@ -55,8 +55,8 @@ eq "pid/label-collapse" \
     "pid=<PID> (pid <PID>)" \
     "$(printf 'pid=4242 (pid 99)\n' | normalize_pids | tr -d '\n')"
 eq "pid/json-collapse" \
-    "/var/sb/<PID>.json" \
-    "$(printf '/var/sb/12345.json\n' | normalize_pids | tr -d '\n')"
+    "/var/qd/<PID>.json" \
+    "$(printf '/var/qd/12345.json\n' | normalize_pids | tr -d '\n')"
 # (b) preserves bare numbers (coordinates, counts) — NOT every int is a pid
 eq "pid/preserve-bare" \
     "rows 24 cols 80 lines 3" \

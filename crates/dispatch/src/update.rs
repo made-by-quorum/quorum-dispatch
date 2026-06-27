@@ -1,20 +1,20 @@
-//! `sb update` — self-update (A5 spec §4.3; named divergence §9 item 3).
+//! `qd update` — self-update (A5 spec §4.3; named divergence §9 item 3).
 //!
-//! FRESH DESIGN, not a port: TS `sb update` ran `bun install -g <repo>`
+//! FRESH DESIGN, not a port: TS `qd update` ran `bun install -g <repo>`
 //! (0d0fa9e:src/commands/update.ts). The Rust engine ships via cargo or
 //! Homebrew, so the update mechanism is rebuilt around those two channels:
 //!
-//!   - exe under a Homebrew prefix (`*/Cellar/*` ancestry) → `brew upgrade sb`
+//!   - exe under a Homebrew prefix (`*/Cellar/*` ancestry) → `brew upgrade qd`
 //!     (argv-level only until A7 lands the formula).
 //!   - exe under `~/.cargo/bin`                            → `cargo install
-//!     --git <repo> --locked sb` (repo = the workspace Cargo.toml `repository`).
+//!     --git <repo> --locked qd` (repo = the workspace Cargo.toml `repository`).
 //!   - neither                                            → guidance + exit 1.
 //!
 //! Library-first (spec §2): [`decide_update_action`] is PURE over the resolved
 //! exe path + env; the runtime ([`run_update`]) is a thin shell over an injected
 //! exec seam, so unit tests assert the constructed argv + channel detection on
 //! EVERY branch WITHOUT running a real `cargo`/`brew` (the TS test
-//! "sb update (injected exec — never runs real bun)" equivalent). Exit codes are
+//! "qd update (injected exec — never runs real bun)" equivalent). Exit codes are
 //! 0/1 ONLY (ADR 0008): a clean update inherits the child's exit; a channel we
 //! cannot determine is exit 1.
 
@@ -23,7 +23,7 @@ use std::path::Path;
 /// The workspace repository (Cargo.toml `repository` field). Used to build the
 /// `cargo install --git <repo>` argv. Kept as a const here AND read from the
 /// real manifest by the bin layer so the two never drift.
-pub const REPO_URL: &str = "https://github.com/private-org/sb-rust";
+pub const REPO_URL: &str = "https://github.com/private-org/qd-rust";
 
 /// The Homebrew formula name (A7 lands the real formula; until then the
 /// `brew upgrade` path is argv-level only).
@@ -35,9 +35,9 @@ pub const CARGO_CRATE: &str = "dispatch";
 /// The resolved update channel + the argv to run, OR a hard error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// `brew upgrade sb`.
+    /// `brew upgrade qd`.
     Brew { argv: Vec<String> },
-    /// `cargo install --git <repo> --locked sb`.
+    /// `cargo install --git <repo> --locked qd`.
     Cargo { argv: Vec<String> },
     /// Could not determine the channel → guidance + exit 1.
     Unknown { message: String },

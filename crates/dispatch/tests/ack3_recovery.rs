@@ -110,7 +110,7 @@ impl Jail {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let base = PathBuf::from("/tmp/sb-ack3rec");
+        let base = PathBuf::from("/tmp/qd-ack3rec");
         let root = base.join("sbrg-runs").join(format!("{tag}-{nanos}"));
         let home = root.join("home");
         let xdg = base.join(format!("x-{tag}-{nanos}"));
@@ -175,7 +175,7 @@ impl Jail {
 }
 
 // ===========================================================================
-// sb driver: blocking (run_sb) + child spawn (spawn_sb)
+// qd driver: blocking (run_sb) + child spawn (spawn_sb)
 // ===========================================================================
 
 fn build_cmd(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> Command {
@@ -204,7 +204,7 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
     // WP-B-CS-1 (D2): force the INTERACTIVE surface for `start` — this harness pipes
     // stdio (`.output()`), so a bare start auto-detects the HEADLESS surface. These
     // recovery tests exercise the interactive create + -p delivery. Behavior delta
-    // (non-TTY `sb start -p` is headless by design now) flagged in the response.
+    // (non-TTY `qd start -p` is headless by design now) flagged in the response.
     let injected: Vec<String>;
     let arg_refs: Vec<&str>;
     let args: &[&str] = if args.first() == Some(&"start") {
@@ -220,7 +220,7 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
     } else {
         args
     };
-    let out = build_cmd(jail, args, extra).output().expect("spawn sb");
+    let out = build_cmd(jail, args, extra).output().expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -228,13 +228,13 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
     )
 }
 
-/// Spawn `sb` as a detached CHILD (handle kept so the test can SIGKILL it).
+/// Spawn `qd` as a detached CHILD (handle kept so the test can SIGKILL it).
 fn spawn_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> Child {
     build_cmd(jail, args, extra)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .expect("spawn sb child")
+        .expect("spawn qd child")
 }
 
 /// SIGKILL a child by pid (WatchGuard::Drop cannot run — the §7 dead-writer gap).

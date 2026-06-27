@@ -35,7 +35,7 @@ trap 'rm -rf "$TMP"' EXIT
 # good_cr.raw     — a capture with CR/LF that must survive (dropped-CR target)
 # good_pass.raw   — a clean passthrough capture (no-altscreen target)
 GOOD_HELP="$TMP/good_help.raw"
-printf 'Usage: sb <command>\r\n  ls    list sessions\r\n  new   create\r\n' > "$GOOD_HELP"
+printf 'Usage: qd <command>\r\n  ls    list sessions\r\n  new   create\r\n' > "$GOOD_HELP"
 GOOD_REPLAY="$TMP/good_replay.raw"
 { i=1; while [ "$i" -le 10 ]; do printf 'GLINE %d payload\r\n' "$i"; i=$((i+1)); done; } > "$GOOD_REPLAY"
 GOOD_PASS="$TMP/good_pass.raw"

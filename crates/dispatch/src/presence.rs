@@ -48,7 +48,7 @@ pub struct Presence {
     pub incarnation: Option<u64>,
     /// Layer-1 liveness (OS truth).
     pub liveness: LifecycleState,
-    /// The `sb ls` readiness facet (`None` for not-alive).
+    /// The `qd ls` readiness facet (`None` for not-alive).
     pub readiness: Option<Readiness>,
     /// SNAPSHOT health — `Dead`/`Idle`/`Busy` only. `Wedged` is authoritative ONLY
     /// via [`health_of`] (the two-signal guard); `presence_of` has no live signals.

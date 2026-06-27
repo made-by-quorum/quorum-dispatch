@@ -1,4 +1,4 @@
-//! `sb survey` core — the OpenRouter fan-out (Phase G), ported from
+//! `qd survey` core — the OpenRouter fan-out (Phase G), ported from
 //! `0d0fa9e:src/commands/survey.ts`. The arg parse + help layer lives in the bin
 //! (`bin/dispatch/survey.rs`, M1); THIS module is the A5 hole made real: request
 //! construction, the per-model call, fan-out, response parsing, and formatting.
@@ -103,7 +103,7 @@ pub fn build_curl_config(api_key: &str) -> String {
     ));
     cfg.push_str("header = \"Content-Type: application/json\"\n");
     cfg.push_str("header = \"HTTP-Referer: https://github.com/private-org/switchboard\"\n");
-    cfg.push_str("header = \"X-Title: sb survey\"\n");
+    cfg.push_str("header = \"X-Title: qd survey\"\n");
     cfg
 }
 
@@ -402,7 +402,7 @@ pub fn real_call_model<'a, E: Exec + Sync + 'a>(
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect();
         let body_path = format!(
-            "{}/sb-survey-{}-{}-{}.json",
+            "{}/qd-survey-{}-{}-{}.json",
             tmp_dir.trim_end_matches('/'),
             std::process::id(),
             nanos,
@@ -545,7 +545,7 @@ mod tests {
     fn curl_config_carries_the_secret_on_stdin() {
         let cfg = build_curl_config("sk-or-SUPERSECRET-KEY-123");
         assert!(cfg.contains("Authorization: Bearer sk-or-SUPERSECRET-KEY-123"));
-        assert!(cfg.contains("X-Title: sb survey"));
+        assert!(cfg.contains("X-Title: qd survey"));
         assert!(cfg.contains("HTTP-Referer: https://github.com/private-org/switchboard"));
     }
 

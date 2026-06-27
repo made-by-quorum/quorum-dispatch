@@ -7,7 +7,7 @@
 # expectation: 10/10 GREEN — the owed SessionKilled reply ARRIVES (the wait holds the exit until the guard drops).
 # ============================================================================
 ===== REP 1 =====
-   Compiling qrmux v0.0.0 (/home/u/work/sb-rust/.claude/worktrees/agent-a64f762b27e8e6b91/crates/qrmux)
+   Compiling qrmux v0.0.0 (/home/u/work/qd-rust/.claude/worktrees/agent-a64f762b27e8e6b91/crates/qrmux)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.54s
      Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
 

@@ -5,14 +5,14 @@
 # the oracle proof-chain and MUST NOT be edited. This stub is owned by the
 # reliability harness and may carry harness-specific behaviour (the mutation seam).
 #
-# Behaviour (faithful to what the Rust sb engine OBSERVES — registry + status):
-#   1. Parse --name from argv (sb new appends `--name <zmxname>`; create.rs).
+# Behaviour (faithful to what the Rust qd engine OBSERVES — registry + status):
+#   1. Parse --name from argv (qd new appends `--name <zmxname>`; create.rs).
 #   2. Render the dev-channels dismiss popup line + block on stdin for ONE CR
 #      (the boot dismiss; boot.rs answerer). Then write the PID-keyed registry
 #      entry ~/.claude/sessions/<pid>.json with status:"idle" (boot readiness).
 #   3. REPL: each submitted non-empty line → set status "busy", (brief hold),
 #      then status "idle". This idle->busy->idle transition is the SINGLE signal
-#      `sb wait` (status-keyed) and the harness's wait_busy poll key on — the I2
+#      `qd wait` (status-keyed) and the harness's wait_busy poll key on — the I2
 #      "the PTY write LANDED" unfakeable proof.
 #
 # MUTATION SEAM (STUB_RL_NEVER_BUSY=1, DORMANT by default): when set, a submitted
@@ -82,7 +82,7 @@ while :; do
   fi
 
   write_status "busy"                 # idle -> busy: acceptance signal
-  # Brief hold so a concurrent observer (sb wait / wait_busy poll) can SEE busy.
+  # Brief hold so a concurrent observer (qd wait / wait_busy poll) can SEE busy.
   sleep "${STUB_RL_BUSY_HOLD_S:-1}"
   printf 'STUB-REPLY: %s\r\n> ' "$line"
   write_status "idle"                 # busy -> idle: completion signal

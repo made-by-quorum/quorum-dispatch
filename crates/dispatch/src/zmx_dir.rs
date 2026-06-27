@@ -3,12 +3,12 @@
 //! Port of collapseRepeatedSegments / resolveZmxDir / legacyZmxDirs (Bug-D
 //! keystone). zmx selects its socket dir from
 //! `ZMX_DIR > XDG_RUNTIME_DIR > $TMPDIR/zmx-<uid>` (falling back to
-//! `/tmp/zmx-<uid>` when TMPDIR is empty). sb must derive the SAME dir the running
+//! `/tmp/zmx-<uid>` when TMPDIR is empty). qd must derive the SAME dir the running
 //! zmx uses and pin BOTH the read path (getZmxSessions) and the write path
 //! (startDetached / zmx kill / attach / send) to it. Hard-coding `/tmp/zmx-<uid>`
-//! ignored TMPDIR and caused the keystone read/write split, where `sb new` wrote a
+//! ignored TMPDIR and caused the keystone read/write split, where `qd new` wrote a
 //! session into `$TMPDIR/zmx-<uid>` while the reader/killer looked in
-//! `/tmp/zmx-<uid>` → "live process, dead/unattachable zmx, can't kill via sb."
+//! `/tmp/zmx-<uid>` → "live process, dead/unattachable zmx, can't kill via qd."
 //!
 //! On the origin box `TMPDIR=/tmp/claude-501` is injected into every Claude
 //! context, so the real dir is `/tmp/claude-501/zmx-501` — resolved dynamically,
@@ -54,7 +54,7 @@ pub fn collapse_repeated_segments(p: &str) -> String {
 /// `$XDG_RUNTIME_DIR/zmx`, NOT the bare root. War-story carried from pinned
 /// utils.ts:71-77 @ 0d0fa9e: zmx's real XDG behavior is `$XDG_RUNTIME_DIR/zmx`
 /// (proven empirically on Lima — zmx run with only XDG set created
-/// `/run/user/501/zmx`). Returning the bare root (the old behavior) made sb write
+/// `/run/user/501/zmx`). Returning the bare root (the old behavior) made qd write
 /// sessions into the root while default zmx sessions lived in `<root>/zmx` — the
 /// C2-Lima send-blind/kill-claims-success family (DUR-1/2, LIFE-9). Synthesis-gate
 /// sanctioned fix 2026-06-04. Note the added `.trim()`: the XDG value is now trimmed
@@ -181,8 +181,8 @@ impl XdgFamily {
 /// caller TMPDIR (login-shell fallback, a Claude tmpdir, or any arbitrary
 /// `TMPDIR=/tmp/<x>`). Discovered dynamically rather than hardcoded (red-team #1):
 /// a session created under e.g. `TMPDIR=/tmp/rttest` lands its socket in
-/// `/tmp/rttest/zmx-<uid>`, which two fixed paths would miss — leaving `sb ls` /
-/// `reconcile` blind and `sb kill` able to leak the zmx side. We scan:
+/// `/tmp/rttest/zmx-<uid>`, which two fixed paths would miss — leaving `qd ls` /
+/// `reconcile` blind and `qd kill` able to leak the zmx side. We scan:
 ///   - per scan root: `<root>/zmx-<uid>` (direct child) + every
 ///     `<root>/<x>/zmx-<uid>` (any `TMPDIR=<root>/<x>` context) + the repeated-segment
 ///     chain `<root>/<name>/<name>/.../zmx-<uid>` so the TMPDIR-compounding nests
@@ -655,7 +655,7 @@ mod tests {
     #[test]
     fn legacy_c2_migration_bare_xdg_root_returned() {
         // C2 migration case (red-team item 3): canonical = <xdg>/zmx; the BARE <xdg>
-        // root still exists (old-sb sessions live there) → returned as legacy, NOT
+        // root still exists (old-qd sessions live there) → returned as legacy, NOT
         // excluded by the canonical filter. The actual post-upgrade cleanup path.
         let canonical = PathBuf::from("/run/user/501/zmx");
         let exist: HashSet<PathBuf> = [PathBuf::from("/run/user/501")].into_iter().collect();

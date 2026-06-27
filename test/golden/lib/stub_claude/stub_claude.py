@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""stub_claude.py — a DETERMINISTIC spec-faithful counterpart for the sb golden oracle.
+"""stub_claude.py — a DETERMINISTIC spec-faithful counterpart for the qd golden oracle.
 
-This process plays Claude Code's role for the contract-bearing corpus rows. sb is
-the system under test (the oracle measures the sb ENGINE), so this stub implements
-EXACTLY the surfaces the pinned-TS sb reads / elicits — and NOTHING that sb does
+This process plays Claude Code's role for the contract-bearing corpus rows. qd is
+the system under test (the oracle measures the qd ENGINE), so this stub implements
+EXACTLY the surfaces the pinned-TS qd reads / elicits — and NOTHING that qd does
 not observe. Every behaviour is DERIVED FROM PINNED TS SOURCE and CITED below.
 
 PIN: 0d0fa9ed4800efb1309eca2311345c48af2c4932  (zmx 0.6.0)
@@ -73,7 +73,7 @@ discipline.
 Every row below names a stub behaviour and the pinned-TS file:line it is derived
 from. Paths are relative to the pinned clone src/.
 
-| # | Stub behaviour                              | sb surface it serves            | Pinned-TS citation (file:line @ pin) |
+| # | Stub behaviour                              | qd surface it serves            | Pinned-TS citation (file:line @ pin) |
 |---|---------------------------------------------|---------------------------------|--------------------------------------|
 | 1 | Launched as the `claude` process by         | startDetached `zmx run <name>   | commands/lifecycle.ts:780-807 (start |
 |   | `command 'claude' <flags> '--name' <name>`; |  -d bash -lc '<claudeCmd>'`;    | Detached), utils.ts:507-513 (build   |
@@ -119,7 +119,7 @@ from. Paths are relative to the pinned clone src/.
 |   | count stdin chars before the PID write (excl. | PID-write ordering; counter is  | loop @ pin), :211 ("harmless" note); |
 |   | dismiss CR) -> stub-boot-stats.json sidecar.  | 0 by stub construction (P2).    | session.ts:135-161 (findPidFile).    |
 
-NON-GOALS (sb never observes these on the recorded rows, so the stub omits them):
+NON-GOALS (qd never observes these on the recorded rows, so the stub omits them):
 opencode/http surfaces, real model inference, tool use, thinking blocks, multi-turn
 beyond what a row drives, ANSI repaint fidelity (boot-readiness keys on the EVENT,
 not bytes — ADR 0004 / 0005-dialog-free-boot).
@@ -534,7 +534,7 @@ def main():
     #
     # FIDELITY (A4 pass-(b) F1, orc-3 ruling 2026-06-05): the popup text is the
     # REAL captured dev-channels dialog VERBATIM (ANSI-stripped capture, A2
-    # 2026-06-04 journal; pinned by sb boot.rs DEV_CHANNELS_TAIL + the
+    # 2026-06-04 journal; pinned by qd boot.rs DEV_CHANNELS_TAIL + the
     # strip_ansi_on_captured_dev_channels_dialog test). The previous paraphrase
     # ("Development channels / Press Enter to continue") was dismissable only by
     # TS's blind-Enter loop; the Rust ADR-0005 answerer content-matches the real

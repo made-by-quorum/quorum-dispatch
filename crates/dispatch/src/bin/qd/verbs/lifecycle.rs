@@ -47,7 +47,7 @@ pub enum AttachOutcome {
 pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
     // ADD-8 residual fix (W1 phase 2) — live-id-collision PREFLIGHT over the RAW
     // registry, SHARED with resume (Pete feedback #6). The deduped join collapses
-    // two same-id LIVE rows to one, so a bare `sb attach`/`sb connect` would
+    // two same-id LIVE rows to one, so a bare `qd attach`/`qd connect` would
     // silently attach to the deduped survivor. We refuse a genuine ≥2-alive
     // collision LOUDLY here (before provider dispatch) so BOTH connect and demoted
     // attach inherit the guard. A 1-alive session is NOT refused (refuse_id_collision
@@ -65,7 +65,7 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
     }
     // OpenCode attach (commands/lifecycle.ts:362-376) is parked (OpenCode ruling).
     if session.provider == "opencode" {
-        eprintln!("sb {verb}: OpenCode attach is not supported in the Rust engine (parked).");
+        eprintln!("qd {verb}: OpenCode attach is not supported in the Rust engine (parked).");
         return AttachOutcome::Done(1);
     }
     // codex (Hosting::Daemon) IS supported but has no terminal to attach — the
@@ -136,17 +136,17 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
     AttachOutcome::Done(match mux.attach(&dir, zmx_name) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("sb {verb}: {e}");
+            eprintln!("qd {verb}: {e}");
             1
         }
     })
 }
 
-/// WP-B-CS-2-LIVE — the live OBSERVE run-loop `sb connect` lands on for a live
+/// WP-B-CS-2-LIVE — the live OBSERVE run-loop `qd connect` lands on for a live
 /// headless target (replacing B5-i's one-shot snapshot). The full interactive
 /// surface, wired to the banked `observe.rs` primitives:
 ///   1. LIVE RE-RENDER of the read-only dashboard — CONTROL FACTS ONLY (§2a): each
-///      `Republish*` control fact off the SAME socket-republish stream `sb wait`
+///      `Republish*` control fact off the SAME socket-republish stream `qd wait`
 ///      reads (the observe-armed [`ChannelSubscriber`]) folds into
 ///      [`DashboardState`] and re-renders. No content path exists, so §2a holds by
 ///      construction.
@@ -175,14 +175,14 @@ fn run_headless_observe(session: &Session) -> i32 {
     let dir = match dispatch::qrmux_dir::resolve_qrmux_dir(&paths.home, &env) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("sb connect: {e}");
+            eprintln!("qd connect: {e}");
             return 1;
         }
     };
     let socket_path = match qrmux::server::session_socket_path_for(Some(&dir), name) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("sb connect: {e}");
+            eprintln!("qd connect: {e}");
             return 1;
         }
     };
@@ -190,7 +190,7 @@ fn run_headless_observe(session: &Session) -> i32 {
     println!("{}", menu_text());
 
     // Subscribe with the observe-armed TAP so the run-loop can drive the cutover
-    // gate from the live `Republish*` stream (the SAME path `sb wait` reads).
+    // gate from the live `Republish*` stream (the SAME path `qd wait` reads).
     let sub =
         dispatch::wait_channel::ChannelSubscriber::connect_observing(socket_path, name.to_string());
     // Settle the channel (subscribe + first frame) before the first render.
@@ -300,7 +300,7 @@ fn run_headless_observe(session: &Session) -> i32 {
                 Some(MenuChoice::RelayMessage) => {
                     println!(
                         "To message this agent WITHOUT disrupting it (async; it keeps working), \
-                         run:\n  sb send:relay {name} \"<your message>\""
+                         run:\n  qd send:relay {name} \"<your message>\""
                     );
                 }
                 Some(MenuChoice::CutOverToDrive) => {
@@ -411,7 +411,7 @@ impl dispatch::observe::CutoverExec for RealCutoverExec<'_> {
         match mux.attach(&handle.socket_dir, &handle.zmx_name) {
             Ok(code) => Ok(code),
             Err(e) => {
-                eprintln!("sb connect: {e}");
+                eprintln!("qd connect: {e}");
                 Err(1)
             }
         }
@@ -420,7 +420,7 @@ impl dispatch::observe::CutoverExec for RealCutoverExec<'_> {
 
 /// Best-effort reap of a live headless session's process subtree: the recorded
 /// claude child `pid` and its descendants, each `(pid, start-time)`-verified by
-/// [`dispatch::effects::kill_pid_tree`]. Scoped mirror of `sb stop`'s descendant sweep —
+/// [`dispatch::effects::kill_pid_tree`]. Scoped mirror of `qd stop`'s descendant sweep —
 /// the child MUST be dead before `revive_claude` resumes the SAME claude session,
 /// or two claude processes race the one transcript. Self is excluded
 /// (`descendant_kill_list` never sweeps toward the caller).
@@ -454,7 +454,7 @@ fn reap_process_subtree(pid: i32) {
 
 // --- new (A2 run_new path, commands/lifecycle.ts:707-809) ---
 
-/// `sb start <name> [claudeArgs...]` (P0 W1: today's `new` renamed, sbx
+/// `qd start <name> [claudeArgs...]` (P0 W1: today's `new` renamed, qb
 /// spec-cli §11; the retired `new` verb errors in verbs/stubs.rs and never
 /// reaches this backend) — A2's detached create (run_new), now WITH
 /// A4 `-p/--prompt` + `--model` DELIVERY (spec §3.4) and the went-busy EXIT
@@ -501,7 +501,7 @@ fn fork_transcript_missing_error(
     }
     let display = target.name.as_deref().unwrap_or(&target.session_id);
     Some(format!(
-        "sb start: cannot fork \"{display}\" — no transcript exists for session id \
+        "qd start: cannot fork \"{display}\" — no transcript exists for session id \
          {} (looked under {}). The session never produced a transcript (it may have \
          been created but never used). Pick another --fork source, or start fresh \
          without --fork.",
@@ -544,14 +544,14 @@ fn seed_fork_transcript(
         pid: target.pid,
     };
     let Some(parent_path) = provider_impl.transcript_path(&paths.projects_dir, &key) else {
-        eprintln!("sb start: cannot fork \"{display}\" — its transcript is unreadable.");
+        eprintln!("qd start: cannot fork \"{display}\" — its transcript is unreadable.");
         return Err(1);
     };
     let text = match std::fs::read_to_string(&parent_path) {
         Ok(t) => t,
         Err(e) => {
             eprintln!(
-                "sb start: cannot read the source transcript at {}: {e}.",
+                "qd start: cannot read the source transcript at {}: {e}.",
                 parent_path.display()
             );
             return Err(1);
@@ -565,7 +565,7 @@ fn seed_fork_transcript(
     let resolved = match dispatch::fork_seed::resolve(&records, point) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("sb start: cannot fork \"{display}\" — {e}");
+            eprintln!("qd start: cannot fork \"{display}\" — {e}");
             return Err(1);
         }
     };
@@ -578,7 +578,7 @@ fn seed_fork_transcript(
     let dir = paths.projects_dir.join(slug);
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!(
-            "sb start: cannot create projects dir {}: {e}",
+            "qd start: cannot create projects dir {}: {e}",
             dir.display()
         );
         return Err(1);
@@ -586,7 +586,7 @@ fn seed_fork_transcript(
     let seed_path = dir.join(format!("{fork_uuid}.jsonl"));
     if let Err(e) = std::fs::write(&seed_path, dispatch::fork_seed::to_jsonl(&seed)) {
         eprintln!(
-            "sb start: cannot write the forked transcript {}: {e}",
+            "qd start: cannot write the forked transcript {}: {e}",
             seed_path.display()
         );
         return Err(1);
@@ -601,7 +601,7 @@ fn seed_fork_transcript(
             if let Err(e) =
                 dispatch::idstore::record_lineage(&ids_path, &fork_uuid, parent_sb, &RealClock)
             {
-                eprintln!("sb start: WARNING — fork lineage not recorded: {e}");
+                eprintln!("qd start: WARNING — fork lineage not recorded: {e}");
             }
         }
     }
@@ -613,7 +613,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("sb start: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd start: HOME is not set — cannot resolve the session state dir.");
             return 1;
         }
     };
@@ -638,7 +638,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             Ok(n) if n >= 1 => Some(n),
             _ => {
                 eprintln!(
-                    "sb start: --turn must be a positive integer (the conversational-turn \
+                    "qd start: --turn must be a positive integer (the conversational-turn \
                      ordinal to rewind the fork to)."
                 );
                 return 1;
@@ -647,7 +647,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     };
     if fork_turn.is_some() && fork_target.is_none() {
         eprintln!(
-            "sb start: --turn is only valid together with --fork (it rewinds the fork to a \
+            "qd start: --turn is only valid together with --fork (it rewinds the fork to a \
              past conversational-turn boundary)."
         );
         return 1;
@@ -657,8 +657,8 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let headless_flag = m.get_flag("headless");
     let interactive_flag = m.get_flag("interactive");
     let agent = m.get_one::<String>("agent").cloned();
-    // `sb start --agent <name>` is RETIRED. The old static-agent path resolved
-    // `~/.sb/plugins/core/agents/<name>.md` and fail-closed booted that role;
+    // `qd start --agent <name>` is RETIRED. The old static-agent path resolved
+    // `~/.quorum/dispatch/plugins/core/agents/<name>.md` and fail-closed booted that role;
     // role/agent CONTENT now lives in the work-model plugin and spawning is
     // `bond commission <role>.md`, never the engine's native flag. Refuse here —
     // BEFORE preflight/claim/launch, so nothing is created — with the teaching
@@ -687,7 +687,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // (spec §3 row 5 — this changes A2's reject-at-parse to accept-then-honest-error).
     if provider.as_deref() == Some("opencode") || port.is_some() {
         eprintln!(
-            "sb start: --provider opencode / --port are not yet supported in the Rust engine \
+            "qd start: --provider opencode / --port are not yet supported in the Rust engine \
              (parked OpenCode)."
         );
         return 1;
@@ -701,7 +701,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     if let Some(p) = provider.as_deref() {
         if p != "claude-code" && p != "codex" && p != "acp/claude-code" {
             eprintln!(
-                "sb start: unknown provider \"{p}\" — this engine supports: claude-code, codex, \
+                "qd start: unknown provider \"{p}\" — this engine supports: claude-code, codex, \
                  acp/claude-code (--provider opencode is parked)."
             );
             return 1;
@@ -716,13 +716,13 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let provider_id = provider.as_deref().unwrap_or("claude-code");
     let Some(provider_impl) = dispatch::provider::provider_for(provider_id) else {
         eprintln!(
-            "sb start: unknown provider \"{provider_id}\" — this engine supports: claude-code, codex \
+            "qd start: unknown provider \"{provider_id}\" — this engine supports: claude-code, codex \
              (--provider opencode is parked)."
         );
         return 1;
     };
     if attach {
-        eprintln!("sb start: --attach is not yet supported in the Rust engine (A5).");
+        eprintln!("qd start: --attach is not yet supported in the Rust engine (A5).");
         return 1;
     }
     // P0 qafix R2 (orc ruling 2026-06-10), kept across the start-surface rework:
@@ -733,9 +733,9 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // --resume` is now an unknown option at parse.)
     if provider_id == "codex" && fork_target.is_some() {
         eprintln!(
-            "sb start: --fork is not supported with --provider codex — codex start \
+            "qd start: --fork is not supported with --provider codex — codex start \
              always begins a new thread (no transcript branching). To revive a stopped \
-             codex session, use \"sb resume <name>\"."
+             codex session, use \"qd resume <name>\"."
         );
         return 1;
     }
@@ -778,7 +778,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             // an EMPTY session_id — there is no transcript to fork.
             if target.session_id.is_empty() {
                 eprintln!(
-                    "sb start: session \"{}\" has no provider session id — nothing to fork.",
+                    "qd start: session \"{}\" has no provider session id — nothing to fork.",
                     target.name.as_deref().unwrap_or(query)
                 );
                 return 1;
@@ -790,7 +790,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             // twin of the codex-START --fork refusal above.
             if target.provider != provider_id {
                 eprintln!(
-                    "sb start: cannot fork \"{}\" — it is a {} session and the new \
+                    "qd start: cannot fork \"{}\" — it is a {} session and the new \
                      session's provider is {} (transcripts don't fork across providers).",
                     target.name.as_deref().unwrap_or(query),
                     target.provider,
@@ -824,7 +824,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // §5a: never silently fork stale — surface the gap when the chosen safe
     // boundary lags the live head (e.g. the source is mid-flight on a tool).
     if let Some(notice) = &fork_staleness {
-        eprintln!("sb start: {notice}");
+        eprintln!("qd start: {notice}");
     }
 
     // codex P2 W4 (codex-p2-spec §7.1): the FIRST PRODUCTION `hosting()` consult,
@@ -874,9 +874,9 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         // re-entry verbs.
         crate::driver::StartRoute::RefuseNoPrompt => {
             eprintln!(
-                "sb start: agent/headless start requires -p <prompt> (a bare headless \
+                "qd start: agent/headless start requires -p <prompt> (a bare headless \
                  start is a no-op turn). To re-enter an existing session use \
-                 \"sb resume <name>\" or \"sb connect <name>\"."
+                 \"qd resume <name>\" or \"qd connect <name>\"."
             );
             return 1;
         }
@@ -915,7 +915,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                     0
                 }
                 Err(e) => {
-                    eprintln!("sb start: {e}");
+                    eprintln!("qd start: {e}");
                     1
                 }
             };
@@ -946,7 +946,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             let canonical = match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
-                    eprintln!("sb start: {msg}");
+                    eprintln!("qd start: {msg}");
                     return 1;
                 }
             };
@@ -978,7 +978,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // session whose provider UUID does not exist yet — a fork mints a NEW UUID
     // at boot — so the identity flow is always mint UNBOUND now, `bind` after
     // the boot waiter confirms the registry row (idstore module doc, "mint
-    // timing at sb start"; the wave-2 pre_bound mint_or_get arm died with
+    // timing at qd start"; the wave-2 pre_bound mint_or_get arm died with
     // `--resume`). A mint failure is fail-closed: never boot a session whose
     // env would silently miss its identity (the EnvFileWriteFailed posture).
     let ids_path = match common::ids_store_path(&env) {
@@ -998,7 +998,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let sb_session_id = match minted {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("sb start: could not mint a stable session id: {e}. No session was created.");
+            eprintln!("qd start: could not mint a stable session id: {e}. No session was created.");
             return 1;
         }
     };
@@ -1043,8 +1043,8 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let params = NewParams {
         name: name.clone(),
         agent,
-        // WP-B5-iii Mechanism S: a fork resumes the sb-SEEDED transcript by its
-        // pre-minted `fork_uuid` with a PLAIN `--resume` (NO `--fork-session` — sb
+        // WP-B5-iii Mechanism S: a fork resumes the qd-SEEDED transcript by its
+        // pre-minted `fork_uuid` with a PLAIN `--resume` (NO `--fork-session` — qd
         // already did the faithful copy/rekey/truncate; the fidelity gate proves
         // it equivalent to native). `fork=false` ⇒ launch_plan emits `--resume
         // <fork_uuid>` only. Non-fork start: resume=None (byte-identical to today).
@@ -1075,7 +1075,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             // §5.1 / D6: a BootTimeout on the -p flow emits a positive
             // priming-readiness-timeout to the BYNAME file (no sessionId exists on
             // a failed boot) BEFORE the existing loud exit. ONLY when -p was
-            // requested (a bare `sb new` boot timeout keeps today's behavior
+            // requested (a bare `qd new` boot timeout keeps today's behavior
             // exactly). The existing stderr/exit are UNCHANGED.
             if prompt.is_some() {
                 if let NewError::BootTimeout { phase, .. } = &e {
@@ -1116,14 +1116,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                         eprintln!(
                             "WARNING: stable-id divergence for session \"{name}\": env \
                              carries {sb_session_id}, registry session {sid} already \
-                             maps to {existing} — sessions disagree; `sb ls` will \
+                             maps to {existing} — sessions disagree; `qd ls` will \
                              surface {existing}, not the session's SB_SESSION_ID."
                         );
                     }
                     Err(e) => {
                         eprintln!(
                             "WARNING: could not bind stable id {sb_session_id} to session \
-                             {sid}: {e} — `sb ls` may surface a different id than the \
+                             {sid}: {e} — `qd ls` may surface a different id than the \
                              session's SB_SESSION_ID."
                         );
                     }
@@ -1132,7 +1132,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             dispatch::registry::LiveNamePick::NoneBindable => {
                 eprintln!(
                     "WARNING: session \"{name}\" booted but its registry row carries no \
-                     sessionId yet — stable id {sb_session_id} is unbound; `sb ls` may \
+                     sessionId yet — stable id {sb_session_id} is unbound; `qd ls` may \
                      surface a different id than the session's SB_SESSION_ID."
                 );
             }
@@ -1140,8 +1140,8 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                 eprintln!(
                     "WARNING: {count} RUNNING sessions claim the name \"{name}\" — \
                      refusing to bind stable id {sb_session_id} to either (two live \
-                     sessions sharing a name is an anomaly; resolve it, e.g. `sb ls` + \
-                     `sb kill`, before trusting name addressing)."
+                     sessions sharing a name is an anomaly; resolve it, e.g. `qd ls` + \
+                     `qd kill`, before trusting name addressing)."
                 );
             }
         }
@@ -1149,7 +1149,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
 
     // --- Warranty belt (2026-06-11): warn at BIRTH if the session is born
     // transport-less. The new engine's relay is a user-scope MCP Claude Code
-    // loads from `~/.claude.json` (registered by `sb relay:register`); if that
+    // loads from `~/.claude.json` (registered by `qd relay:register`); if that
     // step was skipped (the P0-cutover failure class), every session boots with
     // no relay and the gap stays SILENT until the first `send:relay`. Catch it
     // here. CHEAP (a bounded file read + parse, NO `claude` subprocess),
@@ -1173,8 +1173,8 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         {
             eprintln!(
                 "WARNING: session \"{name}\" is up but no user-scope relay MCP is \
-                 registered with Claude Code — `sb send:relay` to it will fail. \
-                 Register once with `sb relay:register` (see doc/DEPLOY.md), then \
+                 registered with Claude Code — `qd send:relay` to it will fail. \
+                 Register once with `qd relay:register` (see doc/DEPLOY.md), then \
                  new sessions pick it up."
             );
         }
@@ -1411,7 +1411,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                     eprintln!(
                         "ERROR: payload truncated in delivery to \"{name}\": expected {expected} bytes, \
                          recorded {recorded}.\n  The turn started (went busy) — do NOT blindly resend \
-                         (double-submit risk).\n  Attach: sb connect {name}"
+                         (double-submit risk).\n  Attach: qd connect {name}"
                     );
                     return 1;
                 }
@@ -1420,14 +1420,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                     // → stays dangling). The send remains outstanding by design.
                     eprintln!(
                         "WARNING: could not attribute the delivered payload in \"{name}\"'s \
-                         transcript — check: sb connect {name}"
+                         transcript — check: qd connect {name}"
                     );
                 }
                 dispatch::submit::PayloadVerifyOutcome::NoRecord
                 | dispatch::submit::PayloadVerifyOutcome::SourceUnavailable(_) => {
                     eprintln!(
                         "WARNING: could not verify payload delivery to \"{name}\" \
-                         (transcript not yet resolvable) — check: sb connect {name}"
+                         (transcript not yet resolvable) — check: qd connect {name}"
                     );
                 }
             }
@@ -1494,7 +1494,7 @@ fn bind_minted_id_best_effort(
     }
 }
 
-/// codex P2 W4 (codex-p2-spec §7.2): the daemon-hosted `sb new` arm. Assembles
+/// codex P2 W4 (codex-p2-spec §7.2): the daemon-hosted `qd new` arm. Assembles
 /// the REAL [`dispatch::create_daemon::DaemonDeps`] seams (the daemon analog of how the
 /// claude arm assembles `NewDeps`) and drives the lib-side
 /// [`dispatch::create_daemon::run_new_daemon`], then maps the outcome/error to the
@@ -1552,7 +1552,7 @@ fn run_new_codex_daemon(
         clock: &clock,
         sessions_dir: paths.sessions_dir.clone(),
         claims_dir,
-        // The daemon's stdout/stderr log root: `<sb_home>/.sb/log` (codex-p2-spec
+        // The daemon's stdout/stderr log root: `<sb_home>/.quorum/dispatch/log` (codex-p2-spec
         // §3.2). Resolved off the injected home so a jailed HOME points the log
         // into the jail (L9a). The file is `codex-<name>.log`.
         log_dir: home.join(".quorum").join("dispatch").join("log"),
@@ -1607,7 +1607,7 @@ fn run_new_acp_daemon(
     let port = match real_alloc_port() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("sb start: acp port allocation failed: {e}");
+            eprintln!("qd start: acp port allocation failed: {e}");
             return 1;
         }
     };
@@ -1617,7 +1617,7 @@ fn run_new_acp_daemon(
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("sb start: cannot resolve own executable for acp adapter: {e}");
+            eprintln!("qd start: cannot resolve own executable for acp adapter: {e}");
             return 1;
         }
     };
@@ -1635,7 +1635,7 @@ fn run_new_acp_daemon(
     let spawned = match spawner.spawn_detached(&argv, &[], cwd, &log_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("sb start: acp adapter spawn failed: {e}");
+            eprintln!("qd start: acp adapter spawn failed: {e}");
             return 1;
         }
     };
@@ -1647,7 +1647,7 @@ fn run_new_acp_daemon(
         Ok(c) => c,
         Err(e) => {
             spawner.kill(spawned.pid);
-            eprintln!("sb start: {e} (see {})", log_path.display());
+            eprintln!("qd start: {e} (see {})", log_path.display());
             return 1;
         }
     };
@@ -1657,7 +1657,7 @@ fn run_new_acp_daemon(
     //    keeps streaming after we disconnect). Non-blocking — `wait` observes the turn.
     if let Some(p) = prompt.as_deref().filter(|s| !s.is_empty()) {
         if let Err(e) = conn.prompt(&session_id, p, name) {
-            eprintln!("sb start: acp create-prompt enqueue failed: {e}");
+            eprintln!("qd start: acp create-prompt enqueue failed: {e}");
             // The session is up; do not tear it down over a prompt-enqueue error.
         }
     }
@@ -1688,7 +1688,7 @@ fn run_new_acp_daemon(
     };
     if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
         spawner.kill(spawned.pid);
-        eprintln!("sb start: acp registry write failed: {e}");
+        eprintln!("qd start: acp registry write failed: {e}");
         return 1;
     }
 
@@ -1882,7 +1882,7 @@ fn resolve_new_p_transcript(
     dispatch::jsonl::find_jsonl_path(&paths.projects_dir, &sid, entry.entry.cwd.as_deref())
 }
 
-/// W8 [`dispatch::submit::VerifyDeps`] for the `sb new -p` path: RE-resolves the
+/// W8 [`dispatch::submit::VerifyDeps`] for the `qd new -p` path: RE-resolves the
 /// transcript each poll (registry → sessionId → path; the fresh session's
 /// row/transcript may land mid-budget) and reads user texts past the
 /// pre-delivery offset. Every resolution failure is a re-polled `Err` —
@@ -1913,7 +1913,7 @@ impl dispatch::submit::VerifyDeps for NewPVerifyDeps<'_> {
 }
 
 /// §3.5 WENT-BUSY EXIT CONTRACT (HARDENING #3, ADR 0008): map the three-way
-/// [`DeliverOutcome`] of an `sb new -p` delivery to the sanctioned exit codes.
+/// [`DeliverOutcome`] of an `qd new -p` delivery to the sanctioned exit codes.
 ///
 ///   - [`DeliverOutcome::Accepted`] → **0**, stdout `Prompt delivered to "<n>"`.
 ///   - [`DeliverOutcome::Stalled`]  → **10**, stderr the WARNING block (the
@@ -1939,7 +1939,7 @@ fn map_deliver_outcome(outcome: dispatch::submit::DeliverOutcome, name: &str) ->
             eprintln!(
                 "WARNING: Prompt sent to \"{name}\" but session did not go busy.\n\
                  The prompt may be in the composer but not submitted.\n  \
-                 Attach: sb connect {name}"
+                 Attach: qd connect {name}"
             );
             10
         }
@@ -1949,14 +1949,14 @@ fn map_deliver_outcome(outcome: dispatch::submit::DeliverOutcome, name: &str) ->
             eprintln!(
                 "ERROR: Prompt sent to \"{name}\" but the session's PID file vanished \
                  after boot — the registry row disappeared (infra failure, not a stall).\n  \
-                 Check: sb ls\n  Attach: sb connect {name}"
+                 Check: qd ls\n  Attach: qd connect {name}"
             );
             1
         }
     }
 }
 
-/// F1 capture + `--via` composition for `sb new` (spec §2.2 + §3.2). Returns the
+/// F1 capture + `--via` composition for `qd new` (spec §2.2 + §3.2). Returns the
 /// composed backend-env key set create.rs writes to the 0600 self-deleting file,
 /// or an exit code on a loud failure (the loud message is already printed).
 ///
@@ -1993,7 +1993,7 @@ fn compose_backend_env(
     // unconditional fresh surface). Reuse the ported S2 guard so the rule and
     // message match the session-name S2 exactly.
     if let Some(msg) = dispatch::resume::validate_session_name(via_name) {
-        eprintln!("sb start --via: invalid backend name: {msg}");
+        eprintln!("qd start --via: invalid backend name: {msg}");
         return Err(1);
     }
 
@@ -2045,7 +2045,7 @@ fn compose_backend_env(
             Ok((set, unset))
         }
         Err(e) => {
-            // e.g. SecretMissing — names the key + `sb config set` hint, no value.
+            // e.g. SecretMissing — names the key + `qd config set` hint, no value.
             eprintln!("{e}");
             Err(1)
         }
@@ -2107,7 +2107,7 @@ fn with_real_secret_deps<R>(
 
 // --- info (commands/status.ts:560-662) ---
 
-/// `sb info <session>` — A1 render/jsonl per commands/status.ts:561-660 field order. The
+/// `qd info <session>` — A1 render/jsonl per commands/status.ts:561-660 field order. The
 /// OpenCode lastTurns fetch branch is skipped (parked); unknown session →
 /// resolveOrDie error + exit 1.
 ///
@@ -2164,7 +2164,7 @@ pub fn run_info(m: &ArgMatches) -> i32 {
 
 // --- live (commands/status.ts:394-556) ---
 
-/// `sb live` — the 2s-refresh TUI + 3-char-code keystroke→attach (commands/status.ts:395-
+/// `qd live` — the 2s-refresh TUI + 3-char-code keystroke→attach (commands/status.ts:395-
 /// 560). REAL interactive path for a TTY; for non-TTY, TS crashes with a Bun
 /// ReferenceError (corpus 33-*). We do NOT replicate the stack trace: print the
 /// header then a clean one-line error to stderr and exit 1.
@@ -2180,8 +2180,8 @@ pub fn run_live(m: &ArgMatches) -> i32 {
         // TS header to stdout (the clear + title, commands/status.ts:433-434), then a clean
         // error to stderr (NOT the Bun stack trace) + exit 1.
         print!("\x1b[2J\x1b[H");
-        println!("sb live  type code to connect · q to quit\n");
-        eprintln!("sb live: requires an interactive terminal (TTY).");
+        println!("qd live  type code to connect · q to quit\n");
+        eprintln!("qd live: requires an interactive terminal (TTY).");
         return 1;
     }
 
@@ -2199,7 +2199,7 @@ fn run_live_interactive(all: bool) -> i32 {
     let mut termios = match RawMode::enter() {
         Some(t) => t,
         None => {
-            eprintln!("sb live: could not enter raw terminal mode.");
+            eprintln!("qd live: could not enter raw terminal mode.");
             return 1;
         }
     };
@@ -2222,7 +2222,7 @@ fn run_live_interactive(all: bool) -> i32 {
         if last_refresh.elapsed() >= Duration::from_secs(2) {
             current = common::all_sessions(opts).unwrap_or_default();
             print!("\x1b[2J\x1b[H");
-            println!("sb live  type code to connect · q to quit\n");
+            println!("qd live  type code to connect · q to quit\n");
             if current.is_empty() {
                 println!("No sessions found.");
             } else {
@@ -2264,13 +2264,13 @@ fn run_live_interactive(all: bool) -> i32 {
                             // W2: resume IS first-class now (no longer "not supported").
                             // The live picker runs in raw termios mid-loop; rather than
                             // re-enter the full revive choreography from here, point the
-                            // user at the dedicated verbs — `sb connect` for the human
-                            // revive+attach, `sb resume` for the agent cold-revive.
+                            // user at the dedicated verbs — `qd connect` for the human
+                            // revive+attach, `qd resume` for the agent cold-revive.
                             print!("\x1b[2J\x1b[H");
                             eprintln!(
                                 "Session \"{label}\" is cold (not running). Revive it with:\n  \
-                                 sb connect {label}   (human: revive and attach)\n  \
-                                 sb resume {label}    (agent: revive to drivable)"
+                                 qd connect {label}   (human: revive and attach)\n  \
+                                 qd resume {label}    (agent: revive to drivable)"
                             );
                             return 1;
                         }
@@ -2309,7 +2309,7 @@ fn attach_session(s: &Session) -> i32 {
     match mux.attach(&dir, zmx_name) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("sb live: {e}");
+            eprintln!("qd live: {e}");
             1
         }
     }
@@ -2468,7 +2468,7 @@ mod tests {
             fork_transcript_missing_error(&dispatch::provider::ClaudeProvider, &paths, &target)
                 .expect("transcript-less fork must be refused");
         // Error-text pins: target display name, sid, searched root, guidance.
-        assert!(msg.contains("sb start: cannot fork \"src\""), "{msg}");
+        assert!(msg.contains("qd start: cannot fork \"src\""), "{msg}");
         assert!(
             msg.contains("no transcript exists for session id uuid-ghost"),
             "{msg}"
@@ -2587,7 +2587,7 @@ mod tests {
     fn boot_timeout_display_byte_identical_both_phases_exit_unchanged() {
         let expected = "ERROR: Session \"wk\" did not reach idle state within timeout.\n\
                         The zmx session exists but Claude Code may not have booted.\n  \
-                        Check: sb ls\n  Attach: sb connect wk\n  (boot detail here)";
+                        Check: qd ls\n  Attach: qd connect wk\n  (boot detail here)";
         for phase in [BootPhase::PidFile, BootPhase::Idle] {
             let err = NewError::BootTimeout {
                 name: "wk".to_string(),

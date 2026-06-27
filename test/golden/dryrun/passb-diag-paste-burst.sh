@@ -8,7 +8,7 @@ set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DIAG="$HERE/dryrun/passb-diag"
 mkdir -p "$DIAG"
-SUT="${SUT:-/home/u/work/wt-a4-passb/target/debug/sb}"
+SUT="${SUT:-/home/u/work/wt-a4-passb/target/debug/qd}"
 
 # Launch the real harness run in the background.
 ( cd "$HERE" && SB_UNDER_TEST="$SUT" ./verify.sh --scenario scenarios/send_pty_paste_burst.sh \

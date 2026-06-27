@@ -22,7 +22,7 @@ use qrmux::client::server_launcher::{ensure_session_server_running, ServerLaunch
 use qrmux::client::session_client::connect_session_stream;
 
 /// Build a [`ServerLaunchSpec`] that re-execs the qrmux TEST binary with
-/// `["server"]` (the standalone daemon entry — the embedder's `sb qrmux-server`
+/// `["server"]` (the standalone daemon entry — the embedder's `qd qrmux-server`
 /// spec is exercised by the engine tests in M3b). The launcher appends
 /// `--socket-dir <dir> --session <name>`.
 fn test_launch_spec() -> ServerLaunchSpec {

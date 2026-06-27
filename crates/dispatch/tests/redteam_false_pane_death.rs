@@ -11,7 +11,7 @@
 //!
 //! The waiter's "a list ERROR is unknown, never death" arm was therefore
 //! unreachable on the zmx lane and bypassable on the embedded lane — two
-//! transient list failures convicted a healthy pane, and on the `sb start`
+//! transient list failures convicted a healthy pane, and on the `qd start`
 //! path the verdict deleted the env file the pane had not yet sourced (the
 //! fail-closed prefix then KILLED the healthy session).
 //!

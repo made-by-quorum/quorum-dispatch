@@ -5,7 +5,7 @@
 
 ## Context
 
-The Phase 0b golden-master harness must drive sb/zmx through a real PTY, capture
+The Phase 0b golden-master harness must drive qd/zmx through a real PTY, capture
 raw bytes, normalize, compare, and enforce per-case timeout budgets. The spike
 (`spike/empirical/`) proved the PTY mechanics in three small Python scripts
 (`pty_capture.py`, `pty_drive.py`, `analyze.py`) and produced real `.raw`
@@ -30,7 +30,7 @@ Rationale:
 - The PTY mechanics are the highest-risk part to port and the spike already
   proved them byte-for-byte; reusing them removes that risk entirely.
 - The timeout-budget, jail, normalization, and comparator layers are first-class
-  and toolchain-independent (POSIX sed/awk/grep), matching the sb-qa battery's
+  and toolchain-independent (POSIX sed/awk/grep), matching the qd-qa battery's
   proven shell idiom that the jail is ported from.
 - The one place a typed Rust carrier adds real value — the permissive-parse
   dirty-state corpus — IS in Rust (`crates/golden`), under `cargo test`.

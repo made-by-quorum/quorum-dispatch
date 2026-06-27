@@ -2,7 +2,7 @@
 # scenario: ls/info --json  — byte-exact JSON contract surface.
 #
 # Corpus entry: `ls/info --json`. Deterministic after normalization, so
-# comparator class = byte-exact. Drives sb-under-test in the jail with an empty
+# comparator class = byte-exact. Drives qd-under-test in the jail with an empty
 # registry (and, for a non-empty case, would create a jailed session — Part 2).
 #
 # Parameterized on SB_UNDER_TEST so Part-2 recording is a re-run. verify.sh has

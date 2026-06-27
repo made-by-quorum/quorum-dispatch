@@ -3,11 +3,11 @@
 //! Ported from `src/utils.ts:240-346` with the war-story comments carried
 //! forward (LESSONS rule 1, comments-carry; citing file:line).
 //!
-//! sb drives sessions by injecting raw keystrokes through the session PTY via
+//! qd drives sessions by injecting raw keystrokes through the session PTY via
 //! `zmx send <name> <text>` (boot-popup dismiss, prompt delivery, relay). zmx
 //! gained `send` in 0.6; older zmx (e.g. 0.5.x, which exposes only run/write/
-//! attach) silently no-ops every keystroke sb tries to type. The symptom is not
-//! an error — it's a HANG: `sb new` boots a session, the auto-[enter] never
+//! attach) silently no-ops every keystroke qd tries to type. The symptom is not
+//! an error — it's a HANG: `qd new` boots a session, the auto-[enter] never
 //! lands, the PID file never appears, and the boot loop times out "not found"
 //! ~40s later. This guard converts that silent multi-machine footgun into an
 //! immediate, actionable error. We key on the `send` SUBCOMMAND in `zmx --help`
@@ -207,7 +207,7 @@ fn line_leading_word(text: &str, word: &str) -> bool {
 /// utils.ts:289-315).
 ///
 ///   `Yes`     — recognizable help, send present
-///   `No`      — recognizable help, send absent (stale zmx — sb cannot drive it)
+///   `No`      — recognizable help, send absent (stale zmx — qd cannot drive it)
 ///   `Unknown` — zmx absent / --help unreadable / output not recognizably zmx help
 ///
 /// The `Unknown` guard is load-bearing: only a recognizable zmx help listing can
@@ -237,7 +237,7 @@ pub fn zmx_send_capability(exec: &impl Exec) -> Capability {
 /// Human-facing guidance for upgrading a too-old zmx (port of
 /// `zmxUpgradeGuidance`, utils.ts:317-325). Byte-matches the TS string.
 pub fn zmx_upgrade_guidance() -> String {
-    "zmx is too old: it has no `send` subcommand, which sb needs to drive\n\
+    "zmx is too old: it has no `send` subcommand, which qd needs to drive\n\
      sessions (boot, prompt delivery, relay). Upgrade to zmx >= 0.6, then retry:\n  \
      brew upgrade neurosnap/tap/zmx   # or: brew install neurosnap/tap/zmx\n  \
      (no brew: see https://github.com/neurosnap/zmx)"
@@ -249,7 +249,7 @@ pub fn zmx_upgrade_guidance() -> String {
 pub fn zmx_missing_guidance() -> String {
     "Failed to launch zmx — is it installed and on PATH?\n  \
      Install: brew install neurosnap/tap/zmx\n  \
-     (no brew: see https://github.com/neurosnap/zmx; sb needs zmx >= 0.6)"
+     (no brew: see https://github.com/neurosnap/zmx; qd needs zmx >= 0.6)"
         .to_string()
 }
 
@@ -529,7 +529,7 @@ Commands:
         // Byte-match against the TS strings (utils.ts:319-333).
         assert_eq!(
             zmx_upgrade_guidance(),
-            "zmx is too old: it has no `send` subcommand, which sb needs to drive\n\
+            "zmx is too old: it has no `send` subcommand, which qd needs to drive\n\
              sessions (boot, prompt delivery, relay). Upgrade to zmx >= 0.6, then retry:\n  \
              brew upgrade neurosnap/tap/zmx   # or: brew install neurosnap/tap/zmx\n  \
              (no brew: see https://github.com/neurosnap/zmx)"
@@ -538,7 +538,7 @@ Commands:
             zmx_missing_guidance(),
             "Failed to launch zmx — is it installed and on PATH?\n  \
              Install: brew install neurosnap/tap/zmx\n  \
-             (no brew: see https://github.com/neurosnap/zmx; sb needs zmx >= 0.6)"
+             (no brew: see https://github.com/neurosnap/zmx; qd needs zmx >= 0.6)"
         );
     }
 }

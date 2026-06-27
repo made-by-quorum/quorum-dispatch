@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test/reliability/reliability_harness.sh
 #
-# The cs/sb RELIABILITY HARNESS, PORTED to drive the RUST sb binary.
+# The cs/qd RELIABILITY HARNESS, PORTED to drive the RUST qd binary.
 #
 # WHAT THIS PORTS
 #   The TS reliability harness `test/reliability_harness.sh` at PIN
@@ -10,30 +10,30 @@
 #   diagnosis log (the I-numbers live in the harness's own comments — the
 #   doc/log diagnosis file is NOT present at the pin, so the harness comments are
 #   the authority, as the A7 plan directs). It drove the TS DEV build
-#   (`bun <repo>/src/index.ts`). This port drives the REAL Rust `sb` binary via
+#   (`bun <repo>/src/index.ts`). This port drives the REAL Rust `qd` binary via
 #   $SB_BIN and NEVER `bun`.
 #
 # INVARIANT MAP  (TS step @pin  ->  Rust step  ->  delta)
 #   I6  born attachable + registered
 #       TS [1]: `cs new` backgrounded; poll registry for a PID; assert PID alive
 #               + zmx_has(name).
-#       Rust  : `sb new --cwd W <name>` with CLAUDE_BIN=<stub> (boots synchronously,
+#       Rust  : `qd new --cwd W <name>` with CLAUDE_BIN=<stub> (boots synchronously,
 #               returns 0). Assert: registry <pid>.json exists w/ the name; the
-#               claude(=stub) PID is alive; `sb info --json` shows the session; the
+#               claude(=stub) PID is alive; `qd info --json` shows the session; the
 #               zmx task is present.
-#       delta : Rust `sb new` blocks until boot-ready then returns, so no
+#       delta : Rust `qd new` blocks until boot-ready then returns, so no
 #               background poll race; we read the registry pid directly.
 #   I2  registry<->zmx resolve regardless of socket dir + a PTY WRITE LANDS
 #       TS [2]+[8b]: `cs ls --json` row has zmxName==name & pid==registry pid; a
 #               `cs send:pty` write is proven to LAND by the session going busy
 #               (wait_busy, TS line 326 — the unfakeable signal).
-#       Rust  : `sb info <name> --json` row has "zmxName":"<name>" & "pid":<pid>;
-#               then `sb send:pty <name> '<line>'` and PROVE it landed by the
+#       Rust  : `qd info <name> --json` row has "zmxName":"<name>" & "pid":<pid>;
+#               then `qd send:pty <name> '<line>'` and PROVE it landed by the
 #               session transitioning to status:"busy" (wait_busy poll on the
 #               registry). THIS busy/idle-wait is the I2-class assertion the
 #               mutation negative-control targets.
 #       delta : TS additionally exercised an ARBITRARY-TMPDIR cross-socket-dir
-#               split (its steps 7–8). Under the jail every sb/zmx call shares one
+#               split (its steps 7–8). Under the jail every qd/zmx call shares one
 #               hermetic ZMX_DIR/TMPDIR (jail.sh, rule 9 + ADD-4), so the cross-dir
 #               split is NOT reproducible here and is a NAMED NON-PORT (see
 #               "INVARIANTS NOT PORTED" below). The LANDS-proof (the load-bearing
@@ -45,7 +45,7 @@
 #   I4  kill is atomic-or-loud (process dead AND zmx gone AND tombstoned)
 #       TS [4]: `cs kill -f` exit 0; claude PID dead; <pid>.json.tombstoned exists;
 #               <pid>.json removed; zmx session gone.
-#       Rust  : `sb kill --force <name>` exit 0 + byte-exact W4 line `killed
+#       Rust  : `qd kill --force <name>` exit 0 + byte-exact W4 line `killed
 #               <name> (zmx <name>, pid N)` (ADD-15 wart-wave re-mint; --force is
 #               a deprecated no-op kept for caller compat); claude PID dead;
 #               <pid>.json.tombstoned exists; the zmx task is gone.
@@ -57,12 +57,12 @@
 #   I1  reconcile crash path: a dead-PID live registry entry is tombstoned
 #       TS [5]: `cs new`; kill -9 the claude PID (registry left live); `cs
 #               reconcile`; assert the entry is tombstoned + no longer listed.
-#       Rust  : `sb new` w/ stub; kill -9 the stub PID out of band (registry left
-#               live-and-DEAD); `sb reconcile`; assert <pid>.json.tombstoned
-#               exists and `sb ls --json` no longer lists the name.
+#       Rust  : `qd new` w/ stub; kill -9 the stub PID out of band (registry left
+#               live-and-DEAD); `qd reconcile`; assert <pid>.json.tombstoned
+#               exists and `qd ls --json` no longer lists the name.
 #   I5  reconcile is idempotent
 #       TS [6]: a 2nd `cs reconcile` is a no-op ("Nothing to reconcile").
-#       Rust  : a 2nd `sb reconcile` prints `Nothing to reconcile — all sources of
+#       Rust  : a 2nd `qd reconcile` prints `Nothing to reconcile — all sources of
 #               truth agree.` (the Rust verb's exact line).
 #
 # INVARIANTS / RED-TEAM ROWS NOT PORTED (named, not silently dropped):
@@ -114,7 +114,7 @@
 #
 # Bash 3.2 floor (macOS). No GNU timeout (deadline loops, verify.sh pattern).
 # Usage:  bash test/reliability/reliability_harness.sh
-# Env:    SB_BIN (sb-under-test, default $WT/target/debug/sb), ZMX_BIN,
+# Env:    SB_BIN (qd-under-test, default $WT/target/debug/qd), ZMX_BIN,
 #         RELIABILITY_LIVE=1 (real claude), CLAUDE_BIN_OVERRIDE (mutation seam:
 #         point at a mutated stub — used by mutation_hang.sh).
 # ---------------------------------------------------------------------------
@@ -125,9 +125,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WT="$(cd "$HERE/../.." && pwd)"               # reliability -> test -> repo root
 cd "$WT" || { echo "FATAL: cannot cd to worktree root"; exit 1; }
 
-SB_BIN="${SB_BIN:-$WT/target/debug/sb}"
+SB_BIN="${SB_BIN:-$WT/target/debug/qd}"
 ZMX_BIN="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}"
-[ -x "$SB_BIN" ]  || { echo "FATAL: sb binary not found/executable: $SB_BIN"; exit 1; }
+[ -x "$SB_BIN" ]  || { echo "FATAL: qd binary not found/executable: $SB_BIN"; exit 1; }
 [ -x "$ZMX_BIN" ] || { echo "FATAL: zmx binary not found/executable: $ZMX_BIN"; exit 1; }
 
 # --- normalize TMPDIR to /tmp (A4 F2: long /var/folders socket path => zmx exits
@@ -323,12 +323,12 @@ export CLAUDE_BIN="$CLAUDE_BIN_RESOLVED"
 WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"
 mkdir -p "$SESS_DIR"
 
-echo "=== run jail=$JAIL_PREFIX root=$JAIL_ROOT  sb=$SB_BIN ==="
+echo "=== run jail=$JAIL_PREFIX root=$JAIL_ROOT  qd=$SB_BIN ==="
 echo
 
-# rl_new <name> — drive `sb new` in the jail with the resolved claude binary.
+# rl_new <name> — drive `qd new` in the jail with the resolved claude binary.
 # (ADD-10a: a jailed engine-under-test session created via the Rust binary.)
-# stdout/err -> $JAIL_ROOT/<name>.{out,err}. Returns sb's exit code.
+# stdout/err -> $JAIL_ROOT/<name>.{out,err}. Returns qd's exit code.
 rl_new() {
   local name="$1"
   ( cd "$WORKDIR" && env SBRL_STUB_NAME="$name" "$SB_BIN" new "$name" --cwd "$WORKDIR" ) \
@@ -338,13 +338,13 @@ rl_new() {
 # ---------------------------------------------------------------------------
 # I6 — new: born attachable + registered
 # ---------------------------------------------------------------------------
-step "I6: sb new (born attachable + registered)"
+step "I6: qd new (born attachable + registered)"
 S1="$(scn_name 1)"
 record_name "$S1"
 rl_new "$S1"; NEW_RC=$?
 echo "    new exit=$NEW_RC"
 [ -s "$JAIL_ROOT/$S1.err" ] && sed 's/^/    err: /' "$JAIL_ROOT/$S1.err"
-assert I6 "sb new exit 0" test "$NEW_RC" -eq 0
+assert I6 "qd new exit 0" test "$NEW_RC" -eq 0
 PID1="$(wait_for_pid "$S1" "$BOOT_SECS" || true)"
 if [ -z "${PID1:-}" ]; then
   echo "  FAIL [I6]: $S1 never registered a PID"; FAIL=$((FAIL+1)); fail_inv I6
@@ -353,10 +353,10 @@ else
   assert I6 "$S1 registered a live claude PID ($PID1)" is_alive "$PID1"
   assert I6 "$S1 attachable: zmx task present" zmx_has "$S1"
   LS1="$(jail_sb ls --json 2>/dev/null)"
-  # `sb ls --json` is PRETTY-printed (`"name": "x"` with spaces), so all field
+  # `qd ls --json` is PRETTY-printed (`"name": "x"` with spaces), so all field
   # greps are whitespace-tolerant (-E with [[:space:]]*). The registry file is
   # compact JSON; only the ls-output greps need this.
-  assert I6 "$S1 present in sb ls --json" \
+  assert I6 "$S1 present in qd ls --json" \
     bash -c "printf '%s' \"\$1\" | grep -Eq '\"name\":[[:space:]]*\"$S1\"'" _ "$LS1"
 fi
 
@@ -364,7 +364,7 @@ fi
 # I2 — registry<->zmx resolve + a PTY WRITE LANDS (the keystone; mutation target)
 # I3 — send round-trip leaves the session alive (folded in)
 # ---------------------------------------------------------------------------
-step "I2: sb ls --json row (zmxName + pid) resolve"
+step "I2: qd ls --json row (zmxName + pid) resolve"
 if [ -n "${PID1:-}" ]; then
   # ls --json is pretty-printed (one field per line). $S1 is UNIQUE in the array,
   # so the name / zmxName / pid fields all belong to OUR row — we grep the whole
@@ -394,7 +394,7 @@ fi
 # ---------------------------------------------------------------------------
 # I4 — kill is atomic-or-loud (process dead AND zmx gone AND tombstoned)
 # ---------------------------------------------------------------------------
-step "I4: sb kill --force (atomic-or-loud)"
+step "I4: qd kill --force (atomic-or-loud)"
 if [ -n "${PID1:-}" ]; then
   if jail_assert_resolves_in_jail "$S1"; then
     KOUT="$(jail_sb kill --force "$S1" 2>"$JAIL_ROOT/$S1.kill")"; KRC=$?
@@ -430,7 +430,7 @@ else
   sed 's/^/    rec: /' "$JAIL_ROOT/$S2.rec1"
   assert I1 "$S2 PID $PID2 dead" is_dead "$PID2"
   assert I1 "$S2 registry tombstoned after reconcile" tombstone_exists "$PID2"
-  assert I1 "$S2 no longer listed live in sb ls --json" \
+  assert I1 "$S2 no longer listed live in qd ls --json" \
     bash -c "! jail_sb ls --json 2>/dev/null | grep -Eq '\"name\":[[:space:]]*\"$S2\"'"
 fi
 

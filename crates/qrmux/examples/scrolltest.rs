@@ -8,7 +8,7 @@ async fn main() -> anyhow::Result<()> {
     let dir = Path::new(&dir_s);
     let name = "scrolltest-probe";
     let launch = qrmux::client::server_launcher::ServerLaunchSpec {
-        program: format!("{home}/.bun/bin/sb").into(),
+        program: format!("{home}/.bun/bin/qd").into(),
         args_prefix: vec!["qrmux-server".to_string()],
     };
     let acked = qrmux::client::session_client::create_detached_session(

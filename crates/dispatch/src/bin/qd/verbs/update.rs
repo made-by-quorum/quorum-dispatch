@@ -1,4 +1,4 @@
-//! REAL `sb update` backend (A5 spec §4.3, fresh-design divergence). Thin
+//! REAL `qd update` backend (A5 spec §4.3, fresh-design divergence). Thin
 //! binding over the pure [`dispatch::update`] library: resolve the running exe path +
 //! the brew/cargo channel hints, decide the channel, print the `[update]`
 //! report, and exec the resolved argv (inherit stdio). Exit 0/1 ONLY (ADR 0008):
@@ -27,7 +27,7 @@ impl UpdateExec for RealUpdateExec<'_> {
     }
 }
 
-/// `sb update` — self-update via the detected install channel (Homebrew/cargo).
+/// `qd update` — self-update via the detected install channel (Homebrew/cargo).
 pub fn run() -> i32 {
     let env = RealEnv;
     let exec = RealExec;
@@ -38,7 +38,7 @@ pub fn run() -> i32 {
         Ok(p) => p,
         Err(_) => {
             eprintln!(
-                "sb update: cannot determine install channel (expected Homebrew or cargo); \
+                "qd update: cannot determine install channel (expected Homebrew or cargo); \
                  reinstall manually from {REPO_URL}."
             );
             return 1;
@@ -89,7 +89,7 @@ pub fn run() -> i32 {
                 println!("[update] done.");
             } else {
                 eprintln!(
-                    "[update] ERROR: update command exited {} — sb was not updated.",
+                    "[update] ERROR: update command exited {} — qd was not updated.",
                     outcome.exit_code
                 );
             }
@@ -109,7 +109,7 @@ pub fn run() -> i32 {
 /// CONSENT-CONSISTENT — it only ever touches an EXISTING registration; an
 /// unregistered relay is left alone (bootstrap is where a user opts in).
 ///
-/// Because we now register the BARE `sb` command (resolved via PATH), a normal
+/// Because we now register the BARE `qd` command (resolved via PATH), a normal
 /// update does NOT need to re-point anything — the bare command keeps working
 /// across the upgrade. This step therefore acts only as a BACKSTOP: if the box
 /// still carries a broken LEGACY absolute-path entry (an absolute path naming a
@@ -139,8 +139,8 @@ fn repoint_relay_after_update(env: &RealEnv, exec: &RealExec) {
     // We drive `claude mcp`; `claude` must be on PATH.
     if !real_command_exists(exec, "claude") {
         eprintln!(
-            "[update] note: relay registration points at a stale `sb` path but `claude` is not \
-             on PATH — repair it with: sb relay:repoint"
+            "[update] note: relay registration points at a stale `qd` path but `claude` is not \
+             on PATH — repair it with: qd relay:repoint"
         );
         return;
     }
@@ -150,7 +150,7 @@ fn repoint_relay_after_update(env: &RealEnv, exec: &RealExec) {
             "[update] relay registration repaired — re-pointed at the bare `{}` command.",
             register::RELAY_BARE_COMMAND
         ),
-        Err(e) => eprintln!("[update] note: relay re-point failed ({e}); run: sb relay:repoint"),
+        Err(e) => eprintln!("[update] note: relay re-point failed ({e}); run: qd relay:repoint"),
     }
 }
 

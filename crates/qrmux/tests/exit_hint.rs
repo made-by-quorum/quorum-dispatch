@@ -17,7 +17,7 @@
 //! `exit_hint_present_after_clear` goes red (the clear-sequence assertion stays
 //! green, proving the two are independent — a regression that drops only the hint
 //! is caught). See the module-level note at the bottom on extending this to
-//! `sb new` / full-attach flows.
+//! `qd new` / full-attach flows.
 
 // The shared `lib/` support module is `#[path]`-included into every integration
 // binary. This binary uses a narrow subset (jail + per-session daemon spawn);
@@ -75,7 +75,7 @@ impl PtyCapture {
 /// daemon, attach, send the detach key, and return everything the client wrote
 /// to the terminal (including the teardown `cleanup_terminal` sequence).
 ///
-/// This is the seed of a general "drive sb in a pty + assert screen" utility:
+/// This is the seed of a general "drive qd in a pty + assert screen" utility:
 /// it isolates (a) starting a daemon in a jail, (b) running a client binary in a
 /// real pty with the jail env, (c) capturing terminal output, and (d) waiting on
 /// observable substrings — the four primitives any interactive-flow assertion needs.
@@ -420,11 +420,11 @@ fn resize_full_repaint_does_not_global_clear() {
 //
 // `capture_attach_then_detach` is deliberately factored into reusable steps:
 //   • start_daemon_in_jail(...)      — any per-session daemon flow
-//   • CommandBuilder + openpty       — run ANY qrmux/sb client binary in a pty
+//   • CommandBuilder + openpty       — run ANY qrmux/qd client binary in a pty
 //   • PtyCapture::wait_for(...)      — block on an observable terminal substring
 //   • write_all(&[...])              — inject keystrokes (detach, Enter, text)
 //
-// To validate `sb new` / full-attach flows: swap the binary (sb instead of
+// To validate `qd new` / full-attach flows: swap the binary (qd instead of
 // qrmux), drive the create→attach path, and key `wait_for` on the session's
 // app-output sentinels instead of the `[retach:` marker. The capture + assert
 // machinery is identical — only the spawn command and the "ready"/"done"

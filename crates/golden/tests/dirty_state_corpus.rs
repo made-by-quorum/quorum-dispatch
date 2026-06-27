@@ -67,7 +67,7 @@ fn corrupt_fixture_fails_cleanly() {
 /// wrong-typed `pid` IS a parse error.
 ///
 /// The PRODUCTION behavior is DIFFERENT and intentional: the engine's
-/// `registry::parse_file` (`crates/sb`) reads per-field-permissively, so the SAME
+/// `registry::parse_file` (`crates/qd`) reads per-field-permissively, so the SAME
 /// fixture SURVIVES there with `pid`/`startedAt` degraded to default and the row
 /// still visible to `ls`. `crates/golden`'s parser is 0b's reference shape and is
 /// deliberately left unchanged.
@@ -78,7 +78,7 @@ fn wrong_typed_fixture_is_clean_whole_row_failure_in_reference_shape() {
         r.is_err(),
         "wrong-typed.json (string pid) must fail CLEANLY against the whole-row \
          reference SessionRecord — the engine's per-field-lenient read is the \
-         production behavior (see crates/sb registry::parse_file)"
+         production behavior (see crates/qd registry::parse_file)"
     );
 }
 

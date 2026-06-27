@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# install-extensions.sh — the EXTERNAL install actions for `sb bootstrap`'s
+# install-extensions.sh — the EXTERNAL install actions for `qd bootstrap`'s
 # extension cascade (plan 0001 child D-install; ADR 0018).
 #
 # WHY EXTERNAL: the engine is content-free (scope-audit.sh bans the deploy
 # vocabulary under crates/**). The actual install actions name those concepts
-# (`claude plugin marketplace add`, etc.), so they live here and `sb bootstrap`
+# (`claude plugin marketplace add`, etc.), so they live here and `qd bootstrap`
 # shells out to this script by path. The engine owns ONLY consent + the
 # invocation; this script owns the deploy mechanics.
 #
@@ -13,7 +13,7 @@
 # script and binary agree on what "the pinned combo" is.
 #
 # Subcommands (one extension per call so bootstrap can consent-gate each):
-#   install-extensions.sh sbx       # cargo install the pinned sbx binary
+#   install-extensions.sh qb       # cargo install the pinned qb binary
 #   install-extensions.sh plugin    # add the marketplace + install the pinned plugin
 #
 # Discipline (plan §D standard):
@@ -58,25 +58,25 @@ require_cmd() {
 
 install_sbx() {
     local repo rev
-    repo="$(read_pin sbx repo)"
-    rev="$(read_pin sbx rev)"
+    repo="$(read_pin qb repo)"
+    rev="$(read_pin qb rev)"
     if [ -z "$repo" ] || [ -z "$rev" ]; then
-        echo "install-extensions: FAIL — sbx pin missing repo/rev in manifest" >&2
+        echo "install-extensions: FAIL — qb pin missing repo/rev in manifest" >&2
         exit 1
     fi
     require_cmd cargo "Install a Rust toolchain (https://rustup.rs), then re-run."
     require_cmd git "Install git, then re-run."
-    echo "install-extensions: sbx — cargo install $repo @ $rev (--force = idempotent refresh)"
-    # sbx is a SINGLE-BIN crate (not a workspace) — `cargo install --git <url>`
+    echo "install-extensions: qb — cargo install $repo @ $rev (--force = idempotent refresh)"
+    # qb is a SINGLE-BIN crate (not a workspace) — `cargo install --git <url>`
     # resolves the lone package without a selector. --rev pins the exact commit;
     # --force makes a re-run an idempotent refresh (overwrites an older install).
-    # --bin sbx is explicit (harmless, future-proofs against a second bin).
+    # --bin qb is explicit (harmless, future-proofs against a second bin).
     # CARGO_NET_GIT_FETCH_WITH_CLI: the repos are PRIVATE; cargo's libgit2 fetch
     # doesn't use the ssh-agent, so it must shell out to the git CLI to auth.
     # (The manifest URL must also be `ssh://git@github.com/…`, not scp-style
     # `git@github.com:…`, which cargo's URL parser rejects.)
-    CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --git "$repo" --rev "$rev" --bin sbx --force
-    echo "install-extensions: sbx — installed pinned $rev to $(command -v sbx 2>/dev/null || echo '~/.cargo/bin/sbx')"
+    CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --git "$repo" --rev "$rev" --bin qb --force
+    echo "install-extensions: qb — installed pinned $rev to $(command -v qb 2>/dev/null || echo '~/.cargo/bin/qb')"
 }
 
 install_plugin() {
@@ -97,7 +97,7 @@ install_plugin() {
     # Code's marketplace at the local checkout (the repo is PRIVATE — a git-URL
     # marketplace would need Claude Code to carry SSH auth; a local checkout we
     # control sidesteps that). plugins/core is consumed RAW (no build step).
-    local cache_dir="${SB_HOME:-$HOME/.sb}/extensions/plugins"
+    local cache_dir="${SB_HOME:-$HOME/.quorum/dispatch}/extensions/plugins"
     if [ -d "$cache_dir/.git" ]; then
         echo "install-extensions: plugin — refreshing checkout at $cache_dir"
         git -C "$cache_dir" fetch --quiet origin
@@ -123,10 +123,10 @@ install_plugin() {
 }
 
 case "${1:-}" in
-    sbx) install_sbx ;;
+    qb) install_sbx ;;
     plugin) install_plugin ;;
     *)
-        echo "usage: install-extensions.sh {sbx|plugin}" >&2
+        echo "usage: install-extensions.sh {qb|plugin}" >&2
         exit 2
         ;;
 esac

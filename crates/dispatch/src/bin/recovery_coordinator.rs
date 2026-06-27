@@ -22,7 +22,7 @@
 //! automatic recovery fires — degraded to manual, never incorrect (fail-safe-down).
 //!
 //! ## Args
-//! - `--state-dir <DIR>`   the sb state dir (default: `$SB_HOME/state` or
+//! - `--state-dir <DIR>`   the qd state dir (default: `$SB_HOME/state` or
 //!   `$HOME/.quorum/dispatch/state`).
 //! - `--once`              run a single pass and exit (testing / cron-style).
 //! - `--tick-ms <N>`       loop cadence (default 2000ms).

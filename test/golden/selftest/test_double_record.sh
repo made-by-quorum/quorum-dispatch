@@ -2,7 +2,7 @@
 # test/golden/selftest/test_double_record.sh — prove record.sh is double-record
 # BY CONSTRUCTION (red-team M4).
 #
-# Two cases, both fully hermetic (NO real sb, NO real fixtures/):
+# Two cases, both fully hermetic (NO real qd, NO real fixtures/):
 #   (1) a DELIBERATELY run-varying scenario (scn_run emits $RANDOM) -> record.sh
 #       MUST FAIL with the double-record-mismatch exit (72), NO expectation written.
 #   (2) a DETERMINISTIC scenario -> record.sh succeeds end-to-end, writing the
@@ -43,7 +43,7 @@ SCN_BUDGET_MS=4000
 SCN_CLASS="byte-exact"
 SCN_FIXTURE="fixtures/det-corpus/normalized/out.txt"
 scn_run() {
-    # Fully deterministic content — no sb, no time, no random.
+    # Fully deterministic content — no qd, no time, no random.
     printf 'deterministic line one\ndeterministic line two\n' > "$SCN_OUT"
     printf '0\n' > "$SCN_OUT.exit"
 }

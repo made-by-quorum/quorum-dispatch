@@ -1,7 +1,7 @@
-//! sbx 0.1 punch-list B2, item 5 — channel-header attribution pins.
-//! Spec: ~/work/ws/switchboard/sbx/punch/b2-relay-spec.md.
+//! qb 0.1 punch-list B2, item 5 — channel-header attribution pins.
+//! Spec: ~/work/ws/switchboard/qb/punch/b2-relay-spec.md.
 //!
-//! PHASE-1 DEFECT (pinned then, fixed now): `sb send:relay` derived
+//! PHASE-1 DEFECT (pinned then, fixed now): `qd send:relay` derived
 //! `from_session` from the INHERITED `CLAUDE_CODE_SESSION_ID`, so any process
 //! inheriting another session's env mis-attributed its messages — even when
 //! the engine's OWN identity (`SB_SESSION_ID`, idstore-resolvable) said
@@ -13,7 +13,7 @@
 //! when no engine identity resolves, then `"cli"`. The unit precedence matrix
 //! lives in verbs/send_relay.rs; these rows pin the surface end-to-end.
 //!
-//! Full-stack: the REAL `sb send:relay` binary against a REAL `sb relay:serve`
+//! Full-stack: the REAL `qd send:relay` binary against a REAL `qd relay:serve`
 //! subprocess. The channel header asserted is the
 //! `notifications/claude/channel` frame on the target relay's MCP stdout —
 //! the exact surface where the fleet observed the wrong identity.
@@ -45,7 +45,7 @@ const IMPOSTER_UUID: &str = "99999999-dead-4bee-8eef-888888888888";
 const TRUE_STABLE_ID: &str = "ab3kx9mq";
 const TRUE_UUID: &str = "33333333-feed-4abc-8def-444444444444";
 
-/// A running `sb relay:serve` child (the target session's relay) with a
+/// A running `qd relay:serve` child (the target session's relay) with a
 /// line-reader draining its MCP stdout. Same pattern as
 /// relay_server_mcp_delivery.rs.
 struct RelayChild {
@@ -67,7 +67,7 @@ impl RelayChild {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn sb relay:serve");
+            .expect("spawn qd relay:serve");
 
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
@@ -206,7 +206,7 @@ fn stage_home(home: &Path) {
     .unwrap();
 }
 
-/// Run `sb send:relay tgt <message>` under the staged home. `plant_env`
+/// Run `qd send:relay tgt <message>` under the staged home. `plant_env`
 /// mutates the child env (identity planting per row).
 fn run_send_relay(home: &Path, message: &str, plant_env: impl FnOnce(&mut Command)) -> String {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_qd"));
@@ -221,7 +221,7 @@ fn run_send_relay(home: &Path, message: &str, plant_env: impl FnOnce(&mut Comman
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("SB_SESSION_ID");
     plant_env(&mut cmd);
-    let out = cmd.output().expect("run sb send:relay");
+    let out = cmd.output().expect("run qd send:relay");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),

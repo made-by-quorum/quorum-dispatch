@@ -22,7 +22,7 @@
 # Bash 3.2 floor (macOS): no assoc arrays, no ${var,,}, no mapfile.
 #
 # Usage:  bash test/golden/scenarios/a5_gate.sh
-# Env:    SB_BIN (sb-under-test; default target/debug/sb)
+# Env:    SB_BIN (qd-under-test; default target/debug/qd)
 #         A5_GATE_SKIP_LIVE=1  skip the live-jail + selftest rows (fast unit pass)
 set -u
 
@@ -30,7 +30,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 cd "$REPO_ROOT" || { echo "FATAL: cannot cd to repo root"; exit 1; }
 
-SB_BIN="${SB_BIN:-$REPO_ROOT/target/debug/sb}"
+SB_BIN="${SB_BIN:-$REPO_ROOT/target/debug/qd}"
 BUILD_LOCK="$REPO_ROOT/scripts/build-lock.sh"
 export SB_BIN
 
@@ -42,9 +42,9 @@ hdr() { printf '\n========== %s ==========\n' "$1"; }
 # ---------------------------------------------------------------------------
 # Build once (serial via build-lock).
 # ---------------------------------------------------------------------------
-hdr "BUILD (build-lock cargo build -p sb --bin sb)"
-"$BUILD_LOCK" cargo build -p sb --bin sb 2>&1 | tail -2
-[ -x "$SB_BIN" ] || { echo "FATAL: sb binary missing: $SB_BIN"; exit 2; }
+hdr "BUILD (build-lock cargo build -p qd --bin qd)"
+"$BUILD_LOCK" cargo build -p qd --bin qd 2>&1 | tail -2
+[ -x "$SB_BIN" ] || { echo "FATAL: qd binary missing: $SB_BIN"; exit 2; }
 
 # ---------------------------------------------------------------------------
 # fmt --check IN the script (spec §7 mechanical requirement).
@@ -57,13 +57,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Helper: run the sb-under-test with a scratch HOME/SB_HOME, no jail (these rows
+# Helper: run the qd-under-test with a scratch HOME/SB_HOME, no jail (these rows
 # are HOME-bounded, never destructive, never session-targeting).
 # ---------------------------------------------------------------------------
 scratch() {
     local T; T="$(mktemp -d)"
     GATE_T="$T"
-    GATE_HOME="$T"; GATE_SBH="$T/sb"
+    GATE_HOME="$T"; GATE_SBH="$T/qd"
 }
 scratch_done() { rm -rf "$GATE_T"; }
 
@@ -145,7 +145,7 @@ scratch
 c6_err="$(HOME="$GATE_HOME" SB_HOME="$GATE_SBH" "$SB_BIN" config get 2>&1 1>/dev/null)"
 HOME="$GATE_HOME" SB_HOME="$GATE_SBH" "$SB_BIN" config get >/dev/null 2>&1; c6_rc=$?
 printf '    stderr=[%s] rc=%s\n' "$c6_err" "$c6_rc"
-if [ "$c6_rc" = "2" ] && [ "$c6_err" = "sb config get: a key is required." ]; then
+if [ "$c6_rc" = "2" ] && [ "$c6_err" = "qd config get: a key is required." ]; then
     row_pass "G-C6" "config get no-key → stderr byte-exact + exit 2 (N1 closed; A3 exit-0 stale)"
 else
     row_fail "G-C6" "see excerpt above"
@@ -159,7 +159,7 @@ scratch_done
 hdr "Unit suites (build-lock cargo test)"
 unit_row() {
     local id="$1" filt="$2" min="$3"
-    local out; out="$("$BUILD_LOCK" cargo test -p sb "$filt" 2>&1 | grep -E 'test result: ok\.' | head -1)"
+    local out; out="$("$BUILD_LOCK" cargo test -p qd "$filt" 2>&1 | grep -E 'test result: ok\.' | head -1)"
     local n; n="$(printf '%s' "$out" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')"
     printf '    %-8s %s\n' "$id" "$out"
     if printf '%s' "$out" | grep -q '0 failed' && [ "${n:-0}" -ge "$min" ]; then
@@ -179,7 +179,7 @@ unit_row "GCu"     "gc::"        12    # candidate scan + trash + recover + purg
 # token. We assert the named test exists and passes (it encodes the would-fail
 # assertion). The active teeth (mutate to argv) is journaled by the QA agent.
 hdr "G-S2 teeth (argv-hygiene negative control present + green)"
-s2="$("$BUILD_LOCK" cargo test -p sb 'survey::tests::negative_control_argv_token_variant_would_fail_the_hygiene_assert' 2>&1 | grep -E 'test result: ok\.' | head -1)"
+s2="$("$BUILD_LOCK" cargo test -p qd 'survey::tests::negative_control_argv_token_variant_would_fail_the_hygiene_assert' 2>&1 | grep -E 'test result: ok\.' | head -1)"
 printf '    %s\n' "$s2"
 if printf '%s' "$s2" | grep -q '1 passed; 0 failed'; then
     row_pass "G-S2" "argv-token negative control present + green (would-red if secret tokenized)"

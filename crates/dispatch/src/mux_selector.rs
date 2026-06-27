@@ -58,7 +58,7 @@ pub fn parse_backend(env: &dyn Env) -> Result<Backend, SelectorError> {
         Some("zmx") => Ok(Backend::Zmx),
         Some(other) => Err(SelectorError {
             message: format!(
-                "sb: invalid SB_MUX value {other:?} — valid values are \"embedded\" (default) \
+                "qd: invalid SB_MUX value {other:?} — valid values are \"embedded\" (default) \
                  or \"zmx\""
             ),
             exit_code: SB_MUX_INVALID_EXIT,

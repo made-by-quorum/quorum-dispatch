@@ -1,4 +1,4 @@
-//! `sb kill` decision core (spec §5.1; TS `commands/lifecycle.ts:532-789`).
+//! `qd kill` decision core (spec §5.1; TS `commands/lifecycle.ts:532-789`).
 //!
 //! The Claude/zmx path is a **dual-reap**: never bail "nothing to kill" while a
 //! known PID is alive. The decider here is split into PURE pieces that take
@@ -246,7 +246,7 @@ pub fn cmdline_is_session_program(cmdline: &str, session_bin: &str) -> bool {
 
 /// PURE (red-team r7 OPEN-Q1 + r8 M#1, lead-2-adjudicated): a recorded claude
 /// pid that is ALIVE but whose current cmdline is visibly NOT an invocation of
-/// the session's program is a REUSED pid — `sb stop` must never signal it,
+/// the session's program is a REUSED pid — `qd stop` must never signal it,
 /// and (r8 M#2) must never derive an ownership witness from it; the caller
 /// zeroes `owner_chain`/`wrapper`/the clause-(a) pid BEFORE resolution.
 /// Applies to REGISTRY-derived pids only — a pane-derived pid (cold-row
@@ -451,9 +451,9 @@ pub fn have_kill_target(target: &ZmxReapTarget, pid: i64) -> bool {
 /// exec-proof pattern, rather than killpg's unenumerated group membership.
 ///
 /// SELF-STOP GUARD (the L10 lesson carried from `kill_pid`'s PID-only
-/// discipline): when `self_pid` — the running `sb stop` process — is inside
+/// discipline): when `self_pid` — the running `qd stop` process — is inside
 /// the subtree (a session stopping ITSELF), the sweep returns EMPTY. Sweeping
-/// would SIGTERM sb and its shell mid-flight, breaking the stop it is
+/// would SIGTERM qd and its shell mid-flight, breaking the stop it is
 /// executing; self-stop keeps today's exact behavior (pane + claude pid reap
 /// only). The grandchild gap stays open for that one shape — documented.
 ///
@@ -1327,11 +1327,11 @@ mod descendant_tests {
         assert_eq!(list, vec![201]);
     }
 
-    /// punch item 8 SELF-STOP GUARD: sb stopping the session it runs INSIDE
+    /// punch item 8 SELF-STOP GUARD: qd stopping the session it runs INSIDE
     /// (self_pid is a descendant of root) sweeps NOTHING.
     #[test]
     fn self_stop_yields_empty_sweep() {
-        // claude(100) -> shell(200) -> sb(300); plus a sibling subtree 210->310.
+        // claude(100) -> shell(200) -> qd(300); plus a sibling subtree 210->310.
         let r = rows(&[(100, 1), (200, 100), (300, 200), (210, 100), (310, 210)]);
         assert_eq!(descendant_kill_list(100, 300, &r), Vec::<i32>::new());
         // And root == self likewise.

@@ -1,9 +1,9 @@
-//! C1 M4fix: the HIDDEN embedded-qrmux-daemon entry for the `sb` binary.
+//! C1 M4fix: the HIDDEN embedded-qrmux-daemon entry for the `qd` binary.
 //!
-//! The sb binary IS the embedded qrmux daemon — it links the `qrmux` crate. The
+//! The qd binary IS the embedded qrmux daemon — it links the `qrmux` crate. The
 //! client launcher (`ensure_server_running_with`) re-execs THIS subcommand
-//! (`sb qrmux-server [--socket-dir DIR]`) instead of `current_exe() server`,
-//! because `sb` has no bare `server` verb (that assumption broke embedded
+//! (`qd qrmux-server [--socket-dir DIR]`) instead of `current_exe() server`,
+//! because `qd` has no bare `server` verb (that assumption broke embedded
 //! cold-start in production — Lima a6-embedded-backend-DELTA.txt).
 //!
 //! Dispatched PRE-CLAP (main.rs) so it never enters the user-facing surface: the
@@ -35,7 +35,7 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
     let parsed = match parse_server_args(args) {
         Ok(d) => d,
         Err(msg) => {
-            eprintln!("sb qrmux-server: {msg}");
+            eprintln!("qd qrmux-server: {msg}");
             return 2;
         }
     };
@@ -46,7 +46,7 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("sb qrmux-server: failed to build runtime: {e}");
+            eprintln!("qd qrmux-server: failed to build runtime: {e}");
             return 1;
         }
     };
@@ -58,18 +58,18 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
         Some(s) => s,
         None => {
             eprintln!(
-                "sb qrmux-server: --session <NAME> is required (legacy shared-daemon mode retired)"
+                "qd qrmux-server: --session <NAME> is required (legacy shared-daemon mode retired)"
             );
             return 2;
         }
     };
 
     // WP-B2b-2b: the embedded daemon injects the headless launch factory (the
-    // sb-side `RegistryStatusSink` + the daemon-resolved launch posture — design
+    // qd-side `RegistryStatusSink` + the daemon-resolved launch posture — design
     // §D-2b) so a `LaunchHeadless` can spawn a `claude -p` turn and write the
     // registry status row in real time. Resolved best-effort from the daemon's
     // env; if HOME is unset the factory is omitted (headless then refused) rather
-    // than failing the daemon bind. The PRODUCTION trigger (`sb start` →
+    // than failing the daemon bind. The PRODUCTION trigger (`qd start` →
     // LaunchHeadless) lands in WP-B-CS — this populates the seam the design names.
     use dispatch::effects::Env as _;
     let headless: Option<std::sync::Arc<dyn qrmux::headless_session::HeadlessFactory>> =
@@ -139,7 +139,7 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
     let _liveness_lock = session_state.as_ref().and_then(|(sid, state_dir)| {
         match dispatch::livelock::LivenessLock::acquire(state_dir, sid) {
             Ok(Some(lock)) => {
-                eprintln!("sb qrmux-server: liveness lock acquired for session {sid}");
+                eprintln!("qd qrmux-server: liveness lock acquired for session {sid}");
                 Some(lock)
             }
             Ok(None) => {
@@ -147,13 +147,13 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
                 // a held lock here is a stale-holder anomaly. Log and run degraded
                 // — the `/proc start_ms` confirmer remains the tombstone authority.
                 eprintln!(
-                    "sb qrmux-server: liveness lock already held for session {sid} (continuing)"
+                    "qd qrmux-server: liveness lock already held for session {sid} (continuing)"
                 );
                 None
             }
             Err(e) => {
                 eprintln!(
-                    "sb qrmux-server: liveness lock acquire failed for session {sid}: {e} \
+                    "qd qrmux-server: liveness lock acquire failed for session {sid}: {e} \
                      (continuing degraded — /proc remains the tombstone authority)"
                 );
                 None
@@ -169,7 +169,7 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
     )) {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("sb qrmux-server: {e}");
+            eprintln!("qd qrmux-server: {e}");
             1
         }
     }

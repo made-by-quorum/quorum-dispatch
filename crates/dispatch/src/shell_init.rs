@@ -1,4 +1,4 @@
-//! `sb init <shell>` — shell-integration emission (the eval-init pattern).
+//! `qd init <shell>` — shell-integration emission (the eval-init pattern).
 //!
 //! ## Why emission instead of a baked rc block
 //!
@@ -6,14 +6,14 @@
 //! `~/.bashrc` between markers. That block was a fossil the moment it was
 //! written: when the engine's `new` verb changed its argument contract, every
 //! baked wrapper on every machine silently broke (observed live 2026-06-09:
-//! `sb new -- "$@"` with no name → `error: missing required argument 'name'`).
+//! `qd new -- "$@"` with no name → `error: missing required argument 'name'`).
 //!
 //! The eval-init pattern (starship / zoxide / direnv precedent) inverts the
 //! ownership: the rc file carries ONE stable line —
 //!
 //! ```text
-//! eval "$(sb init bash)"          # ~/.bashrc / ~/.zshrc (zsh variant)
-//! sb init fish | source           # ~/.config/fish/conf.d/sb.fish
+//! eval "$(qd init bash)"          # ~/.bashrc / ~/.zshrc (zsh variant)
+//! qd init fish | source           # ~/.config/fish/conf.d/qd.fish
 //! ```
 //!
 //! — and the wrapper BODY ships inside this binary, so it can never drift from
@@ -22,10 +22,10 @@
 //! ## What the wrapper does
 //!
 //! `claude` typed bare in an interactive terminal (outside zmx) creates a
-//! tracked session detached (`sb start <generated-name>`) and connects to it
-//! (`sb connect`). `sb start --attach` would be the one-shot form, but it is an
+//! tracked session detached (`qd start <generated-name>`) and connects to it
+//! (`qd connect`). `qd start --attach` would be the one-shot form, but it is an
 //! engine-deferred surface today, so start-then-connect is the supported path.
-//! If `sb start` fails for any reason — most commonly a first-run folder-trust
+//! If `qd start` fails for any reason — most commonly a first-run folder-trust
 //! dialog that blocks the boot-to-idle wait — the wrapper FALLS BACK to
 //! launching claude directly, so `claude` never leaves you worse off than
 //! running it raw (and the folder gets trusted for next time, when the tracked
@@ -38,7 +38,7 @@
 //!
 //! `SB_CLAUDE_WRAPPER_FLAGS` (whitespace-split) is injected on passthrough REAL
 //! launches only (headless / non-TTY / inside-zmx) — never on management
-//! subcommands or help/version. sb-routed launches do NOT need it: the engine's
+//! subcommands or help/version. qd-routed launches do NOT need it: the engine's
 //! launcher already applies `SB_CLAUDE_FLAGS` / config / built-in defaults
 //! (launch.rs). The two seams are deliberately separate: `SB_CLAUDE_FLAGS`
 //! would also override the engine launcher's defaults, which is not what a
@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 
 use crate::effects::Env;
 
-/// Shells `sb init` can emit integration for.
+/// Shells `qd init` can emit integration for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shell {
     Bash,
@@ -60,7 +60,7 @@ pub enum Shell {
 }
 
 impl Shell {
-    /// Canonical lowercase name (the `sb init <shell>` argument).
+    /// Canonical lowercase name (the `qd init <shell>` argument).
     pub fn name(self) -> &'static str {
         match self {
             Shell::Bash => "bash",
@@ -69,7 +69,7 @@ impl Shell {
         }
     }
 
-    /// Parse a shell name from an `sb init` argument or a `$SHELL` value.
+    /// Parse a shell name from an `qd init` argument or a `$SHELL` value.
     /// Accepts a bare name (`bash`), an absolute path (`/bin/zsh`), and the
     /// login-shell dash prefix (`-bash`).
     pub fn from_name(raw: &str) -> Option<Shell> {
@@ -89,22 +89,22 @@ impl Shell {
 /// The marker comment of the RETIRED TS-era baked wrapper block. Bootstrap
 /// detects it and tells the user to remove it (the init line supersedes it; a
 /// live function defined AFTER the eval line would shadow the shipped wrapper).
-pub const LEGACY_BLOCK_MARKER: &str = ">>> sb bootstrap >>>";
+pub const LEGACY_BLOCK_MARKER: &str = ">>> qd bootstrap >>>";
 
 /// The one stable line the user's rc file carries, per shell.
 pub fn init_line(shell: Shell) -> &'static str {
     match shell {
-        Shell::Bash => r#"eval "$(sb init bash)""#,
-        Shell::Zsh => r#"eval "$(sb init zsh)""#,
-        Shell::Fish => "sb init fish | source",
+        Shell::Bash => r#"eval "$(qd init bash)""#,
+        Shell::Zsh => r#"eval "$(qd init zsh)""#,
+        Shell::Fish => "qd init fish | source",
     }
 }
 
 /// Does this rc-file content already carry the init line for `shell`?
-/// Substring match on `sb init <shell>` so wrapped/guarded variants (e.g.
-/// `command -v sb >/dev/null && eval "$(sb init bash)"`) still count.
+/// Substring match on `qd init <shell>` so wrapped/guarded variants (e.g.
+/// `command -v qd >/dev/null && eval "$(qd init bash)"`) still count.
 pub fn rc_has_init_line(contents: &str, shell: Shell) -> bool {
-    let needle = format!("sb init {}", shell.name());
+    let needle = format!("qd init {}", shell.name());
     contents
         .lines()
         .any(|l| l.contains(&needle) && !l.trim_start().starts_with('#'))
@@ -133,7 +133,7 @@ pub fn rc_path(shell: Shell, home: &Path, env: &dyn Env) -> PathBuf {
             .join(".config")
             .join("fish")
             .join("conf.d")
-            .join("sb.fish"),
+            .join("qd.fish"),
     }
 }
 
@@ -154,13 +154,13 @@ pub fn init_script(shell: Shell, zmx_dir: &str) -> String {
 /// expansion of `SB_CLAUDE_WRAPPER_FLAGS`.
 fn posix_script(zmx_dir: &str, wflags: &str, shell_name: &str) -> String {
     format!(
-        r#"# sb shell integration — emitted by `sb init {shell_name}`; do not edit.
-# Pin the zmx socket dir so every shell + sb agree on one control socket
+        r#"# qd shell integration — emitted by `qd init {shell_name}`; do not edit.
+# Pin the zmx socket dir so every shell + qd agree on one control socket
 # (a pre-set ZMX_DIR wins; this only fills the unset case).
 export ZMX_DIR="${{ZMX_DIR:-{zmx_dir}}}"
 
 # claude wrapper: passthrough by default; only a bare interactive launch
-# OUTSIDE zmx routes through 'sb start'. Escape hatch: 'command claude ...'.
+# OUTSIDE zmx routes through 'qd start'. Escape hatch: 'command claude ...'.
 # SB_CLAUDE_WRAPPER_FLAGS (whitespace-split) is injected on passthrough REAL
 # launches only — never on management subcommands or --version/--help.
 claude() {{
@@ -185,13 +185,13 @@ claude() {{
     command claude {wflags} "$@"; return
   fi
   # Remaining case: a bare interactive launch outside zmx → tracked session.
-  # Create detached, then connect (--attach on `sb start` is engine-deferred;
+  # Create detached, then connect (--attach on `qd start` is engine-deferred;
   # start-then-connect is the supported path). If create fails — e.g. a first-run
   # folder-trust dialog blocks the boot-to-idle wait — fall back to launching
   # claude directly so `claude` is never worse than running it raw.
   _sb_name="cc-$(date +%Y%m%d-%H%M%S)-$$"
-  if sb start "$_sb_name" -- "$@"; then
-    sb connect "$_sb_name"
+  if qd start "$_sb_name" -- "$@"; then
+    qd connect "$_sb_name"
   else
     command claude {wflags} "$@"
   fi
@@ -202,14 +202,14 @@ claude() {{
 
 fn fish_script(zmx_dir: &str) -> String {
     format!(
-        r#"# sb shell integration — emitted by `sb init fish`; do not edit.
+        r#"# qd shell integration — emitted by `qd init fish`; do not edit.
 # Pin the zmx socket dir (a pre-set ZMX_DIR wins; this fills the unset case).
 if not set -q ZMX_DIR
     set -gx ZMX_DIR {zmx_dir}
 end
 
 # claude wrapper: passthrough by default; only a bare interactive launch
-# OUTSIDE zmx routes through 'sb start'. Escape hatch: 'command claude ...'.
+# OUTSIDE zmx routes through 'qd start'. Escape hatch: 'command claude ...'.
 function claude
     set -l _sb_wflags (string split -n ' ' -- "$SB_CLAUDE_WRAPPER_FLAGS")
     if test -n "$ZMX_SESSION"; or test -n "$CLAUDE_NO_ZMX"
@@ -237,13 +237,13 @@ function claude
         command claude $_sb_wflags $argv
         return
     end
-    # Create detached, then connect (--attach on `sb start` is engine-deferred;
+    # Create detached, then connect (--attach on `qd start` is engine-deferred;
     # start-then-connect is the supported path). If create fails — e.g. a first-run
     # folder-trust dialog blocks the boot-to-idle wait — fall back to launching
     # claude directly so `claude` is never worse than running it raw.
     set -l _sb_name cc-(date +%Y%m%d-%H%M%S)-$fish_pid
-    if sb start $_sb_name -- $argv
-        sb connect $_sb_name
+    if qd start $_sb_name -- $argv
+        qd connect $_sb_name
     else
         command claude $_sb_wflags $argv
     end
@@ -286,20 +286,20 @@ mod tests {
         let s = Shell::Bash;
         assert!(rc_has_init_line(init_line(s), s));
         assert!(rc_has_init_line(
-            "command -v sb >/dev/null && eval \"$(sb init bash)\"",
+            "command -v qd >/dev/null && eval \"$(qd init bash)\"",
             s
         ));
         // Wrong shell's line does not count.
         assert!(!rc_has_init_line(init_line(Shell::Zsh), s));
         // A commented-out line does not count.
-        assert!(!rc_has_init_line("# eval \"$(sb init bash)\"", s));
+        assert!(!rc_has_init_line("# eval \"$(qd init bash)\"", s));
         assert!(!rc_has_init_line("", s));
     }
 
     #[test]
     fn rc_detects_legacy_block() {
-        assert!(rc_has_legacy_block("# >>> sb bootstrap >>>\nclaude() {\n}"));
-        assert!(!rc_has_legacy_block("eval \"$(sb init bash)\""));
+        assert!(rc_has_legacy_block("# >>> qd bootstrap >>>\nclaude() {\n}"));
+        assert!(!rc_has_legacy_block("eval \"$(qd init bash)\""));
     }
 
     // --- rc_path ------------------------------------------------------------
@@ -318,7 +318,7 @@ mod tests {
         );
         assert_eq!(
             rc_path(Shell::Fish, home, &env),
-            PathBuf::from("/jail/home/.config/fish/conf.d/sb.fish")
+            PathBuf::from("/jail/home/.config/fish/conf.d/qd.fish")
         );
     }
 
@@ -341,10 +341,10 @@ mod tests {
     // --- emission invariants -------------------------------------------------
     //
     // The wrapper CONTRACT, asserted per shell:
-    //   1. routes a bare launch through `sb start <generated-name>` then
-    //      `sb connect` (named-detached-then-connect — `sb start --attach` is an
+    //   1. routes a bare launch through `qd start <generated-name>` then
+    //      `qd connect` (named-detached-then-connect — `qd start --attach` is an
     //      A5-deferred surface the backend honestly rejects),
-    //   1b. falls back to a direct `command claude` when `sb start` fails (so a
+    //   1b. falls back to a direct `command claude` when `qd start` fails (so a
     //      first-run trust dialog can never leave `claude` worse than raw),
     //   2. passthrough for management subcommands,
     //   3. headless (-p/--print) passthrough WITH wrapper flags,
@@ -355,8 +355,8 @@ mod tests {
     fn bash_script_invariants() {
         let s = init_script(Shell::Bash, "/run/user/501");
         assert!(
-            s.contains(r#"if sb start "$_sb_name" -- "$@"; then"#)
-                && s.contains(r#"sb connect "$_sb_name""#),
+            s.contains(r#"if qd start "$_sb_name" -- "$@"; then"#)
+                && s.contains(r#"qd connect "$_sb_name""#),
             "route: {s}"
         );
         // Create-fail fallback to a direct claude launch (with wrapper flags).
@@ -368,8 +368,8 @@ mod tests {
             "fallback: {s}"
         );
         assert!(
-            !s.contains("sb start --attach"),
-            "must NOT invoke the A5-deferred `sb start --attach`: {s}"
+            !s.contains("qd start --attach"),
+            "must NOT invoke the A5-deferred `qd start --attach`: {s}"
         );
         assert!(s.contains("logout|login|config|mcp|plugin|doctor|update|install"));
         assert!(s.contains("-p|--print) command claude $SB_CLAUDE_WRAPPER_FLAGS"));
@@ -384,20 +384,20 @@ mod tests {
         // zsh must use ${=VAR} (no implicit word splitting in zsh).
         assert!(s.contains("${=SB_CLAUDE_WRAPPER_FLAGS}"), "{s}");
         assert!(!s.contains(" $SB_CLAUDE_WRAPPER_FLAGS "), "{s}");
-        assert!(s.contains("sb connect"));
-        assert!(s.contains("if sb start"));
-        assert!(!s.contains("sb start --attach"));
+        assert!(s.contains("qd connect"));
+        assert!(s.contains("if qd start"));
+        assert!(!s.contains("qd start --attach"));
     }
 
     #[test]
     fn fish_script_invariants() {
         let s = init_script(Shell::Fish, "/run/user/501");
         assert!(s.contains("function claude"));
-        assert!(s.contains("if sb start $_sb_name -- $argv"));
-        assert!(s.contains("sb connect $_sb_name"));
+        assert!(s.contains("if qd start $_sb_name -- $argv"));
+        assert!(s.contains("qd connect $_sb_name"));
         // Create-fail fallback to a direct claude launch.
         assert!(s.contains("command claude $_sb_wflags $argv"));
-        assert!(!s.contains("sb start --attach"));
+        assert!(!s.contains("qd start --attach"));
         assert!(s.contains("case logout login config mcp plugin doctor update install"));
         assert!(s.contains("set -gx ZMX_DIR /run/user/501"));
         assert!(s.contains("isatty stdout"));

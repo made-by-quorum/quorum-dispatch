@@ -20,15 +20,15 @@ pub const VERSION: &str = "0.1.0";
 /// Build the full clap command tree. Builder API per spec §2 (NOT derive).
 ///
 /// Layout choices: `disable_version_flag(false)` keeps `-V/--version`;
-/// `disable_help_subcommand(true)` so `sb help` is an unknown command (commander
+/// `disable_help_subcommand(true)` so `qd help` is an unknown command (commander
 /// has no `help` subcommand). We map errors ourselves, so we suppress clap's own
 /// error/exit by using `try_get_matches_from` at the call site.
 pub fn build_cli() -> Command {
-    Command::new("sb")
+    Command::new("qd")
         .about("Claude Sessions — manage Claude Code sessions")
         .version(VERSION)
         // Top-level help is hand-written for commander-layout parity (H1, spec §2):
-        // `Usage: sb [options] [command]`, two-space command table, `ls|list` alias
+        // `Usage: qd [options] [command]`, two-space command table, `ls|list` alias
         // style, config/survey listed, spawn absent (sanctioned), bootstrap as the
         // engine-only one-liner (harness-normalized per the orc ruling).
         .override_help(help::TOP)
@@ -40,8 +40,8 @@ pub fn build_cli() -> Command {
         .subcommands(subcommands())
 }
 
-/// All 24 verb registrations + aliases (spec §3 + sbx spec-cli §11). The default
-/// action (bare `sb` → ls) is handled in `verbs::dispatch` when no subcommand
+/// All 24 verb registrations + aliases (spec §3 + qb spec-cli §11). The default
+/// action (bare `qd` → ls) is handled in `verbs::dispatch` when no subcommand
 /// matched.
 fn subcommands() -> Vec<Command> {
     vec![
@@ -90,7 +90,7 @@ fn cmd_ls() -> Command {
             "json",
             "Output as JSON (best for scripting/piping)",
         ))
-        // WP-B7 PIECE 1 — the render-surface SELECTOR pair. `sb ls` auto-detects
+        // WP-B7 PIECE 1 — the render-surface SELECTOR pair. `qd ls` auto-detects
         // its surface (agent/pipe ⇒ JSON, human/TTY ⇒ table; the I/O-follows-who-
         // drives doctrine). `--json` and `--table` are the two explicit overrides
         // on that one axis, so they CONFLICT. `--table` is the symmetric complement
@@ -98,7 +98,7 @@ fn cmd_ls() -> Command {
         // `DriverOverride::Interactive`. It deliberately does NOT conflict with
         // `--short`: `--table --short` is the agent escape hatch to short TEXT
         // (surface=Table, content=short ⇒ a short table), `--short` being a CONTENT
-        // modifier, not a surface selector (sb-supervisor-11-ratified).
+        // modifier, not a surface selector (qd-supervisor-11-ratified).
         .arg(
             long_flag(
                 "table",
@@ -125,13 +125,13 @@ fn cmd_ls() -> Command {
 // --- 2. attach — RETIRED erroring stub (P0 start-surface rework, STATE 22
 // ruling; was W1 ADD-26 demoted/hidden). `connect` covers attach-or-resume
 // (live → attach; cold → auto-revive → attach; codex → loud redirect); agents
-// use `sb send:relay`. Stays REGISTERED + hidden so `sb attach ...` reaches the
+// use `qd send:relay`. Stays REGISTERED + hidden so `qd attach ...` reaches the
 // stub's helpful error instead of a clap usage error; trailing pass-through
 // swallows any args (the new/kill pattern).
 fn cmd_attach() -> Command {
     Command::new("attach")
         .hide(true)
-        .about("(retired — use sb connect)")
+        .about("(retired — use qd connect)")
         .override_help(help::ATTACH)
         .arg(trailing_passthrough())
 }
@@ -167,7 +167,7 @@ fn cmd_resume() -> Command {
         .args(render_mode_flags())
 }
 
-// --- 4. stop <session> (P0 W1, sbx spec-cli §11) — today's `kill`, renamed.
+// --- 4. stop <session> (P0 W1, qb spec-cli §11) — today's `kill`, renamed.
 // Same backend (verbs/kill.rs dual-reap + verify-gone + tombstone); the clap
 // spec is a clone of the old cmd_kill.
 fn cmd_stop() -> Command {
@@ -176,24 +176,24 @@ fn cmd_stop() -> Command {
         .override_help(help::STOP)
         .arg(positional("session"))
         // W3 (ADD-15): the verb never prompts; the flag stays PARSE-ACCEPTED so
-        // existing scripted callers (`sb stop --force ...`) don't break on the
+        // existing scripted callers (`qd stop --force ...`) don't break on the
         // most destructive verb. User-visible help is help::STOP above; this
         // desc is kept in sync for consistency. See verbs/kill.rs W3 note.
         .arg(flag("force", 'f', "Deprecated no-op (stop never prompts)"))
         .arg(long_flag("server", "Also kill the OpenCode server process"))
 }
 
-// --- 4b. kill — RETIRED erroring stub (P0 W1, sbx spec-cli §11). Stays
-// REGISTERED + visible so `sb kill ...` reaches the stub's helpful error
+// --- 4b. kill — RETIRED erroring stub (P0 W1, qb spec-cli §11). Stays
+// REGISTERED + visible so `qd kill ...` reaches the stub's helpful error
 // instead of a clap usage error; trailing passthrough swallows any args.
 fn cmd_kill() -> Command {
     Command::new("kill")
-        .about("(retired — use sb stop)")
+        .about("(retired — use qd stop)")
         .override_help(help::KILL)
         .arg(trailing_passthrough())
 }
 
-// --- 5. start <name> [claudeArgs...] (P0 W1, sbx spec-cli §11) — today's
+// --- 5. start <name> [claudeArgs...] (P0 W1, qb spec-cli §11) — today's
 // `new`, renamed. Same backend (lifecycle::run_new); the clap spec is a clone
 // of the old cmd_new, including the claudeArgs trailing-var-arg semantics.
 fn cmd_start() -> Command {
@@ -317,12 +317,12 @@ fn render_mode_flags() -> [Arg; 2] {
     ]
 }
 
-// --- 5b. new — RETIRED erroring stub (P0 W1, sbx spec-cli §11). Stays
-// REGISTERED + visible so `sb new ...` reaches the stub's helpful error
+// --- 5b. new — RETIRED erroring stub (P0 W1, qb spec-cli §11). Stays
+// REGISTERED + visible so `qd new ...` reaches the stub's helpful error
 // instead of a clap usage error; trailing passthrough swallows any args.
 fn cmd_new() -> Command {
     Command::new("new")
-        .about("(retired — use sb start)")
+        .about("(retired — use qd start)")
         .override_help(help::NEW)
         .arg(trailing_passthrough())
 }
@@ -479,11 +479,11 @@ fn cmd_gc() -> Command {
 // --- 16b. init <shell> (NET-NEW, 2026-06-09 ruling) — print the shell
 // integration (claude wrapper + zmx-dir pin) for eval'ing from the user's rc
 // file. The eval-init pattern: the wrapper body ships in the binary so it can
-// never drift from what `sb new` accepts (the retired TS bootstrap baked the
+// never drift from what `qd new` accepts (the retired TS bootstrap baked the
 // wrapper INTO the rc file, and it fossilized).
 fn cmd_init() -> Command {
     Command::new("init")
-        .about("Print shell integration (claude wrapper) — add `eval \"$(sb init bash)\"` to your rc file")
+        .about("Print shell integration (claude wrapper) — add `eval \"$(qd init bash)\"` to your rc file")
         .override_help(help::INIT)
         .arg(positional("shell"))
 }
@@ -491,8 +491,8 @@ fn cmd_init() -> Command {
 // --- 17. bootstrap, commands/bootstrap.ts:929-931 ---
 // Description NOT ported verbatim (A3 spec §3 row 17 ruling, carried into A5 §4.1
 // + named divergence §9 item 5): the TS text carries scope-banned tokens AND A5
-// redefines engine bootstrap as ENGINE-ONLY — the sbx-owned deploy steps are
-// dropped; the engine creates ~/.sb + ~/.sb/state + the zmx notice + the ADD-5
+// redefines engine bootstrap as ENGINE-ONLY — the qb-owned deploy steps are
+// dropped; the engine creates ~/.quorum/dispatch + ~/.quorum/dispatch/state + the zmx notice + the ADD-5
 // relay offer. This one-line engine-only description still matches the now-REAL
 // A5 behavior; matrix row = plan-sanctioned parity exclusion (flagged to
 // orchestrator). The banned-token list lives in the spec, never in this repo.
@@ -501,10 +501,10 @@ fn cmd_bootstrap() -> Command {
     // ruling relay-1780662680745-11 condition c): documented together here, in
     // `bootstrap --help`, and in the bootstrap.rs source.
     // (SB_RELAY_DRIVER_INSTALL is GONE with the external bun driver, 2026-06-09
-    // ruling: the relay is native — bootstrap registers `sb relay:serve` in
+    // ruling: the relay is native — bootstrap registers `qd relay:serve` in
     // ~/.claude/.mcp.json itself, with consent.)
     Command::new("bootstrap")
-        .about("Set up sb's local data directory under ~/.sb (idempotent)")
+        .about("Set up qd's local data directory under ~/.quorum/dispatch (idempotent)")
         .after_help(
             "Environment:\n  \
              SB_RELAY_DISABLE_SCAN    Set to 1/true to skip the localhost relay \
@@ -519,7 +519,7 @@ fn cmd_bootstrap() -> Command {
 // A3-row-17-class sanctioned exclusion.
 fn cmd_update() -> Command {
     Command::new("update")
-        .about("Self-update sb via the detected install channel (Homebrew or cargo).")
+        .about("Self-update qd via the detected install channel (Homebrew or cargo).")
         .override_help(help::UPDATE)
 }
 
@@ -627,12 +627,12 @@ fn count_operands(argv: &[String]) -> usize {
 
 /// Map a clap parse error, given the full argv (so an unknown-verb error renders
 /// commander's "too many arguments" count, per the M3 corpus — there is NO
-/// "unknown command" in TS sb: a bad first token is an excess operand to the
+/// "unknown command" in TS qd: a bad first token is an excess operand to the
 /// default ls action).
 pub fn map_clap_error_with_argv(e: clap::Error, argv: &[String]) -> i32 {
     match e.kind() {
         // commander's `.version("0.1.0")` prints JUST the version string (TS
-        // `sb --version` → "0.1.0"); clap would prepend the bin name ("sb 0.1.0").
+        // `qd --version` → "0.1.0"); clap would prepend the bin name ("qd 0.1.0").
         // Print the bare version for parity (index.ts:32), exit 0.
         ErrorKind::DisplayVersion => {
             println!("{VERSION}");
@@ -666,7 +666,7 @@ fn commander_message(e: &clap::Error) -> String {
     let ctx = |k: ContextKind| e.get(k).map(|v| v.to_string());
 
     match e.kind() {
-        // NB: there is NO "unknown command" in TS sb (corpus correction): a bad
+        // NB: there is NO "unknown command" in TS qd (corpus correction): a bad
         // top-level verb is an excess operand handled in `map_clap_error_with_argv`,
         // never reaching here.
 
@@ -717,7 +717,7 @@ mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Result<clap::ArgMatches, clap::Error> {
-        let mut argv = vec!["sb"];
+        let mut argv = vec!["qd"];
         argv.extend_from_slice(args);
         build_cli().try_get_matches_from(argv)
     }
@@ -1132,7 +1132,7 @@ mod tests {
     fn unknown_verb_renders_too_many_arguments() {
         // No "unknown command" anywhere (corpus correction): a bad first token is
         // an excess operand → "too many arguments. Expected 0 arguments but got N.".
-        let argv: Vec<String> = vec!["sb".into(), "nosuchverb".into()];
+        let argv: Vec<String> = vec!["qd".into(), "nosuchverb".into()];
         let e = build_cli().try_get_matches_from(&argv).unwrap_err();
         assert_eq!(e.kind(), ErrorKind::InvalidSubcommand);
         // The full mapping (exit 1 + the counted message) is exercised via
@@ -1206,7 +1206,7 @@ mod tests {
         let about = b.get_about().map(|s| s.to_string()).unwrap_or_default();
         assert_eq!(
             about,
-            "Set up sb's local data directory under ~/.sb (idempotent)"
+            "Set up qd's local data directory under ~/.quorum/dispatch (idempotent)"
         );
     }
 }

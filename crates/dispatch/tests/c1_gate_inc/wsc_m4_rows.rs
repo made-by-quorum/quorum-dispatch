@@ -1,5 +1,5 @@
 // ===========================================================================
-// WS-C M4 ENGINE-LEVEL gate rows (spec §7). Driven through the REAL `sb` binary
+// WS-C M4 ENGINE-LEVEL gate rows (spec §7). Driven through the REAL `qd` binary
 // against REAL per-session qrmux daemons in hermetic jails — the same harness
 // the C1 rows use (Jail / run_sb / mux_create / fake-claude / pid_alive). These
 // are the NEW/INVERTED arms that make the per-session split's claims falsifiable:
@@ -16,7 +16,7 @@
 // (crates/qrmux/tests/wsc_m4.rs).
 // ===========================================================================
 
-/// PID of the per-session qrmux daemon (`sb qrmux-server --socket-dir <dir>
+/// PID of the per-session qrmux daemon (`qd qrmux-server --socket-dir <dir>
 /// --session <name>`) bound to `dir` for `name`, if alive. Greps `ps` for the
 /// exact argv triple (qrmux-server + the dir + `--session <name>`).
 fn session_daemon_pid(dir: &Path, name: &str) -> Option<u32> {
@@ -71,14 +71,14 @@ fn sigkill(pid: u32) {
         .status();
 }
 
-/// Boot a LIVE session end to end through the engine cold-start path: `sb start
+/// Boot a LIVE session end to end through the engine cold-start path: `qd start
 /// <name>` with the fake-claude (writes the live registry row + execs the app).
-/// Returns (exit, stdout, stderr). The daemon is auto-launched by `sb`.
+/// Returns (exit, stdout, stderr). The daemon is auto-launched by `qd`.
 fn sb_new_live(jail: &Jail, name: &str, app: &str) -> (i32, String, String) {
     let fake = write_fake_claude(jail, app);
     let fake_s = fake.to_string_lossy().into_owned();
     let r = run_sb_env(jail, &["start", name], &[("CLAUDE_BIN", &fake_s), ("SB_FAKE_NAME", name)]);
-    // Teardown-leak belt: `sb start` AUTO-LAUNCHED a per-session daemon we never saw
+    // Teardown-leak belt: `qd start` AUTO-LAUNCHED a per-session daemon we never saw
     // a pid for at spawn. Record it post-boot via the exact-socket-dir ps lookup so
     // a future run can identity-reap it if this run dies before teardown.
     record_engine_daemons(&jail.root, &jail.resolved_dir());
@@ -97,7 +97,7 @@ fn g_isol() {
     // ----------------------------------------------------------------------
     // POSITIVE: two sessions on SEPARATE per-session daemons. SIGKILL A's
     // daemon → A dead + torn down; B PROVEN alive by OPERATION (send:pty acks +
-    // history renders post-kill); A recoverable cold (`sb start` relaunch).
+    // history renders post-kill); A recoverable cold (`qd start` relaunch).
     // ----------------------------------------------------------------------
     let jail = Jail::establish("gisol-pos");
     let dir = jail.resolved_dir();
@@ -191,12 +191,12 @@ fn g_isol() {
     ));
     ok &= b_pid_survives && send_ok && hist_ok;
 
-    // A RECOVERABLE COLD: a fresh `sb start alpha` relaunches a daemon for it.
+    // A RECOVERABLE COLD: a fresh `qd start alpha` relaunches a daemon for it.
     let _ = run_sb(&jail, &["stop", "--force", "alpha"]);
     let (cr, _or, er) = sb_new_live(&jail, "alpha", "cat");
     let relaunched = cr == 0 && session_daemon_pid(&dir, "alpha").is_some();
     detail.push_str(&format!(
-        "POS recover-cold: sb start alpha exit={cr} (stderr {}), daemon relaunched={relaunched}\n",
+        "POS recover-cold: qd start alpha exit={cr} (stderr {}), daemon relaunched={relaunched}\n",
         er.trim()
     ));
     ok &= relaunched;
@@ -212,7 +212,7 @@ fn g_isol() {
     // `crates/qrmux/tests/wsc_m4.rs::g_isol_negative_shared_fate_red`. WHY
     // qrmux-level: the QRMUX_TEST_SHARED seam puts TWO sessions on ONE daemon —
     // a multi-session-on-one-daemon world the production engine NEVER builds, so
-    // the full `sb start` engine path (boot-waiter, registry join, end-watch on the
+    // the full `qd start` engine path (boot-waiter, registry join, end-watch on the
     // shared manager) interacts with the artificial mode in production-irrelevant
     // ways that make an engine-level negative flaky. The negative control's JOB
     // is gate INTEGRITY (prove the inversion can't pass vacuously), not engine-
@@ -225,7 +225,7 @@ fn g_isol() {
     // the shared world. See the spec §7 G-ISOL negative-control construction.
 
     let verdict = if ok {
-        "G-ISOL (POSITIVE) VERDICT: PASS — A,B on DISTINCT per-session daemons (one pid each); SIGKILL A's daemon → A child DEAD + world torn down, B PROVEN ALIVE BY OPERATION (send:pty acks + history renders post-kill marker), A recoverable cold (sb start relaunch). The shared-fate NEGATIVE control (must RED) is the qrmux-level g_isol_negative_shared_fate_red arm (QRMUX_TEST_SHARED seam)."
+        "G-ISOL (POSITIVE) VERDICT: PASS — A,B on DISTINCT per-session daemons (one pid each); SIGKILL A's daemon → A child DEAD + world torn down, B PROVEN ALIVE BY OPERATION (send:pty acks + history renders post-kill marker), A recoverable cold (qd start relaunch). The shared-fate NEGATIVE control (must RED) is the qrmux-level g_isol_negative_shared_fate_red arm (QRMUX_TEST_SHARED seam)."
     } else {
         "G-ISOL (POSITIVE) VERDICT: FAIL"
     };
@@ -256,7 +256,7 @@ fn g_coldstart_n() {
         let k = 8usize;
         // Pre-spawn-free precondition.
         let pre = !dir.join("alpha.sock").exists() && session_daemon_pid(&dir, "alpha").is_none();
-        // K concurrent `sb start alpha` (CreateOrAttach semantics: first creates,
+        // K concurrent `qd start alpha` (CreateOrAttach semantics: first creates,
         // the rest attach/connect or fail loud+bounded — never a second daemon).
         let fake = write_fake_claude(&jail, "cat");
         let fake_s = fake.to_string_lossy().into_owned();
@@ -285,7 +285,7 @@ fn g_coldstart_n() {
                     .env("CLAUDE_BIN", &fake_s)
                     .env("SB_FAKE_NAME", "alpha")
                     .output()
-                    .expect("spawn sb start");
+                    .expect("spawn qd start");
                 out.status.code().unwrap_or(-1)
             }));
         }
@@ -350,7 +350,7 @@ fn g_coldstart_n() {
                     .env("CLAUDE_BIN", &fake_s)
                     .env("SB_FAKE_NAME", &name)
                     .output()
-                    .expect("spawn sb start");
+                    .expect("spawn qd start");
                 out.status.code().unwrap_or(-1)
             }));
         }
@@ -387,7 +387,7 @@ fn g_coldstart_n() {
 
     // ---- (d) create-vs-teardown: create racing a predecessor's exit-on-end.
     // Boot a session, kill it (drives exit-on-end: unlink + exit), then
-    // IMMEDIATELY `sb start` the SAME name → a clean relaunch, no bind-error leak.
+    // IMMEDIATELY `qd start` the SAME name → a clean relaunch, no bind-error leak.
     {
         let jail = Jail::establish("gcsn-cvt");
         let dir = jail.resolved_dir();
@@ -437,7 +437,7 @@ fn g_coldstart_n() {
         let names_embedded = combined.contains("embedded") && combined.contains("qrmux");
         let red = cm != 0 && !mut_socket.exists();
         detail.push_str(&format!(
-            "MUTATION (severed SB_EMBEDDED_DAEMON_PROGRAM={}): sb start exit={cm} (want nonzero), no per-session socket={}, error names embedded qrmux={names_embedded}\n  stderr: {}\n",
+            "MUTATION (severed SB_EMBEDDED_DAEMON_PROGRAM={}): qd start exit={cm} (want nonzero), no per-session socket={}, error names embedded qrmux={names_embedded}\n  stderr: {}\n",
             bogus.display(),
             !mut_socket.exists(),
             em.trim()
@@ -586,7 +586,7 @@ fn g_evsplit() {
 
     // EPOCH FENCING across a SIGKILL-respawn of ONE daemon (ev-a). Capture the
     // predecessor's epoch-1 file bytes, SIGKILL ev-a's daemon (no clean close),
-    // relaunch via a fresh `sb start`/send → the successor opens epoch+1 and the
+    // relaunch via a fresh `qd start`/send → the successor opens epoch+1 and the
     // predecessor's epoch-1 file is BYTE-IDENTICAL (never appended).
     let pred_bytes = std::fs::read(&a_epoch1).unwrap_or_default();
     if let Some(pid_a) = session_daemon_pid(&dir, "ev-a") {

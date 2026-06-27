@@ -1,4 +1,4 @@
-//! `sb survey` — hand-parsed (spec §2: survey bypasses commander with
+//! `qd survey` — hand-parsed (spec §2: survey bypasses commander with
 //! allowUnknownOption + allowExcessArguments + helpOption(false), commands/survey.ts:318-
 //! 320). Port of `parseSurveyArgs` (commands/survey.ts:61-90) + `helpText` (commands/survey.ts:92-
 //! 104) as a PURE function. Exit conventions (commands/survey.ts:324-331): `--help` → 0,
@@ -50,21 +50,21 @@ pub fn parse_survey_args(argv: &[String]) -> ParseSurveyResult {
         match argv[i].as_str() {
             "--file" => {
                 if i + 1 >= argv.len() {
-                    return ParseSurveyResult::Error("sb survey: --file requires a value".into());
+                    return ParseSurveyResult::Error("qd survey: --file requires a value".into());
                 }
                 i += 1;
                 file = Some(argv[i].clone());
             }
             "--system" => {
                 if i + 1 >= argv.len() {
-                    return ParseSurveyResult::Error("sb survey: --system requires a value".into());
+                    return ParseSurveyResult::Error("qd survey: --system requires a value".into());
                 }
                 i += 1;
                 system = argv[i].clone();
             }
             "--models" => {
                 if i + 1 >= argv.len() {
-                    return ParseSurveyResult::Error("sb survey: --models requires a value".into());
+                    return ParseSurveyResult::Error("qd survey: --models requires a value".into());
                 }
                 i += 1;
                 models = argv[i]
@@ -77,14 +77,14 @@ pub fn parse_survey_args(argv: &[String]) -> ParseSurveyResult {
                 return ParseSurveyResult::Help(help_text());
             }
             other => {
-                return ParseSurveyResult::Error(format!("sb survey: unknown option '{other}'"));
+                return ParseSurveyResult::Error(format!("qd survey: unknown option '{other}'"));
             }
         }
         i += 1;
     }
 
     if models.is_empty() {
-        return ParseSurveyResult::Error("sb survey: --models resolved to an empty list".into());
+        return ParseSurveyResult::Error("qd survey: --models resolved to an empty list".into());
     }
     ParseSurveyResult::Args(SurveyArgs {
         file,
@@ -96,7 +96,7 @@ pub fn parse_survey_args(argv: &[String]) -> ParseSurveyResult {
 /// `helpText()` (commands/survey.ts:92-104).
 pub fn help_text() -> String {
     format!(
-        "Usage: sb survey [--file <path>] [--system <prompt>] [--models <m1,m2,...>]\n\nFan an artifact out to a panel of LLMs via OpenRouter and collect responses.\n\nOptions:\n  --file <path>       Read artifact from a file (or pipe to stdin)\n  --system <prompt>   System prompt framing the kind of response wanted\n  --models <list>     Comma-separated OpenRouter model IDs\n\nRequires OPENROUTER_API_KEY in the environment.\nDefault models: {}",
+        "Usage: qd survey [--file <path>] [--system <prompt>] [--models <m1,m2,...>]\n\nFan an artifact out to a panel of LLMs via OpenRouter and collect responses.\n\nOptions:\n  --file <path>       Read artifact from a file (or pipe to stdin)\n  --system <prompt>   System prompt framing the kind of response wanted\n  --models <list>     Comma-separated OpenRouter model IDs\n\nRequires OPENROUTER_API_KEY in the environment.\nDefault models: {}",
         DEFAULT_MODELS.join(", ")
     )
 }
@@ -142,7 +142,7 @@ pub fn dispatch(argv_tail: &[String]) -> i32 {
     let exec = dispatch::exec::RealExec;
     if !dispatch::survey::curl_available(&exec) {
         eprintln!(
-            "sb survey: curl is required for the OpenRouter transport but was not found on PATH."
+            "qd survey: curl is required for the OpenRouter transport but was not found on PATH."
         );
         return 1;
     }
@@ -191,14 +191,14 @@ fn resolve_api_key(env: &dispatch::effects::RealEnv) -> Result<String, String> {
     if resolved.locked {
         // Same detector as config (§3.2): the null is INACCESSIBLE, not ABSENT.
         return Err(
-            "sb survey: keychain is locked — a key may exist but is inaccessible \
+            "qd survey: keychain is locked — a key may exist but is inaccessible \
              (SB_SECRET_BACKEND=keychain is env-forced; unlock or unset to use the \
              file fallback)."
                 .to_string(),
         );
     }
     Err(
-        "sb survey: No OpenRouter key. Run `sb config set openrouter-key`, or export \
+        "qd survey: No OpenRouter key. Run `qd config set openrouter-key`, or export \
          OPENROUTER_API_KEY."
             .to_string(),
     )
@@ -267,21 +267,21 @@ fn read_artifact(file: Option<&str>) -> Result<String, String> {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| path.to_string());
         return std::fs::read_to_string(path)
-            .map_err(|_| format!("sb survey: file not found: {resolved}"));
+            .map_err(|_| format!("qd survey: file not found: {resolved}"));
     }
     // stdin: a bare TTY (no pipe) has no artifact.
     // SAFETY: isatty on a valid fd is always safe.
     if unsafe { libc::isatty(libc::STDIN_FILENO) == 1 } {
-        return Err("sb survey: no input. Pipe text to stdin or use --file <path>.".to_string());
+        return Err("qd survey: no input. Pipe text to stdin or use --file <path>.".to_string());
     }
     use std::io::Read;
     let mut buf = String::new();
     std::io::stdin()
         .read_to_string(&mut buf)
-        .map_err(|e| format!("sb survey: failed to read stdin: {e}"))?;
+        .map_err(|e| format!("qd survey: failed to read stdin: {e}"))?;
     let text = buf.trim().to_string();
     if text.is_empty() {
-        return Err("sb survey: empty input.".to_string());
+        return Err("qd survey: empty input.".to_string());
     }
     Ok(text)
 }
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn help_returns_help_text() {
         match parse_survey_args(&argv(&["--help"])) {
-            ParseSurveyResult::Help(t) => assert!(t.contains("Usage: sb survey")),
+            ParseSurveyResult::Help(t) => assert!(t.contains("Usage: qd survey")),
             other => panic!("expected Help, got {other:?}"),
         }
     }

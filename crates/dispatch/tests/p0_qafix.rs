@@ -1,6 +1,6 @@
 //! P0 QA-rulings fixes (spec-w6-qafix, orc-ruled 2026-06-10), REWORKED by the
 //! P0 start-surface ruling (spec-w7-start-surface, STATE 21) — bin-level pins
-//! driving the REAL `sb` binary against a JAILED HOME (L9a / ADD-4 discipline;
+//! driving the REAL `qd` binary against a JAILED HOME (L9a / ADD-4 discipline;
 //! harness mirrors dupid_collision.rs for the forged-registry rows and
 //! ack3_matrix.rs for the fakerepl boot jail — integration test binaries cannot
 //! import each other, duplication is the sanctioned shape).
@@ -44,7 +44,7 @@ fn live_child() -> Child {
 }
 
 /// Forge `<pid>.json` (live) and `<pid>.json.tombstoned` rows under a freshly-
-/// jailed HOME and run `sb <args...>`. CLAUDE_BIN points at a NONEXISTENT path
+/// jailed HOME and run `qd <args...>`. CLAUDE_BIN points at a NONEXISTENT path
 /// and PATH is minimal, so a refusal regression fails loudly downstream instead
 /// of booting a real claude (the stderr pins then catch the wrong text).
 fn run_sb_with_rows(
@@ -71,7 +71,7 @@ fn run_sb_with_rows(
         .env("ZMX_DIR", &zmx)
         .env("CLAUDE_BIN", "/nonexistent/claude-p0-qafix")
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -114,7 +114,7 @@ fn start_resume_is_an_unknown_option() {
         t.path(),
         &[],
         &[],
-        &["start", "sb-qafix-old", "--resume", "qafix-live-0001"],
+        &["start", "qd-qafix-old", "--resume", "qafix-live-0001"],
     );
     assert_eq!(code, 1, "unknown option exits 1; stderr: {err}");
     assert!(
@@ -138,8 +138,8 @@ fn start_fork_ambiguous_target_errors() {
     let p2 = c2.id() as i64;
     // Same NAME, DISTINCT session ids (no id-dedup), both pids alive.
     let rows = [
-        (p1, row(p1, "qafix-amb-0001", "sb-qafix-amb", 1717000001000)),
-        (p2, row(p2, "qafix-amb-0002", "sb-qafix-amb", 1717000002000)),
+        (p1, row(p1, "qafix-amb-0001", "qd-qafix-amb", 1717000001000)),
+        (p2, row(p2, "qafix-amb-0002", "qd-qafix-amb", 1717000002000)),
     ];
 
     let t = tempfile::tempdir().unwrap();
@@ -147,7 +147,7 @@ fn start_fork_ambiguous_target_errors() {
         t.path(),
         &rows,
         &[],
-        &["start", "sb-qafix-fk1", "--fork", "sb-qafix-amb"],
+        &["start", "qd-qafix-fk1", "--fork", "qd-qafix-amb"],
     );
 
     let _ = c1.kill();
@@ -174,7 +174,7 @@ fn start_fork_not_found_errors() {
         t.path(),
         &[],
         &[],
-        &["start", "sb-qafix-fk2", "--fork", "nope"],
+        &["start", "qd-qafix-fk2", "--fork", "nope"],
     );
     assert_eq!(code, 1, "not-found fork target refuses; stderr: {err}");
     assert!(
@@ -192,13 +192,13 @@ fn start_fork_not_found_errors() {
 /// boot stderr, never this message.
 #[test]
 fn start_fork_empty_sid_target_errors() {
-    let rows = [(DEAD_PID, row(DEAD_PID, "", "sb-qafix-nosid", 1717000001000))];
+    let rows = [(DEAD_PID, row(DEAD_PID, "", "qd-qafix-nosid", 1717000001000))];
     let t = tempfile::tempdir().unwrap();
     let (code, _out, err) = run_sb_with_rows(
         t.path(),
         &rows,
         &[],
-        &["start", "sb-qafix-fk3", "--fork", "sb-qafix-nosid"],
+        &["start", "qd-qafix-fk3", "--fork", "qd-qafix-nosid"],
     );
     assert_eq!(code, 1, "empty-sid fork target refuses; stderr: {err}");
     assert!(
@@ -227,7 +227,7 @@ fn codex_start_refuses_fork_flag() {
         &[],
         &[
             "start",
-            "sb-qafix-cx2",
+            "qd-qafix-cx2",
             "--provider",
             "codex",
             "--fork",
@@ -243,7 +243,7 @@ fn codex_start_refuses_fork_flag() {
         "stderr must name the unsupported flag + provider, got: {err}"
     );
     assert!(
-        err.contains("sb resume <name>"),
+        err.contains("qd resume <name>"),
         "stderr must teach the working revive path, got: {err}"
     );
     assert!(
@@ -269,7 +269,7 @@ fn fork_target_must_be_same_provider() {
         t.path(),
         &[(4242, codex_row.to_string())],
         &[],
-        &["start", "sb-qafix-xp", "--fork", "cxwk"],
+        &["start", "qd-qafix-xp", "--fork", "cxwk"],
     );
     assert_eq!(
         code, 1,
@@ -300,8 +300,8 @@ fn resume_killed_transcriptless_session_states_the_truth() {
     // Arm 1: tombstone WITH a session id, no transcript anywhere in the jail.
     // Arm 2: tombstone with an EMPTY session id.
     let arms: [(&str, &str); 2] = [
-        ("qafix-ghost-0001", "sb-qafix-ghost"),
-        ("", "sb-qafix-ghost2"),
+        ("qafix-ghost-0001", "qd-qafix-ghost"),
+        ("", "qd-qafix-ghost2"),
     ];
     for (sid, name) in arms {
         let tombs = [(DEAD_PID, row(DEAD_PID, sid, name, 1717000001000))];
@@ -345,7 +345,7 @@ impl BootJail {
     fn establish(tag: &str) -> BootJail {
         // fakerepl's jail belt (a4-spec §5) requires HOME to match
         // `*/sbrg-runs/*/home` with sb_home/zmx/tmp as root-siblings.
-        let dirs = establish_jail(Path::new("/tmp/sb-p0qafix"), tag);
+        let dirs = establish_jail(Path::new("/tmp/qd-p0qafix"), tag);
         let projects = dirs.home.join(".claude").join("projects").join("proj");
         BootJail { dirs, projects }
     }
@@ -366,9 +366,9 @@ impl BootJail {
     }
 
     fn run_sb(&self, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String) {
-        // WP-B-CS-1 (D2): force the INTERACTIVE surface for `sb start` — this harness
-        // runs sb with piped stdio (non-TTY) + a fake-claude CLAUDE_BIN (not a PTY for
-        // sb), so a bare start would auto-detect the HEADLESS surface (and a no-`-p`
+        // WP-B-CS-1 (D2): force the INTERACTIVE surface for `qd start` — this harness
+        // runs qd with piped stdio (non-TTY) + a fake-claude CLAUDE_BIN (not a PTY for
+        // qd), so a bare start would auto-detect the HEADLESS surface (and a no-`-p`
         // start would hit Fork B's refuse-no-prompt). These boot-matrix tests exercise
         // the interactive create + --fork path. Delta flagged in the WP-B-CS-1 response.
         let injected: Vec<String>;
@@ -423,8 +423,8 @@ fn start_fork_live_matrix_e2e() {
     assert_eq!(code, 0, "original boots; stderr: {err}");
 
     // punch item 11 + WP-B5-iii Mechanism S: the fork source needs a REAL
-    // transcript on disk — sb reads it, copies+rekeys+truncates at a SAFE
-    // `end_turn` boundary, and seeds the fork at a fresh sb-minted uuid. Real
+    // transcript on disk — qd reads it, copies+rekeys+truncates at a SAFE
+    // `end_turn` boundary, and seeds the fork at a fresh qd-minted uuid. Real
     // claude writes one at boot; fakerepl doesn't, so plant a minimal but valid
     // one (one completed turn) keyed to u1.
     std::fs::create_dir_all(&jail.projects).unwrap();
@@ -443,11 +443,11 @@ fn start_fork_live_matrix_e2e() {
     )
     .unwrap();
 
-    // Arm 1: fork over the SAME live original, by NAME. Mechanism S: sb mints the
+    // Arm 1: fork over the SAME live original, by NAME. Mechanism S: qd mints the
     // fork's OWN uuid PRE-spawn and seeds <fork_uuid>.jsonl; the forked fakerepl
     // adopts that uuid via `--resume <fork_uuid>` (faithful claude emulation) — the
     // test does NOT pre-inject a session id (name-only env), so the registered
-    // uuid is whatever sb minted.
+    // uuid is whatever qd minted.
     let (code, _out, err) = jail.run_sb(
         &["start", "forked", "--fork", "orig"],
         &[("SB_FAKEREPL_NAME", "forked".to_string())],
@@ -457,8 +457,8 @@ fn start_fork_live_matrix_e2e() {
         "--fork over a live original succeeds (a new participant); stderr: {err}"
     );
 
-    // Arm 2 (Mechanism S identity): sb seeded EXACTLY ONE new transcript at the
-    // fork's own sb-minted uuid (≠ the parent's u1); the parent transcript is
+    // Arm 2 (Mechanism S identity): qd seeded EXACTLY ONE new transcript at the
+    // fork's own qd-minted uuid (≠ the parent's u1); the parent transcript is
     // byte-untouched; the seed is rekeyed to the fork uuid with NO parent-id leak.
     let parent_after = std::fs::read_to_string(jail.projects.join(format!("{u1}.jsonl"))).unwrap();
     assert_eq!(
@@ -518,7 +518,7 @@ fn start_fork_live_matrix_e2e() {
     // ABSENT->claude-code only at read-back (so `ls --json` shows "claude-code" for
     // BOTH rows — it cannot distinguish None there). We assert the raw `<pid>.json`
     // ROW, which is where the B5-i `provider` defect hid (green at the row layer,
-    // `sb connect` exit-1'd live). Fork-specific: keyed to the "forked" participant.
+    // `qd connect` exit-1'd live). Fork-specific: keyed to the "forked" participant.
     let sessions_dir = jail.dirs.home.join(".claude").join("sessions");
     let rows = dispatch::registry::read_entries(&sessions_dir, false);
     let fork_row = rows
@@ -554,7 +554,7 @@ fn start_fork_live_matrix_e2e() {
 /// WP-B5-iii obl-5 (§5a staleness): forking a source whose transcript ends
 /// mid-in-flight-tool must REPORT the gap ("forking at the latest SAFE
 /// boundary …, mid-flight on <tool>") and fork the SAFE prefix — never silently
-/// fork the unsafe tail. Exercises the report through the live `sb start --fork`
+/// fork the unsafe tail. Exercises the report through the live `qd start --fork`
 /// verb (Mechanism-S `resolve(Latest)` retreats; lifecycle.rs surfaces it).
 ///
 /// MUTATION EVIDENCE: dropping the staleness surfacing (or seeding the in-flight

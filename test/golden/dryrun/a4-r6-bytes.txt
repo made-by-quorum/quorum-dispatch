@@ -1,13 +1,13 @@
 
 === A4 R6 LIVE PROBE (mode=sendpty) ===
   date: 2026-06-05 01:42:52 EDT
-  worktree: /home/u/work/sb-rust/.claude/worktrees/agent-a31427c91d46a58ac  | tip: c7ff21e Merge pull request #12 from private-org/phase/b3-replay
-  binary: /home/u/work/sb-rust/.claude/worktrees/agent-a31427c91d46a58ac/target/debug/sb (0.1.0)
+  worktree: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac  | tip: c7ff21e Merge pull request #12 from private-org/phase/b3-replay
+  binary: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac/target/debug/qd (0.1.0)
 === REAL-HOME BELT before: 731 ===
   credentials seeded: yes
 
-=== sb new (real claude) ===
-  sb new exit=0 : Started detached session "sbrg-94450178063817229903-r6"
+=== qd new (real claude) ===
+  qd new exit=0 : Started detached session "sbrg-94450178063817229903-r6"
   claude version in jail: 2.1.163
   resolution belt: sbrg-94450178063817229903-r6 resolves uniquely in-jail (OK)
 
@@ -161,13 +161,13 @@ EMPTY-DROPPED)
 
 === A4 R6 LIVE PROBE (mode=create) ===
   date: 2026-06-05 01:44:40 EDT
-  worktree: /home/u/work/sb-rust/.claude/worktrees/agent-a31427c91d46a58ac  | tip: c7ff21e Merge pull request #12 from private-org/phase/b3-replay
-  binary: /home/u/work/sb-rust/.claude/worktrees/agent-a31427c91d46a58ac/target/debug/sb (0.1.0)
+  worktree: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac  | tip: c7ff21e Merge pull request #12 from private-org/phase/b3-replay
+  binary: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac/target/debug/qd (0.1.0)
 === REAL-HOME BELT before: 731 ===
   credentials seeded: yes
 
-=== sb new (real claude) ===
-  sb new exit=0 : Started detached session "sbrg-45122178063828016721-r6"
+=== qd new (real claude) ===
+  qd new exit=0 : Started detached session "sbrg-45122178063828016721-r6"
   claude version in jail: 2.1.163
   resolution belt: sbrg-45122178063828016721-r6 resolves uniquely in-jail (OK)
 
@@ -199,9 +199,9 @@ EMPTY-DROPPED)
 
   >>> 12KB (recovered bisect) class=EMPTY-DROPPED
 
-===== create ROW: sb new -p, target=16384 bytes marker=R6_CREATE16_45122178063828016721 =====
+===== create ROW: qd new -p, target=16384 bytes marker=R6_CREATE16_45122178063828016721 =====
   payload actual bytes=16421
-  sb new -p exit=0
+  qd new -p exit=0
   stdout: Started detached session "sbrg-45122178063828016721-r6c"|Prompt delivered to "sbrg-45122178063828016721-r6c"|
   stderr: (none)
   create session: jsonl=/tmp/claude-501/sbrg-runs/45122178063828016721/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-45122178063828016721-tmp-work/d10aeba9-b005-43b6-8f99-415bc6c1246f.jsonl user-records=1 status=busy CLASS=DELIVERED
@@ -216,7 +216,7 @@ EMPTY-DROPPED)
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         paste again to expand
-  CONTRACT: sb new -p exit=0 -> Accepted (went busy / delivered)
+  CONTRACT: qd new -p exit=0 -> Accepted (went busy / delivered)
 
 === REAL-HOME BELT after: 731 (HOLDS) ===
 

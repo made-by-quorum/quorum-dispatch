@@ -1,5 +1,5 @@
 //! HARDENING #2 concurrency gate (spec §6 / §11.4 / §11.10): race N≥4 SEPARATE
-//! PROCESSES through the `sb new` CREATE-PATH claim wiring against ONE shared
+//! PROCESSES through the `qd new` CREATE-PATH claim wiring against ONE shared
 //! claims dir — exactly one wins, the rest lose at the claim.
 //!
 //! This is the multi-PROCESS analogue of A1's in-process threaded claim race
@@ -126,7 +126,7 @@ fn child_body() -> ! {
         boot_waiter: &waiter,
         // codex P1 W3: NewDeps now carries the resolved provider (the launch cmd
         // builds through provider.launch_plan; the claude impl derives its config
-        // off fx.paths.home/.sb/config.toml — nonexistent in this jail → DEFAULT_FLAGS,
+        // off fx.paths.home/.quorum/dispatch/config.toml — nonexistent in this jail → DEFAULT_FLAGS,
         // identical to the dropped no-config path). This race test never inspects
         // the launch cmd; the claude provider keeps the byte-stable wiring.
         provider: &dispatch::provider::ClaudeProvider,

@@ -1,11 +1,11 @@
 === A4 BOOT-#6 (one sanctioned real-claude boot) ===
   date: 2026-06-05 00:37:28 EDT
-  worktree: /home/u/work/sb-rust/.claude/worktrees/agent-ab1242104580d00ca  | tip: 8d6b45f A4 R4 fix: idle-path two-write + content-verified CR delivery (ADR 0009, orc-ruled in-phase)
+  worktree: /home/u/work/qd-rust/.claude/worktrees/agent-ab1242104580d00ca  | tip: 8d6b45f A4 R4 fix: idle-path two-write + content-verified CR delivery (ADR 0009, orc-ruled in-phase)
 === REAL-HOME BELT before: 728 ===
   credentials seeded: yes
 
-=== sb new (real claude) ===
-  sb new exit=0 : Started detached session "sbrg-47484178063424827716-b6"
+=== qd new (real claude) ===
+  qd new exit=0 : Started detached session "sbrg-47484178063424827716-b6"
   claude version in jail: 2.1.163
   resolution belt: sbrg-47484178063424827716-b6 resolves uniquely in-jail (OK)
 
@@ -28,12 +28,12 @@
       WAITREPLY_TWO
   (c) GREEN: queued-then-answered — reply attributed to OUR message (WAITREPLY_TWO), exit 0
 
-=== (d) sb wait x3 ===
-  (d1) sb wait (busy) rc=0 out=[Waiting for sbrg-47484178063424827716-b6... done]
+=== (d) qd wait x3 ===
+  (d1) qd wait (busy) rc=0 out=[Waiting for sbrg-47484178063424827716-b6... done]
   (d1) GREEN: busy -> ' done' exit 0
-  (d2) sb wait (idle) rc=0 out=[sbrg-47484178063424827716-b6 is idle]
+  (d2) qd wait (idle) rc=0 out=[sbrg-47484178063424827716-b6 is idle]
   (d2) GREEN: idle-at-entry -> 'is idle' exit 0
-  (d3) sb wait --timeout 5 (kept busy) rc=0 out=[Waiting for sbrg-47484178063424827716-b6... done]
+  (d3) qd wait --timeout 5 (kept busy) rc=0 out=[Waiting for sbrg-47484178063424827716-b6... done]
   (d3) RED (rc=0)
 
 === (e) R4 LIVE CONFIRM: >=4.2KB idle-path single paste -> DELTA==1 + busy ===
@@ -58,6 +58,6 @@
 === REAL-HOME BELT after: 728 (HOLDS) ===
 
 === BOOT-#6 TALLY ===
-  rows attempted: 6 (a warm-up, b/c --wait x2, d sb-wait x3 counted as one group of 3, e R4)
+  rows attempted: 6 (a warm-up, b/c --wait x2, d qd-wait x3 counted as one group of 3, e R4)
   GREEN: 6   RED: 1
 === DONE (teardown via trap) ===

@@ -2,7 +2,7 @@
 //! `threads` table (codex-p2-spec sections 6.3, 6.4).
 //!
 //! **A CACHE, NEVER A CONTRACT (L8 / codex-p2-spec section 6.3).** The sqlite
-//! index is codex's own thread metadata store; sb reads it best-effort to enrich
+//! index is codex's own thread metadata store; qd reads it best-effort to enrich
 //! ls/info (title, cwd, rollout_path) and to resolve a thread's rollout_path
 //! directly. EVERY failure — missing file, schema drift (a renamed/dropped
 //! column), a query error, wrong column types — returns EMPTY / `None` so the
@@ -10,7 +10,7 @@
 //! (cut-ladder rung C2: if this whole layer is cut, callers degrade to
 //! rollout-only metadata).
 //!
-//! Opened with `SQLITE_OPEN_READ_ONLY` so sb never writes/migrates codex's db.
+//! Opened with `SQLITE_OPEN_READ_ONLY` so qd never writes/migrates codex's db.
 //!
 //! **The REAL schema (mined read-only from the jail evidence,
 //! `exec/codex-p2-evidence/rss/rss-jail/codex-home/state_5.sqlite` and
@@ -44,7 +44,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-/// One row of the codex `threads` index (the subset sb consumes). All fields are
+/// One row of the codex `threads` index (the subset qd consumes). All fields are
 /// best-effort: a wrong-typed column makes the WHOLE row drop (the caller falls
 /// back to the rollout scan for that thread).
 #[derive(Debug, Clone, PartialEq, Eq)]

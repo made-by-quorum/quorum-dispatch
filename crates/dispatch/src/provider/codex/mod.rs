@@ -79,7 +79,7 @@ const CODEX_BIN_ENV: &str = "SB_CODEX_BIN";
 /// The `sessions/` subdir of `$CODEX_HOME` — the rollout tree root.
 const SESSIONS_SUBDIR: &str = "sessions";
 
-// NOTE (W4): the sb-launched full-bypass thread/start posture (approval policy
+// NOTE (W4): the qd-launched full-bypass thread/start posture (approval policy
 // `never` + sandbox `danger-full-access`, the claude `--dangerously-…` parity
 // defaults, codex-p2-spec section 3.3) is a CREATE-PATH concern — it is passed to
 // `AppServerRpc::thread_start(cwd, approval_policy, sandbox)` by the W4 create
@@ -123,7 +123,7 @@ impl Provider for CodexProvider {
             .unwrap_or_else(|| "codex".to_string());
         let argv = vec![bin, "app-server".to_string()];
         // CODEX_HOME passthrough so the spawned daemon writes rollouts into the
-        // SAME root sb reads (jails own it in tests); absent ⇒ codex's default.
+        // SAME root qd reads (jails own it in tests); absent ⇒ codex's default.
         let env = match fx.env.var(CODEX_HOME_ENV).filter(|h| !h.is_empty()) {
             Some(h) => vec![(CODEX_HOME_ENV.to_string(), h)],
             None => vec![],
@@ -362,7 +362,7 @@ struct InitializeWaiter<'a> {
 impl crate::create::BootWaiter for InitializeWaiter<'_> {
     fn wait_ready(&self, name: &str) -> Result<(), crate::boot::BootFailure> {
         let client = ClientInfo {
-            name: "sb-manager".to_string(),
+            name: "qd-manager".to_string(),
             title: None,
             version: "0".to_string(),
         };

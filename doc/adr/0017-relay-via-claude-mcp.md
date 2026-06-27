@@ -8,7 +8,7 @@ shell wrapper — stands).
 
 ## Context
 
-ADR 0016 had `sb bootstrap` / `sb relay:repoint` register the relay by
+ADR 0016 had `qd bootstrap` / `qd relay:repoint` register the relay by
 hand-writing the relay entry into `~/.claude/.mcp.json`, per the "orc-38 E1"
 ruling that Claude Code loads user-scope MCP servers from that file.
 
@@ -18,7 +18,7 @@ That ruling is **false for Claude Code 2.1.x.** Verified on the live box
 the relay. Claude Code reads user-scope MCP server definitions from
 `~/.claude.json`'s top-level `mcpServers` (written by `claude mcp add -s user`),
 NOT from `~/.claude/.mcp.json`. So the relay had been silently non-functional,
-while `sb bootstrap` cheerfully reported "relay: configured" by reading the same
+while `qd bootstrap` cheerfully reported "relay: configured" by reading the same
 file Claude Code ignores — a false green.
 
 Settings files are not an option either: `settings.json` does not DEFINE MCP
@@ -45,11 +45,11 @@ given Claude Code uses, `claude mcp` writes it.
   - `unregister_relay` → `claude mcp remove -s user relay` (rollback).
 - **`current_exe()`** is the registered command (the binary you run is the one
   registered) — unchanged from 0016.
-- **`sb relay:register`** is the primary verb name (clearer than "repoint",
+- **`qd relay:register`** is the primary verb name (clearer than "repoint",
   which never fit first-time setup); **`relay:repoint`** stays as a hidden
-  back-compat alias. **`sb relay:rollback`** → `unregister_relay`.
+  back-compat alias. **`qd relay:rollback`** → `unregister_relay`.
 - **Bootstrap** gains a `claude`-on-PATH precondition (we drive `claude`): when
-  absent, the relay step is a NOTICE with a manual `sb relay:register` pointer,
+  absent, the relay step is a NOTICE with a manual `qd relay:register` pointer,
   never a prompt or a failure — exactly the zmx-notice discipline. Detection is
   `relay_is_registered`; the offer (TTY-only, default No) calls `register_relay`.
   Runtime health (sidecar discovery) stays an FYI line, orthogonal to whether
@@ -63,7 +63,7 @@ given Claude Code uses, `claude mcp` writes it.
 ## Consequences
 
 - The relay actually works: `claude mcp get relay` → Connected, a fresh session
-  writes a sidecar and listens, `sb send:relay` delivers (verified live).
+  writes a sidecar and listens, `qd send:relay` delivers (verified live).
 - No more false greens: bootstrap's "configured" line reflects `claude mcp get`,
   the same source of truth Claude Code uses.
 - Survives Claude Code config-format/location changes for free — the failure

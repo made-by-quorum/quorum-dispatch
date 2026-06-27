@@ -74,7 +74,7 @@ pub struct Session {
     /// Engine-minted stable 8-char id (idstore.rs), keyed by the provider
     /// session UUID — filled post-join from a read-only `idstore::fold`. `None`
     /// when the session has no provider session id (ZmxOnly rows) or no mint
-    /// yet (`sb ls` lazily backfills).
+    /// yet (`qd ls` lazily backfills).
     pub sb_id: Option<String>,
     pub pid: Option<i64>,
     pub status: SessionStatus,
@@ -105,19 +105,19 @@ pub struct Session {
     /// the literal structurally (no provider source exists on them).
     pub provider: String,
     /// The `entrypoint` discriminant the registry row carries (WP-B5-i):
-    /// `Some("headless")` for an agent-driven headless `sb start`, `None` for an
+    /// `Some("headless")` for an agent-driven headless `qd start`, `None` for an
     /// interactive row. Flows from the persisted registry `entrypoint` field at
     /// the join's LiveRegistry boundary (exactly like `provider`/`cwd`/`version`);
     /// all other construction branches (cold JSONL / zmx-only / tombstone) carry
     /// `None` (no registry row to source it). NOT serialized on the `ls --json`
     /// surface (render.rs builds JSON explicitly — adding this field is parity-safe).
-    /// Consumed by the `sb ls` daemon-down render gate (WP-B5-ii-a guarantee (ii),
+    /// Consumed by the `qd ls` daemon-down render gate (WP-B5-ii-a guarantee (ii),
     /// `liveness::gated_ls_status_headless`) to scope the gate to headless rows.
     pub entrypoint: Option<String>,
     /// WP-B5-iii obl-4: a FORK's lineage pointer — the PARENT instance's stable
     /// sbId. Filled post-join by `idstore::fill_lineage` from the `lineage` event
     /// the fork recorded (keyed by the fork's provider session_id), via the SAME
-    /// read-only fold pass `sb ls` runs (`common::all_sessions`) — so a fork's
+    /// read-only fold pass `qd ls` runs (`common::all_sessions`) — so a fork's
     /// parent is discoverable through the live resolver path. `None` for every
     /// non-fork row. NOT serialized on `ls --json` (render.rs builds JSON
     /// explicitly — parity-safe, exactly like `entrypoint`; an output lineage

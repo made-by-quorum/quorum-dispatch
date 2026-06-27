@@ -1,10 +1,10 @@
 #!/bin/bash
-# a2-live-row3.sh — A2 gate row 3: --agent fail-closed (LIVE, in-jail, built sb).
+# a2-live-row3.sh — A2 gate row 3: --agent fail-closed (LIVE, in-jail, built qd).
 #
-# Negative: `sb new <name> --agent bogus-agent-xyz` → nonzero exit, stderr names
+# Negative: `qd new <name> --agent bogus-agent-xyz` → nonzero exit, stderr names
 # the agent + path tried, zmx list UNCHANGED (NO task created, NO boot).
 # Positive control: create <agents_dir>/real-helper.md, point SB_SPAWN_AGENTS_DIR
-# at it, `sb new <name2> --agent real-helper` → resolves PAST the agent gate
+# at it, `qd new <name2> --agent real-helper` → resolves PAST the agent gate
 # (reaches the live create path). To avoid spending a real-claude boot for the
 # positive, we assert resolvability by confirming the run gets past the agent
 # fail-closed check into claim/create (it will then actually boot — so we DO let
@@ -12,9 +12,9 @@
 # negative case alone proves the fail-closed deliverable; the positive is the
 # "it still works" control.
 set -u
-WT=/home/u/work/sb-rust/.claude/worktrees/agent-acfec16fb3b5c3375
+WT=/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/sb"
+export JAIL_SB_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -38,7 +38,7 @@ jail_zmx list 2>&1 | sed 's/^/  /'
 before_count="$(jail_zmx list 2>/dev/null | grep -c "$JAIL_PREFIX" || true)"
 
 echo
-echo "=== NEGATIVE: sb new --agent bogus-agent-xyz (NO boot expected) ==="
+echo "=== NEGATIVE: qd new --agent bogus-agent-xyz (NO boot expected) ==="
 NAME1="${JAIL_PREFIX}bogus"
 ( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" \
     "$JAIL_SB_CMD" new "$NAME1" --cwd "$WORKDIR" --agent bogus-agent-xyz ) \

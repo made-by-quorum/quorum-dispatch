@@ -1,12 +1,12 @@
-# extensions.toml — the SINGLE pin that this `sb` version blesses.
+# extensions.toml — the SINGLE pin that this `qd` version blesses.
 #
 # WHAT THIS IS
-#   One version pin in `sb` determines the matched `sbx` + plugins. This file is
-#   baked into the `sb` binary at build time via `include_str!` (see
-#   crates/sb/src/extensions.rs) and read by `sb bootstrap`'s extension cascade
-#   to install the EXACT pinned `sbx` binary and the pinned work-model plugin.
+#   One version pin in `qd` determines the matched `qb` + plugins. This file is
+#   baked into the `qd` binary at build time via `include_str!` (see
+#   crates/qd/src/extensions.rs) and read by `qd bootstrap`'s extension cascade
+#   to install the EXACT pinned `qb` binary and the pinned work-model plugin.
 #
-#   Installing `sb` vX on two clean machines yields the SAME `sbx` + plugins.
+#   Installing `qd` vX on two clean machines yields the SAME `qb` + plugins.
 #   The pin is AUTHORITATIVE, not advisory.
 #
 # HOW TO BUMP A PIN
@@ -16,10 +16,10 @@
 #      confirms it exists and builds. This is a MANUAL pre-tag gate; nothing in
 #      the binary proves a remote ref exists or builds (the binary only bakes
 #      this string — see the honesty note in extensions.rs).
-#   3. Commit, then tag the `sb` release.
+#   3. Commit, then tag the `qd` release.
 #
 # SCHEMA (flat, one section per extension; values are double-quoted strings)
-#   [sbx]
+#   [qb]
 #     repo = "<git remote URL>"        # cloned/installed from here
 #     rev  = "<full 40-char git sha>"  # the exact pinned commit on the repo's main
 #   [plugins]
@@ -29,18 +29,18 @@
 #     plugin      = "<plugin name>"       # KEEP STABLE — cache path depends on it
 #     version     = "<plugin version>"    # KEEP STABLE — cache path depends on it
 #
-#   The plugins triple (marketplace="sbx", plugin="core", version="0.1.0") is the
+#   The plugins triple (marketplace="qb", plugin="core", version="0.1.0") is the
 #   commission cache path: ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/.
 #   Live commissions resolve roles from that path, so DO NOT churn these three.
 
-[sbx]
+[qb]
 # ssh:// form (NOT scp-style git@github.com:…) — cargo install --git rejects scp-style.
-repo = "ssh://git@github.com/private-org/sbx.git"
+repo = "ssh://git@github.com/private-org/qb.git"
 rev = "ab699f0d1fe9f49fcb8e8d60a7ae75eaf238a7f7"
 
 [plugins]
 repo = "ssh://git@github.com/private-org/plugins.git"
 rev = "a4ff7e3be7e9a41e43536dcdb1d0a2bc80209a69"
-marketplace = "sbx"
+marketplace = "qb"
 plugin = "core"
 version = "0.1.0"

@@ -1,17 +1,17 @@
 //! P0 QA — the id-identity matrix + coverage-gap rows (spec-w4-qa, Pete-ruled
 //! STOP CONDITIONS A1-A4 + section B).
 //!
-//! Drives the REAL `sb` binary through per-run hermetic fakerepl-backed jails
+//! Drives the REAL `qd` binary through per-run hermetic fakerepl-backed jails
 //! (the ack2_gate.rs harness shape) and pins, for the claude provider:
 //!
-//!   A1. resume → SAME sbx id (env AND ls agree)
+//!   A1. resume → SAME qb id (env AND ls agree)
 //!   A2. fork (`start <name> --fork <session>`, the STATE-21 valued surface) →
-//!       NEW sbx id (engine side; the provider-level "fork mints a new UUID"
+//!       NEW qb id (engine side; the provider-level "fork mints a new UUID"
 //!       fact is pinned by the `#[ignore]`d real-claude probe below)
 //!   A3. RETIRED BY RULING (STATE 21, spec-w7-start-surface): branch-via-start
 //!       (`--resume` WITHOUT `--fork`) was removed from the CLI — see the
 //!       retirement note at the A3 section below for the recorded history.
-//!   A4. stop→resume round-trip ×3 — (UUID, name, sbx id) preserved each cycle.
+//!   A4. stop→resume round-trip ×3 — (UUID, name, qb id) preserved each cycle.
 //!
 //! The codex half of the matrix: resume-revive same-id is unit-pinned in
 //! resume_daemon.rs (`revived_daemon_env_carries_the_existing_stable_id`) and
@@ -70,7 +70,7 @@ struct Jail {
     /// A REAL dir used as the seeded transcripts' cwd (the resume cwd
     /// reality-check refuses a vanished dir).
     work: PathBuf,
-    /// (name) created via `sb start` — reaped on Drop so a failed assert never
+    /// (name) created via `qd start` — reaped on Drop so a failed assert never
     /// leaks a fakerepl child holding the embedded daemon open.
     created: RefCell<Vec<String>>,
 }
@@ -79,7 +79,7 @@ impl Jail {
     fn establish(tag: &str) -> Jail {
         // SHORT literal-/tmp base so the embedded qrmux sun_path fits (the
         // 104-byte macOS budget; c1_gate note).
-        let dirs = establish_jail(Path::new("/tmp/sb-p0idm"), tag);
+        let dirs = establish_jail(Path::new("/tmp/qd-p0idm"), tag);
         let work = dirs.root.join("work");
         std::fs::create_dir_all(&work).unwrap();
         Jail {
@@ -180,7 +180,7 @@ impl Drop for Jail {
     }
 }
 
-/// Run `sb <args>` under the jail env. `claude_bin: None` ⇒ fakerepl directly
+/// Run `qd <args>` under the jail env. `claude_bin: None` ⇒ fakerepl directly
 /// (fine for non-launching verbs).
 fn run_sb_inner(jail: &Jail, claude_bin: Option<&Path>, args: &[&str]) -> (i32, String, String) {
     let cb = claude_bin
@@ -191,8 +191,8 @@ fn run_sb_inner(jail: &Jail, claude_bin: Option<&Path>, args: &[&str]) -> (i32, 
 
 /// Run a verb that may LAUNCH a session (start/resume) under `wrapper`.
 fn run_sb(jail: &Jail, wrapper: &Path, args: &[&str]) -> (i32, String, String) {
-    // WP-B-CS-1 (D2): force the INTERACTIVE surface for `sb start` — this harness's
-    // wrapper is a fake-claude CLAUDE_BIN script, NOT a PTY for `sb`, so a bare start
+    // WP-B-CS-1 (D2): force the INTERACTIVE surface for `qd start` — this harness's
+    // wrapper is a fake-claude CLAUDE_BIN script, NOT a PTY for `qd`, so a bare start
     // would auto-detect the HEADLESS surface (and the mint/bind identity these tests
     // assert is the interactive create-path flow). `resume` is intentionally NOT
     // forced: resume is ALWAYS headless now (D3), and the resume-identity tests that
@@ -216,7 +216,7 @@ fn run_sb(jail: &Jail, wrapper: &Path, args: &[&str]) -> (i32, String, String) {
     run_sb_inner(jail, Some(wrapper), args)
 }
 
-/// `sb ls --all --json` rows as (name, sbId, sessionId, status) tuples.
+/// `qd ls --all --json` rows as (name, sbId, sessionId, status) tuples.
 fn ls_rows(jail: &Jail) -> Vec<(Option<String>, Option<String>, String, String)> {
     let (code, out, err) = run_sb_inner(jail, None, &["ls", "--all", "--json"]);
     assert_eq!(code, 0, "ls --all --json exits 0; stderr: {err}");
@@ -253,7 +253,7 @@ fn ls_sb_id_for(jail: &Jail, uuid: &str) -> Option<String> {
     matched[0].1.clone()
 }
 
-/// WP-B7 PIECE 2: the `lineage` value `sb ls --json` surfaces on the row carrying
+/// WP-B7 PIECE 2: the `lineage` value `qd ls --json` surfaces on the row carrying
 /// `uuid` — `None` when the row emits NO `lineage` key at all (the additive
 /// non-fork case; the field is present ONLY for forks). Read straight off the
 /// machine surface, so this exercises the render OUTPUT path end-to-end.
@@ -275,7 +275,7 @@ fn ls_lineage_for(jail: &Jail, uuid: &str) -> Option<String> {
 }
 
 /// Extract the `--resume <uuid>` value from a launch log line (WP-B5-iii: a
-/// Mechanism-S fork resumes its sb-minted seed uuid via plain `--resume`).
+/// Mechanism-S fork resumes its qd-minted seed uuid via plain `--resume`).
 fn resume_arg_of(line: &str) -> Option<String> {
     let toks: Vec<&str> = line.split_whitespace().collect();
     toks.iter()
@@ -295,7 +295,7 @@ fn env_id_of(line: &str) -> String {
 const U1: &str = "11111111-2222-3333-4444-555555555555";
 
 // ===========================================================================
-// A1 — resume → SAME sbx id (env AND ls agree)
+// A1 — resume → SAME qb id (env AND ls agree)
 // ===========================================================================
 
 /// MUTATION EVIDENCE: keying the resume path's `mint_or_get` by anything other
@@ -320,7 +320,7 @@ fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
     let id_at_start = env_id_of(&jail.launches()[0]);
     assert!(
         dispatch::idstore::is_valid_id(&id_at_start),
-        "launch env carried a well-formed sbx id, got {id_at_start:?}"
+        "launch env carried a well-formed qb id, got {id_at_start:?}"
     );
     // env AND ls agree at start.
     assert_eq!(ls_sb_id_for(&jail, U1).as_deref(), Some(&*id_at_start));
@@ -368,11 +368,11 @@ fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
         "resume must not fork: {}",
         launches[1]
     );
-    // A1: SAME sbx id in the resumed process's ENV…
+    // A1: SAME qb id in the resumed process's ENV…
     assert_eq!(
         env_id_of(&launches[1]),
         id_at_start,
-        "resume env carries the SAME sbx id"
+        "resume env carries the SAME qb id"
     );
     // …AND on the ls surface, with no extra mint in the store. Append-only:
     // the resume added NO lines (mint_or_get found the binding and returned).
@@ -391,7 +391,7 @@ fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
 
 /// Resumability after `stop` is the CONTRACT (the tombstone is the discovery
 /// mechanism, not a terminal state). Three consecutive cycles; after each, the
-/// (UUID, name, sbx id) triple is unchanged on BOTH the env and ls surfaces.
+/// (UUID, name, qb id) triple is unchanged on BOTH the env and ls surfaces.
 // WP-B5-ii-b (PROOF 3) RE-ENABLED: see a1. The headless resume launch now injects
 // the child's OWN recorded sbId as SB_SESSION_ID (daemon_headless.rs), so the
 // (UUID, name, sbId) triple is preserved across every stop/resume cycle on BOTH the
@@ -444,7 +444,7 @@ fn a4_claude_stop_resume_three_cycles_identity_stable() {
         assert_eq!(
             env_id_of(last),
             id0,
-            "cycle {cycle}: env sbx id stable across the round trip"
+            "cycle {cycle}: env qb id stable across the round trip"
         );
         let rows = ls_rows(&jail);
         let row = rows.iter().find(|r| r.2 == U1).expect("the U1 row");
@@ -456,7 +456,7 @@ fn a4_claude_stop_resume_three_cycles_identity_stable() {
         assert_eq!(
             row.1.as_deref(),
             Some(&*id0),
-            "cycle {cycle}: ls sbx id stable"
+            "cycle {cycle}: ls qb id stable"
         );
     }
     // Three cycles, one mint line's worth of ids: the store never grew.
@@ -464,20 +464,20 @@ fn a4_claude_stop_resume_three_cycles_identity_stable() {
 }
 
 // ===========================================================================
-// A2 — fork → NEW sbx id (STATE-21 surface: `start <name> --fork <session>`)
+// A2 — fork → NEW qb id (STATE-21 surface: `start <name> --fork <session>`)
 // ===========================================================================
 
 /// `start <new-name> --fork <session>` resolves the target session (name /
-/// full sbx id / unambiguous prefix — the standard pipeline). WP-B5-iii
-/// Mechanism S: sb pre-mints the fork's OWN uuid, seeds `<fork_uuid>.jsonl`
+/// full qb id / unambiguous prefix — the standard pipeline). WP-B5-iii
+/// Mechanism S: qd pre-mints the fork's OWN uuid, seeds `<fork_uuid>.jsonl`
 /// from the target's transcript (copy/rekey/truncate at a SAFE boundary), and
 /// launches a PLAIN `--resume <fork_uuid>` (NO `--fork-session`). Identity is
-/// option A: `mint_or_get(fork_uuid)` mints the fork's OWN sbx id bound to its
-/// sb-minted uuid — NEVER the parent's. (Real-claude provider semantics for the
+/// option A: `mint_or_get(fork_uuid)` mints the fork's OWN qb id bound to its
+/// qd-minted uuid — NEVER the parent's. (Real-claude provider semantics for the
 /// underlying resume pinned by `a3_real_claude_provider_semantics`.) Inheriting
-/// the original sbx id, or resuming the PARENT's uuid, would be THE bug.
+/// the original qb id, or resuming the PARENT's uuid, would be THE bug.
 ///
-/// Two fork arms: by NAME (over the stopped original), then by sbx-id PREFIX
+/// Two fork arms: by NAME (over the stopped original), then by qb-id PREFIX
 /// (over the live first fork) — both resolution tiers drive the same path.
 ///
 /// MUTATION EVIDENCE: keying identity off the PARENT's uuid (`mint_or_get(parent)`
@@ -498,10 +498,10 @@ fn a2_claude_fork_mints_new_sbx_id() {
     assert_eq!(code, 0, "stop wk: {err}");
 
     // FORK by NAME off the stopped session, under a new name. WP-B5-iii
-    // Mechanism S: sb mints the fork's OWN uuid PRE-spawn, seeds
+    // Mechanism S: qd mints the fork's OWN uuid PRE-spawn, seeds
     // <fork_uuid>.jsonl from wk's transcript (rekeyed), and launches `--resume
-    // <fork_uuid>` (NO --fork-session — sb did the copy). The wrapper does NOT
-    // pin a session id (uuid:None) so fakerepl adopts the sb-minted uuid via
+    // <fork_uuid>` (NO --fork-session — qd did the copy). The wrapper does NOT
+    // pin a session id (uuid:None) so fakerepl adopts the qd-minted uuid via
     // --resume (faithful real-claude behavior).
     let wrap2 = jail.wrapper("wk2", "wk2", None);
     let (code, _o, err) = run_sb(&jail, &wrap2, &["start", "wk2", "--fork", "wk"]);
@@ -512,7 +512,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
     let fork_uuid = resume_arg_of(fork_launch).expect("fork argv carries --resume <fork_uuid>");
     assert_ne!(
         fork_uuid, U1,
-        "Mechanism S resumes the sb-minted SEED uuid, NOT the parent's: {fork_launch}"
+        "Mechanism S resumes the qd-minted SEED uuid, NOT the parent's: {fork_launch}"
     );
     assert!(
         !fork_launch.contains("--fork-session"),
@@ -521,7 +521,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
     let id2 = env_id_of(fork_launch);
     assert!(dispatch::idstore::is_valid_id(&id2), "fork env id: {id2:?}");
     // THE pin: a forked session is a NEW identity (never the original's).
-    assert_ne!(id2, id1, "fork must NOT inherit the original sbx id");
+    assert_ne!(id2, id1, "fork must NOT inherit the original qb id");
 
     let ids = jail.ids_fold();
     assert_eq!(
@@ -532,7 +532,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
     assert_eq!(
         ids.by_session.get(&fork_uuid),
         Some(&id2),
-        "fork's own sbx id bound to its sb-minted uuid (option A: mint_or_get(fork_uuid))"
+        "fork's own qb id bound to its qd-minted uuid (option A: mint_or_get(fork_uuid))"
     );
     assert_eq!(ls_sb_id_for(&jail, &fork_uuid).as_deref(), Some(&*id2));
     assert_eq!(ls_sb_id_for(&jail, U1).as_deref(), Some(&*id1));
@@ -553,7 +553,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
         "GUARDRAIL: lineage is the parent, not the fork's own id"
     );
 
-    // WP-B7 PIECE 2 — the lineage pointer now surfaces on the `sb ls --json` OUTPUT
+    // WP-B7 PIECE 2 — the lineage pointer now surfaces on the `qd ls --json` OUTPUT
     // (additive, parent-pointer-only). RED before the render.rs lineage emission:
     // with no `lineage` key on the row, the fork's `ls_lineage_for` is `None` and
     // the `Some(id1)` assert fails. GREEN after. The non-fork PARENT row (U1) emits
@@ -574,7 +574,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
         "non-fork PARENT row emits NO lineage key (additive — present only for forks)"
     );
 
-    // FORK by sbx-id PREFIX off the LIVE first fork (live targets are legal — a
+    // FORK by qb-id PREFIX off the LIVE first fork (live targets are legal — a
     // fork is a new participant). Mechanism S already seeded wk2's transcript
     // (<fork_uuid>.jsonl, with an end_turn carried from wk), so it is itself
     // forkable. The query is id2's shortest prefix NOT shared with id1, floored
@@ -605,7 +605,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
     assert_eq!(
         jail.ids_fold().by_session.get(&fork3_uuid),
         Some(&id3),
-        "second fork bound to ITS sb-minted uuid"
+        "second fork bound to ITS qd-minted uuid"
     );
 }
 
@@ -614,7 +614,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
 //
 // `a3_claude_branch_without_fork_shares_the_sbx_id` pinned the BRANCH-VIA-START
 // surface: `start <new-name> --resume <uuid>` (no fork) → the provider KEEPS
-// the UUID ⇒ the engine pre-bound via `mint_or_get(uuid)` → the SAME sbx id on
+// the UUID ⇒ the engine pre-bound via `mint_or_get(uuid)` → the SAME qb id on
 // a second process. The STATE-21 ruling REMOVED `--resume` from start entirely
 // (TS-parity residue, redundant with the resume verb — and the source of the
 // two-live-participants-one-id hazard this suite had escalated), so the engine
@@ -694,7 +694,7 @@ fn a3_real_claude_provider_semantics() {
 /// `--fork-session` shape exists for codex). QA originally captured the verb
 /// arm silently DROPPING `--resume`/`--fork` and surfaced the question; the
 /// orchestrator RULED (qafix R2, 2026-06-10) that the codex arm must REFUSE
-/// each flag loudly, teaching `sb resume <name>` as the revive path. STATE 21
+/// each flag loudly, teaching `qd resume <name>` as the revive path. STATE 21
 /// then removed `--resume` from start entirely (its refusal arm died with the
 /// flag), so this row pins the surviving `--fork <session>` refusal SHAPE:
 /// exit 1, refusal-not-silent-drop, zero state. (Exact wording is byte-pinned
@@ -711,7 +711,7 @@ fn codex_start_refuses_fork_loudly() {
     );
     assert_eq!(code, 1, "codex + fork → loud refusal; stderr: {err}");
     assert!(
-        err.contains("not supported with --provider codex") && err.contains("sb resume"),
+        err.contains("not supported with --provider codex") && err.contains("qd resume"),
         "the failure is the R2 refusal teaching the revive path: {err}"
     );
     // Nothing was minted and no row was written before the refusal exit.
@@ -821,7 +821,7 @@ fn b_bind_residual_unbound_mint_warns_loud() {
 // ===========================================================================
 
 /// A pre-existing session (row with a sessionId, no mapped id) meets an
-/// UNWRITABLE id store at `sb ls`: the backfill mint fails, the row degrades to
+/// UNWRITABLE id store at `qd ls`: the backfill mint fails, the row degrades to
 /// a warned id-less row (`---`), and ls still exits 0 (a read surface never
 /// hard-fails on engine-state writes).
 ///
@@ -858,7 +858,7 @@ fn b_ls_lazy_mint_failure_degrades_warned_exit_0() {
         "ls exits 0 despite the mint failure; stderr: {err}"
     );
     assert!(
-        err.contains("sb ls: idstore:"),
+        err.contains("qd ls: idstore:"),
         "the warning names the verb AND the failing subsystem (not some \
          unrelated stderr line): {err:?}"
     );
@@ -913,7 +913,7 @@ fn b_whoami_env_id_of_tombstoned_row_answers_without_the_dead_name() {
             .env("SB_SESSION_ID", "ab3kx9mq")
             .env("PATH", "/usr/bin:/bin")
             .output()
-            .expect("spawn sb");
+            .expect("spawn qd");
         (
             out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -954,21 +954,21 @@ fn b_retired_stub_help_renders_without_firing_the_stub() {
     for (verb, pointer, stub_line) in [
         (
             "new",
-            "(retired — use sb start)",
-            "is retired; use `sb start`",
+            "(retired — use qd start)",
+            "is retired; use `qd start`",
         ),
         (
             "kill",
-            "(retired — use sb stop)",
-            "is retired; use `sb stop`",
+            "(retired — use qd stop)",
+            "is retired; use `qd stop`",
         ),
     ] {
         for flag in ["--help", "-h"] {
             let (code, out, err) = run_sb_inner(&jail, None, &[verb, flag]);
-            assert_eq!(code, 0, "sb {verb} {flag} renders help, exit 0: {err}");
+            assert_eq!(code, 0, "qd {verb} {flag} renders help, exit 0: {err}");
             assert!(
                 out.contains(pointer),
-                "sb {verb} {flag} help points at the live verb: {out}"
+                "qd {verb} {flag} help points at the live verb: {out}"
             );
             assert!(
                 !err.contains(stub_line),
@@ -1072,7 +1072,7 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
         .env("SB_SESSION_ID", "AB3KX9MQ") // case-insensitive resolution
         .env("PATH", "/usr/bin:/bin")
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     assert_eq!(out.status.code(), Some(0));
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert_eq!(v["identitySource"], "env");
@@ -1081,7 +1081,7 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
 
     // whoami WITHOUT the env var: the ppid-walk fallback answers at the bin
     // level (the forged wka row is keyed by THIS test process's pid — a real
-    // ancestor of the spawned sb), with the sbId joined READ-ONLY from the
+    // ancestor of the spawned qd), with the sbId joined READ-ONLY from the
     // fold and identitySource "ppid".
     let out = Command::new(sb_bin())
         .args(["whoami", "--json"])
@@ -1090,7 +1090,7 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
         .env("SB_HOME", &jail.dirs.sb_home)
         .env("PATH", "/usr/bin:/bin")
         .output()
-        .expect("spawn sb");
+        .expect("spawn qd");
     assert_eq!(out.status.code(), Some(0), "ppid fallback answers");
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert_eq!(v["identitySource"], "ppid");

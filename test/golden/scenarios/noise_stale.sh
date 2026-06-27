@@ -6,11 +6,11 @@
 # same-name PID files, a stale relay sidecar pointing at a dead pid, a dead-PID
 # registry entry. This row PRE-SEEDS each noise shape into the jailed
 # ~/.claude/{sessions,relay} (no stub, no boot — these are registry-READ outcomes)
-# and records the deterministic `sb ls --json` OUTCOME SHAPE for each, so a
+# and records the deterministic `qd ls --json` OUTCOME SHAPE for each, so a
 # regression that crashes / double-counts / drops on the noise DIFFS.
 #
 # ONE ROW, a SMALL FAMILY of pre-seeded cases (justified: they share the registry
-# substrate and one `sb ls --json` read observes all three; splitting them would
+# substrate and one `qd ls --json` read observes all three; splitting them would
 # triple the boot-free ls cost for no added coverage). Each case asserts a SEPARATE
 # deterministic field:
 #   (a) DUPLICATE same-name PID files, SAME sessionId  -> deduped to EXACTLY ONE row
@@ -27,7 +27,7 @@
 # The wrong-TYPED-timestamp registry row is W4's (NOT built here).
 #
 # Determinism (double-record): the OUTCOME is the per-case ls counts/visibility
-# booleans, computed from `sb ls --json` over the pre-seeded registry. The seeded
+# booleans, computed from `qd ls --json` over the pre-seeded registry. The seeded
 # pids/sessionIds are FIXED constants (normalizer collapses pid tokens; the derived
 # booleans/counts survive). NOT a byte trace.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_scenario_lib.sh"
@@ -95,7 +95,7 @@ PY
 
 scn_assert() {
     [ -f "$SCN_OUT" ] || return 1
-    grep -q 'SHAPE ls_exit_zero=1' "$SCN_OUT"                    || { _cmp_fail failure-shape "sb ls did not exit 0 over the noisy registry"; return 1; }
+    grep -q 'SHAPE ls_exit_zero=1' "$SCN_OUT"                    || { _cmp_fail failure-shape "qd ls did not exit 0 over the noisy registry"; return 1; }
     grep -q 'SHAPE dup_same_sid_deduped_to_one=1' "$SCN_OUT"     || { _cmp_fail failure-shape "duplicate same-name same-sessionId PID files NOT deduped to one row"; return 1; }
     grep -q 'SHAPE dead_pid_entry_still_visible=1' "$SCN_OUT"    || { _cmp_fail failure-shape "dead-pid registry entry not visible in ls (unexpected liveness filter / drop)"; return 1; }
     grep -q 'SHAPE stale_sidecar_no_crash=1' "$SCN_OUT"          || { _cmp_fail failure-shape "stale relay sidecar (dead pid) crashed ls --json"; return 1; }

@@ -1,9 +1,9 @@
-//! `sb new` create pipeline (spec §6) — a testable decider + injected effects.
+//! `qd new` create pipeline (spec §6) — a testable decider + injected effects.
 //!
-//! Port of the `sb new` action (lifecycle.ts:707-809) + `startDetached`
+//! Port of the `qd new` action (lifecycle.ts:707-809) + `startDetached`
 //! (utils.ts:348-375), with TWO hardenings that intentionally DIVERGE from TS:
 //!
-//!   - **HARDENING #1 — fail-closed `--agent`** (spec §6.2): TS's `sb new`
+//!   - **HARDENING #1 — fail-closed `--agent`** (spec §6.2): TS's `qd new`
 //!     BLINDLY forwards `--agent X` to claude (lifecycle.ts:732 via
 //!     `buildNewExtraArgs`), so an unknown agent boots a GENERIC session that
 //!     goes busy → a false success. We resolve `<agents_dir>/<X>.md` BEFORE
@@ -19,7 +19,7 @@
 //! Order of operations (each step names its failure mode; EVERY failure exits
 //! nonzero and leaves NO state — or reaps exactly what it created):
 //!   1. preflight (L3)  → [`NewError::PreflightStale`]
-//!   2. (retired) static `--agent` path — `sb start --agent` is refused at
+//!   2. (retired) static `--agent` path — `qd start --agent` is refused at
 //!      the verb layer now; role content lives in the work-model plugin.
 //!   3. atomic name claim (#2) → [`NewError::NameClaimed`]
 //!      (live-name pre-check fast-path → [`NewError::NameInUse`])
@@ -150,7 +150,7 @@ impl NewDeps<'_> {
     }
 }
 
-/// Parameters for one `sb new` (mirrors the TS action's args + opts).
+/// Parameters for one `qd new` (mirrors the TS action's args + opts).
 pub struct NewParams {
     /// The zmx session name (also the claude --name).
     pub name: String,
@@ -317,7 +317,7 @@ impl std::fmt::Display for NewError {
             // vs TS (which passes such names through to zmx) — ADR 0007 Class 4.
             NewError::NameRejected { name, reason } => write!(
                 f,
-                "sb start: name '{name}' is not allowed ({reason}). \
+                "qd start: name '{name}' is not allowed ({reason}). \
                  Choose a name without path separators, '..', or control characters. \
                  No session was created."
             ),
@@ -331,13 +331,13 @@ impl std::fmt::Display for NewError {
             // reusable (the scan skips tombstones + dead pids).
             NewError::NameHeldLive { name, holder } => write!(
                 f,
-                "sb start: name \"{name}\" is taken by running session {holder} — \
+                "qd start: name \"{name}\" is taken by running session {holder} — \
                  stop it or choose another name. No session was created."
             ),
             NewError::NameInUse(name) => {
                 write!(
                     f,
-                    "sb start: name '{name}' is already in use by a live session"
+                    "qd start: name '{name}' is already in use by a live session"
                 )
             }
             NewError::NameClaimed { name, holder } => {
@@ -348,7 +348,7 @@ impl std::fmt::Display for NewError {
                     registry::claim_file_name(name).unwrap_or_else(|| format!("{name}.claim"));
                 write!(
                     f,
-                    "sb start: name '{name}' is being created by another process \
+                    "qd start: name '{name}' is being created by another process \
                      (claim held: {holder}). No session was created. If no create \
                      is in flight, the claim is wedged — delete the '{claim_file}' \
                      file under ~/.claude/claims/ to recover (the claim file only \
@@ -361,7 +361,7 @@ impl std::fmt::Display for NewError {
             // backend (the qrmux daemon), unlike the zmx-lane ZmxMissing guidance.
             NewError::EmbeddedDaemonLaunchFailed(detail) => write!(
                 f,
-                "sb start: the embedded qrmux daemon failed to launch ({detail}). \
+                "qd start: the embedded qrmux daemon failed to launch ({detail}). \
                  No session was created."
             ),
             // Byte-parity with TS startDetached (utils.ts:371).
@@ -369,7 +369,7 @@ impl std::fmt::Display for NewError {
             // punch item 18: refusing to launch into a dying same-name pty.
             NewError::StaleEndedPane { name } => write!(
                 f,
-                "sb start: a previous ended session still holds the zmx slot \"{name}\" \
+                "qd start: a previous ended session still holds the zmx slot \"{name}\" \
                  and did not clear after reap — not launching into a dying pty (the \
                  cwd-hijack window). Retry in a moment, or inspect with: zmx ls. \
                  No session was created."
@@ -382,7 +382,7 @@ impl std::fmt::Display for NewError {
                 "ERROR: Session \"{name}\" is not attachable in the zmx socket dir \
                  ({}) after creation — registration failed (Bug D).\n  \
                  Nothing was killed (absence is not a kill target); a stray wrapper, \
-                 if any, is cleared by the next same-name start. Inspect with: sb ls",
+                 if any, is cleared by the next same-name start. Inspect with: qd ls",
                 canonical.display()
             ),
             // Byte-parity with TS I6 verify (lifecycle.ts:771-774).
@@ -404,12 +404,12 @@ impl std::fmt::Display for NewError {
                 f,
                 "ERROR: Session \"{name}\" did not reach idle state within timeout.\n\
                  The zmx session exists but Claude Code may not have booted.\n  \
-                 Check: sb ls\n  Attach: sb connect {name}\n  ({detail})"
+                 Check: qd ls\n  Attach: qd connect {name}\n  ({detail})"
             ),
             // F1 fail-closed (spec §2.2): `detail` is the io error only — no value.
             NewError::EnvFileWriteFailed { name, detail } => write!(
                 f,
-                "sb start: failed to write the session env file for \"{name}\": {detail}. \
+                "qd start: failed to write the session env file for \"{name}\": {detail}. \
                  No session was created."
             ),
         }
@@ -419,7 +419,7 @@ impl std::fmt::Display for NewError {
 impl std::error::Error for NewError {}
 
 /// Assemble the BASE `command 'claude' ...` shell command (flags + extra args)
-/// for this `sb new` — WITHOUT the F1 env-file prefix. Factored so `run_to_boot`
+/// for this `qd new` — WITHOUT the F1 env-file prefix. Factored so `run_to_boot`
 /// builds it once after the claim is held. The env prefix is layered on in
 /// `run_to_boot` after the file is written (lifecycle.ts:879). Not public.
 ///
@@ -488,7 +488,7 @@ fn reject_unsafe_name(name: &str) -> Option<String> {
 
 /// S2-at-new PIN RECONCILIATION (spec §2.1; orc-4 ruled ADOPT 2026-06-05).
 ///
-/// TS at pin validates EVERY `sb new` name against the S2 whitelist BEFORE any
+/// TS at pin validates EVERY `qd new` name against the S2 whitelist BEFORE any
 /// FS/env op (lifecycle.ts:857-861), exiting 1 with `ERROR: <validateSessionName
 /// msg>`. Rust's create path historically had only the looser
 /// [`reject_unsafe_name`], so whitelist-failing names like `a'b` / `a b` booted
@@ -506,7 +506,7 @@ fn s2_validate_new_name(name: &str) -> Option<String> {
     crate::resume::validate_session_name(name)
 }
 
-/// Run the `sb new` create pipeline (spec §6). See the module docs for the order
+/// Run the `qd new` create pipeline (spec §6). See the module docs for the order
 /// of operations and the claim-release discipline.
 pub fn run_new(deps: &NewDeps, params: &NewParams) -> Result<NewOutcome, NewError> {
     // --- Step 0a: S2-at-new whitelist (spec §2.1, lifecycle.ts:857-861) ------
@@ -544,7 +544,7 @@ pub fn run_new(deps: &NewDeps, params: &NewParams) -> Result<NewOutcome, NewErro
 
     // --- (Retired) static `--agent` fail-closed path -------------------------
     // The old HARDENING #1 step resolved `<agents_dir>/<agent>.md` here and
-    // fail-closed booted that role. `sb start --agent` is now REFUSED at the verb
+    // fail-closed booted that role. `qd start --agent` is now REFUSED at the verb
     // layer (verbs/stubs.rs::run_start_agent_retired) — role/agent content lives
     // in the work-model plugin and is spawned via `bond commission`, so the engine
     // no longer owns or resolves that agents dir. `params.agent` therefore never
@@ -1023,7 +1023,7 @@ Commands:
         let paths = SbPaths::from_home(&home.path().join("home"));
         let canonical = home.path().join("zmx-501");
         // codex P1 W3: the create path no longer takes an explicit config-toml
-        // path — the provider derives it off `fx.paths.home/.sb/config.toml`
+        // path — the provider derives it off `fx.paths.home/.quorum/dispatch/config.toml`
         // (nonexistent here → DEFAULT_FLAGS, the pre-rewire jail behavior).
         Fix {
             _home: home,
@@ -1193,7 +1193,7 @@ Commands:
             boot_waiter: waiter,
             // codex P1 W3: the create path now builds the launch cmd through the
             // resolved provider. The claude impl derives its config-toml off
-            // `fx.paths.home/.sb/config.toml` (nonexistent in the jail → DEFAULT_FLAGS,
+            // `fx.paths.home/.quorum/dispatch/config.toml` (nonexistent in the jail → DEFAULT_FLAGS,
             // identical to the pre-rewire `fix.config` no-config path).
             provider: &crate::provider::ClaudeProvider,
             // Default test backend = Zmx: the existing units assert the zmx-lane
@@ -1277,7 +1277,7 @@ Commands:
         assert_eq!(out.name, "sess");
     }
 
-    // The static `--agent` path is RETIRED: `sb start --agent` is refused at
+    // The static `--agent` path is RETIRED: `qd start --agent` is refused at
     // the verb layer (verbs/stubs.rs), so `params.agent` never arrives `Some` from
     // the CLI. This pins that the create path no longer consults any agents dir —
     // even an explicitly-set `params.agent` boots straight through
@@ -1344,7 +1344,7 @@ Commands:
         let mux = StagedMux::new(fix.canonical.clone(), "wk");
         // A is LIVE: an alive pid (this test process) + a registry row.
         registry_row(&fix, std::process::id() as i64, "wk", "uuid-holder");
-        // A's stable id is mapped in the idstore (SB_HOME unset → <home>/.sb/state).
+        // A's stable id is mapped in the idstore (SB_HOME unset → <home>/.quorum/dispatch/state).
         let ids_path = crate::idstore::ids_path(
             &fix.paths
                 .home
@@ -2411,7 +2411,7 @@ Commands:
     fn name_reject_plain_names_unaffected() {
         // Names with dots, dashes, underscores but no separator/`..`/NUL pass the
         // gate (None) — only the dangerous classes are rejected.
-        for ok in ["wk", "my-worker", "agent_1", "sb.rust", "v1.2.3", "a.b.c"] {
+        for ok in ["wk", "my-worker", "agent_1", "qd.rust", "v1.2.3", "a.b.c"] {
             assert_eq!(reject_unsafe_name(ok), None, "{ok:?} must be accepted");
         }
         // And the dangerous classes are caught by the pure helper.
@@ -2760,7 +2760,7 @@ Commands:
 
         // The PRE-REWIRE reference: exactly what build_claude_command did before
         // routing through the provider — claude_bin + claude_flags (off the SAME
-        // config path the provider derives, `paths.home/.sb/config.toml`,
+        // config path the provider derives, `paths.home/.quorum/dispatch/config.toml`,
         // nonexistent → DEFAULT_FLAGS) + build_new_extra_args.
         let bin = claude_bin(&fix.env);
         let config = fix

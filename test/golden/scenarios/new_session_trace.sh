@@ -2,7 +2,7 @@
 # scenario: `new` byte trace + boot-readiness EVENT — boot-readiness-event class.
 # 0b DELTA-STRENGTH W3.3 (P2): boot-trace strengthening (re-record new-session-trace).
 #
-# Corpus entry: `new` byte trace. STUB-BACKED (§S): drives the pinned-TS `sb new`
+# Corpus entry: `new` byte trace. STUB-BACKED (§S): drives the pinned-TS `qd new`
 # against the deterministic stub through REAL zmx 0.6.0 and records the readiness
 # EVENT contract (ADR-0004 + ADR-0005-dialog-free-boot): the PID file APPEARS under
 # the jailed HOME/.claude/sessions matched by name (lifecycle.ts findPidFile

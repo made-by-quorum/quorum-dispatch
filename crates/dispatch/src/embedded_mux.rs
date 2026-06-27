@@ -77,7 +77,7 @@
 //!
 //! ## wait (D2/R10)
 //!
-//! PRODUCTION-DEAD: user `sb wait` polls pid-file status, backend-independent;
+//! PRODUCTION-DEAD: user `qd wait` polls pid-file status, backend-independent;
 //! `Mux::wait` is unit-test-only. We provide a minimal trait-fill (bounded poll of
 //! `list` until the named sessions are absent) for trait-completeness ONLY.
 
@@ -103,17 +103,17 @@ use qrmux::server::socket::{session_socket_path_for, validate_session_identity};
 /// When set, the launch spec re-execs THIS program instead of `current_exe()`,
 /// so a test can deliberately sever the wiring (point at a nonexistent binary)
 /// and prove the cold-start path REDs. UNSET in production → `current_exe()` (the
-/// real `sb` binary). Read ONLY here; never consulted on a non-test path by value.
+/// real `qd` binary). Read ONLY here; never consulted on a non-test path by value.
 const DAEMON_PROGRAM_ENV: &str = "SB_EMBEDDED_DAEMON_PROGRAM";
 
-/// The argv-prefix the sb embedder uses for its hidden daemon entry: the sb binary
-/// IS the daemon via `sb qrmux-server` (main.rs pre-clap dispatch).
+/// The argv-prefix the qd embedder uses for its hidden daemon entry: the qd binary
+/// IS the daemon via `qd qrmux-server` (main.rs pre-clap dispatch).
 const DAEMON_ARGS_PREFIX: &str = "qrmux-server";
 
-/// Build the embedder's [`ServerLaunchSpec`]: re-exec the `sb` binary
+/// Build the embedder's [`ServerLaunchSpec`]: re-exec the `qd` binary
 /// (`current_exe()`) with `["qrmux-server"]`, so the daemon cold-start runs
-/// `sb qrmux-server --socket-dir <dir>` — NOT `current_exe() server` (the bug:
-/// `sb` has no bare `server` verb). The program is overridable by
+/// `qd qrmux-server --socket-dir <dir>` — NOT `current_exe() server` (the bug:
+/// `qd` has no bare `server` verb). The program is overridable by
 /// [`DAEMON_PROGRAM_ENV`] for the mutation-control test ONLY.
 fn embedder_launch_spec() -> io::Result<ServerLaunchSpec> {
     let program = match std::env::var(DAEMON_PROGRAM_ENV) {
@@ -129,7 +129,7 @@ fn embedder_launch_spec() -> io::Result<ServerLaunchSpec> {
 }
 
 /// Per-op timeout for the bounded (non-attach) verbs. Generous enough for a
-/// busy host's daemon round-trip; the point is to never wedge `sb ls`/`sb kill`
+/// busy host's daemon round-trip; the point is to never wedge `qd ls`/`qd kill`
 /// on a hung daemon, not to be tight.
 const OP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -288,7 +288,7 @@ impl Mux for EmbeddedMux {
         cwd: &Path,
     ) -> io::Result<ExecResult> {
         // WS-C M3b: create_detached_session cold-starts the session's OWN daemon
-        // (`ensure_session_server_running` → `<sb> qrmux-server --socket-dir <dir>
+        // (`ensure_session_server_running` → `<qd> qrmux-server --socket-dir <dir>
         // --session <name>`, the embedder launch spec, C1 M4fix) binding
         // `<dir>/<name>.sock`, then creates the detached session. Engine-side
         // pre-validation (§2) runs FIRST so a bad name / over-budget leaf surfaces
@@ -375,7 +375,7 @@ impl Mux for EmbeddedMux {
     }
 
     fn wait(&self, socket_dir: &Path, names: &[String]) -> io::Result<i32> {
-        // PRODUCTION-DEAD (D2/R10): user `sb wait` polls pid-file status; this is
+        // PRODUCTION-DEAD (D2/R10): user `qd wait` polls pid-file status; this is
         // trait-completeness ONLY. Bounded poll of `list` until none of `names`
         // are present (or the budget runs out → exit 1, "still present").
         if names.is_empty() {
@@ -428,7 +428,7 @@ pub fn embedded_socket_dir(home: &Path, env: &EmbeddedEnv) -> io::Result<PathBuf
 /// that need the session's daemon up before asserting its bound socket path).
 /// WS-C M3b: mirrors the auto-launch a `run_detached`/`attach` op triggers —
 /// `ensure_session_server_running` with the EMBEDDER launch spec (C1 M4fix), so it
-/// re-execs `sb qrmux-server --socket-dir <dir> --session <name>`, binding
+/// re-execs `qd qrmux-server --socket-dir <dir> --session <name>`, binding
 /// `<dir>/<name>.sock`.
 pub fn ensure_session_daemon(
     rt: &tokio::runtime::Runtime,
@@ -440,13 +440,13 @@ pub fn ensure_session_daemon(
         .map_err(|e| io::Error::other(format!("embedded mux: ensure_session_daemon: {e}")))
 }
 
-/// WP-B-CS-1 (D2 `sb start` agent caller / D3 `sb resume`): launch (or resume) a
+/// WP-B-CS-1 (D2 `qd start` agent caller / D3 `qd resume`): launch (or resume) a
 /// headless `claude -p` stream-json turn for `name` via the per-session qrmux
 /// daemon's `LaunchHeadless` verb (the D-LH client helper). Headless is inherently
 /// the qrmux-daemon path (there is no PTY/pane to render), so it resolves the
 /// embedded qrmux dir directly and cold-starts the session's OWN daemon with the
 /// embedder launch spec — exactly the spawn `run_detached`/`attach` trigger above,
-/// re-execing `sb qrmux-server --socket-dir <dir> --session <name>`.
+/// re-execing `qd qrmux-server --socket-dir <dir> --session <name>`.
 /// `resume_session_id = Some(id)` continues an existing claude session
 /// (`--resume`); `None` is a fresh launch.
 ///

@@ -1,5 +1,5 @@
 # WART-WAVE M2 MUTATION EVIDENCE — new gates RED against the PRE-FIX binary
-# pre-fix SUT = sb built at main abba9e7 (tag phase-a7, pre-wave), scratch worktree
+# pre-fix SUT = qd built at main abba9e7 (tag phase-a7, pre-wave), scratch worktree
 # new gates = a5rec_kill.sh (W3 direct-kill + W4 line) + a3 excl-kill-force/excl-wait-about guardrails @ 2d2c1a9
 # date: 2026-06-06T00:52:25Z
 

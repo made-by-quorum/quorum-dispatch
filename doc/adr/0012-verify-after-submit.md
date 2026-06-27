@@ -2,7 +2,7 @@
 
 - **Status:** accepted (wart-wave; Pete-sanctioned via ADD-15 W8, 2026-06-05 19:47 EDT)
 - **Date:** 2026-06-05
-- **Deciders:** Pete (design sanction), sb-rust-orc-6 (wave GO), sbr-wart-lead
+- **Deciders:** Pete (design sanction), qd-rust-orc-6 (wave GO), sbr-wart-lead
 - **Design source:** the M11 joint-sanction proposal
   (`exec/a7-evidence/a4-r1-truncation-closure-proposal.md` in the phase workspace),
   post wave-spec red-team R1/R3/R5/R8 revisions.
@@ -40,13 +40,13 @@ enemy is the false fail):
 | `NoRecord` | reads succeeded, zero records in budget | path-split below |
 | `SourceUnavailable` | every read errored | one stderr WARN, success unchanged |
 
-**Path-split** (red-team R1 — the flagship `sb new -p` path must not false-fail):
+**Path-split** (red-team R1 — the flagship `qd new -p` path must not false-fail):
 
 - **`send:pty` idle path** (transcript resolved + offset snapshotted BEFORE the
   send): STRICT — `NoRecord` is also loud exit-1 (`could not verify payload
   arrival ... within 10s`). Verification runs BEFORE the `--wait` anchor loop
   (a truncated payload fails in ≤10s instead of anchor-timing-out at 120s).
-- **`sb new -p`** (session_id is a best-effort registry read at delivery time;
+- **`qd new -p`** (session_id is a best-effort registry read at delivery time;
   the transcript may not exist yet): BEST-EFFORT — resolution is re-attempted
   every poll (registry → sessionId → `find_jsonl_path`); `NoRecord`/
   `SourceUnavailable` DEGRADE to one warn. `--resume` sessions snapshot the

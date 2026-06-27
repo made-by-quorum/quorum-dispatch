@@ -10,7 +10,7 @@
 #
 # FIDELITY BOUNDARY (RECORDED FACT, R4-honest — FLAGGED to the lead): the spec/ADR
 # framed this as "the raw-mode config the engine establishes." EMPIRICALLY, the
-# engine (sb) does NOT itself put the PTY in raw mode — RAW MODE is established by the
+# engine (qd) does NOT itself put the PTY in raw mode — RAW MODE is established by the
 # interactive TUI app (real Claude Code), and the deterministic STUB is NOT a
 # raw-mode TUI (it is a line reader). So the termios the stub observes on the
 # engine-established session PTY is the DEFAULT zmx-run COOKED mode: icanon=1, echo=1,
@@ -32,7 +32,7 @@
 # COLLISION CHECK (W2.3): no existing scenario submits a line starting `STTY` (the
 # prompt namespace already holds EMIT) — verified at the stub doctrine header.
 #
-# §S: drives the pinned-TS `sb new` + `sb send:pty STTY` against the stub; the report
+# §S: drives the pinned-TS `qd new` + `qd send:pty STTY` against the stub; the report
 # is the stub reading tcgetattr on its stdin (the session PTY the ENGINE set up), so
 # the row measures the PTY mode the ENGINE established, not the stub.
 #

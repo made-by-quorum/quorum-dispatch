@@ -9,7 +9,7 @@
 # report FIELDS (icanon/echo/isig) — NOT byte-exact over the flag bitmasks (those are
 # platform-specific; this is the Linux side, sibling to report.txt's macOS capture).
 #
-# FIDELITY BOUNDARY (RECORDED FACT, R4-honest — same as the macOS row): the engine (sb)
+# FIDELITY BOUNDARY (RECORDED FACT, R4-honest — same as the macOS row): the engine (qd)
 # does NOT itself put the PTY in raw mode — raw mode is established by the interactive
 # TUI app, and the deterministic STUB is a LINE READER, not a raw-mode TUI. So the
 # termios the stub observes on the engine-established session PTY is the DEFAULT
@@ -20,7 +20,7 @@
 # PLATFORM-SPLIT: writes the Linux fixture report-linux.txt with per-platform
 # provenance siblings (.linux). The macOS sibling (report.txt) is W3.7.
 #
-# §S: drives the pinned-TS `sb new` + `sb send:pty STTY` against the stub; the report
+# §S: drives the pinned-TS `qd new` + `qd send:pty STTY` against the stub; the report
 # is the stub reading tcgetattr on its stdin (the session PTY the ENGINE set up), so
 # the row measures the PTY mode the ENGINE established on Linux, not the stub.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_scenario_lib.sh"

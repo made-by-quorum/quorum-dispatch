@@ -1,4 +1,4 @@
-//! `sb ping [session]` — REAL backend (A5 M5), ported from
+//! `qd ping [session]` — REAL backend (A5 M5), ported from
 //! `0d0fa9e:src/commands/ping.ts:357-388` (registerPingCommand action). The pure
 //! classifier + resolution/sweep live in [`dispatch::ping`]; this is the thin binding:
 //! gather the session list (the engine-native `getAllSessions({includeAll:true})`
@@ -26,7 +26,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // No target → usage error, exit 3 (ping.ts:381-385; FROZEN — preserves the
     // A3 stubs.rs byte-shape).
     if prefix.is_none() && session.is_none() {
-        eprintln!("sb ping: provide a <session> or --prefix <p>");
+        eprintln!("qd ping: provide a <session> or --prefix <p>");
         return Classification::Error.exit_code();
     }
 

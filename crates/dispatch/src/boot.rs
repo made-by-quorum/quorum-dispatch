@@ -419,7 +419,7 @@ pub struct BootTimeouts {
 /// TS `Bun.sleep(1000)` pin (lifecycle.ts:150): under ADD-13 ("works-well over
 /// parity") the TS source is an intent reference, not an obligation. A session is
 /// typically ready ~1.7s in but a 1s poll only OBSERVES it on the next tick,
-/// burning up to ~1s of dead-wait per `sb new`. A finer poll cannot overshoot the
+/// burning up to ~1s of dead-wait per `qd new`. A finer poll cannot overshoot the
 /// upper-bound timeouts (`overall_ms`/`pid_phase_ms`) — the loops check-before-
 /// sleep and re-check the deadline — so those upper bounds stay TS-faithful.
 const DEFAULT_BOOT_POLL_MS: u64 = 125;
@@ -575,7 +575,7 @@ impl<'a> EventBootWaiter<'a> {
     /// - `Unmatched` → FAIL IMMEDIATELY, zero keystrokes (ADR 0005 §2).
     ///
     /// Returns the PID file path on success, or `Err(detail)` (loud, naming
-    /// `sb connect <name>`) on any dialog failure or PID-phase timeout.
+    /// `qd connect <name>`) on any dialog failure or PID-phase timeout.
     fn run_pid_phase(&self, name: &str, deadline: i64) -> Result<PathBuf, String> {
         // PID phase cap = min(overall deadline, now + pid_phase_ms)
         // (lifecycle.ts:205).
@@ -719,7 +719,7 @@ impl<'a> EventBootWaiter<'a> {
                     // ADR 0005 §2: NEVER answer a dialog not in the named list.
                     // Fail loudly with ZERO keystrokes, carrying the tail.
                     return Err(format!(
-                        "unanswered dialog — sb connect {name} to answer it manually \
+                        "unanswered dialog — qd connect {name} to answer it manually \
                          (no keystroke was sent). Screen tail:\n{}",
                         strip_ansi(&tail).trim()
                     ));
@@ -747,7 +747,7 @@ impl<'a> EventBootWaiter<'a> {
                         // No 3rd send EVER (the bound).
                         return Err(format!(
                             "dialog '{key}' did not dismiss after retry — \
-                             sb connect {name} to answer it manually"
+                             qd connect {name} to answer it manually"
                         ));
                     }
                     // Loop back to re-scan (PID file + dialog state) immediately;
@@ -781,7 +781,7 @@ impl<'a> EventBootWaiter<'a> {
                 };
                 return Err(format!(
                     "PID file for \"{name}\" did not appear within {}ms — {pane_note}; \
-                     sb connect {name} to inspect",
+                     qd connect {name} to inspect",
                     self.timeouts.pid_phase_ms
                 ));
             }
@@ -818,7 +818,7 @@ impl<'a> EventBootWaiter<'a> {
         format!(
             "session pane \"{name}\" {died} before Claude Code wrote its PID file — \
              the launch command died at startup (not a slow boot). Check the launch \
-             command and `sb ls` / the mux pane list for leftovers.{tail_note}"
+             command and `qd ls` / the mux pane list for leftovers.{tail_note}"
         )
     }
 
@@ -884,7 +884,7 @@ impl<'a> EventBootWaiter<'a> {
     /// Fix-A — phase 3 (RESPEC-DELTA §4.2): poll the global `relay_dir` until the
     /// child's OWN relay sidecar is present, matched by the `sessionId` from its
     /// registry row (`pid_file`). The relay server is MCP-spawned by Claude Code,
-    /// async to and decoupled from dispatch's idle gate (§4.1), so `sb start` can
+    /// async to and decoupled from dispatch's idle gate (§4.1), so `qd start` can
     /// return idle BEFORE the relay is up — the bind-race this phase closes. Once
     /// the sidecar exists, a priming relay POST after up-live lands on a live relay
     /// server and its `message-seen` fires (§4.3). Bounded by the same boot
@@ -1643,7 +1643,7 @@ Enter to confirm \u{b7} Esc to cancel";
         let sleeper = RecordingSleeper::default();
         let w = waiter(&mux, socket, sessions, &clock, &sleeper);
         let err = w.wait_ready("sess").unwrap_err();
-        assert!(err.detail.contains("sb connect"), "loud failure: {err:?}");
+        assert!(err.detail.contains("qd connect"), "loud failure: {err:?}");
         assert!(err.detail.contains("dev-channels"));
         // HARD BOUND: exactly 2 sends, never 3.
         assert_eq!(mux.send_count(), 2, "persistent dialog: \\r + 1 retry only");
@@ -1664,7 +1664,7 @@ Enter to confirm \u{b7} Esc to cancel";
         let w = waiter(&mux, socket, sessions, &clock, &sleeper);
         let err = w.wait_ready("sess").unwrap_err();
         assert!(err.detail.contains("unanswered dialog"));
-        assert!(err.detail.contains("sb connect"));
+        assert!(err.detail.contains("qd connect"));
         // The error includes the (stripped) tail for diagnosis.
         assert!(err.detail.contains("Some brand-new confirmation"));
         // CRITICAL: ZERO keystrokes to an unmatched dialog.
@@ -1718,7 +1718,7 @@ Enter to confirm \u{b7} Esc to cancel";
             err.detail.contains("folder-trust"),
             "names the dialog: {err:?}"
         );
-        assert!(err.detail.contains("sb connect"));
+        assert!(err.detail.contains("qd connect"));
         assert_eq!(mux.send_count(), 2, "persistent dialog: \\r + 1 retry only");
     }
 
@@ -1757,7 +1757,7 @@ Enter to confirm \u{b7} Esc to cancel";
         let w = waiter(&mux, socket, sessions, &clock, &sleeper);
         let err = w.wait_ready("sess").unwrap_err();
         assert_eq!(err.phase, BootPhase::PidFile);
-        assert!(err.detail.contains("did not appear") || err.detail.contains("sb connect"));
+        assert!(err.detail.contains("did not appear") || err.detail.contains("qd connect"));
         // punch item 6 (diagnostics): the timeout names the pane as still up —
         // distinguishable at the surface from the pane-death fail-fast below.
         assert!(
@@ -1922,7 +1922,7 @@ Enter to confirm \u{b7} Esc to cancel";
             "states the unconfirmed observation: {}",
             err.detail
         );
-        assert!(err.detail.contains("sb connect"), "{}", err.detail);
+        assert!(err.detail.contains("qd connect"), "{}", err.detail);
         assert_eq!(mux.send_count(), 0);
     }
 

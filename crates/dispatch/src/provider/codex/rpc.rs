@@ -286,41 +286,41 @@ mod tests {
     #[test]
     fn client_info_serializes_omitting_none_title() {
         let ci = ClientInfo {
-            name: "sb-manager".into(),
+            name: "qd-manager".into(),
             title: None,
             version: "0".into(),
         };
         let v = serde_json::to_value(&ci).unwrap();
         // Matches q1-coinjection.py:53 minus the title the probe DID send;
         // None title must be ABSENT (skip_serializing_if), not null.
-        assert_eq!(v, serde_json::json!({"name":"sb-manager","version":"0"}));
+        assert_eq!(v, serde_json::json!({"name":"qd-manager","version":"0"}));
         assert!(v.get("title").is_none());
     }
 
     #[test]
     fn client_info_with_title_round_trips() {
         let ci = ClientInfo {
-            name: "sb-probe".into(),
-            title: Some("sb probe".into()),
+            name: "qd-probe".into(),
+            title: Some("qd probe".into()),
             version: "0.0.1".into(),
         };
         let v = serde_json::to_value(&ci).unwrap();
         assert_eq!(
             v,
-            serde_json::json!({"name":"sb-probe","title":"sb probe","version":"0.0.1"})
+            serde_json::json!({"name":"qd-probe","title":"qd probe","version":"0.0.1"})
         );
     }
 
     // === REAL evidence lines parsed (cited inline) ===
 
     // q1c-clientA-events.jsonl line 1 (the initialize RESULT payload).
-    const EV_INITIALIZE_RESULT: &str = r#"{"userAgent":"sb-manager/0.134.0 (Mac OS 26.5.0; arm64) dumb (sb-manager; 0)","codexHome":"/jail/codex-home","platformFamily":"unix","platformOs":"macos"}"#;
+    const EV_INITIALIZE_RESULT: &str = r#"{"userAgent":"qd-manager/0.134.0 (Mac OS 26.5.0; arm64) dumb (qd-manager; 0)","codexHome":"/jail/codex-home","platformFamily":"unix","platformOs":"macos"}"#;
 
     #[test]
     fn parses_real_initialize_result() {
         let r: InitializeResult = serde_json::from_str(EV_INITIALIZE_RESULT).unwrap();
         assert_eq!(r.codex_home, "/jail/codex-home");
-        assert!(r.user_agent.starts_with("sb-manager/0.134.0"));
+        assert!(r.user_agent.starts_with("qd-manager/0.134.0"));
     }
 
     // q1c-clientA-events.jsonl line 3 (the thread/start RESULT payload, trimmed
