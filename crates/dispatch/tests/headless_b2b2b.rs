@@ -1,7 +1,7 @@
 //! WP-B2b-2b — live daemon-launch wiring, integration (§6 DoD "fake-claude
 //! end-to-end").
 //!
-//! Drives the REAL `sbmux::server::run_server` (the embedded daemon entry sb
+//! Drives the REAL `qrmux::server::run_server` (the embedded daemon entry sb
 //! itself runs) with the sb-side `DaemonHeadlessFactory` injected — exactly the
 //! production seam (`crates/dispatch/src/bin/qd/daemon.rs`), only the fixture binary +
 //! the isolated registry differ. A fixture shell script emits canned stream-json;
@@ -13,7 +13,7 @@
 //! HOME isolation: the fixture launches under `clear_env` + a synthetic HOME (the
 //! `env -i` contract — never the live `~/.claude*`); the registry is a tempdir.
 
-use sbmux::protocol::{encode, ClientMsg, FrameReader, ServerMsg};
+use qrmux::protocol::{encode, ClientMsg, FrameReader, ServerMsg};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -66,10 +66,10 @@ async fn drive_channel_wait(
     let fac = factory(claude_bin, home, sessions_dir);
     let sock_dir_owned = sock_dir.to_path_buf();
     let server = tokio::spawn(async move {
-        sbmux::server::run_server(Some(sock_dir_owned), SESSION.to_string(), Some(fac)).await
+        qrmux::server::run_server(Some(sock_dir_owned), SESSION.to_string(), Some(fac)).await
     });
 
-    let sock_path = sbmux::server::session_socket_path_for(Some(sock_dir), SESSION).unwrap();
+    let sock_path = qrmux::server::session_socket_path_for(Some(sock_dir), SESSION).unwrap();
     wait_for_socket(&sock_path).await;
 
     // Client A: LaunchHeadless → drain the Connected ack. Held open for the turn.
@@ -194,7 +194,7 @@ fn factory(
     claude_bin: String,
     home: &Path,
     sessions_dir: &Path,
-) -> Arc<dyn sbmux::headless_session::HeadlessFactory> {
+) -> Arc<dyn qrmux::headless_session::HeadlessFactory> {
     Arc::new(dispatch::daemon_headless::DaemonHeadlessFactory {
         claude_bin,
         flags: vec![],
@@ -230,7 +230,7 @@ fn minted_status(sessions_dir: &Path, name: &str) -> Option<String> {
 
 /// v3 handshake: preamble → Hello → consume ServerHello.
 async fn handshake(stream: &mut UnixStream) {
-    sbmux::protocol::write_preamble(stream).await.unwrap();
+    qrmux::protocol::write_preamble(stream).await.unwrap();
     let hello = encode(&ClientMsg::Hello { caps: vec![] }).unwrap();
     stream.write_all(&hello).await.unwrap();
     let mut fr = FrameReader::new();
@@ -305,10 +305,10 @@ fn fake_claude_launch_subscribe_and_registry_flip() {
         let fac = factory(bin, &home, &sessions_dir);
         let sock_dir_owned = sock_dir.clone();
         let server = tokio::spawn(async move {
-            sbmux::server::run_server(Some(sock_dir_owned), SESSION.to_string(), Some(fac)).await
+            qrmux::server::run_server(Some(sock_dir_owned), SESSION.to_string(), Some(fac)).await
         });
 
-        let sock_path = sbmux::server::session_socket_path_for(Some(&sock_dir), SESSION).unwrap();
+        let sock_path = qrmux::server::session_socket_path_for(Some(&sock_dir), SESSION).unwrap();
         wait_for_socket(&sock_path).await;
 
         // Client A: LaunchHeadless → Connected ack.
@@ -466,10 +466,10 @@ fn eof_abort_flips_offline_and_ends() {
         let fac = factory(bin, &home, &sessions_dir);
         let sock_dir_owned = sock_dir.clone();
         let server = tokio::spawn(async move {
-            sbmux::server::run_server(Some(sock_dir_owned), SESSION.to_string(), Some(fac)).await
+            qrmux::server::run_server(Some(sock_dir_owned), SESSION.to_string(), Some(fac)).await
         });
 
-        let sock_path = sbmux::server::session_socket_path_for(Some(&sock_dir), SESSION).unwrap();
+        let sock_path = qrmux::server::session_socket_path_for(Some(&sock_dir), SESSION).unwrap();
         wait_for_socket(&sock_path).await;
 
         let mut a = UnixStream::connect(&sock_path).await.unwrap();
@@ -627,7 +627,7 @@ fn real_isolated_claude_wait_completes_off_channel() {
 
         // The factory's env carries the isolation argv. We need CLAUDE_CONFIG_DIR;
         // build the factory inline (the shared helper uses the fake-claude env set).
-        let fac: Arc<dyn sbmux::headless_session::HeadlessFactory> =
+        let fac: Arc<dyn qrmux::headless_session::HeadlessFactory> =
             Arc::new(dispatch::daemon_headless::DaemonHeadlessFactory {
                 claude_bin,
                 flags: vec![],
@@ -651,9 +651,9 @@ fn real_isolated_claude_wait_completes_off_channel() {
 
         let sock_dir_owned = sock_dir.clone();
         let server = tokio::spawn(async move {
-            sbmux::server::run_server(Some(sock_dir_owned), SESSION.to_string(), Some(fac)).await
+            qrmux::server::run_server(Some(sock_dir_owned), SESSION.to_string(), Some(fac)).await
         });
-        let sock_path = sbmux::server::session_socket_path_for(Some(&sock_dir), SESSION).unwrap();
+        let sock_path = qrmux::server::session_socket_path_for(Some(&sock_dir), SESSION).unwrap();
         wait_for_socket(&sock_path).await;
 
         let mut a = UnixStream::connect(&sock_path).await.unwrap();

@@ -2,7 +2,7 @@
 //! event-sequence teeth G3, the three-arm boot-readiness gate G7, the
 //! transcript-race G8, the §9 exit/stdout stability assertions, and the §G10
 //! privacy grep. These drive the REAL `sb` binary (`CARGO_BIN_EXE_qd`) through
-//! per-run hermetic fakerepl-backed jails against the embedded sbmux daemon —
+//! per-run hermetic fakerepl-backed jails against the embedded qrmux daemon —
 //! the SAME engine path `c1_gate.rs` exercises, with `fakerepl` substituted for
 //! claude via the `CLAUDE_BIN` override (launch.rs:23-27).
 //!
@@ -23,8 +23,8 @@
 //! Each row builds its own jail tempdir laid out EXACTLY as fakerepl's belt
 //! requires: HOME=`<base>/sbrg-runs/<id>/home`, SB_HOME=`root/sb_home`,
 //! ZMX_DIR=`root/zmx`, TMPDIR=`root/tmp`, plus an own XDG_RUNTIME_DIR (0700) so
-//! the embedded sbmux socket dir is per-run. The base lives under a SHORT
-//! literal-/tmp prefix so the sbmux `sun_path` fits macOS's 104-byte budget —
+//! the embedded qrmux socket dir is per-run. The base lives under a SHORT
+//! literal-/tmp prefix so the qrmux `sun_path` fits macOS's 104-byte budget —
 //! TEST infra only (ADD-14 governs ENGINE writes; the engine's own paths are
 //! SB_HOME-honoring and asserted clean by C1's belt rows). Every payload carries
 //! a distinctive KEY-SHAPED `sk-ack3canary<tag>…` marker (≥24-char body) built by
@@ -37,9 +37,9 @@
 //!
 //! ## Skip mechanism (matches c1_gate)
 //!
-//! The rows need the `sbmux` binary (embedded backend) + the `fakerepl` binary.
+//! The rows need the `qrmux` binary (embedded backend) + the `fakerepl` binary.
 //! [`require_bins`] PANICS with a build hint if either is absent — never a silent
-//! vacuous pass (the c1_gate `sbmux_bin` contract). `fakerepl` carries the
+//! vacuous pass (the c1_gate `qrmux_bin` contract). `fakerepl` carries the
 //! fakerepl_gate staleness guard.
 
 #![allow(clippy::too_many_arguments)]
@@ -70,14 +70,14 @@ fn profile_dir() -> PathBuf {
         .to_path_buf()
 }
 
-/// The built `sbmux` binary (embedded backend). PANICS with a build hint if
-/// absent — never a silent skip (c1_gate `sbmux_bin` contract).
-fn sbmux_bin() -> PathBuf {
-    let bin = profile_dir().join("sbmux");
+/// The built `qrmux` binary (embedded backend). PANICS with a build hint if
+/// absent — never a silent skip (c1_gate `qrmux_bin` contract).
+fn qrmux_bin() -> PathBuf {
+    let bin = profile_dir().join("qrmux");
     assert!(
         bin.exists(),
-        "sbmux binary not found at {bin:?} — build it first: \
-         scripts/build-lock.sh cargo build -p sbmux --bin sbmux"
+        "qrmux binary not found at {bin:?} — build it first: \
+         scripts/build-lock.sh cargo build -p qrmux --bin qrmux"
     );
     bin
 }
@@ -129,7 +129,7 @@ fn mtime(p: &Path) -> Option<std::time::SystemTime> {
 /// asserts inside the locators fail LOUD — a missing binary is a build error, not
 /// a skip.
 fn require_bins() {
-    let _ = sbmux_bin();
+    let _ = qrmux_bin();
     let _ = fakerepl_bin();
 }
 
@@ -139,7 +139,7 @@ fn require_bins() {
 
 /// A per-run hermetic jail shaped EXACTLY as the fakerepl belt requires
 /// (HOME=`*/sbrg-runs/<id>/home`, SB_HOME=`root/sb_home`, ZMX_DIR=`root/zmx`,
-/// TMPDIR=`root/tmp`) plus an own XDG_RUNTIME_DIR for the embedded sbmux socket.
+/// TMPDIR=`root/tmp`) plus an own XDG_RUNTIME_DIR for the embedded qrmux socket.
 struct Jail {
     root: PathBuf,
     home: PathBuf,
@@ -162,7 +162,7 @@ impl Jail {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        // SHORT literal-/tmp base so the embedded sbmux sun_path fits (c1_gate
+        // SHORT literal-/tmp base so the embedded qrmux sun_path fits (c1_gate
         // note); the sbrg-runs/<id> segment satisfies fakerepl's HOME belt.
         let base = PathBuf::from("/tmp/sb-ack2gate");
         let root = base.join("sbrg-runs").join(format!("{tag}-{nanos}"));

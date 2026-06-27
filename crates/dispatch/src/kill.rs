@@ -765,7 +765,7 @@ mod tests {
     #[test]
     fn fallback1_embedded_shell_parent_in_chain_owns_pane() {
         // Embedded-mux shape (g_coldstart_n regression): the pane pid is the
-        // pty CHILD (sbmux SessionInfo.pid) — here a `bash -lc` shell whose
+        // pty CHILD (qrmux SessionInfo.pid) — here a `bash -lc` shell whose
         // child is the session program (row pid 800). The shell 700 is in the
         // row pid's ancestor chain → owned, confirmed; the zmx wrapper witness
         // does not exist on this backend and must not be required.

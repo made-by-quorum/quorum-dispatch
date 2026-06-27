@@ -22,8 +22,8 @@ therefore a **cross-track dependency carried to the dispatch track** (#4/#6). Th
 ADR records building it.
 
 The recorded `session-opened.pid` is the **PTY child = the agent process** (the
-responder bond cares about), captured once at spawn (`sbmux events.rs:83-85`,
-`session.rs`), **NOT** the sbmux daemon (SPEC-v2 §5.A corrected at `81becc4`, M5).
+responder bond cares about), captured once at spawn (`qrmux events.rs:83-85`,
+`session.rs`), **NOT** the qrmux daemon (SPEC-v2 §5.A corrected at `81becc4`, M5).
 The token pins the start-time of *whatever pid is on record*; bond re-checks *that
 same recorded pid*, so recycle-detection works regardless.
 
@@ -40,7 +40,7 @@ boot_id:      Option<String> // per-boot-stable OPAQUE id, EXACT string-equality
 
 Both fields use `#[serde(default)]` + `skip_serializing_if = "Option::is_none"`
 (additive rule (a); omit-when-None keeps a token-absent line byte-stable with v1).
-The value contract (`crates/sbmux/src/procid.rs`):
+The value contract (`crates/qrmux/src/procid.rs`):
 
 - **Darwin (macOS 10.12+):** `pid_start_ms` via libproc `proc_pidinfo`
   (`pidinfo::<BSDInfo>(pid, 0)` → `pbi_start_tvsec*1000 + pbi_start_tvusec/1000`),
@@ -89,7 +89,7 @@ and consumer are the same OS by construction and read the value identically.
   a v2 line parses under a v1-shaped reader — `deny_unknown_fields` banned). Record
   budget fine (no per-record cap; the token adds ~80 bytes to `session-opened`, the
   first record).
-- **Scope held:** the only engine change is sbmux (`procid.rs` + the `session-opened`
+- **Scope held:** the only engine change is qrmux (`procid.rs` + the `session-opened`
   schema/stamp). The firing lifecycle, watcher, DuckDB, relay, `content_preview`
   redactor, the delivery schema, and every transport are **untouched**.
 - **Cross-impl contract:** the linux parser's expected vector is published in

@@ -27,7 +27,7 @@ use crate::zmx_mux::ZmxMux;
 /// dir-resolution lane keys off this same value (single source of truth).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
-    /// Default: the embedded sbmux daemon (the C1 flip).
+    /// Default: the embedded qrmux daemon (the C1 flip).
     Embedded,
     /// The zmx escape hatch (`SB_MUX=zmx`).
     Zmx,
@@ -66,7 +66,7 @@ pub fn parse_backend(env: &dyn Env) -> Result<Backend, SelectorError> {
     }
 }
 
-/// Build the selected mux as a `Box<dyn Mux>`, resolving the sbmux dir for the
+/// Build the selected mux as a `Box<dyn Mux>`, resolving the qrmux dir for the
 /// embedded backend from the injected `home` + `Env`. The zmx lane is dir-agnostic
 /// (its dir is pinned per-call by the gather/kill/attach sites), so `home` is
 /// unused there.
@@ -100,7 +100,7 @@ fn env_snapshot(env: &dyn Env) -> EmbeddedEnv {
 
 /// Minimal env snapshot the [`EmbeddedMux`] carries (it can't hold a borrowed
 /// `&dyn Env`). Implements [`Env`] so the adapter can reuse
-/// [`crate::sbmux_dir::resolve_sbmux_dir`] unchanged.
+/// [`crate::qrmux_dir::resolve_qrmux_dir`] unchanged.
 #[derive(Debug, Clone)]
 pub struct EmbeddedEnv {
     pub xdg_runtime_dir: Option<String>,
@@ -211,10 +211,10 @@ mod tests {
 
     #[test]
     fn embedded_env_snapshot_reuses_resolver() {
-        // The snapshot env feeds resolve_sbmux_dir identically to the real Env.
+        // The snapshot env feeds resolve_qrmux_dir identically to the real Env.
         let e = env(&[("SB_HOME", "/relocated")]);
         let snap = env_snapshot(&e);
-        let dir = crate::sbmux_dir::resolve_sbmux_dir(Path::new("/jail/home"), &snap).unwrap();
+        let dir = crate::qrmux_dir::resolve_qrmux_dir(Path::new("/jail/home"), &snap).unwrap();
         assert_eq!(dir, Path::new("/relocated/mux"));
     }
 }

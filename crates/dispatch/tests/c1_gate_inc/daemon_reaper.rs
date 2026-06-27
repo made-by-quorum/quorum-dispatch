@@ -1,7 +1,7 @@
 // ===========================================================================
 // Teardown-leak belt — prefix-scoped reap at jail setup, per-target by pidfile.
 //
-// THE LEAK CLASS (live finding, orc-adopted option (b)): jailed sbmux daemons
+// THE LEAK CLASS (live finding, orc-adopted option (b)): jailed qrmux daemons
 // setsid (ppid 1) and outlive a SIGTERM'd / SIGKILL'd test runner — DaemonGuard
 // Drop and Jail teardown NEVER run on an abrupt runner death, so the daemon
 // orphans and survives past its jail. The N-session split multiplies this.
@@ -29,7 +29,7 @@
 //   Bounded + best-effort: reap failures warn (eprintln) and NEVER fail the new
 //   run's setup. The family root is a fixed short /tmp literal (jail invariant).
 //
-// This is INDEPENDENT of the sbmux test-lib `sweep_orphan_daemons` (ppid==1 +
+// This is INDEPENDENT of the qrmux test-lib `sweep_orphan_daemons` (ppid==1 +
 // exact-binary-path sweep): that one is binary-scoped and fires per spawn; this
 // one is run-dir-scoped, owner-gated, and identity-pinned by recorded pidfile.
 // ===========================================================================
@@ -104,7 +104,7 @@ fn record_engine_daemons(run_root: &Path, dir: &Path) {
         let Some((pid, args)) = line.split_once(char::is_whitespace) else {
             continue;
         };
-        if args.contains("sbmux-server") && args.contains(want_dir.as_ref()) {
+        if args.contains("qrmux-server") && args.contains(want_dir.as_ref()) {
             if let Ok(p) = pid.trim().parse::<u32>() {
                 record_daemon_pid(run_root, p, &want_dir);
             }

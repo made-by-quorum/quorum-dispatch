@@ -63,7 +63,7 @@ pub mod render;
 pub mod resolve;
 pub mod resume;
 pub mod resume_daemon;
-pub mod sbmux_dir;
+pub mod qrmux_dir;
 pub mod secrets;
 pub mod sendpty;
 pub mod shell_init;

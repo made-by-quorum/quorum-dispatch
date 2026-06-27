@@ -1,6 +1,6 @@
 //! Republish→status Sink bridge (WP-B2b-1, memo R1: daemon-as-status-writer).
 //!
-//! A concrete [`sbmux::headless::Sink`] the daemon attaches to a headless session
+//! A concrete [`qrmux::headless::Sink`] the daemon attaches to a headless session
 //! so the registry status row is written in REAL TIME — control no longer rests
 //! on a stale disk read. Each [`Republish`] the headless pump delivers is mapped
 //! to a CAS-guarded [`registry::set_status`] per the lifecycle below; because the
@@ -28,8 +28,8 @@
 
 use crate::progress::{ProgressRecorder, ProgressSource, TurnStartRecorder};
 use crate::registry::{self, RegistryEntry, StatusWriteOutcome};
-use sbmux::headless::{Republish, Sink};
-use sbmux::stream_json::TurnOutcome;
+use qrmux::headless::{Republish, Sink};
+use qrmux::stream_json::TurnOutcome;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -384,7 +384,7 @@ impl Sink for RegistryStatusSink {
 mod tests {
     use super::*;
     use crate::registry::{read_entry, write_entry, RegistryEntry};
-    use sbmux::stream_json::{ResultEvent, StreamEvent, Usage};
+    use qrmux::stream_json::{ResultEvent, StreamEvent, Usage};
     use std::path::Path;
     use tempfile::tempdir;
 

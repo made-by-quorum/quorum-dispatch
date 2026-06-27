@@ -61,13 +61,13 @@ jobs:
         run: ./scripts/build-lock.sh cargo build --workspace --all-targets
 
       - name: test (through build-lock)
-        # SBMUX_CI_QUARANTINE: g3-macos — g3_winch_storm is QUARANTINED on
-        # macos-latest ONLY (ledger: crates/sbmux/GATE-B2.md "Quarantine").
+        # QRMUX_CI_QUARANTINE: g3-macos — g3_winch_storm is QUARANTINED on
+        # macos-latest ONLY (ledger: crates/qrmux/GATE-B2.md "Quarantine").
         # Deterministic marker loss on the GH macOS runner that does not
         # reproduce locally (incl. with the runner's prompt width); G3 keeps
         # two-platform coverage via macOS-local (brano) + ubuntu-latest here.
         env:
-          SBMUX_CI_QUARANTINE: ${{ matrix.os == 'macos-latest' && 'g3-macos' || '' }}
+          QRMUX_CI_QUARANTINE: ${{ matrix.os == 'macos-latest' && 'g3-macos' || '' }}
         run: ./scripts/build-lock.sh cargo test --workspace
 
       - name: build-lock serialization smoke

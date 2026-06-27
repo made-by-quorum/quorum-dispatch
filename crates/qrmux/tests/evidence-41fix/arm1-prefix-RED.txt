@@ -1,0 +1,517 @@
+# §4.1 lost-reply fix — CR-3 Arm 1 PRE-FIX RED capture
+# date: 2026-06-07T01:19:47Z
+# base SHA (worktree HEAD before fix): bd4509a3a12047f38d70ed328116da9be6968593
+# branch: 41fix-work
+# variant: PRE-FIX lifecycle (end-watch = fixed 150ms grace, NO in-flight wait)
+#          + SLOW_DROP seam present (QRMUX_TEST_SLOW_DROP_MS=400 via Arm-1 daemon env)
+# command: cargo test -p qrmux --test wsc_41fix arm1_kill_reply_survives_slow_drop -- --exact --nocapture  (x10)
+# expectation (design [F6]): 10/10 RED — the owed SessionKilled reply is LOST
+#   (UnexpectedEof / connection closed) at the ~225ms margin (400ms drop vs ~175ms pre-fix exit start).
+# ============================================================================
+===== REP 1 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.74s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 1: RED (lost reply / failure — expected pre-fix)
+===== REP 2 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 45847: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.65s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 2: RED (lost reply / failure — expected pre-fix)
+===== REP 3 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 45847: No such process
+kill: 45998: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.66s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 3: RED (lost reply / failure — expected pre-fix)
+===== REP 4 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 45847: No such process
+kill: 45998: No such process
+kill: 46056: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.63s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 4: RED (lost reply / failure — expected pre-fix)
+===== REP 5 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 45847: No such process
+kill: 46184: No such process
+kill: 45998: No such process
+kill: 46056: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.65s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 5: RED (lost reply / failure — expected pre-fix)
+===== REP 6 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 45847: No such process
+kill: 46184: No such process
+kill: 45998: No such process
+kill: 46056: No such process
+kill: 46337: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.65s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 6: RED (lost reply / failure — expected pre-fix)
+===== REP 7 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 45847: No such process
+kill: 46184: No such process
+kill: 45998: No such process
+kill: 46056: No such process
+kill: 46466: No such process
+kill: 46337: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.63s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 7: RED (lost reply / failure — expected pre-fix)
+===== REP 8 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 45847: No such process
+kill: 46184: No such process
+kill: 45998: No such process
+kill: 46056: No such process
+kill: 46490: No such process
+kill: 46466: No such process
+kill: 46337: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.69s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 8: RED (lost reply / failure — expected pre-fix)
+===== REP 9 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 45847: No such process
+kill: 46184: No such process
+kill: 46625: No such process
+kill: 45998: No such process
+kill: 46056: No such process
+kill: 46490: No such process
+kill: 46466: No such process
+kill: 46337: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.65s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 9: RED (lost reply / failure — expected pre-fix)
+===== REP 10 =====
+warning: unused variable: `in_flight`
+   --> crates/qrmux/src/server/mod.rs:260:13
+    |
+260 |         let in_flight = in_flight.clone();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_in_flight`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `exit_wait`
+   --> crates/qrmux/src/server/mod.rs:261:13
+    |
+261 |         let exit_wait = exit_wait_budget();
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_wait`
+
+warning: constant `SIGNAL_INFLIGHT_WAIT` is never used
+   --> crates/qrmux/src/server/mod.rs:115:7
+    |
+115 | const SIGNAL_INFLIGHT_WAIT: std::time::Duration = std::time::Duration::from_millis(1_000);
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `wait_in_flight_or_log` is never used
+   --> crates/qrmux/src/server/mod.rs:122:10
+    |
+122 | async fn wait_in_flight_or_log(
+    |          ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `qrmux` (lib) generated 4 warnings (run `cargo fix --lib -p qrmux` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/wsc_41fix.rs (target/debug/deps/wsc_41fix-5c5c76232839d008)
+
+running 1 test
+kill: 46692: No such process
+kill: 45847: No such process
+kill: 46184: No such process
+kill: 46625: No such process
+kill: 45998: No such process
+kill: 46056: No such process
+kill: 46490: No such process
+kill: 46466: No such process
+kill: 46337: No such process
+Error: "lost reply: connection closed by server"
+test arm1_kill_reply_survives_slow_drop ... FAILED
+
+failures:
+
+failures:
+    arm1_kill_reply_survives_slow_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.64s
+
+error: test failed, to rerun pass `-p qrmux --test wsc_41fix`
+REP 10: RED (lost reply / failure — expected pre-fix)
+# ============================================================================
+# RESULT: 10/10 RED, 0/10 GREEN

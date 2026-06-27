@@ -12,7 +12,7 @@ control GREEN.
 ### (b) refuted by audit
 `sb ls` and `sb send:pty` share the SAME backend-aware session-resolution path:
 `common::all_sessions` (crates/sb/src/bin/sb/verbs/common.rs:100) parses SB_MUX
-ONCE, builds the embedded mux AND `MuxDirs::embedded(sbmux_dir)`, and scans that
+ONCE, builds the embedded mux AND `MuxDirs::embedded(qrmux_dir)`, and scans that
 dir via `join::gather_with_dirs`. There is NO unconditional `resolve_zmx_dir` in
 the resolution path (send.rs:141 `resolve_zmx_dir` is only the `op_dir` fallback,
 reached only AFTER `zmx_name` is Some). The path is fully backend-aware; `ls` and
@@ -30,7 +30,7 @@ Engine instrumentation (SB_DIAG_JOIN) printed, at the FAILING `send`'s gather:
 External `ps` taken microseconds later:
 
     reg pid 7180 ancestors(3)=[7176, 7100]
-    7100  1     sb sbmux-server --socket-dir .../sbmux       (daemon)
+    7100  1     sb qrmux-server --socket-dir .../qrmux       (daemon)
     7176  7100  bash -lc '...fake-claude.sh ...'             (MUX SESSION PID)
     7180  7176  cat                                          (REGISTRY PID)
 
@@ -50,7 +50,7 @@ to the mux-tracked shell is visible in `ps`.
 
 ## The fix (eliminates the race window by DESIGN)
 
-The embedded sbmux daemon tracks each session by NAME, and the registry row
+The embedded qrmux daemon tracks each session by NAME, and the registry row
 carries that same name. So for the EMBEDDED lane, link a live registry row to its
 mux session BY NAME when the pid/ancestor walk comes up empty — deterministic,
 no dependence on `ps` propagation.
@@ -75,7 +75,7 @@ and the zmx session remains a separate ZmxOnly row (byte-stable).
 ## Wrong-layer error text fix
 "Session is not in zmx" under embedded named the wrong layer. Now backend-keyed
 (send.rs + common::send_backend_label):
-  - embedded: "Session has no live sbmux session — cannot send (it may still be
+  - embedded: "Session has no live qrmux session — cannot send (it may still be
     starting up; retry in a moment)."
   - zmx (BYTE-STABLE): "Session is not in zmx — cannot send."
 

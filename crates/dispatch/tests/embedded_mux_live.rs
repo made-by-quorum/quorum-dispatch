@@ -1,8 +1,8 @@
-//! C1 M4 item 7: EmbeddedMux adapter against a REAL jailed sbmux daemon.
+//! C1 M4 item 7: EmbeddedMux adapter against a REAL jailed qrmux daemon.
 //!
 //! These are HERMETIC (jail rule 9 + ADD-4): each test resolves its OWN jailed
-//! sbmux dir (XDG_RUNTIME_DIR under a short per-run jail root), spawns a fresh
-//! sbmux daemon there, exercises the adapter's 8-verb mapping over the M3 client
+//! qrmux dir (XDG_RUNTIME_DIR under a short per-run jail root), spawns a fresh
+//! qrmux daemon there, exercises the adapter's 8-verb mapping over the M3 client
 //! ops, then tears the jail down — kills the daemon by pid + removes the jail dir,
 //! verifying no orphan daemon survives.
 //!
@@ -10,7 +10,7 @@
 //!
 //! The adapter's auto-launch (`ensure_server_running_with`) re-execs the embedder
 //! launch spec — in THIS test crate `current_exe()` is the test harness, which has
-//! no daemon subcommand. So we pre-spawn the REAL `sbmux` binary with
+//! no daemon subcommand. So we pre-spawn the REAL `qrmux` binary with
 //! `server --socket-dir <jaildir>`. The adapter ops then SHORT-CIRCUIT the
 //! auto-launch (connect to the already-live socket and return early), so EVERY
 //! verb — including `run_detached` — runs against the real daemon. This keeps the
@@ -21,7 +21,7 @@
 //! the daemon (the Lima a6 bug: `current_exe() server` failed for the `sb` binary).
 //! That path is covered at GATE level by `tests/c1_gate.rs::g_coldstart`, which
 //! drives the real `sb new` with NO pre-spawned daemon and asserts SB stood the
-//! daemon up via its hidden `sb sbmux-server` entry (+ a severed-launch mutation
+//! daemon up via its hidden `sb qrmux-server` entry (+ a severed-launch mutation
 //! control). Do not "fix" this file to cold-start — the cross-crate binary
 //! constraint is real; the gate arm owns cold-start.
 //!
@@ -29,8 +29,8 @@
 //!
 //! The jail root sits under literal `/tmp/sb-embedded-runs/` (TEST infra, NOT
 //! engine code — ADD-14 governs ENGINE writes; the daemon socket at
-//! `<jail>/xdg/sbmux/sbmux.sock` must fit macOS's 104-byte sun_path, so the base
-//! must be short). The engine-resolved dir is asserted to NOT create sbmux-named
+//! `<jail>/xdg/qrmux/qrmux.sock` must fit macOS's 104-byte sun_path, so the base
+//! must be short). The engine-resolved dir is asserted to NOT create qrmux-named
 //! paths under literal `/tmp` (the ADD-14 belt + its negative control).
 
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ use dispatch::effects::MapEnv;
 use dispatch::embedded_mux::{embedded_socket_dir, EmbeddedMux};
 use dispatch::mux::Mux;
 use dispatch::mux_selector::EmbeddedEnv;
-use dispatch::sbmux_dir::resolve_sbmux_dir;
+use dispatch::qrmux_dir::resolve_qrmux_dir;
 
 // ---------------------------------------------------------------------------
 // Jail + daemon helpers (test infra)
@@ -66,7 +66,7 @@ impl Jail {
         let xdg_runtime = root.join("x");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&xdg_runtime).unwrap();
-        // 0700 on the runtime dir (sbmux's socket-dir belt expects per-user perms).
+        // 0700 on the runtime dir (qrmux's socket-dir belt expects per-user perms).
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&xdg_runtime, std::fs::Permissions::from_mode(0o700)).ok();
         Jail {
@@ -85,9 +85,9 @@ impl Jail {
         }
     }
 
-    /// The dir the engine resolves for this jail (== `$XDG_RUNTIME_DIR/sbmux`).
+    /// The dir the engine resolves for this jail (== `$XDG_RUNTIME_DIR/qrmux`).
     fn resolved_dir(&self) -> PathBuf {
-        resolve_sbmux_dir(&self.home, &self.embedded_env()).unwrap()
+        resolve_qrmux_dir(&self.home, &self.embedded_env()).unwrap()
     }
 
     fn teardown(&self) {
@@ -95,43 +95,43 @@ impl Jail {
     }
 }
 
-/// Locate the built `sbmux` binary from the test exe's target dir. Panics with a
+/// Locate the built `qrmux` binary from the test exe's target dir. Panics with a
 /// build hint if absent (never a silent skip — that would make the test vacuous).
-fn sbmux_binary() -> PathBuf {
-    // current_exe = <target>/debug/deps/<test-hash>; the bin is <target>/debug/sbmux.
+fn qrmux_binary() -> PathBuf {
+    // current_exe = <target>/debug/deps/<test-hash>; the bin is <target>/debug/qrmux.
     let exe = std::env::current_exe().expect("current_exe");
     let mut dir = exe
         .parent()
         .and_then(Path::parent)
         .expect("target/debug")
         .to_path_buf();
-    dir.push("sbmux");
+    dir.push("qrmux");
     assert!(
         dir.exists(),
-        "sbmux binary not found at {dir:?} — build it first: \
-         scripts/build-lock.sh cargo build -p sbmux --bin sbmux"
+        "qrmux binary not found at {dir:?} — build it first: \
+         scripts/build-lock.sh cargo build -p qrmux --bin qrmux"
     );
     dir
 }
 
-/// The ADD-14 belt predicate (R-F), SCOPED to sbmux*/sb-shaped names at the /tmp
+/// The ADD-14 belt predicate (R-F), SCOPED to qrmux*/sb-shaped names at the /tmp
 /// ROOT — the production default an un-de-/tmp'd resolver would emit
-/// (`/tmp/sbmux`, `/tmp/sbmux-<uid>`, `/tmp/sb-<uid>`, `/tmp/sb/...`). It must NOT
+/// (`/tmp/qrmux`, `/tmp/qrmux-<uid>`, `/tmp/sb-<uid>`, `/tmp/sb/...`). It must NOT
 /// match a deeper jail path that merely nests under /tmp for the sun_path budget.
-fn is_tmp_root_sbmux_path(dir: &Path) -> bool {
+fn is_tmp_root_qrmux_path(dir: &Path) -> bool {
     let s = dir.to_string_lossy();
     let Some(rest) = s.strip_prefix("/tmp/") else {
         return false;
     };
     // The FIRST /tmp segment must be one of the un-de-/tmp'd PRODUCTION DEFAULTS:
-    // `sbmux`, `sbmux-<uid>`, `sb`, or `sb-<uid-digits>`. (Deliberately NOT a broad
+    // `qrmux`, `qrmux-<uid>`, `sb`, or `sb-<uid-digits>`. (Deliberately NOT a broad
     // `sb-` prefix — the test's own jail base `sb-embedded-runs` must not match;
     // `sb-<digits>` is the uid-suffixed default shape only.)
     let first = rest.split('/').next().unwrap_or("");
-    first == "sbmux"
+    first == "qrmux"
         || first == "sb"
         || first
-            .strip_prefix("sbmux-")
+            .strip_prefix("qrmux-")
             .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
         || first
             .strip_prefix("sb-")
@@ -199,19 +199,19 @@ fn pid_alive(pid: u32) -> bool {
     }
 }
 
-/// WS-C M3b: spawn a PER-SESSION daemon `sbmux server --socket-dir <dir>
+/// WS-C M3b: spawn a PER-SESSION daemon `qrmux server --socket-dir <dir>
 /// --session <name>` in the jail and wait for the `<dir>/<name>.sock` leaf. The
-/// legacy shared-daemon mode (no `--session`, bound `sbmux.sock`) is RETIRED.
+/// legacy shared-daemon mode (no `--session`, bound `qrmux.sock`) is RETIRED.
 /// Returns the guard + the actual bound socket path the daemon created.
 ///
-/// A long `SBMUX_CLAIM_TIMEOUT_MS` keeps the pre-spawned daemon alive through the
+/// A long `QRMUX_CLAIM_TIMEOUT_MS` keeps the pre-spawned daemon alive through the
 /// adapter chain (the daemon starts EMPTY and would otherwise reap itself on the
 /// claim timeout before `run_detached` claims it). The adapter's own
 /// `ensure_session_server_running` then probes this live `<name>.sock`, finds it
 /// Up, and short-circuits — so every verb runs against this real daemon (the
 /// cross-crate cold-start constraint the file header documents is unchanged).
 fn start_daemon(jail: &Jail, dir: &Path, name: &str) -> (DaemonGuard, PathBuf) {
-    let bin = sbmux_binary();
+    let bin = qrmux_binary();
     let child = Command::new(&bin)
         .arg("server")
         .arg("--socket-dir")
@@ -223,11 +223,11 @@ fn start_daemon(jail: &Jail, dir: &Path, name: &str) -> (DaemonGuard, PathBuf) {
         .env("XDG_RUNTIME_DIR", &jail.xdg_runtime)
         .env("PATH", "/usr/bin:/bin")
         .env("TERM", "xterm-256color")
-        .env("SBMUX_CLAIM_TIMEOUT_MS", "60000")
+        .env("QRMUX_CLAIM_TIMEOUT_MS", "60000")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn sbmux server --session");
+        .expect("spawn qrmux server --session");
     let pid = child.id();
     // Keep the Child so the guard can waitpid (reap) after the kill — the daemon is
     // a direct child of this test process (we spawn it WITHOUT setsid, unlike the
@@ -258,7 +258,7 @@ fn start_daemon(jail: &Jail, dir: &Path, name: &str) -> (DaemonGuard, PathBuf) {
 /// returns the `session` field of the daemon's ServerHello. NO canonicalize()
 /// anywhere — the path is used verbatim (§4.4 invariant).
 fn server_hello_session(socket: &Path) -> String {
-    use sbmux::protocol::{self, codec::FrameReader, write_preamble, ClientMsg, ServerMsg};
+    use qrmux::protocol::{self, codec::FrameReader, write_preamble, ClientMsg, ServerMsg};
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
 
@@ -417,7 +417,7 @@ fn adapter_verb_mapping_against_real_daemon() {
     let code = mux.kill(&dir, name).expect("kill");
     assert_eq!(code, 0, "kill of a live session → exit 0");
 
-    // After kill the session is gone (sbmux sessions vanish on end — D-LISTRAW).
+    // After kill the session is gone (qrmux sessions vanish on end — D-LISTRAW).
     // Poll briefly for the daemon to drop it.
     let mut gone = false;
     for _ in 0..40 {
@@ -453,22 +453,22 @@ fn adapter_verb_mapping_against_real_daemon() {
 }
 
 /// ADD-14 belt (item 7, spec A14-1 rider R-F): zero NEW literal-/tmp paths with
-/// sbmux*/sb-shaped names created by the engine resolution + adapter — SCOPED to
+/// qrmux*/sb-shaped names created by the engine resolution + adapter — SCOPED to
 /// those name-classes so shared-host /tmp churn can't flake it.
 #[test]
-fn add14_no_new_literal_tmp_sbmux_paths() {
+fn add14_no_new_literal_tmp_qrmux_paths() {
     let jail = Jail::establish("add14");
     let env = jail.embedded_env();
 
     // The engine-resolved dir for a JAILED run (XDG set) lands under the jail's
     // runtime dir, NEVER at the UN-jailed literal-/tmp default. The belt's scope is
-    // the sbmux/sb name-classes at the /tmp ROOT (e.g. `/tmp/sbmux`, `/tmp/sb-uid`)
+    // the qrmux/sb name-classes at the /tmp ROOT (e.g. `/tmp/qrmux`, `/tmp/sb-uid`)
     // — the production default an un-de-/tmp'd resolver would have produced — NOT
     // the test's own jail base (which legitimately nests under /tmp for sun_path).
-    let dir = resolve_sbmux_dir(&jail.home, &env).unwrap();
+    let dir = resolve_qrmux_dir(&jail.home, &env).unwrap();
     assert!(
-        !is_tmp_root_sbmux_path(&dir),
-        "engine sbmux dir must not be a literal-/tmp-ROOT sbmux/sb path: {dir:?}"
+        !is_tmp_root_qrmux_path(&dir),
+        "engine qrmux dir must not be a literal-/tmp-ROOT qrmux/sb path: {dir:?}"
     );
     // And it sits under the jailed XDG runtime dir (tier 1) — the agreement that
     // makes the belt above non-trivial (it resolved to the jail, not /tmp).
@@ -478,17 +478,17 @@ fn add14_no_new_literal_tmp_sbmux_paths() {
     );
 
     // Tier 2 (no XDG) lands under the jailed HOME (<home>/.quorum/dispatch/mux), never at a
-    // /tmp-ROOT sbmux/sb default. (The jail HOME itself nests under /tmp for the
+    // /tmp-ROOT qrmux/sb default. (The jail HOME itself nests under /tmp for the
     // sun_path budget — that's test infra, not an engine /tmp write.)
     let env2 = EmbeddedEnv {
         xdg_runtime_dir: None,
         sb_home: None,
         uid: 501,
     };
-    let dir2 = resolve_sbmux_dir(&jail.home, &env2).unwrap();
+    let dir2 = resolve_qrmux_dir(&jail.home, &env2).unwrap();
     assert!(
-        !is_tmp_root_sbmux_path(&dir2),
-        "tier-2 dir must not be a /tmp-root sbmux/sb path: {dir2:?}"
+        !is_tmp_root_qrmux_path(&dir2),
+        "tier-2 dir must not be a /tmp-root qrmux/sb path: {dir2:?}"
     );
     assert_eq!(
         dir2,
@@ -500,22 +500,22 @@ fn add14_no_new_literal_tmp_sbmux_paths() {
 }
 
 /// NEGATIVE CONTROL for the ADD-14 belt (R-F): point resolution at literal /tmp
-/// artificially (XDG_RUNTIME_DIR=/tmp) → the resolved dir IS under /tmp/sbmux, so
+/// artificially (XDG_RUNTIME_DIR=/tmp) → the resolved dir IS under /tmp/qrmux, so
 /// the belt's check MUST trip. If it didn't, the belt above would be vacuous.
 #[test]
 fn add14_negative_control_belt_trips_when_pointed_at_tmp() {
-    // Artificially point XDG at literal /tmp — tier 1 → /tmp/sbmux.
+    // Artificially point XDG at literal /tmp — tier 1 → /tmp/qrmux.
     let env = EmbeddedEnv {
         xdg_runtime_dir: Some("/tmp".to_string()),
         sb_home: None,
         uid: 501,
     };
-    let dir = resolve_sbmux_dir(Path::new("/jail/home"), &env).unwrap();
-    assert_eq!(dir, PathBuf::from("/tmp/sbmux"));
+    let dir = resolve_qrmux_dir(Path::new("/jail/home"), &env).unwrap();
+    assert_eq!(dir, PathBuf::from("/tmp/qrmux"));
     // The SAME predicate the positive belt uses must TRIP here (return true). If it
     // didn't, the positive belt would be vacuous.
     assert!(
-        is_tmp_root_sbmux_path(&dir),
+        is_tmp_root_qrmux_path(&dir),
         "negative control: pointing XDG at /tmp MUST trip the belt predicate \
          (so the positive belt is non-vacuous), got: {dir:?}"
     );

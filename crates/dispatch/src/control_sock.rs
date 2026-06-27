@@ -1,8 +1,8 @@
 //! Per-session `AF_UNIX` `SOCK_DGRAM` control socket (R3c-Step-1, R1 §5).
 //!
 //! A best-effort, never-blocking wake/control channel keyed on `session_id`. The
-//! servicer (the per-session sbmux daemon) BINDS the receiving end adjacent to its
-//! `<name>.sock` listener (`sbmux/src/server/mod.rs`, the confirmed design-(A) seam)
+//! servicer (the per-session qrmux daemon) BINDS the receiving end adjacent to its
+//! `<name>.sock` listener (`qrmux/src/server/mod.rs`, the confirmed design-(A) seam)
 //! and services it in its existing `tokio::select!`; this module is the SENDER side
 //! plus the shared path + wire definitions.
 //!
@@ -13,9 +13,9 @@
 //! the registry row.
 //!
 //! ## Wire format (≤64B fixed-size datagrams)
-//! A single opcode byte. The sbmux servicer decodes the SAME opcodes from a mirror
+//! A single opcode byte. The qrmux servicer decodes the SAME opcodes from a mirror
 //! const block (`server/mod.rs` `ctrl_op`): there is NO shared crate to host the
-//! type because `dispatch` depends on `sbmux`, not the reverse — so the opcode
+//! type because `dispatch` depends on `qrmux`, not the reverse — so the opcode
 //! values are duplicated by necessity and a comment on each side points at the
 //! other. Keep [`OP_WAKE_INBOX`]..[`OP_GRACEFUL_STOP`] in lockstep with that mirror.
 //!
@@ -58,8 +58,8 @@ pub enum ControlMsg {
 }
 
 // --- wire opcodes (1 byte) -------------------------------------------------
-// MIRRORED in `sbmux/src/server/mod.rs` (`ctrl_op` const block). Change BOTH
-// together — there is no shared crate (dispatch depends on sbmux, not vice versa).
+// MIRRORED in `qrmux/src/server/mod.rs` (`ctrl_op` const block). Change BOTH
+// together — there is no shared crate (dispatch depends on qrmux, not vice versa).
 /// Opcode for [`ControlMsg::WakeInbox`].
 pub const OP_WAKE_INBOX: u8 = 1;
 /// Opcode for [`ControlMsg::Ping`].

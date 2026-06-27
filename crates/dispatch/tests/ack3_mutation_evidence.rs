@@ -20,7 +20,7 @@
 #![cfg(feature = "mutation-evidence")]
 
 use dispatch::events::{parse_events, sha256_hex, EventRecord};
-use sbmux::events::{DaemonEvent, EventMeta};
+use qrmux::events::{DaemonEvent, EventMeta};
 
 // ---------------------------------------------------------------------------
 // Predicate shapes (duplicated from ack3_matrix.rs — keep byte-small so drift is
@@ -82,7 +82,7 @@ fn pred_report_eaten(report: &str, content_len: usize) -> bool {
 
 /// An N-row daemon-stream predicate: a clean delivery wrote bytes (the stream is
 /// non-empty and carries the bytes-written for the sha). A kill-switch
-/// (SBMUX_EVENTS_DISABLED=1) blanks the stream → this fails.
+/// (QRMUX_EVENTS_DISABLED=1) blanks the stream → this fails.
 fn pred_nrow_daemon_nonblank(daemon: &[DaemonEvent], sha: &str) -> bool {
     !daemon.is_empty() && pred_daemon_bytes_written(daemon, sha)
 }
@@ -268,7 +268,7 @@ fn me_add18_exit_zero_shape_fails_the_contract_row() {
 }
 
 /// Kill-switch e2e (daemon side, §3.1): an N-row daemon-stream predicate over a
-/// SBMUX_EVENTS_DISABLED=1-shaped capture (an EMPTY daemon set — the emitter
+/// QRMUX_EVENTS_DISABLED=1-shaped capture (an EMPTY daemon set — the emitter
 /// produced no file) FAILS. The e2e analogue of ack1's R-MUT m1, now through the
 /// real engine stack's reader.
 #[test]
@@ -289,7 +289,7 @@ fn me_matrix_daemon_kill_switch_blanks_the_stream() {
         pred_nrow_daemon_nonblank(&clean, &sha),
         "N-row predicate holds over a clean (emitter-on) daemon capture"
     );
-    // MUTATION: SBMUX_EVENTS_DISABLED=1 → the emitter is None → no file → an empty
+    // MUTATION: QRMUX_EVENTS_DISABLED=1 → the emitter is None → no file → an empty
     // parsed capture → the predicate FAILS (the harness REDs when the stream is
     // suppressed).
     let blanked: Vec<DaemonEvent> = Vec::new();

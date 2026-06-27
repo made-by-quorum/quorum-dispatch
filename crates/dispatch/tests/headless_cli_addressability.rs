@@ -2,7 +2,7 @@
 //!
 //! Drives the REAL `sb` binary end-to-end (`sb start --headless` → `sb ls` →
 //! `sb connect` by id AND name) against a JAILED HOME, with a real per-session
-//! sbmux daemon, a real registry, and a real socket — ONLY `claude` is faked
+//! qrmux daemon, a real registry, and a real socket — ONLY `claude` is faked
 //! (a fixture script via `CLAUDE_BIN`, the existing `headless_b2b2b` pattern,
 //! lifted to the CLI surface). The fixture HOLDS BUSY for a controlled window so
 //! the `connect → Observe` dispatch (which is inherently BUSY-window behaviour —
@@ -65,8 +65,8 @@ struct Jail {
 
 fn jail(root: &Path, busy_secs: u64) -> Jail {
     let home = root.join("home");
-    // A SHORT XDG_RUNTIME_DIR keeps the `<dir>/sbmux/<name>.sock` path under the
-    // 104-byte sun_path budget `resolve_sbmux_dir` guards.
+    // A SHORT XDG_RUNTIME_DIR keeps the `<dir>/qrmux/<name>.sock` path under the
+    // 104-byte sun_path budget `resolve_qrmux_dir` guards.
     let xdg = root.join("x");
     std::fs::create_dir_all(home.join(".claude").join("sessions")).unwrap();
     std::fs::create_dir_all(home.join(".claude").join("projects")).unwrap();

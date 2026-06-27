@@ -157,8 +157,8 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
     // The subscriber must outlive the loop (kept in `subscriber`).
     let subscriber = session.name.as_deref().and_then(|name| {
         let env = dispatch::effects::RealEnv;
-        let dir = dispatch::sbmux_dir::resolve_sbmux_dir(&paths.home, &env).ok()?;
-        let socket_path = sbmux::server::session_socket_path_for(Some(&dir), name).ok()?;
+        let dir = dispatch::qrmux_dir::resolve_qrmux_dir(&paths.home, &env).ok()?;
+        let socket_path = qrmux::server::session_socket_path_for(Some(&dir), name).ok()?;
         socket_path.exists().then(|| {
             dispatch::wait_channel::ChannelSubscriber::connect(socket_path, name.to_string())
         })

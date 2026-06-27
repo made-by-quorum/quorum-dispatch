@@ -18,12 +18,12 @@ libc = "0.2"
 # commander phrasing + exit 1 ourselves (try_parse), so `derive`/`error-context`
 # auto-wiring is off; we keep `std` + `help`/`usage` for the help layout.
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
-# sbmux: the embedded mux backend (C1 D2). The EmbeddedMux adapter consumes the
-# M3 library client ops (sbmux::client::*_data + ensure_server_running) over the
+# qrmux: the embedded mux backend (C1 D2). The EmbeddedMux adapter consumes the
+# M3 library client ops (qrmux::client::*_data + ensure_server_running) over the
 # protocol-v2 daemon. The adapter bridges sync `Mux` → async client via a
 # lazily-init current-thread tokio runtime + block_on, so we bring tokio + anyhow
 # in alongside it.
-sbmux = { path = "../sbmux" }
+qrmux = { path = "../qrmux" }
 tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "io-util"] }
 anyhow = "1"
 # tungstenite: the codex app-server ws client (codex-p2-spec sections 3.1, 6.3,

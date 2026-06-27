@@ -40,7 +40,7 @@ $ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test --workspace
   create_claim_race     2 passed   <- multi-PROCESS race winner + claims_dir derivation
   parity                6 passed
   roundtrip             1 passed
-  sbmux lib             1 passed
+  qrmux lib             1 passed
   GRAND TOTAL: 241 passed; 0 failed
 
 $ cargo clippy --workspace --all-targets -- -D warnings   -> CLIPPY_EXIT=0 (no warnings)

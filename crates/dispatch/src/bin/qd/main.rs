@@ -45,16 +45,16 @@ fn run(argv: &[String]) -> i32 {
     // config / survey: hand-parsed, pre-clap (spec §2). The argv tail after the
     // verb is handed verbatim to the ported pure logic.
     //
-    // sbmux-server: the HIDDEN embedded-daemon entry (C1 M4fix). The sb binary IS
-    // the embedded sbmux daemon — it links sbmux — so the client launcher re-execs
-    // `sb sbmux-server [--socket-dir DIR]` (NOT `sb server`, which has no verb).
+    // qrmux-server: the HIDDEN embedded-daemon entry (C1 M4fix). The sb binary IS
+    // the embedded qrmux daemon — it links qrmux — so the client launcher re-execs
+    // `sb qrmux-server [--socket-dir DIR]` (NOT `sb server`, which has no verb).
     // Dispatched PRE-CLAP so it never enters the user-facing clap surface: the a3
     // help/exit-byte surface stays byte-unchanged and the daemon entry can't be
     // commander-error-mangled. Internal-only; not advertised in help.
     match rest.first().map(String::as_str) {
         Some("config") => return config::dispatch(&rest[1..]),
         Some("survey") => return survey::dispatch(&rest[1..]),
-        Some("sbmux-server") => return daemon::run_sbmux_server(&rest[1..]),
+        Some("qrmux-server") => return daemon::run_qrmux_server(&rest[1..]),
         // relay:serve: machine-spawned hidden operational verb (MCP config spawns
         // it). Dispatched pre-clap so it never enters the user-facing clap surface
         // and cannot be commander-error-mangled. Not advertised in help. §2.

@@ -1,4 +1,4 @@
     1     0 /sbin/launchd
-  116     1 /home/u/work/wt-ack3-lead/target/debug/sb sbmux-server --socket-dir /tmp/sb-ack3mat/x-m2fp-1780763250238520000/sbmux
-  268     1 /home/u/work/sb-rust/.claude/worktrees/agent-a696cf9068d934bdf/target/debug/sb sbmux-server --socket-dir /tmp/sb-ack2gate/x-g7b-1780765322554194000/sbmux
+  116     1 /home/u/work/wt-ack3-lead/target/debug/sb qrmux-server --socket-dir /tmp/sb-ack3mat/x-m2fp-1780763250238520000/qrmux
+  268     1 /home/u/work/sb-rust/.claude/worktrees/agent-a696cf9068d934bdf/target/debug/sb qrmux-server --socket-dir /tmp/sb-ack2gate/x-g7b-1780765322554194000/qrmux
   500   499 bash -c sleep 45; true df3  embedded  spaces

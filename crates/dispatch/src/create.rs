@@ -112,7 +112,7 @@ pub struct NewDeps<'a> {
     /// prove it; `provider_routed_cmd_equals_prerewire_assembly` pins it directly).
     pub provider: &'a dyn Provider,
     /// The selected mux backend (C1 M4fix). The launch-failure error path names
-    /// the ACTUAL backend: an embedded daemon-launch failure must say "sbmux
+    /// the ACTUAL backend: an embedded daemon-launch failure must say "qrmux
     /// daemon failed to launch" (+ underlying error), not the zmx-lane
     /// missing-binary guidance. The zmx-lane text stays byte-stable (G-NEG).
     pub backend: crate::mux_selector::Backend,
@@ -242,7 +242,7 @@ pub enum NewError {
     /// `holder` is the live session's display id (stable id when mapped, else
     /// the truncated provider UUID). Nothing created; the claim is released.
     NameHeldLive { name: String, holder: String },
-    /// Scan-under-claim (spec-w2-env D3): a mux (zmx/sbmux) pane already holds
+    /// Scan-under-claim (spec-w2-env D3): a mux (zmx/qrmux) pane already holds
     /// the name with NO live registry row behind it. Previously the advisory
     /// PRE-claim check; now runs UNDER the claim, so it is authoritative.
     /// Nothing created; the claim is released.
@@ -254,7 +254,7 @@ pub enum NewError {
     /// guidance. Nothing created (the spawn never started). ZMX LANE ONLY — the
     /// embedded lane uses [`NewError::EmbeddedDaemonLaunchFailed`].
     ZmxMissing(String),
-    /// `start_detached` (EMBEDDED lane, C1 M4fix): the sbmux daemon could not be
+    /// `start_detached` (EMBEDDED lane, C1 M4fix): the qrmux daemon could not be
     /// launched / the create op failed. Carries the underlying error detail.
     /// Nothing durable created. Distinct from [`NewError::ZmxMissing`] so the
     /// message names the ACTUAL backend (the Lima delta: the generic
@@ -358,10 +358,10 @@ impl std::fmt::Display for NewError {
             }
             NewError::ZmxMissing(g) => write!(f, "{g}"),
             // C1 M4fix: embedded-lane daemon launch failure names the ACTUAL
-            // backend (the sbmux daemon), unlike the zmx-lane ZmxMissing guidance.
+            // backend (the qrmux daemon), unlike the zmx-lane ZmxMissing guidance.
             NewError::EmbeddedDaemonLaunchFailed(detail) => write!(
                 f,
-                "sb start: the embedded sbmux daemon failed to launch ({detail}). \
+                "sb start: the embedded qrmux daemon failed to launch ({detail}). \
                  No session was created."
             ),
             // Byte-parity with TS startDetached (utils.ts:371).
@@ -853,7 +853,7 @@ fn run_to_boot_inner(
             Ok(r) => r,
             // C1 M4fix: backend-aware spawn-failure error. The zmx lane keeps the
             // byte-stable missing-binary guidance (G-NEG asserts it); the embedded
-            // lane names the sbmux daemon + carries the underlying error (the Lima
+            // lane names the qrmux daemon + carries the underlying error (the Lima
             // delta — a daemon-launch failure under embedded must NOT print the
             // misleading zmx guidance). The error detail was previously discarded.
             Err(e) => {
@@ -2253,7 +2253,7 @@ Commands:
     /// C1 M4fix item 3/5: a `run_detached` SPAWN error (Err, not nonzero status)
     /// maps backend-aware. A mux whose run_detached errors stands in for an
     /// unlaunchable daemon. Under Embedded → `EmbeddedDaemonLaunchFailed` carrying
-    /// the underlying detail + an sbmux-named message; under Zmx → the byte-stable
+    /// the underlying detail + an qrmux-named message; under Zmx → the byte-stable
     /// `ZmxMissing` guidance (G-NEG unchanged). This is the misleading-error
     /// negative control: it proves the embedded message isn't dead text.
     #[test]
@@ -2300,7 +2300,7 @@ Commands:
         let exec = ok_exec();
         let mux = ErrRunMux;
 
-        // Embedded lane: sbmux-named error carrying the underlying detail.
+        // Embedded lane: qrmux-named error carrying the underlying detail.
         let mut d = deps(&fix, &exec, &mux, &OkBootWaiter);
         d.backend = crate::mux_selector::Backend::Embedded;
         let err = run_new(&d, &params("sess")).unwrap_err();
@@ -2315,8 +2315,8 @@ Commands:
         }
         let text = err.to_string();
         assert!(
-            text.contains("embedded sbmux daemon") && !text.to_lowercase().contains("zmx"),
-            "embedded message names sbmux, not zmx: {text}"
+            text.contains("embedded qrmux daemon") && !text.to_lowercase().contains("zmx"),
+            "embedded message names qrmux, not zmx: {text}"
         );
 
         // Zmx lane: byte-stable missing-binary guidance (G-NEG unchanged).

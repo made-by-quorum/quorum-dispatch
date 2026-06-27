@@ -38,7 +38,7 @@
 //! ## Verb registration
 //! `relay:serve` is a HIDDEN, machine-spawned verb (spawned by Claude Code's MCP
 //! config, never typed by a human). Dispatched pre-clap in main.rs (same pattern
-//! as `sbmux-server`).
+//! as `qrmux-server`).
 //!
 //! ## Concurrency foundation (spec P-G3 — ONE lock, no ordering)
 //! [`RelayServer`] holds the M1 `RelayState` behind a SINGLE `Mutex` paired with

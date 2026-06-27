@@ -1,6 +1,6 @@
 //! WP-B-CS-2-LIVE — the live OBSERVE run-loop + turn-boundary cutover EXECUTION,
 //! driven END-TO-END through the REAL `sb` binary against a JAILED HOME with a real
-//! per-session sbmux daemon, a real registry, a real socket — ONLY `claude` is faked
+//! per-session qrmux daemon, a real registry, a real socket — ONLY `claude` is faked
 //! (a `CLAUDE_BIN` fixture script, the `headless_cli_addressability` pattern).
 //!
 //! Two `#[ignore]` integration proofs (run explicitly — they spawn real `sb`

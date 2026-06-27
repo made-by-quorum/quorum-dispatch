@@ -224,7 +224,7 @@ pub fn run(m: &ArgMatches) -> i32 {
 
     // --- D3 (WP-B-CS-1, Fork A): sb resume is an AGENT verb — ALWAYS headless. ---
     // FULL REPLACEMENT of the zmx/PTY relaunch + interactive attach: route to the
-    // per-session sbmux daemon's LaunchHeadless with resume_session_id = the
+    // per-session qrmux daemon's LaunchHeadless with resume_session_id = the
     // session's provider id, so the revived session rides the headless stream-json
     // channel (the §6.0 intent — an agent-driven session is NOT on a PTY/zmx
     // surface). The live-ownership lock / id-collision / must-be-cold / cwd
@@ -538,7 +538,7 @@ pub fn revive_claude(
     let canonical = match backend {
         dispatch::mux_selector::Backend::Zmx => resolve_zmx_dir(&env),
         dispatch::mux_selector::Backend::Embedded => {
-            match dispatch::sbmux_dir::resolve_sbmux_dir(&home, &env) {
+            match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
                     eprintln!("sb connect: {msg}");

@@ -5,7 +5,7 @@
 
 ## Context
 
-C1 flips the engine's `Mux` backend to embedded sbmux behind `SB_MUX` (default `embedded`;
+C1 flips the engine's `Mux` backend to embedded qrmux behind `SB_MUX` (default `embedded`;
 `SB_MUX=zmx` = the escape hatch, test-carried). Pre-flip sessions live in the zmx world
 (sockets under zmx dirs; registry rows written by Claude Code). ADD-14 (Pete): the engine
 never WRITES literal /tmp. Rule 9: Rust sb never touches real state until C2 — this ADR
@@ -24,17 +24,17 @@ visibility feature is a C2 decision WITH Pete (a `--json` contract surface, ADD-
 
 ### 2. Embedded state dir (ADD-14-compliant)
 
-Engine resolution `resolve_sbmux_dir`: `$XDG_RUNTIME_DIR/sbmux` else `<sbHome>/mux` where
+Engine resolution `resolve_qrmux_dir`: `$XDG_RUNTIME_DIR/qrmux` else `<sbHome>/mux` where
 `sbHome = SB_HOME || $HOME/.sb` (the engine's `SbPaths::from_home_env` seam). NO /tmp tier.
 sun_path-length guard at resolve with a named remedy (set XDG_RUNTIME_DIR or shorten
 SB_HOME). The engine-resolved dir is the single source of truth: passed per-call into the
-sbmux client ops AND propagated to the daemon via `server --socket-dir` argv — daemon binds
+qrmux client ops AND propagated to the daemon via `server --socket-dir` argv — daemon binds
 exactly where the engine reads (Bug-D keystone, asserted in `embedded_mux_live` +
 gate row G-CRUD).
 
-**Standalone sbmux CLI fallback (checkpoint rider R-B, ruled):** ADD-14 extends to every
-shipped binary — sbmux's own `socket.rs` fallback changed from `/tmp/sbmux-{uid}` to
-`$XDG_RUNTIME_DIR/sbmux` else `<sbHome>/mux`, **honoring SB_HOME** (implementer choice,
+**Standalone qrmux CLI fallback (checkpoint rider R-B, ruled):** ADD-14 extends to every
+shipped binary — qrmux's own `socket.rs` fallback changed from `/tmp/qrmux-{uid}` to
+`$XDG_RUNTIME_DIR/qrmux` else `<sbHome>/mux`, **honoring SB_HOME** (implementer choice,
 ratified here): engine and standalone agree fully; a relocated SB_HOME moves the mux dir
 with it; SB_HOME-only jails stay hermetic. D-SOCKDIR is therefore a NON-divergence record.
 
@@ -62,10 +62,10 @@ unchanged.
 
 ### 5. Named divergences introduced by the flip (gate-report table carries the full set)
 
-- **D-LISTRAW:** embedded `list_raw` never surfaces ended sessions (sbmux sessions vanish
+- **D-LISTRAW:** embedded `list_raw` never surfaces ended sessions (qrmux sessions vanish
   on end) — reconcile's reap input differs by construction; embedded sessions end clean,
   so the reap path is a zmx-ism. Works-well assessed in the gate report.
-- **D-RESUME:** sbmux has no inline-command attach; embedded resume = `run_detached` THEN
+- **D-RESUME:** qrmux has no inline-command attach; embedded resume = `run_detached` THEN
   `attach` (vs zmx's single create-or-attach spawn). Same observable outcome; window
   between create and attach is benign (detached session runs regardless).
 - **GetHistory composition:** scrollback + visible screen (content-inspection op;
@@ -73,10 +73,10 @@ unchanged.
   dialogs under fullscreen apps). Documented in PROTOCOL.md.
 - **D17 (--model passthrough):** assessed KEEP (engine content-free; claude rejects
   unknown models loudly) — Pete-visible at the C1 gate, not silently lead-ruled.
-- **Hidden `sbmux-server` subcommand (M4fix):** the sb binary is also the embedded daemon
+- **Hidden `qrmux-server` subcommand (M4fix):** the sb binary is also the embedded daemon
   (single-binary; pre-clap dispatch so `--help`/exit surfaces are structurally untouched).
-  The embedded launcher passes `ServerLaunchSpec { current_exe(), ["sbmux-server"] }`;
-  standalone sbmux keeps `current_exe() server`. Added after the Lima-lane cold-start find
+  The embedded launcher passes `ServerLaunchSpec { current_exe(), ["qrmux-server"] }`;
+  standalone qrmux keeps `current_exe() server`. Added after the Lima-lane cold-start find
   (G-COLDSTART gate row + mutation control carry the anti-regression).
 
 ## Consequences
@@ -85,8 +85,8 @@ unchanged.
   against the real zmx binary.
 - No real-state migration risk in C1 (rule 9 intact); C2 inherits decisions 3+4 as named
   carries.
-- Protocol v2 skew window: production has no pre-existing sbmux daemons; dev/test v1
-  daemons surface a named "stale sbmux daemon at <dir>; restart it" refusal — never
+- Protocol v2 skew window: production has no pre-existing qrmux daemons; dev/test v1
+  daemons surface a named "stale qrmux daemon at <dir>; restart it" refusal — never
   auto-killed.
 
 ## WS-C note (2026-06-06, ADR-0014)
@@ -95,4 +95,4 @@ The per-session daemon split (ADR-0014) changes the TOPOLOGY (one daemon per ses
 `<dir>/<name>.sock`) but NOT this ADR's dir-resolution contract: the two-tier
 XDG/sbHome resolution, SB_HOME honoring, ADD-14 no-/tmp-writes, and the whole-world
 backend rule are all unmodified. The v2 skew-window note above generalizes per-session
-("stale sbmux daemon for session '<name>' at <dir>; kill or restart THAT session").
+("stale qrmux daemon for session '<name>' at <dir>; kill or restart THAT session").

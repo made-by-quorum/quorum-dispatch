@@ -41,7 +41,7 @@ pub fn ids_store_path(env: &dyn Env) -> Result<std::path::PathBuf, i32> {
     Ok(dispatch::idstore::ids_path(&paths.state_dir))
 }
 
-/// Resolve HOME as a `PathBuf` (the embedded mux + sbmux dir resolution need the
+/// Resolve HOME as a `PathBuf` (the embedded mux + qrmux dir resolution need the
 /// raw home, not the `.claude`-layout `SbPaths`). Same L9a discipline.
 fn home_path(env: &dyn Env) -> Result<std::path::PathBuf, i32> {
     match env.var("HOME").filter(|s| !s.is_empty()) {
@@ -98,7 +98,7 @@ pub fn build_mux(
 /// Build the backend-selected [`MuxDirs`] the gather scans. zmx → canonical +
 /// legacy (with the A14-2(c) test-lane scan-root override applied to the surviving
 /// READ scan; production default = literal `/tmp`). embedded → the single resolved
-/// sbmux dir (legacy EMPTY). Keyed off the SAME parsed backend as the mux.
+/// qrmux dir (legacy EMPTY). Keyed off the SAME parsed backend as the mux.
 pub fn build_mux_dirs(
     backend: Backend,
     home: &std::path::Path,
@@ -114,7 +114,7 @@ pub fn build_mux_dirs(
             Ok(MuxDirs::zmx_roots(env, &scan_roots, Some(&xdg)))
         }
         Backend::Embedded => {
-            let dir = dispatch::sbmux_dir::resolve_sbmux_dir(home, env).map_err(|msg| {
+            let dir = dispatch::qrmux_dir::resolve_qrmux_dir(home, env).map_err(|msg| {
                 eprintln!("sb: {msg}");
                 1
             })?;

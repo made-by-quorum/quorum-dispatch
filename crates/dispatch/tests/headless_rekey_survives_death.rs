@@ -9,7 +9,7 @@
 //! clobbering a foreign incarnation's row anyway).
 //!
 //! This drives the REAL `sb` binary against a JAILED HOME with a real per-session
-//! sbmux daemon (ONLY `claude` is faked; the fixture HOLDS busy so the claude child
+//! qrmux daemon (ONLY `claude` is faked; the fixture HOLDS busy so the claude child
 //! stays alive across the kill+respawn — the live orphan). We:
 //!   start --headless → mint the child-pid row → SIGKILL the owning daemon (orphan
 //!   claude stays alive, row persists) → RESPAWN the daemon → assert EXACTLY ONE
@@ -94,8 +94,8 @@ impl Jail {
     fn sessions_dir(&self) -> PathBuf {
         self.home.join(".claude").join("sessions")
     }
-    fn sbmux_dir(&self) -> PathBuf {
-        self.xdg.join("sbmux")
+    fn qrmux_dir(&self) -> PathBuf {
+        self.xdg.join("qrmux")
     }
     fn run(&self, args: &[&str]) -> std::process::Output {
         self.cmd(args).output().expect("spawn sb")
@@ -114,12 +114,12 @@ impl Jail {
         c
     }
     /// Respawn the per-session daemon exactly as the embedder spec does:
-    /// `sb sbmux-server --socket-dir <sbmux_dir> --session <name>`, detached.
+    /// `sb qrmux-server --socket-dir <qrmux_dir> --session <name>`, detached.
     fn respawn_daemon(&self) -> std::process::Child {
         self.cmd(&[
-            "sbmux-server",
+            "qrmux-server",
             "--socket-dir",
-            self.sbmux_dir().to_str().unwrap(),
+            self.qrmux_dir().to_str().unwrap(),
             "--session",
             SESSION,
         ])
@@ -127,7 +127,7 @@ impl Jail {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("respawn sbmux-server")
+        .expect("respawn qrmux-server")
     }
 }
 
@@ -162,15 +162,15 @@ fn find_daemon_pid(session: &str) -> Option<i64> {
             continue;
         };
         let cmd = proc_cmdline(pid);
-        if cmd.contains("sbmux-server") && cmd.contains(session) {
+        if cmd.contains("qrmux-server") && cmd.contains(session) {
             return Some(pid);
         }
     }
     None
 }
 
-fn socket_connectable(sbmux_dir: &Path, session: &str) -> bool {
-    std::os::unix::net::UnixStream::connect(sbmux_dir.join(format!("{session}.sock"))).is_ok()
+fn socket_connectable(qrmux_dir: &Path, session: &str) -> bool {
+    std::os::unix::net::UnixStream::connect(qrmux_dir.join(format!("{session}.sock"))).is_ok()
 }
 
 fn kill9(pid: i64) {
@@ -212,7 +212,7 @@ fn rekey_survives_daemon_kill_and_respawn() {
     let root = tempfile::tempdir().unwrap();
     let j = jail(root.path(), 60);
     let sessions_dir = j.sessions_dir();
-    let sbmux_dir = j.sbmux_dir();
+    let qrmux_dir = j.qrmux_dir();
 
     // --- mint the child-pid-keyed headless row (the B5-i identity path) ---------
     let start = j.run(&["start", SESSION, "--headless", "-p", "hi"]);
@@ -258,7 +258,7 @@ fn rekey_survives_daemon_kill_and_respawn() {
     println!("[mint] child_pid={child_pid} sessionId={SID} sbId={sb_id}");
 
     // --- SIGKILL the owning per-session daemon (D1) -----------------------------
-    let d1 = find_daemon_pid(SESSION).expect("owning sbmux-server daemon found in /proc");
+    let d1 = find_daemon_pid(SESSION).expect("owning qrmux-server daemon found in /proc");
     assert_ne!(
         d1, child_pid,
         "the daemon is a DIFFERENT process from the claude child"
@@ -266,7 +266,7 @@ fn rekey_survives_daemon_kill_and_respawn() {
     println!("[kill] daemon D1={d1} (claude child={child_pid})");
     kill9(d1);
     let down = Instant::now() + Duration::from_secs(10);
-    while socket_connectable(&sbmux_dir, SESSION) {
+    while socket_connectable(&qrmux_dir, SESSION) {
         assert!(
             Instant::now() < down,
             "daemon socket still accepting after SIGKILL"
@@ -288,11 +288,11 @@ fn rekey_survives_daemon_kill_and_respawn() {
     // --- RESPAWN the per-session daemon (D2, a NEW pid) -------------------------
     let mut d2_child = j.respawn_daemon();
     let up = Instant::now() + Duration::from_secs(10);
-    while !socket_connectable(&sbmux_dir, SESSION) {
+    while !socket_connectable(&qrmux_dir, SESSION) {
         assert!(Instant::now() < up, "respawned daemon socket never came up");
         std::thread::sleep(Duration::from_millis(100));
     }
-    let d2 = find_daemon_pid(SESSION).expect("respawned sbmux-server daemon found in /proc");
+    let d2 = find_daemon_pid(SESSION).expect("respawned qrmux-server daemon found in /proc");
     assert_ne!(d2, d1, "the respawned daemon has a NEW pid (D1 was killed)");
     assert_ne!(
         d2, child_pid,

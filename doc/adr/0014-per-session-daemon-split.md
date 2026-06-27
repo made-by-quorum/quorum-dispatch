@@ -6,7 +6,7 @@ exec/wsc-spec.md rev C, orc-8 GO + riders; implemented M1–M5 on phase/wsc-spli
 
 ## Context
 
-The as-built sbmux topology was ONE daemon per socket-dir owning ALL sessions' PTY
+The as-built qrmux topology was ONE daemon per socket-dir owning ALL sessions' PTY
 masters — a silent inheritance from the retach 0.8 fork base that contradicted B2's own
 spec text ("one session = one daemon", b2-spec.md:101; LESSONS L22). Its single measured
 liability was TOTAL blast radius: SIGKILL of the one daemon killed every session's PTY
@@ -19,12 +19,12 @@ Supervision cannot fix this — PTY masters die with the process.
 One server process per SESSION (the zmx-parity shape, and the shape B2 actually
 specced):
 
-- **Topology:** `sb sbmux-server --socket-dir <dir> --session <name>` (--session
+- **Topology:** `sb qrmux-server --socket-dir <dir> --session <name>` (--session
   REQUIRED; the per-dir multi-session mode is retired). Capacity-1 enforced by
   identity: every session-addressed verb checks `name == self.session`.
 - **Naming (no third resolution scheme):** dir resolution is UNCHANGED (two-tier
   XDG/sbHome, ADR-0013). Leaves: `<dir>/<name>.sock` / `<name>.lock` / `<name>.log`.
-  Injective name→leaf mapping (refuse-don't-escape; reserved: `sbmux`, leading `.`);
+  Injective name→leaf mapping (refuse-don't-escape; reserved: `qrmux`, leading `.`);
   dynamic sun_path budget with remedy-naming errors (zmx precedent).
 - **Protocol v3 + capability exchange:** preamble byte 0x03; `ClientMsg::Hello {caps}` /
   `ServerMsg::Hello {caps, session}` APPENDED (Error variant index 4 stays frozen);
@@ -39,14 +39,14 @@ specced):
 - **Discovery:** engine dir-scan of `*.sock` + per-socket Hello+ListSessions probe; a
   row surfaces IFF the daemon reports ≥1 session; ConnectionRefused-only stale cleanup
   (zmx busy-daemon rule); D-LISTRAW preserved by construction.
-- **Mixed-state:** a live pre-split `sbmux.sock` daemon gets ONE best-effort stderr
+- **Mixed-state:** a live pre-split `qrmux.sock` daemon gets ONE best-effort stderr
   warning — visibility, NEVER auto-kill.
 
 ## Consequences
 
 - D27 flips to zmx-parity: daemon death is one session's death (G-ISOL: positive
   isolation control + shared-fate negative control via the test-only
-  SBMUX_TEST_SHARED seam).
+  QRMUX_TEST_SHARED seam).
 - Cold-start race class multiplies → per-session G-COLDSTART-N arms (same-session
   race, cross-session burst, claim-timeout, create-vs-teardown, teardown-grace rows).
 - Measured (release build, gate evidence crates/sb/tests/c1-gate-evidence/wsc-m5/):
@@ -63,6 +63,6 @@ specced):
 
 ## Cross-references
 
-ADR-0013 (state-dir contract — unmodified, see its WS-C note); crates/sbmux/PROTOCOL.md
+ADR-0013 (state-dir contract — unmodified, see its WS-C note); crates/qrmux/PROTOCOL.md
 v3 sections; exec/wsc-spec.md (rev C + §14 riders); exec/wsa-ruling.md + Amendment 1;
 exec/wsa-daemon-memo.md; divergence table D27/D-LISTRAW/D-SOCKDIR rows.

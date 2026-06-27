@@ -50,7 +50,7 @@ class Dispatch < Formula
       dispatch (Stage 1) drives sessions through zmx 0.6.0 (pinned). Install it from
       the verified in-repo mirror staged at:
         #{pkgshare}/zmx/  (sha256-pinned tarball + fetch-zmx.sh)
-      The Stage-2 embedded mux (sbmux) removes this dependency.
+      The Stage-2 embedded mux (qrmux) removes this dependency.
     EOS
   end
 

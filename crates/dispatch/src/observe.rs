@@ -11,7 +11,7 @@
 //! The dashboard shows STATE — ready / working / idle / waiting / stuck, in-turn
 //! vs idle, turn count, last result ok/error, last status. It NEVER shows the
 //! agent's assistant text / output scrollback. The republish protocol carries no
-//! content by design ([`sbmux::protocol::ServerMsg`] `Republish*` are the only
+//! content by design ([`qrmux::protocol::ServerMsg`] `Republish*` are the only
 //! control facts); rendering content is the Claude-Code-lookalike trap and is NOT
 //! built here. [`DashboardState::apply`] therefore has NO arm for the
 //! content-bearing `ScreenUpdate`/`History`/`Passthrough` frames — they are
@@ -25,7 +25,7 @@
 //! proven here with SYNTHETIC values; B5 populates the discriminant from the real
 //! row. The renderer + cutover primitive are standalone, fed by synthetic frames.
 
-use sbmux::protocol::ServerMsg;
+use qrmux::protocol::ServerMsg;
 
 // ===========================================================================
 // Dashboard renderer — CONTROL FACTS ONLY (§2a)

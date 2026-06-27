@@ -3,7 +3,7 @@
 //! [`ChannelTurnSource`]) off ONE connection, so "channel-down" is a SINGLE shared
 //! truth (the §6.0 invariant the §H.2 purity test pins).
 //!
-//! `sb wait` is a CLIENT process: it connects to the session's sbmux daemon socket,
+//! `sb wait` is a CLIENT process: it connects to the session's qrmux daemon socket,
 //! does the v3 handshake, sends [`ClientMsg::SubscribeRepublish`], and a background
 //! thread drains `ServerMsg::Republish*` frames into shared state. The two B3 seams
 //! read that state (non-blocking); the disk reads (`pid.json` + the transcript
@@ -20,7 +20,7 @@ use crate::wait::{
     ChannelStatus, ChannelStatusObservation, ChannelStatusSource, ChannelTurnObservation,
     ChannelTurnSource,
 };
-use sbmux::protocol::{encode, ClientMsg, FrameReader, ServerMsg};
+use qrmux::protocol::{encode, ClientMsg, FrameReader, ServerMsg};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -318,7 +318,7 @@ async fn connect_and_subscribe(
     use tokio::net::UnixStream;
 
     let mut s = UnixStream::connect(socket_path).await.ok()?;
-    sbmux::protocol::write_preamble(&mut s).await.ok()?;
+    qrmux::protocol::write_preamble(&mut s).await.ok()?;
     let hello = encode(&ClientMsg::Hello { caps: vec![] }).ok()?;
     s.write_all(&hello).await.ok()?;
     // Read ServerHello; verify the session identity belt.

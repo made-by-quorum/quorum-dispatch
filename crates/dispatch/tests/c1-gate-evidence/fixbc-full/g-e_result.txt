@@ -1,4 +1,4 @@
-G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under SB_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded sbmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)
+G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under SB_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded qrmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)
 
 zmx binary: /opt/homebrew/bin/zmx
 PROVENANCE: which zmx=/opt/homebrew/bin/zmx
@@ -9,7 +9,7 @@ sb new (zmx): exit=0
   stderr: 
 sb ls (zmx): exit=0, lists ge-sess=true
 POSITIVE CONTROL (zmx lane live): zmx socket /tmp/sb-c1gate-runs/ge-1780716379407287000/zmxdir/ge-sess present=true; zmx ls (jailed ZMX_DIR) lists ge-sess with server pid=Some(17170), that pid alive=true
-SBMUX ABSENT IN-LANE: no sbmux socket at engine embedded dir /tmp/sb-c1gate-runs/ge-1780716379407287000/x/sbmux/sbmux.sock = true; no sb sbmux-server bound to it = true
+QRMUX ABSENT IN-LANE: no qrmux socket at engine embedded dir /tmp/sb-c1gate-runs/ge-1780716379407287000/x/qrmux/qrmux.sock = true; no sb qrmux-server bound to it = true
 sb kill (zmx): exit=0
   stderr: 
 

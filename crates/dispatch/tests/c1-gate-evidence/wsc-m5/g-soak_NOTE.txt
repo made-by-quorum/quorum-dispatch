@@ -63,7 +63,7 @@ siblings) is decisively met.
 
 ## Reproduce:
 
-  scripts/build-lock.sh cargo build --release -p sb --bin sb -p sbmux --bin sbmux
+  scripts/build-lock.sh cargo build --release -p sb --bin sb -p qrmux --bin qrmux
   C1_GATE_RUNID=<id> scripts/build-lock.sh cargo test -p sb --test c1_gate \
     -- --ignored --exact g_soak --nocapture
 

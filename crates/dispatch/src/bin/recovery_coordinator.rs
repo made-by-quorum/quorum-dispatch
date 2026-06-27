@@ -8,7 +8,7 @@
 //! bin is the thin process shell around [`dispatch::recovery::coordinator_pass`].
 //!
 //! ## Why a separate standing process (C-1)
-//! The agent cannot run its own recovery (it may be the wedged party), and sbmux is
+//! The agent cannot run its own recovery (it may be the wedged party), and qrmux is
 //! per-session (no one daemon to be "the coordinator"). The per-session daemons remain
 //! the SERVICERS of their control sockets (Rung 2); this coordinator is the global
 //! DECIDER/timer. The split is deliberate — servicer (per-session) and coordinator

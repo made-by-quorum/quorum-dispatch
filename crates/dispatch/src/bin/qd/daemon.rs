@@ -1,14 +1,14 @@
-//! C1 M4fix: the HIDDEN embedded-sbmux-daemon entry for the `sb` binary.
+//! C1 M4fix: the HIDDEN embedded-qrmux-daemon entry for the `sb` binary.
 //!
-//! The sb binary IS the embedded sbmux daemon — it links the `sbmux` crate. The
+//! The sb binary IS the embedded qrmux daemon — it links the `qrmux` crate. The
 //! client launcher (`ensure_server_running_with`) re-execs THIS subcommand
-//! (`sb sbmux-server [--socket-dir DIR]`) instead of `current_exe() server`,
+//! (`sb qrmux-server [--socket-dir DIR]`) instead of `current_exe() server`,
 //! because `sb` has no bare `server` verb (that assumption broke embedded
 //! cold-start in production — Lima a6-embedded-backend-DELTA.txt).
 //!
 //! Dispatched PRE-CLAP (main.rs) so it never enters the user-facing surface: the
 //! a3 help/exit-byte contract stays byte-unchanged. Args are hand-parsed (mirrors
-//! sbmux's own `Command::Server { socket_dir, session }`): the accepted options are
+//! qrmux's own `Command::Server { socket_dir, session }`): the accepted options are
 //! `--socket-dir <DIR>` (C1 D1/R26 socket-dir propagation) and `--session <NAME>`
 //! (WS-C M2 single-session mode, spec §4.1).
 
@@ -22,20 +22,20 @@ struct ServerArgs {
     session: Option<String>,
 }
 
-/// Run the embedded sbmux daemon. `args` is the argv tail AFTER `sbmux-server`
+/// Run the embedded qrmux daemon. `args` is the argv tail AFTER `qrmux-server`
 /// (e.g. `["--socket-dir", "<dir>"]`, `["--socket-dir", "<dir>", "--session",
 /// "<name>"]`, or empty). Returns the process exit code.
 ///
-/// Mirrors `sbmux::main`'s
+/// Mirrors `qrmux::main`'s
 /// `Command::Server { socket_dir, session } => run_server(socket_dir, session)`:
 /// builds a tokio runtime and blocks on
-/// `sbmux::server::run_server(Option<PathBuf>, String)`. WS-C M3b: `--session` is
+/// `qrmux::server::run_server(Option<PathBuf>, String)`. WS-C M3b: `--session` is
 /// REQUIRED (legacy shared-daemon mode retired); a missing value exits 2.
-pub fn run_sbmux_server(args: &[String]) -> i32 {
+pub fn run_qrmux_server(args: &[String]) -> i32 {
     let parsed = match parse_server_args(args) {
         Ok(d) => d,
         Err(msg) => {
-            eprintln!("sb sbmux-server: {msg}");
+            eprintln!("sb qrmux-server: {msg}");
             return 2;
         }
     };
@@ -46,7 +46,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("sb sbmux-server: failed to build runtime: {e}");
+            eprintln!("sb qrmux-server: failed to build runtime: {e}");
             return 1;
         }
     };
@@ -58,7 +58,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
         Some(s) => s,
         None => {
             eprintln!(
-                "sb sbmux-server: --session <NAME> is required (legacy shared-daemon mode retired)"
+                "sb qrmux-server: --session <NAME> is required (legacy shared-daemon mode retired)"
             );
             return 2;
         }
@@ -72,7 +72,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
     // than failing the daemon bind. The PRODUCTION trigger (`sb start` →
     // LaunchHeadless) lands in WP-B-CS — this populates the seam the design names.
     use dispatch::effects::Env as _;
-    let headless: Option<std::sync::Arc<dyn sbmux::headless_session::HeadlessFactory>> =
+    let headless: Option<std::sync::Arc<dyn qrmux::headless_session::HeadlessFactory>> =
         dispatch::effects::RealEnv
             .var("HOME")
             .filter(|s| !s.is_empty())
@@ -86,7 +86,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
                         &dispatch::effects::RealEnv,
                         &paths,
                     ),
-                ) as std::sync::Arc<dyn sbmux::headless_session::HeadlessFactory>
+                ) as std::sync::Arc<dyn qrmux::headless_session::HeadlessFactory>
             });
 
     // R3c-Step-1: resolve the per-session control socket path the daemon binds.
@@ -94,7 +94,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
     // on `CLAUDE_CODE_SESSION_ID` + `SbPaths::state_dir` (relay_server/mod.rs). The
     // daemon derives the identical path from the SAME env, so both sides agree
     // without a new CLI arg. Only THIS entry can name `dispatch::control_sock`
-    // (sbmux cannot — it is the lower crate); bare sbmux (`sbmux/src/main.rs`) passes
+    // (qrmux cannot — it is the lower crate); bare qrmux (`qrmux/src/main.rs`) passes
     // None and runs with no ctrl servicer. Absent env (no session id / HOME) → None.
     //
     // R3c item-1: resolve the (session_id, state_dir) pair ONCE — both the control
@@ -122,7 +122,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
         .map(|(sid, state_dir)| dispatch::control_sock::control_sock_path(state_dir, sid));
 
     // R3c item-1 (HIGH-stakes): acquire the per-session liveness flock at
-    // DAEMON-LIFETIME. THIS process — the embedded sbmux daemon — is the long-lived
+    // DAEMON-LIFETIME. THIS process — the embedded qrmux daemon — is the long-lived
     // per-session daemon (single-session mode, §4.1); it holds the lock for its
     // whole life and the kernel releases it on daemon death (flock last-close), so
     // `LivenessLock::probe_dead` / `reconcile`'s flock fast-path see the session as
@@ -139,7 +139,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
     let _liveness_lock = session_state.as_ref().and_then(|(sid, state_dir)| {
         match dispatch::livelock::LivenessLock::acquire(state_dir, sid) {
             Ok(Some(lock)) => {
-                eprintln!("sb sbmux-server: liveness lock acquired for session {sid}");
+                eprintln!("sb qrmux-server: liveness lock acquired for session {sid}");
                 Some(lock)
             }
             Ok(None) => {
@@ -147,13 +147,13 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
                 // a held lock here is a stale-holder anomaly. Log and run degraded
                 // — the `/proc start_ms` confirmer remains the tombstone authority.
                 eprintln!(
-                    "sb sbmux-server: liveness lock already held for session {sid} (continuing)"
+                    "sb qrmux-server: liveness lock already held for session {sid} (continuing)"
                 );
                 None
             }
             Err(e) => {
                 eprintln!(
-                    "sb sbmux-server: liveness lock acquire failed for session {sid}: {e} \
+                    "sb qrmux-server: liveness lock acquire failed for session {sid}: {e} \
                      (continuing degraded — /proc remains the tombstone authority)"
                 );
                 None
@@ -161,7 +161,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
         }
     });
 
-    match rt.block_on(sbmux::server::run_server_ctrl(
+    match rt.block_on(qrmux::server::run_server_ctrl(
         parsed.socket_dir,
         session,
         headless,
@@ -169,7 +169,7 @@ pub fn run_sbmux_server(args: &[String]) -> i32 {
     )) {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("sb sbmux-server: {e}");
+            eprintln!("sb qrmux-server: {e}");
             1
         }
     }
@@ -230,11 +230,11 @@ mod tests {
     fn parse_socket_dir_split_form() {
         let args = vec![
             "--socket-dir".to_string(),
-            "/run/user/501/sbmux".to_string(),
+            "/run/user/501/qrmux".to_string(),
         ];
         assert_eq!(
             parse_server_args(&args).unwrap().socket_dir,
-            Some(PathBuf::from("/run/user/501/sbmux"))
+            Some(PathBuf::from("/run/user/501/qrmux"))
         );
     }
 
@@ -279,14 +279,14 @@ mod tests {
 
         let both = vec![
             "--socket-dir".to_string(),
-            "/run/user/501/sbmux".to_string(),
+            "/run/user/501/qrmux".to_string(),
             "--session".to_string(),
             "gamma".to_string(),
         ];
         let parsed = parse_server_args(&both).unwrap();
         assert_eq!(
             parsed.socket_dir,
-            Some(PathBuf::from("/run/user/501/sbmux"))
+            Some(PathBuf::from("/run/user/501/qrmux"))
         );
         assert_eq!(parsed.session, Some("gamma".into()));
     }

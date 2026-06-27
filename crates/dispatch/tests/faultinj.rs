@@ -936,7 +936,7 @@ fn class2_no_wedged_state_exists_red() {
 // there is no such fd, so this FAILS RED: the enqueue lands but no wake exists.
 //
 // REVERT SEAM (distinct): R3c-Step-1 adds `control_sock.rs` (the per-session
-// SOCK_DGRAM) + the sbmux servicer branch + the enqueue hook. Reverting the
+// SOCK_DGRAM) + the qrmux servicer branch + the enqueue hook. Reverting the
 // enqueue hook (or killing the daemon ctrl reader) re-reds this — distinct from
 // class1 (reconcile predicate) and class2 (classify_obs surface).
 #[cfg(feature = "faultinj")]
@@ -1536,8 +1536,8 @@ fn class2_signal_a_standing_producer_real_path() {
         LifecycleState, OsLiveness, StreamLiveness, StreamObs, STUCK_THRESHOLD_MS,
     };
     use dispatch::progress::{TurnStartProducer, TurnStartRecorder};
-    use sbmux::headless::{Republish, Sink};
-    use sbmux::stream_json::TurnOutcome;
+    use qrmux::headless::{Republish, Sink};
+    use qrmux::stream_json::TurnOutcome;
 
     // A REAL alive victim for the OS layer of classify_obs (signal-A overlays an
     // alive base, never a Gone).

@@ -52,11 +52,11 @@ use std::process::Command;
 // the jail-belt dir scaffold, and the jailed runner live in
 // tests/common/p0bins.rs (shared with p0_qafix.rs ONLY).
 use common::p0bins::{
-    establish_jail, fakerepl_bin, run_sb_jailed, sb_bin, sbmux_bin, JailScaffold,
+    establish_jail, fakerepl_bin, run_sb_jailed, sb_bin, qrmux_bin, JailScaffold,
 };
 
 fn require_bins() {
-    let _ = sbmux_bin();
+    let _ = qrmux_bin();
     let _ = fakerepl_bin();
 }
 
@@ -77,7 +77,7 @@ struct Jail {
 
 impl Jail {
     fn establish(tag: &str) -> Jail {
-        // SHORT literal-/tmp base so the embedded sbmux sun_path fits (the
+        // SHORT literal-/tmp base so the embedded qrmux sun_path fits (the
         // 104-byte macOS budget; c1_gate note).
         let dirs = establish_jail(Path::new("/tmp/sb-p0idm"), tag);
         let work = dirs.root.join("work");

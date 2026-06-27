@@ -1,6 +1,6 @@
 G-CRUD VERDICT: PASS — keystone dir==socket; 8 verbs via sb (create/list/list_raw/send/history/attach/wait/kill); ls --json coherent; A14-1 belt + armed neg-control
 
-KEYSTONE: engine-resolved dir /tmp/sb-c1gate-runs/gcrud-1780708222735914000/x/sbmux == daemon-bound socket dir /tmp/sb-c1gate-runs/gcrud-1780708222735914000/x/sbmux → true
+KEYSTONE: engine-resolved dir /tmp/sb-c1gate-runs/gcrud-1780708222735914000/x/qrmux == daemon-bound socket dir /tmp/sb-c1gate-runs/gcrud-1780708222735914000/x/qrmux → true
 CREATE: mux session crud-sess pid 47588
 LIST: sb ls --json exit=0, row present+tagged=true
   stderr: 
@@ -12,6 +12,6 @@ REATTACH: second sb attach alive=true
 WAIT: sb wait exit=0, idle reported=true
 KILL: sb kill --force exit=0
   stderr: 
-A14-1 BELT: engine dir not /tmp-root sbmux path AND under jail XDG = true (dir /tmp/sb-c1gate-runs/gcrud-1780708222735914000/x/sbmux)
-A14-1 NEG-CTRL: predicate trips on /tmp/sbmux = true (MUST be true)
+A14-1 BELT: engine dir not /tmp-root qrmux path AND under jail XDG = true (dir /tmp/sb-c1gate-runs/gcrud-1780708222735914000/x/qrmux)
+A14-1 NEG-CTRL: predicate trips on /tmp/qrmux = true (MUST be true)
 

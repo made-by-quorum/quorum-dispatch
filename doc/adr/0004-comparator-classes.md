@@ -180,7 +180,7 @@ tracking on, and a client kept on the main screen has dead scrolling on phone
 terminals (Termius swipes become mouse events; the local buffer is empty because
 alt-screen output never reaches mux scrollback). zmx replays `?1049h` on
 reattach, which is why the pre-flip engine never exposed the problem. Full
-evidence chain: `doc/inbox/2026-06-10-sbmux-phone-scroll-regression.md`.
+evidence chain: `doc/inbox/2026-06-10-qrmux-phone-scroll-regression.md`.
 
 The invariant is not retired — it is SPLIT by surface:
 
@@ -190,14 +190,14 @@ The invariant is not retired — it is SPLIT by surface:
   The corpus rows above (e.g. `attach-detach-reattach`, judged on the history
   serialization) keep `assert_no_altscreen` as written.
 
-- **Live client attach/transition captures (embedded sbmux): no-altscreen-leak
+- **Live client attach/transition captures (embedded qrmux): no-altscreen-leak
   REPLACED by alt-screen REPLAY.** New invariant: a client's raw capture
   contains `?1049h` IFF the inner app is in the alt screen at attach time or
   transitions into it while attached, exactly once per attach; a main-screen
   session's capture stays byte-identical to the pre-replay behavior; legacy
   `?47h/?1047h` are STILL never emitted (the renderer replays only 1049).
   Comparator: `assert_altscreen_replay <cap> <expect_1049h> <expect_1049l>`
-  (replaces `assert_no_altscreen_leak` in `crates/sbmux/tests/lib/assertions.rs`;
+  (replaces `assert_no_altscreen_leak` in `crates/qrmux/tests/lib/assertions.rs`;
   c1_gate G-ALT asserts the 1049h/1049l ride-through, G-WINCH and fresh-reattach
   rows assert zero-on-main-screen).
 

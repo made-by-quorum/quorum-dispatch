@@ -1,8 +1,8 @@
 //! ACK-3 e2e INJECTION MATRIX (ack3-spec §2-§4) — five fault-injection rows
 //! (M1-M5) + negative twins driving the REAL `sb` binary over the embedded
-//! `sbmux` daemon with `fakerepl` as Claude, asserting BOTH event streams (the
+//! `qrmux` daemon with `fakerepl` as Claude, asserting BOTH event streams (the
 //! engine file at `<SB_HOME>/state/sessions/<key>.events.jsonl` and the daemon
-//! file at `<XDG_RUNTIME_DIR>/sbmux/events/<session>.daemon.<epoch>.jsonl`),
+//! file at `<XDG_RUNTIME_DIR>/qrmux/events/<session>.daemon.<epoch>.jsonl`),
 //! joined by content sha (unique-by-construction contents). Plus the R-REC
 //! recovery-read rows (§4) and the coverage assertion (§3.3).
 //!
@@ -13,11 +13,11 @@
 //! ## Fault arming (the matrix keystone, spec §1)
 //!
 //! `ensure_server_running_with` spawns the daemon WITHOUT `env_clear`, so
-//! `SBMUX_FAULT_*` passed as run_sb extras reaches the daemon process; the fault
+//! `QRMUX_FAULT_*` passed as run_sb extras reaches the daemon process; the fault
 //! layer reads its env ONCE at daemon start. The arming `sb` call IS the
 //! session-creating one, and `sb start`'s boot waiter writes an Enter ("\r")
 //! through the SAME session — so every daemon fault carries
-//! `SBMUX_FAULT_MATCH_SHA256=<content sha>` (the AND-filter lets the boot "\r"
+//! `QRMUX_FAULT_MATCH_SHA256=<content sha>` (the AND-filter lets the boot "\r"
 //! pass). M1/M2/M3 use SINGLE-CHUNK contents so the FRAME sha the daemon matches
 //! equals the engine's content sha.
 //!
@@ -35,7 +35,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use dispatch::events::{parse_events, sha256_hex, EventRecord};
-use sbmux::events::{parse_line, DaemonEvent};
+use qrmux::events::{parse_line, DaemonEvent};
 
 // ===========================================================================
 // Binary locators (ack2_gate patterns, duplicated)
@@ -54,12 +54,12 @@ fn profile_dir() -> PathBuf {
         .to_path_buf()
 }
 
-fn sbmux_bin() -> PathBuf {
-    let bin = profile_dir().join("sbmux");
+fn qrmux_bin() -> PathBuf {
+    let bin = profile_dir().join("qrmux");
     assert!(
         bin.exists(),
-        "sbmux binary not found at {bin:?} — build it first: \
-         scripts/build-lock.sh cargo build -p sbmux --bin sbmux"
+        "qrmux binary not found at {bin:?} — build it first: \
+         scripts/build-lock.sh cargo build -p qrmux --bin qrmux"
     );
     bin
 }
@@ -104,7 +104,7 @@ fn mtime(p: &Path) -> Option<std::time::SystemTime> {
 }
 
 fn require_bins() {
-    let _ = sbmux_bin();
+    let _ = qrmux_bin();
     let _ = fakerepl_bin();
 }
 
@@ -206,13 +206,13 @@ impl Jail {
         out
     }
 
-    /// The daemon events dir (`<xdg>/sbmux/events`).
+    /// The daemon events dir (`<xdg>/qrmux/events`).
     fn daemon_events_dir(&self) -> PathBuf {
-        self.xdg.join("sbmux").join("events")
+        self.xdg.join("qrmux").join("events")
     }
 
     /// All daemon event records for this jail (concat every `.daemon.<epoch>.jsonl`
-    /// in filename order), parsed via the sbmux reader.
+    /// in filename order), parsed via the qrmux reader.
     fn daemon_records(&self) -> Vec<DaemonEvent> {
         let mut files: Vec<PathBuf> = Vec::new();
         let _ = walk(&self.daemon_events_dir(), &mut |p| {
@@ -497,9 +497,9 @@ fn drive_m1(jail: &Jail, name: &str) -> (String, String, i32, String, String) {
     let sha = sha256_hex(msg.as_bytes());
     let mut env = jail.fakerepl_env(name);
     // Arm the daemon BEFORE the first sb call (env read once at daemon start).
-    env.push(("SBMUX_FAULT_DROP_FRAMES", "send-input".to_string()));
-    env.push(("SBMUX_FAULT_SESSION", name.to_string()));
-    env.push(("SBMUX_FAULT_MATCH_SHA256", sha.clone()));
+    env.push(("QRMUX_FAULT_DROP_FRAMES", "send-input".to_string()));
+    env.push(("QRMUX_FAULT_SESSION", name.to_string()));
+    env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
     env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
 
     // Boot (the arming call). The boot "\r" passes the sha AND-filter.
@@ -603,9 +603,9 @@ fn drive_m2(jail: &Jail, name: &str) -> (String, String, i32, String, String) {
     let (msg, canary) = row_message(2, 0);
     let sha = sha256_hex(msg.as_bytes());
     let mut env = jail.fakerepl_env(name);
-    env.push(("SBMUX_FAULT_PTY_WRITE", "error".to_string()));
-    env.push(("SBMUX_FAULT_SESSION", name.to_string()));
-    env.push(("SBMUX_FAULT_MATCH_SHA256", sha.clone()));
+    env.push(("QRMUX_FAULT_PTY_WRITE", "error".to_string()));
+    env.push(("QRMUX_FAULT_SESSION", name.to_string()));
+    env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
     env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
 
     let (cb, _o, _e, _) = run_sb(jail, &["start", name], &env);
@@ -718,9 +718,9 @@ fn m2_filter_precision_other_session_clean() {
     // boot Enter and the test send both go to `other`, which the session
     // filter excludes — nothing is faulted despite the sha matching.
     let mut env = jail.fakerepl_env(other);
-    env.push(("SBMUX_FAULT_PTY_WRITE", "error".to_string()));
-    env.push(("SBMUX_FAULT_SESSION", armed_for.to_string()));
-    env.push(("SBMUX_FAULT_MATCH_SHA256", sha.clone()));
+    env.push(("QRMUX_FAULT_PTY_WRITE", "error".to_string()));
+    env.push(("QRMUX_FAULT_SESSION", armed_for.to_string()));
+    env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
     env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
     let (c1, _o, _e, _) = run_sb(&jail, &["start", other], &env);
     assert_eq!(c1, 0, "non-matching session boots in the ARMED daemon");
@@ -764,8 +764,8 @@ fn m3_silent_swallow_event_streams() {
     let sha = sha256_hex(msg.as_bytes());
     let report = jail.root.join("m3-report.jsonl");
     let mut env = jail.fakerepl_env(name);
-    env.push(("SBMUX_FAULT_PTY_WRITE", "swallow".to_string()));
-    env.push(("SBMUX_FAULT_MATCH_SHA256", sha.clone()));
+    env.push(("QRMUX_FAULT_PTY_WRITE", "swallow".to_string()));
+    env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
     env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
     env.push(("SB_FAKEREPL_REPORT", report.to_string_lossy().into_owned()));
 
@@ -1260,7 +1260,7 @@ fn engine_kind_disposition(p: &dispatch::events::Payload) -> Option<Delegation> 
     }
 }
 
-/// EXHAUSTIVE classification of every DAEMON event kind (sbmux events.rs
+/// EXHAUSTIVE classification of every DAEMON event kind (qrmux events.rs
 /// `DaemonEvent`): OWNED or DELEGATED. No wildcard arm.
 fn daemon_kind_disposition(e: &DaemonEvent) -> Option<Delegation> {
     match e {
@@ -1269,19 +1269,19 @@ fn daemon_kind_disposition(e: &DaemonEvent) -> Option<Delegation> {
         DaemonEvent::PtyWriteFailed { .. } => None,  // M2
         // DELEGATED:
         DaemonEvent::SessionOpened { .. } => Some(Delegation {
-            file: "crates/sbmux/src/events.rs",
+            file: "crates/qrmux/src/events.rs",
             test_fn: "r_epoch_excl_retry",
         }),
         DaemonEvent::SessionClosed { .. } => Some(Delegation {
-            file: "crates/sbmux/src/events.rs",
+            file: "crates/qrmux/src/events.rs",
             test_fn: "close_bookend_idempotent",
         }),
         DaemonEvent::EventsTruncated { .. } => Some(Delegation {
-            file: "crates/sbmux/src/events.rs",
+            file: "crates/qrmux/src/events.rs",
             test_fn: "r_seq_monotonic_and_suppression_gap",
         }),
         DaemonEvent::Heartbeat { .. } => Some(Delegation {
-            file: "crates/sbmux/src/events.rs",
+            file: "crates/qrmux/src/events.rs",
             test_fn: "r_ser_golden_lines_byte_exact",
         }),
     }
@@ -1423,9 +1423,9 @@ fn coverage_inventory_every_event_kind_exercised() {
         }
     }
 
-    // DAEMON: one of every DaemonEvent variant (the structural tooth on the sbmux
+    // DAEMON: one of every DaemonEvent variant (the structural tooth on the qrmux
     // enum — a new daemon variant fails to compile here).
-    use sbmux::events::{CloseReason, EventMeta};
+    use qrmux::events::{CloseReason, EventMeta};
     let meta = EventMeta {
         session: "s".into(),
         epoch: 1,

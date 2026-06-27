@@ -1,6 +1,6 @@
 //! C1 M6 — ENGINE-LEVEL gate rows (c1-spec "Gate rows"), driving the REAL `sb`
 //! binary (`CARGO_BIN_EXE_qd`) through per-run hermetic jails against a REAL
-//! jailed sbmux daemon. These are the gate teeth for the Stage-2 mux swap.
+//! jailed qrmux daemon. These are the gate teeth for the Stage-2 mux swap.
 //!
 //! ## How these differ from the M4 crate-level live tests
 //!
@@ -24,11 +24,11 @@
 //!
 //! ## Comparator provenance (cross-crate)
 //!
-//! The sbmux test-lib comparators (`assert_backlog_ordered`, `check_cjk_*`,
-//! `assert_altscreen_replay`, …) live in `crates/sbmux/tests/lib/` and are NOT
+//! The qrmux test-lib comparators (`assert_backlog_ordered`, `check_cjk_*`,
+//! `assert_altscreen_replay`, …) live in `crates/qrmux/tests/lib/` and are NOT
 //! importable across crates. The byte-level checker BODIES are ported here with
 //! their provenance noted at each use; the cell-level `check_no_orphan_wide_cell`
-//! (needs `sbmux::screen::Cell`) is NOT reachable through the engine PTY path, so
+//! (needs `qrmux::screen::Cell`) is NOT reachable through the engine PTY path, so
 //! G-UNI uses the byte-level CJK/UTF-8 integrity check on the rendered replay.
 //!
 //! ## Evidence
@@ -40,7 +40,7 @@
 //! ## Jail invariants (rule 9 + ADD-4 + ADD-12 + ADD-14)
 //!
 //! Each row gets its own jail (own HOME/SB_HOME/XDG_RUNTIME_DIR/TMPDIR/ZMX_DIR),
-//! launches a fresh jailed sbmux daemon, and tears down by killing the daemon by
+//! launches a fresh jailed qrmux daemon, and tears down by killing the daemon by
 //! pid + removing the jail dir. No destructive sweeps; per-target verbs only.
 
 #![allow(clippy::too_many_arguments)]
@@ -65,23 +65,23 @@ fn sb_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
-/// Locate the built `sbmux` binary from the test exe's target dir. PANICS with a
+/// Locate the built `qrmux` binary from the test exe's target dir. PANICS with a
 /// build hint if absent (never a silent skip — that makes the row vacuous). This
-/// mirrors the M4 live-test pattern: the sbmux binary must be built first.
-fn sbmux_bin() -> PathBuf {
+/// mirrors the M4 live-test pattern: the qrmux binary must be built first.
+fn qrmux_bin() -> PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
     // current_exe = <target>/<profile>/deps/<test-hash>; the bin is
-    // <target>/<profile>/sbmux.
+    // <target>/<profile>/qrmux.
     let mut dir = exe
         .parent()
         .and_then(Path::parent)
         .expect("target/<profile>")
         .to_path_buf();
-    dir.push("sbmux");
+    dir.push("qrmux");
     assert!(
         dir.exists(),
-        "sbmux binary not found at {dir:?} — build it first: \
-         scripts/build-lock.sh cargo build -p sbmux --bin sbmux"
+        "qrmux binary not found at {dir:?} — build it first: \
+         scripts/build-lock.sh cargo build -p qrmux --bin qrmux"
     );
     dir
 }
@@ -134,9 +134,9 @@ fn write_artifact(row: &str, name: &str, bytes: &[u8]) -> PathBuf {
 // ===========================================================================
 
 /// A per-run hermetic jail. The root sits under a SHORT literal-/tmp base so the
-/// daemon's `<jail>/x/sbmux/sbmux.sock` fits macOS's 104-byte sun_path budget —
+/// daemon's `<jail>/x/qrmux/qrmux.sock` fits macOS's 104-byte sun_path budget —
 /// TEST infra, NOT engine code (ADD-14 governs ENGINE writes; the belt rows
-/// assert the engine itself never emits sbmux-named /tmp-ROOT paths).
+/// assert the engine itself never emits qrmux-named /tmp-ROOT paths).
 struct Jail {
     root: PathBuf,
     home: PathBuf,
@@ -157,7 +157,7 @@ impl Jail {
         std::fs::create_dir_all(&sessions_dir).unwrap();
         std::fs::create_dir_all(&xdg_runtime).unwrap();
         use std::os::unix::fs::PermissionsExt;
-        // sbmux's socket-dir belt expects 0700 per-user perms on the runtime dir.
+        // qrmux's socket-dir belt expects 0700 per-user perms on the runtime dir.
         std::fs::set_permissions(&xdg_runtime, std::fs::Permissions::from_mode(0o700)).ok();
         common::assert_not_real_home(&home);
         // Teardown-leak belt: FIRST stamp this run's owning test-harness pid so a
@@ -177,7 +177,7 @@ impl Jail {
 
     /// The engine-resolved embedded socket dir for this jail (tier 1: XDG set).
     fn resolved_dir(&self) -> PathBuf {
-        self.xdg_runtime.join("sbmux")
+        self.xdg_runtime.join("qrmux")
     }
 
     /// Apply the jailed embedded env to a std::process::Command.
@@ -270,15 +270,15 @@ fn pid_alive(pid: u32) -> bool {
     }
 }
 
-/// WS-C M3b: pre-spawn a PER-SESSION daemon `sbmux server --socket-dir <dir>
+/// WS-C M3b: pre-spawn a PER-SESSION daemon `qrmux server --socket-dir <dir>
 /// --session <name>` in the jail and wait for the `<dir>/<name>.sock` leaf. The
-/// legacy shared-daemon mode (no `--session`, bound `sbmux.sock`) is RETIRED
+/// legacy shared-daemon mode (no `--session`, bound `qrmux.sock`) is RETIRED
 /// (spec §1, §9). `extra_env` injects daemon env (e.g. the G-NEG breaker
-/// `RETACH_B1_BREAK`); a long `SBMUX_CLAIM_TIMEOUT_MS` keeps the freshly-spawned
+/// `RETACH_B1_BREAK`); a long `QRMUX_CLAIM_TIMEOUT_MS` keeps the freshly-spawned
 /// (still EMPTY) daemon alive until the adapter's `run_detached` claims it. The
 /// adapter's own `ensure_session_server_running` then probes this live socket,
 /// finds it Up, and short-circuits — every verb runs against this real daemon
-/// (the cross-crate binary constraint: the test exe has no `sbmux-server` entry).
+/// (the cross-crate binary constraint: the test exe has no `qrmux-server` entry).
 fn start_daemon(
     jail: &Jail,
     dir: &Path,
@@ -286,7 +286,7 @@ fn start_daemon(
     extra_env: &[(&str, &str)],
 ) -> (DaemonGuard, PathBuf) {
     std::fs::create_dir_all(dir).ok();
-    let bin = sbmux_bin();
+    let bin = qrmux_bin();
     let mut cmd = Command::new(&bin);
     cmd.arg("server")
         .arg("--socket-dir")
@@ -298,13 +298,13 @@ fn start_daemon(
         .env("XDG_RUNTIME_DIR", &jail.xdg_runtime)
         .env("PATH", "/usr/bin:/bin")
         .env("TERM", "xterm-256color")
-        .env("SBMUX_CLAIM_TIMEOUT_MS", "60000")
+        .env("QRMUX_CLAIM_TIMEOUT_MS", "60000")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
-    let child = cmd.spawn().expect("spawn sbmux server --session");
+    let child = cmd.spawn().expect("spawn qrmux server --session");
     let pid = child.id();
     // Teardown-leak belt: record this daemon (pid + its --socket-dir identity)
     // so a future run can reap it if this run dies before teardown. `jail.root`
@@ -541,10 +541,10 @@ impl SbAttach {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    /// Detach via the sbmux client detach key (Ctrl-\, the standalone detach
+    /// Detach via the qrmux client detach key (Ctrl-\, the standalone detach
     /// chord) — falls back to killing the client process if it does not exit.
     fn detach(&mut self) {
-        // sbmux attach detaches on the configured detach key; Ctrl-\ (0x1c) is the
+        // qrmux attach detaches on the configured detach key; Ctrl-\ (0x1c) is the
         // conventional chord. If the client does not exit promptly we kill it (the
         // DAEMON keeps the session — that is the detach semantics under test).
         self.write_raw(&[0x1c]);
@@ -577,7 +577,7 @@ impl Drop for SbAttach {
 // Ported byte-level comparators (provenance noted)
 // ===========================================================================
 
-/// PORTED from crates/sbmux/tests/lib/client.rs::strip_ansi (cross-crate, not
+/// PORTED from crates/qrmux/tests/lib/client.rs::strip_ansi (cross-crate, not
 /// importable). Strips CSI / OSC / ESC-single sequences for robust substring
 /// matching against SGR-interleaved renders.
 fn strip_ansi(s: &str) -> String {
@@ -615,9 +615,9 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
-/// PORTED from crates/sbmux/tests/lib/assertions.rs::assert_altscreen_replay
+/// PORTED from crates/qrmux/tests/lib/assertions.rs::assert_altscreen_replay
 /// (ADR-0004 altscreen-replay invariant — REVERSED from no-altscreen-leak,
-/// approved 2026-06-10; doc/inbox/2026-06-10-sbmux-phone-scroll-regression.md).
+/// approved 2026-06-10; doc/inbox/2026-06-10-qrmux-phone-scroll-regression.md).
 /// A client's capture carries `?1049h` IFF the inner app is in the alt screen
 /// at attach or transitions into it while attached (exactly once per
 /// transition); main-screen captures carry zero 1049 sequences; legacy
@@ -649,7 +649,7 @@ fn assert_altscreen_replay(
     Ok(())
 }
 
-/// PORTED from crates/sbmux/tests/lib/b3_checkers.rs::strip_csi_bytes — byte-level
+/// PORTED from crates/qrmux/tests/lib/b3_checkers.rs::strip_csi_bytes — byte-level
 /// CSI strip leaving text bytes (so a split wide char stays detectable).
 fn strip_csi_bytes(line: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(line.len());
@@ -673,7 +673,7 @@ fn strip_csi_bytes(line: &[u8]) -> Vec<u8> {
     out
 }
 
-/// PORTED from crates/sbmux/tests/lib/b3_checkers.rs::check_cjk_integrity —
+/// PORTED from crates/qrmux/tests/lib/b3_checkers.rs::check_cjk_integrity —
 /// post-strip residue must be WHOLE UTF-8 (no lone continuation / split wide
 /// char). This is the engine-reachable width-sanity check for G-UNI.
 fn check_cjk_integrity(bytes: &[u8], desc: &str) -> Result<(), String> {
@@ -688,7 +688,7 @@ fn check_cjk_integrity(bytes: &[u8], desc: &str) -> Result<(), String> {
 
 /// Ordered marker presence over a SETTLED TEXT capture (engine PTY render).
 ///
-/// HONESTLY WEAKER than sbmux's `assert_backlog_ordered`: that comparator's
+/// HONESTLY WEAKER than qrmux's `assert_backlog_ordered`: that comparator's
 /// red-team #12 contract REQUIRES frame-decoded wire-order History lines and
 /// REJECTS settled text (clause (b) is vacuous on spatially-ordered text). The
 /// engine attach path renders a SETTLED SCREEN, so we assert presence-in-order

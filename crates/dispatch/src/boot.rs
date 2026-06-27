@@ -796,7 +796,7 @@ impl<'a> EventBootWaiter<'a> {
     /// launch failure's own stderr is not lost.
     ///
     /// F2 (red-team r1, accepted+documented): these diagnostics are zmx-modeled.
-    /// The EMBEDDED backend has no ended rows (a dead sbmux session simply
+    /// The EMBEDDED backend has no ended rows (a dead qrmux session simply
     /// vanishes from the list — D-LISTRAW) and no surviving history, so on that
     /// lane a death verdict is reachable only via absence-after-presence, with
     /// `exit_code = None` and usually an empty tail — thinner but still honest.

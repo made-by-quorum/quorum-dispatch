@@ -51,7 +51,7 @@ use super::common;
 /// stream-complete-or-error, never a silent partial.
 ///
 /// SCOPE (deliberate): this does NOT reset the process-wide SIGPIPE disposition.
-/// The embedded sbmux daemon and relay server run inside THIS binary and rely on
+/// The embedded qrmux daemon and relay server run inside THIS binary and rely on
 /// EPIPE arriving as an `io::Result` they handle gracefully; a global
 /// `SIG_DFL` reset would turn those graceful disconnects into process death.
 /// The fix lives at the verb's own stdout write.
@@ -182,7 +182,7 @@ fn run_inner(
     // `<dir>/<name>.sock` connect probe BEFORE the claude-pid gate (lead RULING):
     // for a headless row whose daemon is DOWN, render `cold` (Fork A — reuse cold,
     // no new token) regardless of the orphan pid. Non-headless rows are unaffected
-    // (the probe is skipped). RENDER-path only. The sbmux dir is resolved
+    // (the probe is skipped). RENDER-path only. The qrmux dir is resolved
     // best-effort; if it cannot be (HOME unset / non-embedded layout) the probe
     // returns Up for every row and the gate degrades to claude-pid-only (pre-WP
     // behavior) — headless rows only exist under the embedded backend anyway.
@@ -190,15 +190,15 @@ fn run_inner(
         use dispatch::effects::Env;
         let src = dispatch::liveness::OsLiveness::new();
         let env = dispatch::effects::RealEnv;
-        let sbmux_dir = env.var("HOME").filter(|h| !h.is_empty()).and_then(|h| {
-            dispatch::sbmux_dir::resolve_sbmux_dir(std::path::Path::new(&h), &env).ok()
+        let qrmux_dir = env.var("HOME").filter(|h| !h.is_empty()).and_then(|h| {
+            dispatch::qrmux_dir::resolve_qrmux_dir(std::path::Path::new(&h), &env).ok()
         });
-        let daemon_src = dispatch::liveness::SocketDaemonLiveness::new(sbmux_dir);
+        let daemon_src = dispatch::liveness::SocketDaemonLiveness::new(qrmux_dir);
         for s in &mut sessions {
             // codex rows: daemon-hosted (rollout-tail liveness), skipped here. acp/*
             // rows (Item 3): ALSO daemon-hosted (resident adapter + bridge) — their
             // liveness is the adapter pid + `--listen` endpoint, NOT a claude
-            // `(pid,starttime)` or sbmux socket, so the headless gate would mis-classify
+            // `(pid,starttime)` or qrmux socket, so the headless gate would mis-classify
             // them. They get a primary-sourced acp Status override at render time
             // (`acp_human_status`) instead.
             if s.provider != "codex" && !s.provider.starts_with("acp/") {

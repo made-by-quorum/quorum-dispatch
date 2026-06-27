@@ -128,7 +128,7 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
         .unwrap_or(canonical);
 
     // Backend-selected mux (C1 D3). An attachable session carries its socket_dir
-    // (tagged by the backend's list), so the embedded lane targets the sbmux dir.
+    // (tagged by the backend's list), so the embedded lane targets the qrmux dir.
     let mux = match common::real_mux() {
         Ok(m) => m,
         Err(code) => return AttachOutcome::Done(code),
@@ -172,14 +172,14 @@ fn run_headless_observe(session: &Session) -> i32 {
         Ok(p) => p,
         Err(code) => return code,
     };
-    let dir = match dispatch::sbmux_dir::resolve_sbmux_dir(&paths.home, &env) {
+    let dir = match dispatch::qrmux_dir::resolve_qrmux_dir(&paths.home, &env) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("sb connect: {e}");
             return 1;
         }
     };
-    let socket_path = match sbmux::server::session_socket_path_for(Some(&dir), name) {
+    let socket_path = match qrmux::server::session_socket_path_for(Some(&dir), name) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("sb connect: {e}");
@@ -217,7 +217,7 @@ fn run_headless_observe(session: &Session) -> i32 {
     let mut dash = dispatch::observe::DashboardState::default();
     let mut gate = CutoverGate::default();
     if row_busy {
-        let busy = sbmux::protocol::ServerMsg::RepublishStatus {
+        let busy = qrmux::protocol::ServerMsg::RepublishStatus {
             status: "busy".to_string(),
         };
         dash.apply(&busy);
@@ -520,7 +520,7 @@ fn fork_transcript_missing_error(
 /// pre-minted `fork_uuid`: the caller `mint_or_get(fork_uuid)`s the fork's OWN
 /// sbId (option A — never the parent's). Mechanism S is uniform (default + the
 /// `--turn` rewind) per the lead's Q4-FOLLOWUP ruling; it touches ZERO banked
-/// daemon/sbmux/protocol/argv surface (the fidelity gate proves it equivalent to
+/// daemon/qrmux/protocol/argv surface (the fidelity gate proves it equivalent to
 /// native `--fork-session`).
 fn seed_fork_transcript(
     provider_impl: &dyn dispatch::provider::Provider,
@@ -832,7 +832,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // topology (orc ruling 02:18 06-07). MuxPane → the existing claude
     // choreography below, UNTOUCHED (blast-radius rule). Daemon → a NEW sibling
     // create path (no daemon logic threads through create.rs). The daemon path
-    // does NOT use the zmx/sbmux backend selection, mux, or boot waiter — its
+    // does NOT use the zmx/qrmux backend selection, mux, or boot waiter — its
     // readiness is the app-server initialize handshake, not a pid-file/went-busy.
     // scoped-ACP-CC daemon-residence (S5): an `acp/*` row is Daemon-hosted like codex,
     // but its residence is a dispatch-OWNED adapter process (the bridge speaks stdio, not
@@ -880,13 +880,13 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             );
             return 1;
         }
-        // Agent + prompt → headless launch via the per-session sbmux daemon.
+        // Agent + prompt → headless launch via the per-session qrmux daemon.
         crate::driver::StartRoute::Headless => {
             // WP-B5-iii (Q4 ruling): headless `--fork` is REQUIRED (use cases 1&2
             // are agent-self-fork — no TTY → headless only). The earlier
             // interactive-only refusal is LIFTED. Mechanism S already seeded the
             // forked transcript at `fork_uuid` above; the headless launch resumes
-            // THAT (additive on the proven headless spine — zero daemon/sbmux/
+            // THAT (additive on the proven headless spine — zero daemon/qrmux/
             // protocol/argv change). The daemon mints the fork's OWN sbId via
             // `mint_or_get(resume_session_id=fork_uuid)` (B5-ii-b parity, never the
             // parent's) + the daemon-minted child-pid row (`provider=None`). A
@@ -924,7 +924,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
 
     // Backend-selected create dirs (C1 D2/D3). ONE SB_MUX parse drives the canonical
     // dir, the legacy list, AND the mux below — the embedded lane creates the
-    // session in its single sbmux dir (legacy EMPTY); the zmx lane keeps the
+    // session in its single qrmux dir (legacy EMPTY); the zmx lane keeps the
     // canonical + cross-dir legacy scan (Bug-D). A bogus SB_MUX exits loudly here.
     let backend = match common::select_backend(&env) {
         Ok(b) => b,
@@ -943,7 +943,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             (canonical, legacy)
         }
         dispatch::mux_selector::Backend::Embedded => {
-            let canonical = match dispatch::sbmux_dir::resolve_sbmux_dir(&home, &env) {
+            let canonical = match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
                     eprintln!("sb start: {msg}");
@@ -1499,7 +1499,7 @@ fn bind_minted_id_best_effort(
 /// claude arm assembles `NewDeps`) and drives the lib-side
 /// [`dispatch::create_daemon::run_new_daemon`], then maps the outcome/error to the
 /// verb's stdout/stderr + exit code. The daemon path is self-contained: no zmx/
-/// sbmux backend, no `EventBootWaiter`, no F1 env-file — its readiness IS the
+/// qrmux backend, no `EventBootWaiter`, no F1 env-file — its readiness IS the
 /// app-server initialize handshake, and the row is written by the lib itself.
 #[allow(clippy::too_many_arguments)]
 fn run_new_codex_daemon(
@@ -2301,7 +2301,7 @@ fn attach_session(s: &Session) -> i32 {
         .map(PathBuf::from)
         .unwrap_or(canonical);
     // Backend-selected mux (C1 D3). An attachable session carries its socket_dir
-    // (tagged by the backend's list), so the embedded lane targets the sbmux dir.
+    // (tagged by the backend's list), so the embedded lane targets the qrmux dir.
     let mux = match common::real_mux() {
         Ok(m) => m,
         Err(code) => return code,

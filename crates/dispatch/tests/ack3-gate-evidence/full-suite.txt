@@ -1,7 +1,7 @@
 # ACK-3 full-suite evidence (ADD-17 local-gate protocol)
 # Lead: sbr-ack3-lead | 2026-06-06 12:48-12:54 EDT | worktree: wt-ack3-lead
 # Tip: 0d4b6c5 (phase/ack-3) | base: main c1d96a3
-# Prebuild: scripts/build-lock.sh cargo build -p sbmux --bin sbmux -p fakerepl -p sb
+# Prebuild: scripts/build-lock.sh cargo build -p qrmux --bin qrmux -p fakerepl -p sb
 # Command: scripts/build-lock.sh cargo test --workspace   (exit code 0)
 # Note: one interleaved-output artifact at the g2 multi-process re-exec child
 # (events_test_child re-execs the lib test binary with a filter; its result line
@@ -54,9 +54,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
      Running tests/verbs_a4.rs (target/debug/deps/verbs_a4-a529d2e074aa5bf4)
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
-     Running unittests src/lib.rs (target/debug/deps/sbmux-af231b36f4f50eac)
+     Running unittests src/lib.rs (target/debug/deps/qrmux-af231b36f4f50eac)
 test result: ok. 821 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
-     Running unittests src/main.rs (target/debug/deps/sbmux-8c8d92c8a94dc63f)
+     Running unittests src/main.rs (target/debug/deps/qrmux-8c8d92c8a94dc63f)
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/ack1_events.rs (target/debug/deps/ack1_events-c6dcfacee0243df9)
 test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.90s
@@ -74,7 +74,7 @@ test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
    Doc-tests sb
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-   Doc-tests sbmux
+   Doc-tests qrmux
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 # ANNOTATION: the sb lib line above was mangled by the g2 re-exec child's

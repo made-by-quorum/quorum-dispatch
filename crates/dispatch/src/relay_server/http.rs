@@ -385,7 +385,7 @@ fn handle_message(req: &ParsedRequest, server: &RelayServer) -> Result<String, (
 
     // (b') R3c-Step-1 enqueue hook: AFTER persisting the inbox file, nudge the
     // (possibly parked/wedged) recipient session on its ALWAYS-SERVICED control fd.
-    // The recipient is THIS server's own session (`server.session_id`); its sbmux
+    // The recipient is THIS server's own session (`server.session_id`); its qrmux
     // daemon binds the matching `control_sock_path` (derived from the SAME env) and
     // drains the `WakeInbox`. If there is no live servicer (ENOENT/ECONNREFUSED) the
     // wake degrades to a logged PTY-inject fallback — and the in-process stdout

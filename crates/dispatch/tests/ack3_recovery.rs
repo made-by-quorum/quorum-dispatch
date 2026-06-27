@@ -40,12 +40,12 @@ fn profile_dir() -> PathBuf {
         .to_path_buf()
 }
 
-fn sbmux_bin() -> PathBuf {
-    let bin = profile_dir().join("sbmux");
+fn qrmux_bin() -> PathBuf {
+    let bin = profile_dir().join("qrmux");
     assert!(
         bin.exists(),
-        "sbmux binary not found at {bin:?} — build it first: \
-         scripts/build-lock.sh cargo build -p sbmux --bin sbmux"
+        "qrmux binary not found at {bin:?} — build it first: \
+         scripts/build-lock.sh cargo build -p qrmux --bin qrmux"
     );
     bin
 }
@@ -85,7 +85,7 @@ fn mtime(p: &Path) -> Option<std::time::SystemTime> {
 }
 
 fn require_bins() {
-    let _ = sbmux_bin();
+    let _ = qrmux_bin();
     let _ = fakerepl_bin();
 }
 

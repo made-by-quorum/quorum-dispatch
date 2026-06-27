@@ -5,9 +5,9 @@
 //!
 //! Drives the REAL `sb` binary end-to-end against a JAILED HOME (the
 //! `headless_cli_addressability` pattern): `sb start --headless` mints a row via a
-//! real per-session sbmux daemon, ONLY `claude` is faked (a fixture script via
+//! real per-session qrmux daemon, ONLY `claude` is faked (a fixture script via
 //! `CLAUDE_BIN` that HOLDS busy for a long window). We then SIGKILL the OWNING
-//! per-session daemon (`sb sbmux-server --session <name>`) while the fixture is
+//! per-session daemon (`sb qrmux-server --session <name>`) while the fixture is
 //! still in its busy sleep — so the claude child is ORPHANED but STILL ALIVE (the
 //! daemon spawns claude on a PIPE, not a controlling PTY, so the daemon's death
 //! does not hang up the child; it survives, reparented, until its next write). That
@@ -133,7 +133,7 @@ fn proc_cmdline(pid: i64) -> String {
 }
 
 /// Find the OWNING per-session daemon pid by scanning `/proc` for the embedded
-/// daemon entry `sb sbmux-server … --session <SESSION>` (daemon.rs). Returns the
+/// daemon entry `sb qrmux-server … --session <SESSION>` (daemon.rs). Returns the
 /// first match; `None` if no such process exists (already dead).
 fn find_daemon_pid(session: &str) -> Option<i64> {
     for entry in std::fs::read_dir("/proc").ok()? {
@@ -143,7 +143,7 @@ fn find_daemon_pid(session: &str) -> Option<i64> {
             continue;
         };
         let cmd = proc_cmdline(pid);
-        if cmd.contains("sbmux-server") && cmd.contains(session) {
+        if cmd.contains("qrmux-server") && cmd.contains(session) {
             return Some(pid);
         }
     }
@@ -154,9 +154,9 @@ fn find_daemon_pid(session: &str) -> Option<i64> {
 /// (Up); `false` = ECONNREFUSED / missing (Down) — the exact signal the (ii) gate
 /// reads via `SocketDaemonLiveness`.
 fn socket_connectable(xdg: &Path, session: &str) -> bool {
-    // Mirror resolve_sbmux_dir's embedded layout: $XDG_RUNTIME_DIR/sbmux/<name>.sock.
+    // Mirror resolve_qrmux_dir's embedded layout: $XDG_RUNTIME_DIR/qrmux/<name>.sock.
     let candidates = [
-        xdg.join("sbmux").join(format!("{session}.sock")),
+        xdg.join("qrmux").join(format!("{session}.sock")),
         xdg.join(format!("{session}.sock")),
     ];
     candidates
@@ -231,7 +231,7 @@ fn daemon_death_fails_closed_control_status_wait() {
 
     // --- KILL the owning per-session daemon -----------------------------------
     let daemon =
-        find_daemon_pid(SESSION).expect("the owning sbmux-server daemon must be found in /proc");
+        find_daemon_pid(SESSION).expect("the owning qrmux-server daemon must be found in /proc");
     assert_ne!(
         daemon, pid,
         "the daemon is a DIFFERENT process from the claude child"

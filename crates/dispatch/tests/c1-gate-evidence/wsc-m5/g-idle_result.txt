@@ -3,7 +3,7 @@
 # Base SHA: 8270c212f91f7d777e445762f0b1560ec0fb9e44 (the M5 rows wsc_m5_rows.rs are added in THIS phase commit, atop this base)
 # Build profile: RELEASE (target/release/sb daemons); test harness dev profile (wire client only)
 # Host: brano.local (macOS 26.5, arm64, Darwin 25.5.0)
-# Rerun: scripts/build-lock.sh cargo build --release -p sb --bin sb -p sbmux --bin sbmux
+# Rerun: scripts/build-lock.sh cargo build --release -p sb --bin sb -p qrmux --bin qrmux
 #        C1_GATE_RUNID=wsc-m5 scripts/build-lock.sh cargo test -p sb --test c1_gate -- --ignored --exact g_idle --nocapture
 #
 G-IDLE VERDICT: MEASUREMENT COMPLETE (release build, N=[0, 1, 5, 10, 20], ≥60s settle each) — per-daemon idle RSS table recorded; macOS RSS-overcount caveat + PSS Lima follow-up named; flag-vs-2×-dev-base = false. No pass/fail threshold (measurement row).

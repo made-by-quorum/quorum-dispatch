@@ -9,13 +9,13 @@ identity token on `session-opened`). A reader can build a log reader from this
 document alone.
 
 > **dispatch paths** are relative to `~/work/quorum/dispatch/`. `events.rs` =
-> `crates/dispatch/src/events.rs` (delivery family); `sbmux events.rs` =
-> `crates/sbmux/src/events.rs` (mux family); `procid.rs` =
-> `crates/sbmux/src/procid.rs` (the W2 token provider).
+> `crates/dispatch/src/events.rs` (delivery family); `qrmux events.rs` =
+> `crates/qrmux/src/events.rs` (mux family); `procid.rs` =
+> `crates/qrmux/src/procid.rs` (the W2 token provider).
 
 This contract is **append-only and additively-versioned**: new optional fields
 and new event variants may appear; readers MUST skip what they don't know and
-MUST NOT use `deny_unknown_fields` (`sbmux events.rs` evolution rule (e); dispatch
+MUST NOT use `deny_unknown_fields` (`qrmux events.rs` evolution rule (e); dispatch
 `CONVENTIONS.md:6-16`).
 
 ---
@@ -29,7 +29,7 @@ A reader MUST branch on which it is reading — they share some field *names*
 | # | Store | On-disk path | Written by | Envelope key |
 |---|-------|-------------|-----------|--------------|
 | 1 | **Delivery log** | `~/.quorum/dispatch/state/sessions/<key>.events.jsonl` | `dispatch` crate `events.rs` | `v`+`ts`(ISO)+`pid`+`seq`; file key = uuid **or** `byname-<name>` |
-| 2 | **Mux/session log** | `~/.quorum/dispatch/mux/events/<name>.daemon.<epoch>.jsonl` | `sbmux` crate `events.rs` | `session`(=NAME)+`epoch`+`seq`+`ts_ms`(int) |
+| 2 | **Mux/session log** | `~/.quorum/dispatch/mux/events/<name>.daemon.<epoch>.jsonl` | `qrmux` crate `events.rs` | `session`(=NAME)+`epoch`+`seq`+`ts_ms`(int) |
 | 3 | **Id store** | `~/.quorum/dispatch/state/ids.jsonl` | `dispatch` crate `idstore.rs` | `mint`/`bind`/`lineage` |
 
 **The per-family discriminator is the PATH PREFIX, never content auto-detection**
@@ -206,7 +206,7 @@ has already left.
 
 ## 2. Mux/session family — `mux/events/<name>.daemon.<epoch>.jsonl`
 
-### 2.1 Envelope (`EventMeta sbmux events.rs:55-73`, `#[serde(flatten)]`)
+### 2.1 Envelope (`EventMeta qrmux events.rs:55-73`, `#[serde(flatten)]`)
 
 | field | type | notes |
 |---|---|---|
@@ -218,9 +218,9 @@ has already left.
 
 **No `v`, no `send_id`** in this envelope; `pid` + `schema_version` appear ONLY on
 `session-opened`. Epoch must be parsed from the **filename** via a last-`.daemon.`
-anchor (`scan_max_epoch sbmux events.rs:537-562`) — names may legally contain `.`.
+anchor (`scan_max_epoch qrmux events.rs:537-562`) — names may legally contain `.`.
 
-### 2.2 Events (`DaemonEvent sbmux events.rs:76-144`)
+### 2.2 Events (`DaemonEvent qrmux events.rs:76-144`)
 
 1. **`session-opened`** — the **started** bookend, always `seq==1`. Adds `pid`(u32),
    `schema_version`(u32, carried ONLY here), **and after W2 the OPTIONAL agent-pid
@@ -230,9 +230,9 @@ anchor (`scan_max_epoch sbmux events.rs:537-562`) — names may legally contain 
 3. **`session-closed`** — the **stopped** bookend. `reason`(`CloseReason`).
 4. **`pty-write-failed`** — `errno`(i32?), `error`(str), `content_sha256`, `content_len`.
 5. **`events-truncated`** — rotation marker; `cap_bytes`(u64).
-6. **`heartbeat`** — envelope only; **DEFAULT OFF** (`SBMUX_EVENTS_HEARTBEAT_MS`).
+6. **`heartbeat`** — envelope only; **DEFAULT OFF** (`QRMUX_EVENTS_HEARTBEAT_MS`).
 
-**`CloseReason`** (`sbmux events.rs:146-158`, kebab): `killed` | `child-exited`
+**`CloseReason`** (`qrmux events.rs:146-158`, kebab): `killed` | `child-exited`
 (no exit code in the event) | `daemon-shutdown` (graceful) | `dropped` (a finding).
 **A hard daemon SIGKILL emits NO `session-closed`** — crash is signalled by
 *absence* + a later epoch, not a reason (G7).
@@ -248,8 +248,8 @@ On `session-opened`, after `schema_version`, two **OPTIONAL** fields (SPEC-v2
 | `boot_id` | str? | a per-boot-stable **opaque** id, compared by **EXACT string equality only** |
 
 - **What `pid` is:** the **PTY child = the agent process** (the responder bond
-  cares about), **NOT** the sbmux daemon — captured ONCE at spawn
-  (`sbmux events.rs:83-85`, `session.rs`), written on `session-opened`. The token
+  cares about), **NOT** the qrmux daemon — captured ONCE at spawn
+  (`qrmux events.rs:83-85`, `session.rs`), written on `session-opened`. The token
   pins the start-time of *that same recorded pid*; bond re-checks *that same pid*,
   so recycle-detection works regardless [SPEC-v2 §5.A, M5; #4/dispatch-gt-ac1].
 - **Why:** today liveness rests on `kill(pid,0)` with no start-time check
@@ -309,7 +309,7 @@ except `schema_version`):
 A **pre-token v1** line (`schema_version:1`, no token) remains valid and parses
 under the v2 reader (`#[serde(default)]` → fields `None`). The version bump signals
 "a token *may* be present." The additive-evolution **rule is declared** at
-`sbmux events.rs:39-40` — warn (never fail) on a newer-than-known version — but
+`qrmux events.rs:39-40` — warn (never fail) on a newer-than-known version — but
 dispatch has **no mux-stream consumer**, so its **enforcement is the consumer's**
 (bond #7): a v2 reader skips a newer `schema_version` / unknown fields, never
 errors. The *never-fail* half is structural here (`deny_unknown_fields` is banned),
@@ -345,14 +345,14 @@ parser is pure.)
 2. **Same field NAMES mean different things** across families: `session` (uuid vs
    NAME), `seq` (from 0 vs from 1), `content_sha256` (delivery payload vs mux PTY
    bytes); `v` exists only on delivery, `send_id` only on delivery [G8].
-3. **Additive-only evolution** (`sbmux events.rs:33-41`; `CONVENTIONS.md:6-16`): new
+3. **Additive-only evolution** (`qrmux events.rs:33-41`; `CONVENTIONS.md:6-16`): new
    optional fields land with `#[serde(default)]`; new event variants must be
    **skipped** by readers, never error; nothing is renamed/retyped/removed;
    `deny_unknown_fields` is **banned**; any additive change bumps the version. The
    "warn (not fail) on a newer version" rule is **declared** at `events.rs:39-40`;
    its **enforcement is the consumer's** (bond #7) — dispatch has no mux-stream reader.
 4. **Torn-tail tolerance**: read with `ignore_errors`; an unparseable line →
-   skipped (`parse_line → None`, `sbmux events.rs:163-165`; delivery
+   skipped (`parse_line → None`, `qrmux events.rs:163-165`; delivery
    `events.rs:839-882`).
 5. **Cross-log joins:**
    - bond event ↔ delivery span: **`send_id`** (delivery only).

@@ -1,26 +1,24 @@
 // ===========================================================================
 // WS-C M4 ENGINE-LEVEL gate rows (spec §7). Driven through the REAL `sb` binary
-// against REAL per-session sbmux daemons in hermetic jails — the same harness
+// against REAL per-session qrmux daemons in hermetic jails — the same harness
 // the C1 rows use (Jail / run_sb / mux_create / fake-claude / pid_alive). These
 // are the NEW/INVERTED arms that make the per-session split's claims falsifiable:
 //
-//   * G-ISOL (R-1(4))       — positive isolation + the SBMUX_TEST_SHARED
+//   * G-ISOL (R-1(4))       — positive isolation + the QRMUX_TEST_SHARED
 //                             shared-fate NEGATIVE control (must RED).
 //   * G-COLDSTART-N (R-1(3))— (a) same-session race → 1 daemon; (b) cross-session
 //                             burst → N daemons no convoy; (d) create-vs-teardown;
 //                             plus the SB_EMBEDDED_DAEMON_PROGRAM mutation control.
 //   * G-EVSPLIT             — two daemons write disjoint events files concurrently
 //                             with clean bookends + epoch fencing across respawn.
-//   * G-LEGACY (W-4)        — a LIVE legacy sbmux.sock → ls warns + nothing
-//                             auto-kills it; STALE variant → per-target unlink.
 //
-// The wire-level skew + claim-timeout + grace arms are sbmux-level
-// (crates/sbmux/tests/wsc_m4.rs).
+// The wire-level skew + claim-timeout + grace arms are qrmux-level
+// (crates/qrmux/tests/wsc_m4.rs).
 // ===========================================================================
 
-/// PID of the per-session sbmux daemon (`sb sbmux-server --socket-dir <dir>
+/// PID of the per-session qrmux daemon (`sb qrmux-server --socket-dir <dir>
 /// --session <name>`) bound to `dir` for `name`, if alive. Greps `ps` for the
-/// exact argv triple (sbmux-server + the dir + `--session <name>`).
+/// exact argv triple (qrmux-server + the dir + `--session <name>`).
 fn session_daemon_pid(dir: &Path, name: &str) -> Option<u32> {
     let out = Command::new("/bin/ps").args(["-axo", "pid=,args="]).output().ok()?;
     let want_dir = dir.to_string_lossy();
@@ -30,7 +28,7 @@ fn session_daemon_pid(dir: &Path, name: &str) -> Option<u32> {
         let Some((pid, args)) = line.split_once(char::is_whitespace) else {
             continue;
         };
-        if args.contains("sbmux-server")
+        if args.contains("qrmux-server")
             && args.contains(want_dir.as_ref())
             && args.contains(&want_session)
         {
@@ -42,7 +40,7 @@ fn session_daemon_pid(dir: &Path, name: &str) -> Option<u32> {
     None
 }
 
-/// All per-session sbmux daemon pids bound to `dir` (any session). Used to assert
+/// All per-session qrmux daemon pids bound to `dir` (any session). Used to assert
 /// the daemon COUNT (one-per-session positive; one-for-both negative control).
 fn all_session_daemon_pids(dir: &Path) -> Vec<u32> {
     let out = match Command::new("/bin/ps").args(["-axo", "pid=,args="]).output() {
@@ -56,7 +54,7 @@ fn all_session_daemon_pids(dir: &Path) -> Vec<u32> {
         let Some((pid, args)) = line.split_once(char::is_whitespace) else {
             continue;
         };
-        if args.contains("sbmux-server") && args.contains(want_dir.as_ref()) {
+        if args.contains("qrmux-server") && args.contains(want_dir.as_ref()) {
             if let Ok(p) = pid.trim().parse::<u32>() {
                 pids.push(p);
             }
@@ -210,16 +208,16 @@ fn g_isol() {
     jail.teardown();
 
     // ----------------------------------------------------------------------
-    // The NEGATIVE control (shared-fate, MUST RED) lives at the SBMUX LEVEL:
-    // `crates/sbmux/tests/wsc_m4.rs::g_isol_negative_shared_fate_red`. WHY
-    // sbmux-level: the SBMUX_TEST_SHARED seam puts TWO sessions on ONE daemon —
+    // The NEGATIVE control (shared-fate, MUST RED) lives at the QRMUX LEVEL:
+    // `crates/qrmux/tests/wsc_m4.rs::g_isol_negative_shared_fate_red`. WHY
+    // qrmux-level: the QRMUX_TEST_SHARED seam puts TWO sessions on ONE daemon —
     // a multi-session-on-one-daemon world the production engine NEVER builds, so
     // the full `sb start` engine path (boot-waiter, registry join, end-watch on the
     // shared manager) interacts with the artificial mode in production-irrelevant
     // ways that make an engine-level negative flaky. The negative control's JOB
     // is gate INTEGRITY (prove the inversion can't pass vacuously), not engine-
     // path coverage — the POSITIVE arm above already exercises the full engine
-    // path. At the sbmux level the construction is deterministic: ONE daemon under
+    // path. At the qrmux level the construction is deterministic: ONE daemon under
     // the seam, two sessions created on it via the wire (the manager genuinely
     // goes multi-session — the machinery exists), ONE pid serves BOTH (asserted),
     // SIGKILL it → BOTH children die (the shared-fate RED the control detects).
@@ -227,7 +225,7 @@ fn g_isol() {
     // the shared world. See the spec §7 G-ISOL negative-control construction.
 
     let verdict = if ok {
-        "G-ISOL (POSITIVE) VERDICT: PASS — A,B on DISTINCT per-session daemons (one pid each); SIGKILL A's daemon → A child DEAD + world torn down, B PROVEN ALIVE BY OPERATION (send:pty acks + history renders post-kill marker), A recoverable cold (sb start relaunch). The shared-fate NEGATIVE control (must RED) is the sbmux-level g_isol_negative_shared_fate_red arm (SBMUX_TEST_SHARED seam)."
+        "G-ISOL (POSITIVE) VERDICT: PASS — A,B on DISTINCT per-session daemons (one pid each); SIGKILL A's daemon → A child DEAD + world torn down, B PROVEN ALIVE BY OPERATION (send:pty acks + history renders post-kill marker), A recoverable cold (sb start relaunch). The shared-fate NEGATIVE control (must RED) is the qrmux-level g_isol_negative_shared_fate_red arm (QRMUX_TEST_SHARED seam)."
     } else {
         "G-ISOL (POSITIVE) VERDICT: FAIL"
     };
@@ -241,7 +239,7 @@ fn g_isol() {
 //   (b) cross-session burst: N concurrent creations → N daemons, no convoy.
 //   (d) create-vs-teardown: create racing a predecessor exit-on-end → clean.
 //   MUTATION: SB_EMBEDDED_DAEMON_PROGRAM severed → cold start REDS (embedded-named).
-// (c claim-timeout + grace are the sbmux-level wsc_m4 arms.)
+// (c claim-timeout + grace are the qrmux-level wsc_m4 arms.)
 // ===========================================================================
 
 #[test]
@@ -302,7 +300,7 @@ fn g_coldstart_n() {
             .map(|rd| {
                 rd.flatten()
                     .filter_map(|e| e.file_name().into_string().ok())
-                    .filter(|n| n.ends_with(".sock") && n != "sbmux.sock")
+                    .filter(|n| n.ends_with(".sock") && n != "qrmux.sock")
                     .count()
             })
             .unwrap_or(0);
@@ -436,10 +434,10 @@ fn g_coldstart_n() {
         );
         let mut_socket = dir.join("mut.sock");
         let combined = format!("{om}\n{em}").to_lowercase();
-        let names_embedded = combined.contains("embedded") && combined.contains("sbmux");
+        let names_embedded = combined.contains("embedded") && combined.contains("qrmux");
         let red = cm != 0 && !mut_socket.exists();
         detail.push_str(&format!(
-            "MUTATION (severed SB_EMBEDDED_DAEMON_PROGRAM={}): sb start exit={cm} (want nonzero), no per-session socket={}, error names embedded sbmux={names_embedded}\n  stderr: {}\n",
+            "MUTATION (severed SB_EMBEDDED_DAEMON_PROGRAM={}): sb start exit={cm} (want nonzero), no per-session socket={}, error names embedded qrmux={names_embedded}\n  stderr: {}\n",
             bogus.display(),
             !mut_socket.exists(),
             em.trim()
@@ -635,166 +633,6 @@ fn g_evsplit() {
     assert!(ok, "G-EVSPLIT failed:\n{detail}");
 }
 
-// ===========================================================================
-// G-LEGACY (W-4) — visibility-never-autokill. A LIVE stub listener on
-// `<dir>/sbmux.sock` → `sb ls` exits 0, emits the ONE warning line on stderr
-// (exact prefix), rows unaffected; the stub is STILL ALIVE after ls + new (other
-// session) + kill (other session) — NOTHING auto-kills it. STALE variant: a dead
-// sbmux.sock (bound then holder SIGKILLed) → per-target unlink, NO warning.
-// ===========================================================================
-
-/// Spawn a child process that binds `<dir>/sbmux.sock` as a raw UnixListener and
-/// accepts-in-a-loop forever (a "live" legacy daemon stub — connect succeeds).
-/// Returns the child so the caller can assert it stays alive + reap it.
-fn spawn_legacy_stub_listener(dir: &Path) -> std::process::Child {
-    std::fs::create_dir_all(dir).ok();
-    let sock = dir.join("sbmux.sock");
-    let _ = std::fs::remove_file(&sock);
-    // A tiny inline accept-loop via a python3 one-liner is fragile across hosts;
-    // instead we re-exec THIS test binary's helper is overkill — use a portable
-    // shell+nc-free approach: a Rust thread won't survive as a separate process.
-    // Simplest robust "live listener" child: a `python3` accept loop if present,
-    // else a perl fallback. Both are POSIX-ubiquitous on the dev/CI hosts.
-    let prog = format!(
-        r#"
-import socket, os, sys
-p = {:?}
-try:
-    os.unlink(p)
-except FileNotFoundError:
-    pass
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.bind(p)
-s.listen(16)
-sys.stderr.write("legacy-stub-ready\n"); sys.stderr.flush()
-while True:
-    try:
-        c,_ = s.accept(); c.close()
-    except Exception:
-        pass
-"#,
-        sock.to_string_lossy()
-    );
-    Command::new("/usr/bin/python3")
-        .arg("-c")
-        .arg(&prog)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn legacy stub listener (python3)")
-}
-
-#[test]
-fn g_legacy() {
-    let mut detail = String::new();
-    let mut ok = true;
-
-    // ---- LIVE legacy daemon: visibility warning, NOTHING auto-kills it. ----
-    let jail = Jail::establish("glegacy-live");
-    let dir = jail.resolved_dir();
-    std::fs::create_dir_all(&dir).ok();
-    let mut stub = spawn_legacy_stub_listener(&dir);
-    let sock = dir.join("sbmux.sock");
-    // Wait for the stub to bind (bounded).
-    let t0 = Instant::now();
-    while !sock.exists() && t0.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let stub_pid = stub.id();
-    let bound = sock.exists() && pid_alive(stub_pid);
-    detail.push_str(&format!(
-        "live stub: bound sbmux.sock={} (pid {stub_pid} alive={})\n",
-        sock.exists(),
-        pid_alive(stub_pid)
-    ));
-    ok &= bound;
-
-    // `sb ls` exits 0 AND emits the ONE warning line (exact prefix) on stderr.
-    let (cls, _ols, els) = run_sb(&jail, &["ls", "--json"]);
-    let warn_prefix = "legacy shared sbmux daemon";
-    let warns = els.contains(warn_prefix);
-    // Exactly ONE warning line carrying the prefix (not a storm).
-    let warn_lines = els.lines().filter(|l| l.contains(warn_prefix)).count();
-    detail.push_str(&format!(
-        "sb ls: exit={cls} (want 0), warning prefix present={warns}, warning line count={warn_lines}\n  stderr: {}\n",
-        els.trim()
-    ));
-    ok &= cls == 0 && warns && warn_lines == 1;
-
-    // The stub is STILL ALIVE after ls.
-    let alive_after_ls = pid_alive(stub_pid);
-
-    // `sb start other` (a DIFFERENT, per-session session) succeeds and does NOT
-    // touch the legacy stub.
-    let (cn, _o, _e) = sb_new_live(&jail, "other", "cat");
-    let alive_after_new = pid_alive(stub_pid);
-
-    // `sb stop other` — killing ANOTHER session must not auto-kill the legacy stub.
-    let (ck, _o, _e) = run_sb(&jail, &["stop", "--force", "other"]);
-    let alive_after_kill = pid_alive(stub_pid);
-
-    detail.push_str(&format!(
-        "stub survives: after ls={alive_after_ls}, after new other (exit {cn})={alive_after_new}, after kill other (exit {ck})={alive_after_kill}\n"
-    ));
-    ok &= alive_after_ls && alive_after_new && alive_after_kill;
-    // The legacy socket file is STILL present (never unlinked while live).
-    let legacy_present = sock.exists();
-    detail.push_str(&format!("live legacy socket still present (never unlinked)={legacy_present}\n"));
-    ok &= legacy_present;
-
-    // Reap the stub + any per-session daemons.
-    let _ = stub.kill();
-    let _ = stub.wait();
-    for p in all_session_daemon_pids(&dir) {
-        sigkill(p);
-    }
-    jail.teardown();
-
-    // ---- STALE legacy socket: per-target unlink, NO warning. ----
-    let jail2 = Jail::establish("glegacy-stale");
-    let dir2 = jail2.resolved_dir();
-    std::fs::create_dir_all(&dir2).ok();
-    // Bind then SIGKILL the holder → a stale sbmux.sock (ConnectionRefused).
-    let mut stub2 = spawn_legacy_stub_listener(&dir2);
-    let sock2 = dir2.join("sbmux.sock");
-    let t0 = Instant::now();
-    while !sock2.exists() && t0.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    // SIGKILL the holder (no unlink): the socket file is now stale.
-    let _ = stub2.kill();
-    let _ = stub2.wait();
-    std::thread::sleep(Duration::from_millis(200));
-    let stale_present_before = sock2.exists();
-    // `sb ls`: the stale-legacy path → per-target unlink, NO warning.
-    let (cls2, _o2, els2) = run_sb(&jail2, &["ls", "--json"]);
-    let no_warn = !els2.contains(warn_prefix);
-    // After ls, the stale socket is unlinked (per-target cleanup, §4.3/§5.3).
-    let mut unlinked = false;
-    let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_secs(2) {
-        if !sock2.exists() {
-            unlinked = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    detail.push_str(&format!(
-        "STALE variant: stale socket present before ls={stale_present_before}; sb ls exit={cls2} (want 0), NO warning={no_warn}, stale socket unlinked after ls={unlinked}\n  stderr: {}\n",
-        els2.trim()
-    ));
-    ok &= stale_present_before && cls2 == 0 && no_warn && unlinked;
-
-    for p in all_session_daemon_pids(&dir2) {
-        sigkill(p);
-    }
-    jail2.teardown();
-
-    let verdict = if ok {
-        "G-LEGACY VERDICT: PASS — LIVE legacy sbmux.sock: sb ls exit 0 + EXACTLY ONE named warning line, stub ALIVE after ls/new(other)/kill(other) (nothing auto-kills), socket never unlinked while live. STALE variant: dead sbmux.sock → per-target unlink, NO warning"
-    } else {
-        "G-LEGACY VERDICT: FAIL"
-    };
-    write_result("g-legacy", verdict, &detail);
-    assert!(ok, "G-LEGACY failed:\n{detail}");
-}
+// G-LEGACY (W-4) was removed: the legacy `<dir>/qrmux.sock` shared-daemon probe
+// and its per-target unlink/warning are dropped as part of the cat-(iii) rename
+// (the one sanctioned behavior change).

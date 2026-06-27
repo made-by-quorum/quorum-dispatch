@@ -123,7 +123,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let pid = session.pid.unwrap_or(0);
 
     // The socket dirs to scan/kill in. Backend-keyed (C1 D2): zmx keeps the
-    // canonical + cross-dir legacy scan (Bug D); embedded uses the single sbmux
+    // canonical + cross-dir legacy scan (Bug D); embedded uses the single qrmux
     // dir (legacy EMPTY). A14-2(c): the surviving zmx READ scan honors
     // SB_TEST_SCAN_ROOTS (test lanes only; production = literal /tmp). Per the
     // A14-2 discriminator the kill TARGET is registry-known/user-named + socket-
@@ -131,7 +131,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let canonical = match backend {
         dispatch::mux_selector::Backend::Zmx => resolve_zmx_dir(&env),
         dispatch::mux_selector::Backend::Embedded => {
-            match dispatch::sbmux_dir::resolve_sbmux_dir(&home, &env) {
+            match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
                     eprintln!("sb stop: {msg}");

@@ -1,5 +1,5 @@
 //! C1 M4 (D2) + WS-C M3b: the EmbeddedMux adapter — the 8-verb [`Mux`] trait over
-//! the PER-SESSION sbmux client surface (`sbmux::client::session_client::*` +
+//! the PER-SESSION qrmux client surface (`qrmux::client::session_client::*` +
 //! `ensure_session_server_running` + `discovery::scan_sessions`). The shared-daemon
 //! mode is RETIRED (spec §1, §9): there is now ONE daemon per session, each binding
 //! `<dir>/<name>.sock` in the SAME resolved dir.
@@ -8,7 +8,7 @@
 //!
 //! `list`/`list_raw` no longer ask a single shared daemon to enumerate; they call
 //! [`scan_sessions`], which reads the resolved dir, filters `*.sock` leaves
-//! (excluding the legacy `sbmux.sock`), probes each per-session daemon, and merges
+//! (excluding the legacy `qrmux.sock`), probes each per-session daemon, and merges
 //! its 0-or-1 rows. An unclaimed daemon (socket present, 0 sessions) is invisible.
 //! D-LISTRAW is preserved by construction: a daemon unlinks its socket on session
 //! end, so ended sessions never surface and `list == list_raw`.
@@ -28,16 +28,10 @@
 //! over-budget leaf surfaces the verbatim remedy-naming error BEFORE a spawn
 //! attempt — not as an opaque cold-start failure.
 //!
-//! ## Legacy-daemon visibility (WS-C §5.3, orc rider W-4)
-//!
-//! On the ls-gather path the adapter probes the legacy `<dir>/sbmux.sock` once,
-//! bounded, via [`probe_legacy_socket`]: a LIVE pre-split daemon → ONE best-effort
-//! stderr warning (never fatal, never blocks, alongside `--json`); a STALE socket
-//! → per-target unlink of `sbmux.sock` only. NOTHING auto-kills a live daemon.
-//!
+
 //! ## Async bridge (D2/R11)
 //!
-//! The `Mux` trait is SYNC; the sbmux client ops are async. The adapter owns a
+//! The `Mux` trait is SYNC; the qrmux client ops are async. The adapter owns a
 //! lazily-init single-thread (current-thread) tokio runtime and `block_on`s each
 //! op. A `tokio::time::timeout` wraps EVERY op EXCEPT `attach` — attach is an
 //! interactive, unbounded-by-design handoff, so only its connect-phase timeout
@@ -49,25 +43,25 @@
 //! Each call passes the trait's `socket_dir` param straight into the client op as
 //! `Some(dir)`. The per-session launcher (`ensure_session_server_running`, invoked
 //! by `create_detached_session`/`attach_session`/`send_input_session`) propagates
-//! the SAME dir to the daemon via `sbmux-server --socket-dir <dir> --session
+//! the SAME dir to the daemon via `qrmux-server --socket-dir <dir> --session
 //! <name>`, so the engine-resolved dir == the daemon-bound socket dir AND the leaf
 //! == `<name>.sock` (the generalized G-CRUD keystone, §4.4). The engine computes
-//! that dir with [`crate::sbmux_dir::resolve_sbmux_dir`]; gather/kill/attach call
+//! that dir with [`crate::qrmux_dir::resolve_qrmux_dir`]; gather/kill/attach call
 //! sites feed it in via the `MuxDirs` lane (single source of truth).
 //!
 //! ## list/list_raw synthesis (D2/R8, divergence row D-LISTRAW)
 //!
-//! sbmux `SessionInfo { name, pid, cols, rows, created }` lacks most `MuxSession`
+//! qrmux `SessionInfo { name, pid, cols, rows, created }` lacks most `MuxSession`
 //! fields. The adapter SYNTHESIZES the rest (named here + in ADR 0013):
 //!
-//! - `clients` → 0 (sbmux does not expose an attach count in `SessionInfo`).
-//! - `ended` → `None` ALWAYS (sbmux sessions VANISH on end — they never list as
+//! - `clients` → 0 (qrmux does not expose an attach count in `SessionInfo`).
+//! - `ended` → `None` ALWAYS (qrmux sessions VANISH on end — they never list as
 //!   ended; this is the D-LISTRAW divergence: embedded `list_raw` can never surface
 //!   an ended session, so reconcile's reap input differs by construction.
 //!   Works-well: embedded sessions end clean; the ended-but-listed concept is a
 //!   zmx-ism).
 //! - `exit_code` → `None` (no ended → no exit code).
-//! - `zmx_status` → an attachable-class string (a listed sbmux session is, by
+//! - `zmx_status` → an attachable-class string (a listed qrmux session is, by
 //!   construction, live + reachable). We use `"attachable"`, which
 //!   [`crate::mux::is_attachable`] treats as attachable (it only drops the literal
 //!   `"unreachable"`).
@@ -94,16 +88,16 @@ use std::time::Duration;
 use crate::exec::ExecResult;
 use crate::mux::{is_attachable, Mux, MuxSession};
 use crate::mux_selector::EmbeddedEnv;
-use crate::sbmux_dir::resolve_sbmux_dir;
+use crate::qrmux_dir::resolve_qrmux_dir;
 
-use sbmux::client::discovery::{probe_legacy_socket, scan_sessions, LegacyProbe};
-use sbmux::client::server_launcher::{ensure_session_server_running, ServerLaunchSpec};
-use sbmux::client::session_client::{
+use qrmux::client::discovery::scan_sessions;
+use qrmux::client::server_launcher::{ensure_session_server_running, ServerLaunchSpec};
+use qrmux::client::session_client::{
     attach_session, create_detached_session, get_history_session, kill_session_session,
     launch_headless_session, send_input_session,
 };
-use sbmux::protocol::{ConnectMode, SessionInfo};
-use sbmux::server::socket::{session_socket_path_for, validate_session_identity};
+use qrmux::protocol::{ConnectMode, SessionInfo};
+use qrmux::server::socket::{session_socket_path_for, validate_session_identity};
 
 /// Test-lane override for the embedded daemon program (C1 M4fix mutation knob).
 /// When set, the launch spec re-execs THIS program instead of `current_exe()`,
@@ -113,12 +107,12 @@ use sbmux::server::socket::{session_socket_path_for, validate_session_identity};
 const DAEMON_PROGRAM_ENV: &str = "SB_EMBEDDED_DAEMON_PROGRAM";
 
 /// The argv-prefix the sb embedder uses for its hidden daemon entry: the sb binary
-/// IS the daemon via `sb sbmux-server` (main.rs pre-clap dispatch).
-const DAEMON_ARGS_PREFIX: &str = "sbmux-server";
+/// IS the daemon via `sb qrmux-server` (main.rs pre-clap dispatch).
+const DAEMON_ARGS_PREFIX: &str = "qrmux-server";
 
 /// Build the embedder's [`ServerLaunchSpec`]: re-exec the `sb` binary
-/// (`current_exe()`) with `["sbmux-server"]`, so the daemon cold-start runs
-/// `sb sbmux-server --socket-dir <dir>` — NOT `current_exe() server` (the bug:
+/// (`current_exe()`) with `["qrmux-server"]`, so the daemon cold-start runs
+/// `sb qrmux-server --socket-dir <dir>` — NOT `current_exe() server` (the bug:
 /// `sb` has no bare `server` verb). The program is overridable by
 /// [`DAEMON_PROGRAM_ENV`] for the mutation-control test ONLY.
 fn embedder_launch_spec() -> io::Result<ServerLaunchSpec> {
@@ -147,7 +141,7 @@ const WAIT_POLL_MAX: usize = 150; // ~30s ceiling; trait-fill only.
 /// default the standalone CLI uses for a reattach.
 const HISTORY_LINES: usize = 10_000;
 
-/// The embedded mux: bridges the sync `Mux` trait to the async sbmux client over
+/// The embedded mux: bridges the sync `Mux` trait to the async qrmux client over
 /// a lazily-init current-thread tokio runtime. Carries an [`EmbeddedEnv`] snapshot
 /// plus the injected home so it can resolve its socket dir (it cannot hold a
 /// borrowed `&dyn Env`).
@@ -155,12 +149,6 @@ pub struct EmbeddedMux {
     home: PathBuf,
     env: EmbeddedEnv,
     runtime: std::sync::OnceLock<tokio::runtime::Runtime>,
-    /// F3a (B1 red-team r1): once-per-instance guard for the §5.3 legacy-daemon
-    /// warning. The boot waiter polls list_raw every ~125ms; without the guard
-    /// a live legacy daemon spammed the warning every poll round for the whole
-    /// boot wait. One mux instance ≈ one verb run, so this is the cheapest
-    /// once-per-waiter-run point.
-    legacy_warned: std::sync::atomic::AtomicBool,
 }
 
 impl EmbeddedMux {
@@ -169,12 +157,11 @@ impl EmbeddedMux {
             home,
             env,
             runtime: std::sync::OnceLock::new(),
-            legacy_warned: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     /// The socket dir this adapter would bind, resolved from its captured
-    /// home + env snapshot via [`crate::sbmux_dir::resolve_sbmux_dir`].
+    /// home + env snapshot via [`crate::qrmux_dir::resolve_qrmux_dir`].
     ///
     /// The trait ops are dir-pinned per-call (the call sites pass the dir from the
     /// `MuxDirs` lane — the single source of truth), so the adapter does not consult
@@ -224,7 +211,7 @@ impl EmbeddedMux {
         }
     }
 
-    /// Map one sbmux `SessionInfo` to a `MuxSession`, applying the NAMED synthesis
+    /// Map one qrmux `SessionInfo` to a `MuxSession`, applying the NAMED synthesis
     /// (see the module doc / D-LISTRAW).
     fn to_mux_session(info: &SessionInfo, dir: &Path) -> MuxSession {
         MuxSession {
@@ -236,7 +223,7 @@ impl EmbeddedMux {
             cmd: String::new(),                        // not in SessionInfo.
             current: false,
             socket_dir: Some(dir.to_string_lossy().into_owned()),
-            ended: None, // sbmux sessions vanish on end (D-LISTRAW).
+            ended: None, // qrmux sessions vanish on end (D-LISTRAW).
             exit_code: None,
             zmx_status: Some("attachable".to_string()), // listed ⇒ live+reachable.
             err: None,
@@ -244,13 +231,9 @@ impl EmbeddedMux {
     }
 
     /// Fetch + synthesize the session list pinned to `socket_dir` via the
-    /// per-session dir-scan + probe (WS-C §4.3). Also runs the §5.3 legacy-daemon
-    /// visibility step (best-effort warning / stale unlink — never fatal, never
-    /// blocks the list).
+    /// per-session dir-scan + probe (WS-C §4.3).
     fn list_synth(&self, socket_dir: &Path) -> io::Result<Vec<MuxSession>> {
         let dir = socket_dir.to_path_buf();
-        // §5.3: surface a live pre-split shared daemon (visibility, never kill).
-        self.legacy_visibility(&dir);
         let infos: Vec<SessionInfo> =
             self.run_bounded("scan_sessions", scan_sessions(Some(&dir)))?;
         Ok(infos
@@ -276,44 +259,6 @@ impl EmbeddedMux {
             .map_err(|e| io::Error::other(format!("embedded mux: {e}")))
     }
 
-    /// WS-C §5.3 (orc rider W-4): probe the legacy shared `<dir>/sbmux.sock` once,
-    /// bounded. A LIVE pre-split daemon → ONE best-effort stderr warning (the A6/L7
-    /// precedent: never fatal, never blocks the operation; emitted alongside
-    /// `--json` since json goes to stdout). A STALE socket (ConnectionRefused) →
-    /// per-target unlink of `sbmux.sock` ONLY. NOTHING auto-kills a live daemon.
-    /// All probe errors are swallowed — visibility must never break ls.
-    fn legacy_visibility(&self, dir: &Path) {
-        let probe = match self.block_on(async {
-            tokio::time::timeout(OP_TIMEOUT, probe_legacy_socket(Some(dir))).await
-        }) {
-            Ok(Ok(Ok(p))) => p,
-            // Probe build/timeout/error → say nothing (visibility is best-effort).
-            _ => return,
-        };
-        match probe {
-            LegacyProbe::Live => {
-                // F3a: once per mux instance — the boot waiter re-lists every
-                // ~125ms and the warning is per-run advice, not a heartbeat.
-                if !self
-                    .legacy_warned
-                    .swap(true, std::sync::atomic::Ordering::SeqCst)
-                {
-                    eprintln!(
-                        "warning: legacy shared sbmux daemon at {} (pre-split); its sessions are \
-                         invisible to this binary — finish or restart them with the old binary, or \
-                         kill that daemon",
-                        dir.display()
-                    );
-                }
-            }
-            LegacyProbe::Stale => {
-                // Per-target unlink of the legacy socket ONLY (never the .log;
-                // socket-only hygiene, §4.3/§5.3 rule). Best-effort.
-                let _ = std::fs::remove_file(dir.join("sbmux.sock"));
-            }
-            LegacyProbe::Absent => {}
-        }
-    }
 }
 
 impl Mux for EmbeddedMux {
@@ -330,7 +275,7 @@ impl Mux for EmbeddedMux {
 
     fn list_raw(&self, socket_dir: &Path) -> io::Result<Vec<MuxSession>> {
         // RAW view. DIVERGENCE D-LISTRAW: embedded `list_raw` NEVER surfaces ended
-        // sessions (sbmux sessions vanish on end), so reconcile's reap input
+        // sessions (qrmux sessions vanish on end), so reconcile's reap input
         // differs from the zmx lane by construction. Documented in ADR 0013.
         self.list_synth(socket_dir)
     }
@@ -343,7 +288,7 @@ impl Mux for EmbeddedMux {
         cwd: &Path,
     ) -> io::Result<ExecResult> {
         // WS-C M3b: create_detached_session cold-starts the session's OWN daemon
-        // (`ensure_session_server_running` → `<sb> sbmux-server --socket-dir <dir>
+        // (`ensure_session_server_running` → `<sb> qrmux-server --socket-dir <dir>
         // --session <name>`, the embedder launch spec, C1 M4fix) binding
         // `<dir>/<name>.sock`, then creates the detached session. Engine-side
         // pre-validation (§2) runs FIRST so a bad name / over-budget leaf surfaces
@@ -476,14 +421,14 @@ impl Mux for EmbeddedMux {
 /// the `MuxDirs` lane (join.rs) and the keystone test can resolve the SAME dir
 /// the adapter would bind.
 pub fn embedded_socket_dir(home: &Path, env: &EmbeddedEnv) -> io::Result<PathBuf> {
-    resolve_sbmux_dir(home, env).map_err(|msg| io::Error::other(format!("embedded mux: {msg}")))
+    resolve_qrmux_dir(home, env).map_err(|msg| io::Error::other(format!("embedded mux: {msg}")))
 }
 
 /// Best-effort PER-SESSION daemon launch for a resolved dir + name (used by tests
 /// that need the session's daemon up before asserting its bound socket path).
 /// WS-C M3b: mirrors the auto-launch a `run_detached`/`attach` op triggers —
 /// `ensure_session_server_running` with the EMBEDDER launch spec (C1 M4fix), so it
-/// re-execs `sb sbmux-server --socket-dir <dir> --session <name>`, binding
+/// re-execs `sb qrmux-server --socket-dir <dir> --session <name>`, binding
 /// `<dir>/<name>.sock`.
 pub fn ensure_session_daemon(
     rt: &tokio::runtime::Runtime,
@@ -496,12 +441,12 @@ pub fn ensure_session_daemon(
 }
 
 /// WP-B-CS-1 (D2 `sb start` agent caller / D3 `sb resume`): launch (or resume) a
-/// headless `claude -p` stream-json turn for `name` via the per-session sbmux
+/// headless `claude -p` stream-json turn for `name` via the per-session qrmux
 /// daemon's `LaunchHeadless` verb (the D-LH client helper). Headless is inherently
-/// the sbmux-daemon path (there is no PTY/pane to render), so it resolves the
-/// embedded sbmux dir directly and cold-starts the session's OWN daemon with the
+/// the qrmux-daemon path (there is no PTY/pane to render), so it resolves the
+/// embedded qrmux dir directly and cold-starts the session's OWN daemon with the
 /// embedder launch spec — exactly the spawn `run_detached`/`attach` trigger above,
-/// re-execing `sb sbmux-server --socket-dir <dir> --session <name>`.
+/// re-execing `sb qrmux-server --socket-dir <dir> --session <name>`.
 /// `resume_session_id = Some(id)` continues an existing claude session
 /// (`--resume`); `None` is a fresh launch.
 ///
@@ -527,7 +472,7 @@ pub fn launch_headless_embedded(
     cwd: Option<&str>,
     claude_args: &[String],
 ) -> io::Result<()> {
-    let dir = resolve_sbmux_dir(home, env)
+    let dir = resolve_qrmux_dir(home, env)
         .map_err(|msg| io::Error::other(format!("embedded mux: {msg}")))?;
     // Engine-side name belt (§2) BEFORE any spawn — verbatim remedy-naming error
     // first, not an opaque cold-start failure (mirrors `pre_validate`).
@@ -573,7 +518,7 @@ mod tests {
 
     #[test]
     fn synthesis_table_maps_session_info() {
-        let dir = Path::new("/run/user/501/sbmux");
+        let dir = Path::new("/run/user/501/qrmux");
         let s = EmbeddedMux::to_mux_session(&info("alpha", 111, Some(1_700_000_000)), dir);
         assert_eq!(s.name, "alpha");
         assert_eq!(s.pid, 111);
@@ -582,7 +527,7 @@ mod tests {
         assert_eq!(s.start_dir, "", "start_dir synthesized empty");
         assert_eq!(s.cmd, "", "cmd synthesized empty");
         assert!(!s.current);
-        assert_eq!(s.socket_dir.as_deref(), Some("/run/user/501/sbmux"));
+        assert_eq!(s.socket_dir.as_deref(), Some("/run/user/501/qrmux"));
         assert_eq!(s.ended, None, "ended always None (D-LISTRAW)");
         assert_eq!(s.exit_code, None);
         assert_eq!(s.zmx_status.as_deref(), Some("attachable"));
@@ -593,7 +538,7 @@ mod tests {
 
     #[test]
     fn created_none_maps_to_zero() {
-        let dir = Path::new("/run/user/501/sbmux");
+        let dir = Path::new("/run/user/501/qrmux");
         let s = EmbeddedMux::to_mux_session(&info("beta", 222, None), dir);
         assert_eq!(s.created, 0, "None created → 0");
     }
@@ -610,7 +555,7 @@ mod tests {
     #[test]
     fn embedded_socket_dir_resolves_via_snapshot() {
         let dir = embedded_socket_dir(Path::new("/jail/home"), &snap_env()).unwrap();
-        assert_eq!(dir, Path::new("/run/user/501/sbmux"));
+        assert_eq!(dir, Path::new("/run/user/501/qrmux"));
     }
 
     #[test]
@@ -628,6 +573,6 @@ mod tests {
     fn wait_empty_names_is_ok() {
         // Trait-fill: no names → immediately Ok(0), no daemon contact.
         let mux = EmbeddedMux::new(PathBuf::from("/jail/home"), snap_env());
-        assert_eq!(mux.wait(Path::new("/run/user/501/sbmux"), &[]).unwrap(), 0);
+        assert_eq!(mux.wait(Path::new("/run/user/501/qrmux"), &[]).unwrap(), 0);
     }
 }

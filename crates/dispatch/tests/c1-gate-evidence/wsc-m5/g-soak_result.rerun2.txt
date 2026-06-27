@@ -3,7 +3,7 @@
 # Base SHA: 8270c212f91f7d777e445762f0b1560ec0fb9e44 (M5 rows wsc_m5_rows.rs added in THIS phase commit, atop this base)
 # Build profile: RELEASE (target/release/sb daemons); test harness dev profile (wire client only)
 # Host: brano.local (macOS 26.5, arm64, Darwin 25.5.0)
-# Rerun: scripts/build-lock.sh cargo build --release -p sb --bin sb -p sbmux --bin sbmux
+# Rerun: scripts/build-lock.sh cargo build --release -p sb --bin sb -p qrmux --bin qrmux
 #        C1_GATE_RUNID=wsc-m5 scripts/build-lock.sh cargo test -p sb --test c1_gate -- --ignored --exact g_soak --nocapture
 #
 G-SOAK VERDICT: PASS — release-build, N≥10 per-session daemons under ≥3 flooders + ≥4 input-blast threads for ≥60s: sibling RTT p95 ≤ 10ms ABSOLUTE and ≤ 3× same-run shared baseline, ZERO timeouts, ls ≤ 1s at N≥10; positive controls (flood-liveness + acked blast) asserted.
@@ -12,7 +12,7 @@ BUILD PROFILE: RELEASE (daemon = /home/u/work/sb-rust/.claude/worktrees/agent-aa
 CONFIG: N_total=10 (quiet=7 + flooders=3), blast_threads=4, window=60s
 CHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat/flood-loop); NOT full fakerepl (delta named in header)
 
-=== SHARED-BASELINE ARM (SBMUX_TEST_SHARED=1, one daemon, same N) ===
+=== SHARED-BASELINE ARM (QRMUX_TEST_SHARED=1, one daemon, same N) ===
 [shared] booted 10/10 sessions
 [shared] daemon count = 1 (expected 1)
 [shared] PRE-FLOOD per-daemon RSS: max=3968 KB sum=3968 KB across 1 daemon(s)

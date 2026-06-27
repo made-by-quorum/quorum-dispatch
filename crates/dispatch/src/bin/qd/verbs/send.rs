@@ -239,13 +239,13 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
         // mux session linked" — generic, NOT zmx-specific. Under the embedded
         // backend the stale "not in zmx" wording named the wrong layer. Key the
         // text off the selected backend: zmx keeps the BYTE-STABLE legacy wording;
-        // embedded names the actual backend (sbmux). A bogus SB_MUX here would have
+        // embedded names the actual backend (qrmux). A bogus SB_MUX here would have
         // already failed `all_sessions` above, so the parse is effectively infallible
         // on this path; on the impossible error we fall back to the generic wording.
         match common::send_backend_label() {
             SendBackend::Embedded => {
                 eprintln!(
-                    "Session has no live sbmux session — cannot send (it may still be \
+                    "Session has no live qrmux session — cannot send (it may still be \
                      starting up; retry in a moment)."
                 );
             }
@@ -326,7 +326,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
         .unwrap_or(canonical);
 
     // Backend-selected mux (C1 D3). A live session carries its socket_dir (tagged
-    // by the backend's list), so the embedded lane writes to the sbmux dir.
+    // by the backend's list), so the embedded lane writes to the qrmux dir.
     let mux_box = match common::real_mux() {
         Ok(m) => m,
         Err(code) => return code,

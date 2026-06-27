@@ -51,11 +51,11 @@ test resume::tests::empty_name_rejected ... ok
 test resume::tests::empty_opt_and_name_fall_through ... ok
 test resume::tests::session_name_when_no_opt ... ok
 test resume::tests::zmx_name_opt_wins ... ok
-test sbmux_dir::tests::empty_sb_home_falls_back_to_default ... ok
-test sbmux_dir::tests::tier1_xdg_runtime_dir_wins ... test events::tests::events_test_child ... ok
+test qrmux_dir::tests::empty_sb_home_falls_back_to_default ... ok
+test qrmux_dir::tests::tier1_xdg_runtime_dir_wins ... test events::tests::events_test_child ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 697 filtered out; finished in 0.02s
-test sbmux_dir::tests::tier2_sb_home_default_under_home ... ok
-test sbmux_dir::tests::tier2_sb_home_only_jail ... ok
+test qrmux_dir::tests::tier2_sb_home_default_under_home ... ok
+test qrmux_dir::tests::tier2_sb_home_only_jail ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 697 filtered out; finished in 0.02s
 test stray::tests::two_procs_same_dir_take_distinct_transcripts ... ok
 test stray::tests::two_transcripts_same_dir_most_recent_wins ... ok

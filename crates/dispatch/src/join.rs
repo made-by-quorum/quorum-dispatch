@@ -51,7 +51,7 @@ use crate::{codes, resolve, zmx_dir};
 ///
 /// The dir computation is the ONLY backend-divergent part of gather. zmx keeps the
 /// canonical+legacy cross-dir scan (Bug-D, byte-identical to pre-C1); embedded
-/// uses a SINGLE [`crate::sbmux_dir::resolve_sbmux_dir`] dir with NO legacy list
+/// uses a SINGLE [`crate::qrmux_dir::resolve_qrmux_dir`] dir with NO legacy list
 /// (the embedded daemon binds one dir; there is no TMPDIR-scatter to recover from).
 ///
 /// The backend is parsed ONCE (mux_selector) and feeds BOTH this resolver AND the
@@ -63,7 +63,7 @@ pub enum MuxDirs {
         canonical: PathBuf,
         legacy: Vec<PathBuf>,
     },
-    /// the single embedded sbmux dir (legacy list EMPTY by construction).
+    /// the single embedded qrmux dir (legacy list EMPTY by construction).
     Embedded { dir: PathBuf },
 }
 
@@ -89,7 +89,7 @@ impl MuxDirs {
         MuxDirs::Zmx { canonical, legacy }
     }
 
-    /// Build the embedded-lane dir set: a single resolved sbmux dir.
+    /// Build the embedded-lane dir set: a single resolved qrmux dir.
     pub fn embedded(dir: PathBuf) -> Self {
         MuxDirs::Embedded { dir }
     }
@@ -132,7 +132,7 @@ pub struct JoinInputs {
     pub now_ms: i64,
     /// Backend-keyed: when true (EMBEDDED lane only), a live registry row whose
     /// PID/ancestor walk fails to find its mux session falls back to a BY-NAME
-    /// match against an unused mux session. The embedded sbmux daemon tracks each
+    /// match against an unused mux session. The embedded qrmux daemon tracks each
     /// session by NAME and the registry row carries that same name, so the link is
     /// deterministic and needs no `ps` ancestry. This closes the cold-start race
     /// (C1 redfix): on a fresh `sb new`, the claude registry row lands before the
@@ -879,7 +879,7 @@ pub fn gather(
 /// The backend-aware gather (C1 D2 item 2): the dir computation is lifted out of
 /// [`gather`] into a [`MuxDirs`] selected by the backend. The zmx lane builds the
 /// canonical+legacy list (byte-identical to the old inline code); the embedded
-/// lane builds a SINGLE [`crate::sbmux_dir::resolve_sbmux_dir`] dir with an EMPTY
+/// lane builds a SINGLE [`crate::qrmux_dir::resolve_qrmux_dir`] dir with an EMPTY
 /// legacy list. Everything else (registry/relay/ppid/transcripts) is unchanged.
 #[allow(clippy::too_many_arguments)]
 pub fn gather_with_dirs(
@@ -1404,7 +1404,7 @@ mod tests {
         // Registry row pid 7180; mux session pid 7176 (the parent shell). NO ppid
         // entry for 7180 → the ancestor walk yields nothing (the cold-start race).
         inputs.registry = vec![live(7180, "sid-cold", Some("cold-sess"), 5_000)];
-        inputs.zmx_sessions = vec![mux("cold-sess", 7176, 0, "/run/user/501/sbmux", 1000)];
+        inputs.zmx_sessions = vec![mux("cold-sess", 7176, 0, "/run/user/501/qrmux", 1000)];
         inputs.ppid_map = HashMap::new();
         inputs.match_live_by_name = true; // EMBEDDED lane.
 
@@ -1415,7 +1415,7 @@ mod tests {
             Some("cold-sess"),
             "embedded by-name fallback links the live row despite the missing ppid edge"
         );
-        assert_eq!(s.socket_dir.as_deref(), Some("/run/user/501/sbmux"));
+        assert_eq!(s.socket_dir.as_deref(), Some("/run/user/501/qrmux"));
         // status stays LIVE (idle/busy from the registry), NOT cold — so send:pty
         // accepts it (the cold guard is what the legacy bug never reached).
         assert_eq!(s.status, SessionStatus::Busy);

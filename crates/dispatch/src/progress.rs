@@ -51,7 +51,7 @@ pub const PROGRESS_STALE_N_MS: i64 = 300_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressSource {
     /// Claude Code headless: `Republish::Event` per-line stream-event cadence
-    /// (`sbmux` reader → dispatch `daemon_status` sink). The primary live producer.
+    /// (`qrmux` reader → dispatch `daemon_status` sink). The primary live producer.
     AcpUpdate,
     /// JSONL transcript byte/line growth past an entry-time offset (`wait.rs`).
     TranscriptGrowth,

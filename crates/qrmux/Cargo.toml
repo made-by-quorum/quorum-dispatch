@@ -1,0 +1,44 @@
+[package]
+name = "qrmux"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "qrmux mux crate (Rust rewrite). Content-free scaffold; mux logic lands in later phases."
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal"] }
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+vte = "0.13"
+portable-pty = "0.8"
+nix = { version = "0.29", features = ["term", "signal", "user", "fs"] }
+anyhow = "1"
+thiserror = "2"
+serde_json = "1"
+sha2 = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+terminal_size = "0.4"
+unicode-width = "0.2"
+dirs = "5"
+
+# Agent-pid identity token (W2 / SPEC-v2 §5.A): darwin start-time via the SAME
+# libproc proc_pidinfo(PROC_PIDTBSDINFO) call bond's §5.A fallback names →
+# bit-identical values by construction. Exact-pinned (R8: a compile error is the
+# API-drift backstop). macOS-only; `nix::libc` already covers sysctlbyname.
+[target.'cfg(target_os = "macos")'.dependencies]
+libproc = "=0.14.11"
+
+[dev-dependencies]
+tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+portable-pty = "0.8"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Compression-immune memory sampling for the G5/leak-guard rows (flake pass):
+# proc_pid_rusage phys_footprint on macOS (bare `ps rss` undercounts retained
+# pages once the compressor takes them — the 3865fe9 ratchet flake).
+libc = "0.2"

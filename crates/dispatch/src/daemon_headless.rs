@@ -1,19 +1,19 @@
 //! Daemon-side headless launch factory (WP-B2b-2b, design §D-2b) — the sb-side
-//! object injected into `sbmux`'s `DaemonCtx` so the embedded daemon
+//! object injected into `qrmux`'s `DaemonCtx` so the embedded daemon
 //! ([`crate::bin::dispatch::daemon`] → `run_server`) can launch a `claude -p`
 //! stream-json turn and write the registry status row in real time.
 //!
-//! sbmux cannot reference [`crate::daemon_status::RegistryStatusSink`] (sb depends
-//! on sbmux, never the reverse — the governing constraint). So the COMPOSITE sink
+//! qrmux cannot reference [`crate::daemon_status::RegistryStatusSink`] (sb depends
+//! on qrmux, never the reverse — the governing constraint). So the COMPOSITE sink
 //! is assembled sb-side: this factory resolves the launch posture (the SAME
 //! `claude_bin`/`claude_flags`/env resolvers the interactive path uses — seam #1)
-//! AND builds the `RegistryStatusSink`; sbmux's `SessionManager::create_headless`
+//! AND builds the `RegistryStatusSink`; qrmux's `SessionManager::create_headless`
 //! fans that out with its own `SocketFanoutSink` so ONE reader/pump drives both.
 
 use crate::daemon_status::{MintIdentity, RegistryStatusSink};
 use crate::observe::HEADLESS_ENTRYPOINT;
-use sbmux::headless::{HeadlessLaunch, Sink};
-use sbmux::headless_session::{HeadlessFactory, HeadlessLaunchPlan};
+use qrmux::headless::{HeadlessLaunch, Sink};
+use qrmux::headless_session::{HeadlessFactory, HeadlessLaunchPlan};
 use std::path::PathBuf;
 
 /// The concrete [`HeadlessFactory`] the embedded daemon injects. Every field is
@@ -212,7 +212,7 @@ impl HeadlessFactory for DaemonHeadlessFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sbmux::headless_session::HeadlessFactory;
+    use qrmux::headless_session::HeadlessFactory;
 
     fn factory(daemon_cwd: Option<&str>, flags: &[&str]) -> DaemonHeadlessFactory {
         DaemonHeadlessFactory {
@@ -284,7 +284,7 @@ mod tests {
     /// integration proof, the surviving row points at the now-dead daemon).
     #[test]
     fn factory_mints_row_keyed_on_child_pid_not_daemon_pid() {
-        use sbmux::headless::{Republish, Sink};
+        use qrmux::headless::{Republish, Sink};
         let dir = tempfile::tempdir().unwrap();
         let f = DaemonHeadlessFactory {
             claude_bin: "claude".to_string(),

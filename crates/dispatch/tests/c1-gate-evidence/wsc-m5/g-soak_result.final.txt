@@ -4,7 +4,7 @@ BUILD PROFILE: RELEASE (daemon = /home/u/work/wt-wsc-lead/target/release/sb)
 CONFIG: N_total=10 (quiet=7 + flooders=3), blast_threads=4, window=60s
 CHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat/flood-loop); NOT full fakerepl (delta named in header)
 
-=== SHARED-BASELINE ARM (SBMUX_TEST_SHARED=1, one daemon, same N) ===
+=== SHARED-BASELINE ARM (QRMUX_TEST_SHARED=1, one daemon, same N) ===
 [shared] booted 10/10 sessions
 [shared] daemon count = 1 (expected 1)
 [shared] PRE-FLOOD per-daemon RSS: max=3984 KB sum=3984 KB across 1 daemon(s)

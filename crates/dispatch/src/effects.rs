@@ -874,7 +874,7 @@ mod tests {
         assert_eq!(rows[&1].ppid, 0);
         assert_eq!(rows[&1].cmd, "/sbin/launchd");
         // Real long-command rows survive with full command text.
-        assert!(rows[&116].cmd.contains("sbmux-server --socket-dir"));
+        assert!(rows[&116].cmd.contains("qrmux-server --socket-dir"));
         // Command-intactness: internal double spaces preserved verbatim.
         assert_eq!(
             rows[&500].cmd,

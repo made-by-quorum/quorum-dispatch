@@ -28,7 +28,7 @@ use std::process::{Child, Command};
 // the jail-belt dir scaffold, and the jailed runner live in
 // tests/common/p0bins.rs (shared with p0_id_matrix.rs ONLY).
 use common::p0bins::{
-    establish_jail, fakerepl_bin, run_sb_jailed, sb_bin, sbmux_bin, JailScaffold,
+    establish_jail, fakerepl_bin, run_sb_jailed, sb_bin, qrmux_bin, JailScaffold,
 };
 
 /// A pid that is reliably DEAD (never a running process) — `is_pid_alive` → false.
@@ -328,13 +328,13 @@ fn resume_killed_transcriptless_session_states_the_truth() {
 }
 
 // ===========================================================================
-// R1 e2e — the boot-true matrix over the embedded sbmux daemon with fakerepl
+// R1 e2e — the boot-true matrix over the embedded qrmux daemon with fakerepl
 // as Claude (jail + driver mirror ack3_matrix.rs; duplication sanctioned —
 // integration test binaries cannot import each other)
 // ===========================================================================
 
 /// A fakerepl boot jail (ack3_matrix shape, reduced to what this matrix needs).
-/// Rooted under /tmp for the zmx/sbmux socket-path length budget (L21).
+/// Rooted under /tmp for the zmx/qrmux socket-path length budget (L21).
 struct BootJail {
     /// The shared jail-belt scaffold (root/home/xdg/sb_home) — p0bins.
     dirs: JailScaffold,
@@ -414,7 +414,7 @@ impl BootJail {
 /// UUID); arm 3 reds if `--resume` parses again.
 #[test]
 fn start_fork_live_matrix_e2e() {
-    let _ = sbmux_bin();
+    let _ = qrmux_bin();
     let jail = BootJail::establish("r1");
     let u1 = "aaaaaaaa-1111-2222-3333-444444444444";
 
@@ -562,7 +562,7 @@ fn start_fork_live_matrix_e2e() {
 /// fork_seed.rs.
 #[test]
 fn start_fork_in_flight_source_reports_staleness() {
-    let _ = sbmux_bin();
+    let _ = qrmux_bin();
     let jail = BootJail::establish("stale");
     let u1 = "cccccccc-1111-2222-3333-444444444444";
 

@@ -61,7 +61,7 @@ pub fn run(m: &ArgMatches) -> i32 {
 
     // RAW mux list across the dir sweep, INCLUDING ended/unreachable tasks.
     // Backend-keyed (C1 D2): zmx = FULL Bug-D tier sweep (canonical + legacy,
-    // `/tmp` + the env-derived XDG family); embedded = the single sbmux dir
+    // `/tmp` + the env-derived XDG family); embedded = the single qrmux dir
     // (legacy EMPTY — D-LISTRAW: embedded list_raw never surfaces ended sessions).
     // A14-2(c): the surviving zmx READ scan honors SB_TEST_SCAN_ROOTS (test lanes
     // only; production = literal /tmp). A14-2(d): the dry-run gate + negative-control
@@ -69,7 +69,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let canonical = match backend {
         dispatch::mux_selector::Backend::Zmx => resolve_zmx_dir(&env),
         dispatch::mux_selector::Backend::Embedded => {
-            match dispatch::sbmux_dir::resolve_sbmux_dir(&home, &env) {
+            match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
                     eprintln!("sb reconcile: {msg}");

@@ -6,7 +6,7 @@
 //   * long windows ≥60s (probes were 2–3s),
 //   * claude-shaped children (the c1_gate write_fake_claude registry-row shim —
 //     see "CHILDREN" note below),
-//   * a SAME-RUN shared-baseline arm (SBMUX_TEST_SHARED) so the soak RTT is
+//   * a SAME-RUN shared-baseline arm (QRMUX_TEST_SHARED) so the soak RTT is
 //     gated against a real comparator, not only an absolute ceiling (red-team M8).
 //
 // BOTH rows are #[ignore]-gated (Lima-row precedent): they need RELEASE binaries
@@ -17,7 +17,7 @@
 // RELEASE BINARIES (the gate's whole point — house locator pattern).
 //
 // The row drives the REAL RELEASE `sb` binary for `sb start`, so each session's
-// cold-start auto-launches a RELEASE `sb sbmux-server --session <name>` daemon
+// cold-start auto-launches a RELEASE `sb qrmux-server --session <name>` daemon
 // (embedded_mux::embedder_launch_spec re-execs current_exe() = the release sb).
 // The daemons — the processes under measurement (RSS, runtime, RTT) — are thus
 // release. The in-process EmbeddedMux client used for the RTT/history/list
@@ -27,9 +27,9 @@
 // (in practice the daemons are already up from `sb start`, so the client only
 // connects).
 //
-// release_sb_bin()/release_sbmux_bin() locate target/release/{sb,sbmux} from the
+// release_sb_bin()/release_qrmux_bin() locate target/release/{sb,qrmux} from the
 // test exe's target dir and PANIC WITH A REMEDY if absent — never a silent skip
-// (the c1_gate sbmux_bin contract).
+// (the c1_gate qrmux_bin contract).
 //
 // ---------------------------------------------------------------------------
 // CHILDREN (spec §7 "fake-repl claude-shaped harness where wiring permits, else
@@ -58,11 +58,11 @@ fn release_sb_bin() -> PathBuf {
     release_bin("sb")
 }
 
-/// Locate `target/release/sbmux` (the daemon binary, present for parity even
-/// though `sb sbmux-server` is the launched daemon entry).
+/// Locate `target/release/qrmux` (the daemon binary, present for parity even
+/// though `sb qrmux-server` is the launched daemon entry).
 #[allow(dead_code)]
-fn release_sbmux_bin() -> PathBuf {
-    release_bin("sbmux")
+fn release_qrmux_bin() -> PathBuf {
+    release_bin("qrmux")
 }
 
 fn release_bin(name: &str) -> PathBuf {
@@ -81,7 +81,7 @@ fn release_bin(name: &str) -> PathBuf {
         bin.exists(),
         "RELEASE binary not found at {bin:?} — these M5 gates measure the RELEASE \
          daemon. Build first: scripts/build-lock.sh cargo build --release -p dispatch \
-         --bin dispatch -p sbmux --bin sbmux"
+         --bin dispatch -p qrmux --bin qrmux"
     );
     bin
 }
@@ -105,8 +105,8 @@ fn release_jail_env(jail: &Jail) -> Vec<(String, String)> {
 }
 
 /// `sb start <name>` through the RELEASE binary with the claude-shaped fake-claude
-/// shim execing `app`. `extra` adds env (SB_FAKE_NAME, SBMUX_TEST_SHARED, …).
-/// Returns the exit code. The daemon auto-launched is the release `sb sbmux-server`.
+/// shim execing `app`. `extra` adds env (SB_FAKE_NAME, QRMUX_TEST_SHARED, …).
+/// Returns the exit code. The daemon auto-launched is the release `sb qrmux-server`.
 fn release_sb_new(
     jail: &Jail,
     fake: &Path,
@@ -135,20 +135,20 @@ fn release_sb_new(
     out.status.code().unwrap_or(-1)
 }
 
-/// Pre-spawn ONE RELEASE shared-fate daemon (`sb sbmux-server --session shared`
-/// with SBMUX_TEST_SHARED=1) and wait for its `shared.sock`. The shared-baseline
+/// Pre-spawn ONE RELEASE shared-fate daemon (`sb qrmux-server --session shared`
+/// with QRMUX_TEST_SHARED=1) and wait for its `shared.sock`. The shared-baseline
 /// arm uses this PROBE-style construction (pre-spawned daemon + in-process
 /// mux_create) rather than the engine `sb start` cold-start: under the seam the
 /// full engine boot-waiter/registry-join path is the production-irrelevant
 /// multi-session-on-one-daemon world M4 documented as flaky through `sb start`, so
 /// the deterministic probe mechanism is the honest baseline construction. Uses
-/// the RELEASE `sb` binary (`sb sbmux-server`) so the baseline daemon is release,
+/// the RELEASE `sb` binary (`sb qrmux-server`) so the baseline daemon is release,
 /// same as the split arm's daemons. Returns (DaemonGuard, shared.sock path).
 fn start_release_shared_daemon(jail: &Jail, dir: &Path) -> (DaemonGuard, PathBuf) {
     std::fs::create_dir_all(dir).ok();
     let bin = release_sb_bin();
     let mut cmd = Command::new(&bin);
-    cmd.arg("sbmux-server")
+    cmd.arg("qrmux-server")
         .arg("--socket-dir")
         .arg(dir)
         .arg("--session")
@@ -158,11 +158,11 @@ fn start_release_shared_daemon(jail: &Jail, dir: &Path) -> (DaemonGuard, PathBuf
         .env("XDG_RUNTIME_DIR", &jail.xdg_runtime)
         .env("PATH", "/usr/bin:/bin")
         .env("TERM", "xterm-256color")
-        .env("SBMUX_CLAIM_TIMEOUT_MS", "120000")
-        .env("SBMUX_TEST_SHARED", "1")
+        .env("QRMUX_CLAIM_TIMEOUT_MS", "120000")
+        .env("QRMUX_TEST_SHARED", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = cmd.spawn().expect("spawn release shared sbmux-server");
+    let child = cmd.spawn().expect("spawn release shared qrmux-server");
     let pid = child.id();
     // Teardown-leak belt: direct spawn, pid known — record at spawn with the
     // --socket-dir identity so a future run can identity-reap a leak.
@@ -180,7 +180,7 @@ fn start_release_shared_daemon(jail: &Jail, dir: &Path) -> (DaemonGuard, PathBuf
     panic!("shared daemon socket not created within 5s at {socket:?}");
 }
 
-/// Per-session sbmux daemon RSS in KB (`ps -o rss=`), 0 if gone.
+/// Per-session qrmux daemon RSS in KB (`ps -o rss=`), 0 if gone.
 fn rss_kb(pid: u32) -> u64 {
     Command::new("/bin/ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
@@ -190,7 +190,7 @@ fn rss_kb(pid: u32) -> u64 {
         .unwrap_or(0)
 }
 
-/// Reap EVERY per-session sbmux daemon bound to `dir` (TERM then KILL), by
+/// Reap EVERY per-session qrmux daemon bound to `dir` (TERM then KILL), by
 /// recorded pid via `all_session_daemon_pids` (wsc_m4_rows.rs). Returns the count
 /// of daemons that were still alive when teardown began (for the leak check).
 /// THE TEARDOWN-LEAK CLASS IS A LIVE FINDING — this row spawns ~14+ daemons and
@@ -237,7 +237,7 @@ while :; do i=$((i+1)); echo "FLOOD $i {pad}"; done
 // G-SOAK (R-1(5)) — release-build many-session soak, probe caveats CLOSED.
 //
 // RUN:
-//   scripts/build-lock.sh cargo build --release -p dispatch --bin dispatch -p sbmux --bin sbmux
+//   scripts/build-lock.sh cargo build --release -p dispatch --bin dispatch -p qrmux --bin qrmux
 //   scripts/build-lock.sh cargo test -p dispatch --test c1_gate -- --ignored --exact g_soak --nocapture
 //
 // SHAPE (spec §7): RELEASE build; N≥10 per-session daemons (claude-shaped quiet
@@ -254,7 +254,7 @@ while :; do i=$((i+1)); echo "FLOOD $i {pad}"; done
 //      spec-minimum saturating load on one box it measures HOST SCHEDULING, not
 //      the split. Probe-era RTT ~1ms; >25ms = order-of-magnitude pathology.
 //   2. THE BINDING ARCHITECTURE TOOTH: sibling RTT p95 ≤ 3× a SAME-RUN
-//      shared-baseline arm (identical workload shape under SBMUX_TEST_SHARED=1 —
+//      shared-baseline arm (identical workload shape under QRMUX_TEST_SHARED=1 —
 //      one daemon, same N, same execution; both arms share host conditions, so
 //      the comparison is methodologically sound where the absolute is not);
 //   3. ZERO timeouts;
@@ -323,7 +323,7 @@ fn g_soak() {
 
     // One full soak arm. Returns (rtt_p95_ms, total_timeouts, ls_max_ms,
     // flood_live_all, blast_total, per-phase detail string, max_daemon_rss_kb).
-    // `shared` selects the SBMUX_TEST_SHARED baseline construction.
+    // `shared` selects the QRMUX_TEST_SHARED baseline construction.
     let run_arm = |arm: &str, shared: bool, detail: &mut String| -> (f64, usize, f64, bool, u64, u64) {
         let jail = Jail::establish(if shared { "gsoak-shared" } else { "gsoak-split" });
         let dir = jail.resolved_dir();
@@ -349,7 +349,7 @@ fn g_soak() {
             // SAFETY: single-threaded at this point; blaster threads spawn later,
             // after the var is set, and the var is removed only after they join.
             unsafe {
-                std::env::set_var("SBMUX_TEST_SHARED", "1");
+                std::env::set_var("QRMUX_TEST_SHARED", "1");
             }
             let (g, _sock) = start_release_shared_daemon(&jail, &dir);
             shared_guard = Some(g);
@@ -478,7 +478,7 @@ fn g_soak() {
         ));
 
         // Teardown THIS arm's daemons + jail (per-target by recorded pid). This
-        // reaps EVERY sbmux daemon bound to `dir` — per-session daemons (split)
+        // reaps EVERY qrmux daemon bound to `dir` — per-session daemons (split)
         // AND the one shared daemon (shared arm), by recorded pid.
         let alive = reap_all_daemons(&dir);
         // Belt: also reap the held shared guard explicitly (its pid is in the dir
@@ -497,15 +497,15 @@ fn g_soak() {
         // have joined above; single-threaded here.
         if shared {
             unsafe {
-                std::env::remove_var("SBMUX_TEST_SHARED");
+                std::env::remove_var("QRMUX_TEST_SHARED");
             }
         }
 
         (r_p95, r_to + l_to, l_max, flood_live, blast_total, max_rss_post)
     };
 
-    // -------- SAME-RUN SHARED BASELINE ARM (SBMUX_TEST_SHARED=1, one daemon) ----
-    detail.push_str("\n=== SHARED-BASELINE ARM (SBMUX_TEST_SHARED=1, one daemon, same N) ===\n");
+    // -------- SAME-RUN SHARED BASELINE ARM (QRMUX_TEST_SHARED=1, one daemon) ----
+    detail.push_str("\n=== SHARED-BASELINE ARM (QRMUX_TEST_SHARED=1, one daemon, same N) ===\n");
     let (shared_p95, _shared_to, _shared_ls, shared_flood_live, shared_blast, shared_rss) =
         run_arm("shared", true, &mut detail);
 
@@ -556,7 +556,7 @@ fn g_soak() {
 // G-IDLE (R-1(6)) — release-build idle-footprint MEASUREMENT row (spec §7, §8).
 //
 // RUN:
-//   scripts/build-lock.sh cargo build --release -p dispatch --bin dispatch -p sbmux --bin sbmux
+//   scripts/build-lock.sh cargo build --release -p dispatch --bin dispatch -p qrmux --bin qrmux
 //   scripts/build-lock.sh cargo test -p dispatch --test c1_gate -- --ignored --exact g_idle --nocapture
 //
 // N = 0, 1, 5, 10, 20 idle per-session daemons (quiet claude-shaped children),

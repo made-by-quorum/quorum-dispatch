@@ -347,7 +347,7 @@ impl<L: LivenessSource> LivenessSource for StreamLiveness<L> {
 }
 
 /// Daemon-as-PARENT refinement: when the observer IS the reaping parent (the
-/// sbmux daemon for claude — memo Step-2 ownership), `try_wait`/`pidfd` yields
+/// qrmux daemon for claude — memo Step-2 ownership), `try_wait`/`pidfd` yields
 /// the real [`std::process::ExitStatus`], refining the cross-process
 /// `ExitedSignal` into the precise clean-vs-signal verdict. Pure (callers pass
 /// the reaped status); this is the only producer of [`LifecycleState::ExitedClean`].
@@ -432,8 +432,8 @@ pub fn gated_ls_status(
 /// WP-B5-ii-a guarantee (ii) — the per-session DAEMON-liveness signal for a
 /// HEADLESS row's `sb ls` render gate. The daemon-liveness verdict the lead RULING
 /// (Fork B) fixes as a per-session `<dir>/<name>.sock` CONNECT probe (the
-/// ECONNREFUSED-class analog already used by `sbmux::client::discovery`'s
-/// `probe_socket`/`probe_legacy_socket` and `create_daemon`'s endpoint check).
+/// ECONNREFUSED-class analog already used by `qrmux::client::discovery`'s
+/// `probe_socket` and `create_daemon`'s endpoint check).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonLiveness {
     /// The per-session socket accepted a connection — a daemon is listening, so
@@ -612,7 +612,7 @@ pub fn reconciled_read_status(
 }
 
 /// The production [`DaemonLivenessSource`]: a synchronous per-session socket
-/// CONNECT probe against `<sbmux_dir>/<name>.sock` (lead RULING Fork B). A
+/// CONNECT probe against `<qrmux_dir>/<name>.sock` (lead RULING Fork B). A
 /// successful connect ⇒ [`DaemonLiveness::Up`] (a daemon is listening);
 /// `ConnectionRefused` (stale socket, no listener) or `NotFound` (the socket file
 /// is gone) ⇒ [`DaemonLiveness::Down`] — the positive daemon-down evidence. ANY
@@ -621,22 +621,22 @@ pub fn reconciled_read_status(
 /// could not answer; the same #4 fail-closed-on-ambiguity posture the
 /// `(pid,starttime)` classifier takes).
 ///
-/// `sbmux_dir == None` (HOME unset / the dir could not be resolved) ⇒ every probe
+/// `qrmux_dir == None` (HOME unset / the dir could not be resolved) ⇒ every probe
 /// returns `Up`, so the gate degrades to the exact pre-WP claude-pid-only behavior.
 pub struct SocketDaemonLiveness {
-    sbmux_dir: Option<std::path::PathBuf>,
+    qrmux_dir: Option<std::path::PathBuf>,
 }
 
 impl SocketDaemonLiveness {
-    pub fn new(sbmux_dir: Option<std::path::PathBuf>) -> Self {
-        Self { sbmux_dir }
+    pub fn new(qrmux_dir: Option<std::path::PathBuf>) -> Self {
+        Self { qrmux_dir }
     }
 }
 
 impl DaemonLivenessSource for SocketDaemonLiveness {
     fn daemon_liveness(&self, name: &str) -> DaemonLiveness {
         use std::io::ErrorKind;
-        let Some(dir) = &self.sbmux_dir else {
+        let Some(dir) = &self.qrmux_dir else {
             return DaemonLiveness::Up; // no dir to probe → never downgrade.
         };
         let path = dir.join(format!("{name}.sock"));

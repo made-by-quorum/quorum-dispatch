@@ -15,7 +15,7 @@ fn parse_ls_json(stdout: &str) -> Vec<serde_json::Value> {
 /// preamble + Hello, returns the `session` field of the daemon's ServerHello. NO
 /// canonicalize() anywhere (§4.4 invariant) — the path is used verbatim.
 fn server_hello_session(socket: &Path) -> String {
-    use sbmux::protocol::{self, codec::FrameReader, write_preamble, ClientMsg, ServerMsg};
+    use qrmux::protocol::{self, codec::FrameReader, write_preamble, ClientMsg, ServerMsg};
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
 
@@ -88,13 +88,13 @@ fn g_sel() {
     jail.teardown();
 
     // --- Arm 2: BOTH-DIRECTIONS lane matrix. ---
-    // Embedded world: a live sbmux session "emb-live". zmx world: a live zmx
+    // Embedded world: a live qrmux session "emb-live". zmx world: a live zmx
     // session "zmx-live" (forged as a registry+ZMX_DIR session — we cannot run a
     // real zmx binary for the LISTING assert, so the zmx lane's "own" session is
     // a registry row whose zmx_name resolves under the zmx dir; the KEY assertion
     // is CROSS-LANE INVISIBILITY: the embedded lane must NOT surface the zmx
     // session's mux row, and vice versa). We make BOTH provably-alive:
-    //   - embedded: a real sbmux daemon + run_detached session (alive: listed).
+    //   - embedded: a real qrmux daemon + run_detached session (alive: listed).
     //   - zmx-side: a live registry row + a real long-lived child pid (alive:
     //     kill -0 succeeds) whose name the zmx lane would surface but embedded
     //     must not (embedded legacy list is EMPTY by construction).
@@ -102,12 +102,12 @@ fn g_sel() {
     let dir = jail.resolved_dir();
     let (_guard, _socket) = start_daemon(&jail, &dir, "emb-live", &[]);
 
-    // Embedded world: live sbmux session.
+    // Embedded world: live qrmux session.
     let emb = mux_create(&jail, &dir, "emb-live", "echo EMB_SENTINEL; exec sleep 60");
     forge_registry_row(&jail, "emb-live", emb.pid as u32);
 
     // zmx world: a real long-lived child + a registry row tagged into the zmx dir.
-    // The child keeps the row "alive" (pid present). We DO NOT create an sbmux
+    // The child keeps the row "alive" (pid present). We DO NOT create an qrmux
     // session for it — it lives only in the zmx universe.
     let mut zmx_child = Command::new("/bin/sleep")
         .arg("60")
@@ -305,10 +305,10 @@ fn g_e() {
         zmx_server_pid
     ));
 
-    // --- SBMUX-ABSENT-IN-LANE (FIX C; WS-C M3b: per-session leaf scan): the
+    // --- QRMUX-ABSENT-IN-LANE (FIX C; WS-C M3b: per-session leaf scan): the
     //     embedded backend must be provably ABSENT during the zmx chain. The
     //     escape hatch must NOT have stood up an embedded daemon as a side effect.
-    //     With the per-session split there is no shared `sbmux.sock` to check — a
+    //     With the per-session split there is no shared `qrmux.sock` to check — a
     //     stray embedded daemon would bind `<name>.sock`, so we assert the engine-
     //     resolved embedded dir holds NO `*.sock` leaf at all (and no sb daemon). -
     let embedded_dir = jail.resolved_dir();
@@ -323,7 +323,7 @@ fn g_e() {
         .unwrap_or(true); // missing dir = no sockets
     let no_embedded_daemon = !sb_daemon_present_for(&embedded_dir);
     detail.push_str(&format!(
-        "SBMUX ABSENT IN-LANE: no *.sock leaf at engine embedded dir {} = {no_embedded_socket}; no sb sbmux-server bound to it = {no_embedded_daemon}\n",
+        "QRMUX ABSENT IN-LANE: no *.sock leaf at engine embedded dir {} = {no_embedded_socket}; no sb qrmux-server bound to it = {no_embedded_daemon}\n",
         embedded_dir.display()
     ));
 
@@ -342,7 +342,7 @@ fn g_e() {
     // non-goal (zmx is not re-certified).
     let chain_ok = c_new == 0 && listed && c_kill == 0 && positive_control_ok;
     let verdict = if chain_ok {
-        "G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under SB_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded sbmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)"
+        "G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under SB_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded qrmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)"
     } else {
         "G-E VERDICT: FAIL"
     };
@@ -489,20 +489,20 @@ fn g_crud() {
     ok &= kill_ok;
 
     // A14-1 BELT (R-F): the engine-resolved dir must NOT be a literal-/tmp-ROOT
-    // sbmux/sb path; it must sit under the jailed XDG runtime dir.
-    let belt_ok = !is_tmp_root_sbmux_path(&dir) && dir.starts_with(&jail.xdg_runtime);
+    // qrmux/sb path; it must sit under the jailed XDG runtime dir.
+    let belt_ok = !is_tmp_root_qrmux_path(&dir) && dir.starts_with(&jail.xdg_runtime);
     detail.push_str(&format!(
-        "A14-1 BELT: engine dir not /tmp-root sbmux path AND under jail XDG = {belt_ok} (dir {})\n",
+        "A14-1 BELT: engine dir not /tmp-root qrmux path AND under jail XDG = {belt_ok} (dir {})\n",
         dir.display()
     ));
     ok &= belt_ok;
 
     // A14-1 NEGATIVE CONTROL (armed): point resolution at literal /tmp → the belt
     // predicate MUST trip. If it doesn't, the belt is vacuous.
-    let tmp_dir = PathBuf::from("/tmp/sbmux");
-    let negctl_trips = is_tmp_root_sbmux_path(&tmp_dir);
+    let tmp_dir = PathBuf::from("/tmp/qrmux");
+    let negctl_trips = is_tmp_root_qrmux_path(&tmp_dir);
     detail.push_str(&format!(
-        "A14-1 NEG-CTRL: predicate trips on /tmp/sbmux = {negctl_trips} (MUST be true)\n"
+        "A14-1 NEG-CTRL: predicate trips on /tmp/qrmux = {negctl_trips} (MUST be true)\n"
     ));
     ok &= negctl_trips;
 
@@ -518,19 +518,19 @@ fn g_crud() {
     assert!(ok, "G-CRUD failed:\n{detail}");
 }
 
-/// The ADD-14 belt predicate (R-F), SCOPED to sbmux*/sb-shaped names at the /tmp
+/// The ADD-14 belt predicate (R-F), SCOPED to qrmux*/sb-shaped names at the /tmp
 /// ROOT — the production defaults an un-de-/tmp'd resolver would emit. Mirrors
-/// tests/embedded_mux_live.rs::is_tmp_root_sbmux_path (same scoping rationale).
-fn is_tmp_root_sbmux_path(dir: &Path) -> bool {
+/// tests/embedded_mux_live.rs::is_tmp_root_qrmux_path (same scoping rationale).
+fn is_tmp_root_qrmux_path(dir: &Path) -> bool {
     let s = dir.to_string_lossy();
     let Some(rest) = s.strip_prefix("/tmp/") else {
         return false;
     };
     let first = rest.split('/').next().unwrap_or("");
-    first == "sbmux"
+    first == "qrmux"
         || first == "sb"
         || first
-            .strip_prefix("sbmux-")
+            .strip_prefix("qrmux-")
             .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
         || first
             .strip_prefix("sb-")
@@ -543,7 +543,7 @@ fn is_tmp_root_sbmux_path(dir: &Path) -> bool {
 // (REVERSED 2026-06-10 from no-altscreen-leak: the renderer now replays the
 // absorbed alt-screen state per client — ?1049h on attach into a fullscreen
 // app, ?1049l when it exits — so phone terminals track the inner app's
-// buffer; doc/inbox/2026-06-10-sbmux-phone-scroll-regression.md).
+// buffer; doc/inbox/2026-06-10-qrmux-phone-scroll-regression.md).
 // (Merge note: #51 side wrote `sb attach`; the verb is `sb connect` since
 // STATE 22 — phase side's rename kept.)
 // ===========================================================================
@@ -690,7 +690,7 @@ fn g_scroll() {
             Err(e) => e.clone(),
         }
     ));
-    detail.push_str("NOTE: engine attach yields a SETTLED screen render; this is the order-blind tail check (honestly weaker than sbmux assert_backlog_ordered which needs wire-order History frames — red-team #12). The wire-order ordered comparator is covered at the crate level (sbmux b3_replay).\n");
+    detail.push_str("NOTE: engine attach yields a SETTLED screen render; this is the order-blind tail check (honestly weaker than qrmux assert_backlog_ordered which needs wire-order History frames — red-team #12). The wire-order ordered comparator is covered at the crate level (qrmux b3_replay).\n");
 
     let _ = run_sb(&jail, &["stop", "--force", name]);
     drop(guard);
@@ -1290,8 +1290,8 @@ fn g_neg() {
 // ===========================================================================
 // G-COLDSTART — NEW (C1 M4fix). The gate hole M4/M6 missed: production embedded
 // `sb start` COLD-START — NO pre-spawned daemon. Drives the real `sb start` under
-// embedded default and asserts SB ITSELF auto-launched the sbmux daemon (via the
-// hidden `sb sbmux-server` entry, NOT the broken `current_exe() server`). Plus a
+// embedded default and asserts SB ITSELF auto-launched the qrmux daemon (via the
+// hidden `sb qrmux-server` entry, NOT the broken `current_exe() server`). Plus a
 // MUTATION CONTROL: sever the launch wiring (point the daemon program at a
 // nonexistent binary) → the SAME cold-start path MUST RED.
 //
@@ -1300,19 +1300,19 @@ fn g_neg() {
 // start_daemon(). The FIRST `sb start` must stand the daemon up end to end.
 // ===========================================================================
 
-/// Is an `sb sbmux-server` daemon process bound to `dir` alive? Greps `ps` for
+/// Is an `sb qrmux-server` daemon process bound to `dir` alive? Greps `ps` for
 /// the embedded daemon entry argv carrying this socket dir. (The daemon is the
-/// `sb` binary re-execed as `sb sbmux-server --socket-dir <dir>`.)
+/// `sb` binary re-execed as `sb qrmux-server --socket-dir <dir>`.)
 fn sb_daemon_present_for(dir: &Path) -> bool {
     let out = Command::new("/bin/ps").args(["-axo", "args="]).output();
     let Ok(o) = out else { return false };
     let want = dir.to_string_lossy();
     String::from_utf8_lossy(&o.stdout).lines().any(|l| {
-        l.contains("sbmux-server") && l.contains(want.as_ref())
+        l.contains("qrmux-server") && l.contains(want.as_ref())
     })
 }
 
-/// Reap any `sb sbmux-server` daemon bound to `dir` (cold-start teardown: the
+/// Reap any `sb qrmux-server` daemon bound to `dir` (cold-start teardown: the
 /// daemon SB launched is parented to init via setsid, so no guard owns it).
 fn reap_sb_daemons_for(dir: &Path) {
     let out = Command::new("/bin/ps").args(["-axo", "pid=,args="]).output();
@@ -1323,7 +1323,7 @@ fn reap_sb_daemons_for(dir: &Path) {
         let Some((pid, args)) = line.split_once(char::is_whitespace) else {
             continue;
         };
-        if args.contains("sbmux-server") && args.contains(want.as_ref()) {
+        if args.contains("qrmux-server") && args.contains(want.as_ref()) {
             let _ = Command::new("/bin/kill")
                 .args(["-9", pid.trim()])
                 .stderr(Stdio::null())
@@ -1346,7 +1346,7 @@ fn g_coldstart() {
     // --- PRE-SPAWN-FREE PRECONDITION (asserted, not assumed) -----------------
     // No PER-SESSION socket at the engine-resolved dir; no sb daemon bound to it.
     // The arm NEVER calls start_daemon — the first `sb start` must stand the
-    // per-session daemon up (WS-C M3b: it binds `<name>.sock`, not `sbmux.sock`).
+    // per-session daemon up (WS-C M3b: it binds `<name>.sock`, not `qrmux.sock`).
     let socket = dir.join(format!("{name}.sock"));
     let pre_no_socket = !socket.exists();
     let pre_no_daemon = !sb_daemon_present_for(&dir);
@@ -1372,12 +1372,12 @@ fn g_coldstart() {
     ok &= new_ok;
 
     // --- ASSERT SB AUTO-LAUNCHED THE DAEMON ----------------------------------
-    // Socket now exists at the engine-resolved dir AND an `sb sbmux-server`
+    // Socket now exists at the engine-resolved dir AND an `sb qrmux-server`
     // daemon bound to it is alive — proves SB (not the test) stood it up.
     let post_socket = socket.exists();
     let post_daemon = sb_daemon_present_for(&dir);
     detail.push_str(&format!(
-        "AUTO-LAUNCH: socket present at engine dir={post_socket}; sb sbmux-server daemon bound={post_daemon}\n"
+        "AUTO-LAUNCH: socket present at engine dir={post_socket}; sb qrmux-server daemon bound={post_daemon}\n"
     ));
     ok &= post_socket && post_daemon;
 
@@ -1428,9 +1428,9 @@ fn g_coldstart() {
     // The error must name the EMBEDDED backend (not the zmx guidance) — proves
     // the backend-aware mapping (create.rs) isn't dead text.
     let combined_m = format!("{}\n{}", o_mut, e_mut).to_lowercase();
-    let names_embedded = combined_m.contains("embedded") && combined_m.contains("sbmux");
+    let names_embedded = combined_m.contains("embedded") && combined_m.contains("qrmux");
     detail.push_str(&format!(
-        "MUTATION CONTROL (severed launch program={}): sb start exit={c_mut} (want nonzero), no socket={}, error names embedded sbmux daemon={names_embedded}\n  stderr: {}\n",
+        "MUTATION CONTROL (severed launch program={}): sb start exit={c_mut} (want nonzero), no socket={}, error names embedded qrmux daemon={names_embedded}\n  stderr: {}\n",
         bogus.display(),
         !mut_socket.exists(),
         e_mut.trim()
@@ -1442,7 +1442,7 @@ fn g_coldstart() {
     jail.teardown();
 
     let verdict = if ok {
-        "G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `sb start` cold-start: SB auto-launched the daemon via `sb sbmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error"
+        "G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `sb start` cold-start: SB auto-launched the daemon via `sb qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error"
     } else {
         "G-COLDSTART VERDICT: FAIL"
     };
@@ -1453,13 +1453,13 @@ fn g_coldstart() {
 // ===========================================================================
 // G-DAEMONKILL — NEW (FIX B). Daemon-death blast radius + cold-start recovery.
 //
-// A jailed embedded world with >=2 live sessions; SIGKILL the sbmux daemon, then
+// A jailed embedded world with >=2 live sessions; SIGKILL the qrmux daemon, then
 // assert the engine verbs all DEGRADE LOUDLY (defined, bounded, no hang / no
 // panic / no corruption):
 //   - `sb ls`            : succeeds, sessions surface as NON-mux-live registry
 //                          rows (no zmxName) — NOT a panic / corruption.
 //   - `sb send:pty <v>`  : LOUD exit 1, the embedded backend-named "no live
-//                          sbmux session" text (the engine's not-live wording).
+//                          qrmux session" text (the engine's not-live wording).
 //   - `sb attach <v>`    : LOUD exit 1, bounded (timeout-guarded), no hang.
 // Then a FRESH `sb start` RELAUNCHES the daemon cold (the run_detached/attach
 // auto-launch path) and the new session is usable (send + kill).
@@ -1467,7 +1467,7 @@ fn g_coldstart() {
 // BLAST-RADIUS TRUTH (recorded empirically): the per-session child processes
 // (the bash/fake-claude under each PTY) are captured by pid BEFORE the kill and
 // re-probed AFTER. The observed disposition is written verbatim into the result
-// file — this is the divergence-row D-BLAST evidence (sbmux = ONE daemon per
+// file — this is the divergence-row D-BLAST evidence (qrmux = ONE daemon per
 // socket-dir owning ALL sessions; daemon death = every session's terminal world
 // dies at once, vs zmx's per-session servers where death is per-session).
 // ===========================================================================
@@ -1490,7 +1490,7 @@ fn g_daemonkill() {
 // ===========================================================================
 // WSA-FLOODCONT — WS-A research PROBE (NOT a gate row; #[ignore]d so the C1
 // suite is unaffected). Question (acks-split-plan WS-A): does ONE flooding
-// session starve SIBLING sessions in the shared one-daemon-per-dir sbmux?
+// session starve SIBLING sessions in the shared one-daemon-per-dir qrmux?
 //
 // Shape: 1 flooder + 2 quiet siblings (cat echo servers) in one jailed daemon.
 // Round-trip time (RTT) oracle = send a unique marker to a sibling, poll its

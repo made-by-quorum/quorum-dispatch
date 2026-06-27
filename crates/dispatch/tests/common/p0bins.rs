@@ -24,14 +24,14 @@ pub fn profile_dir() -> PathBuf {
         .to_path_buf()
 }
 
-/// The built `sbmux` binary (embedded backend). PANICS with a build hint if
+/// The built `qrmux` binary (embedded backend). PANICS with a build hint if
 /// absent — never a silent skip (c1_gate contract).
-pub fn sbmux_bin() -> PathBuf {
-    let bin = profile_dir().join("sbmux");
+pub fn qrmux_bin() -> PathBuf {
+    let bin = profile_dir().join("qrmux");
     assert!(
         bin.exists(),
-        "sbmux binary not found at {bin:?} — build it first: \
-         scripts/build-lock.sh cargo build -p sbmux --bin sbmux"
+        "qrmux binary not found at {bin:?} — build it first: \
+         scripts/build-lock.sh cargo build -p qrmux --bin qrmux"
     );
     bin
 }
@@ -79,7 +79,7 @@ fn mtime(p: &Path) -> Option<std::time::SystemTime> {
 /// The shared jail dir layout (fakerepl's jail belt, a4-spec §5): HOME at
 /// `<base>/sbrg-runs/<tag>-<nanos>/home` with `sb_home`/`tmp`/`zmx` as
 /// root-siblings, plus a 0700 XDG dir beside the runs. `base` must be a SHORT
-/// literal-/tmp path so the embedded sbmux sun_path fits (the 104-byte macOS
+/// literal-/tmp path so the embedded qrmux sun_path fits (the 104-byte macOS
 /// budget; c1_gate note / L21).
 pub struct JailScaffold {
     pub root: PathBuf,
