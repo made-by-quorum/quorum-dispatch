@@ -16,7 +16,7 @@ so the oracle does not bake in unfixed behavior). See `coverage-matrix.md`.
 
 The org's REAL TypeScript qd runs on this machine (brano). This harness MUST be
 invisible to it. `lib/jail.sh` establishes a per-run hermetic environment — own
-**HOME** (load-bearing: TS qd keys its registry on `homedir()`, ADD-4), SB_HOME,
+**HOME** (load-bearing: TS qd keys its registry on `homedir()`, ADD-4), QD_HOME,
 ZMX_DIR, XDG_*, TMPDIR, relay port + socket prefix — all under a per-run temp dir.
 It uses POSITIVE sandbox detection (it REQUIRES every isolation var to resolve
 under the run dir) and FAILS CLOSED. Kill/gc refuse any session name not under the

@@ -64,8 +64,8 @@ fn server_hello_session(socket: &Path) -> String {
 }
 
 // ===========================================================================
-// G-SEL — NEW. Selector matrix: default→embedded, SB_MUX=zmx→zmx,
-// SB_MUX=bogus→named error (exit 2). PLUS the positive both-directions lane
+// G-SEL — NEW. Selector matrix: default→embedded, QD_MUX=zmx→zmx,
+// QD_MUX=bogus→named error (exit 2). PLUS the positive both-directions lane
 // matrix: a live session in EACH backend world; each lane sees its own AND NOT
 // the other's (absence-only assertions banned — both provably alive at assert).
 // ===========================================================================
@@ -75,12 +75,12 @@ fn g_sel() {
     let mut detail = String::new();
     let mut ok = true;
 
-    // --- Arm 1: bogus SB_MUX → loud named error, exit code 2 (NOT 1). ---
+    // --- Arm 1: bogus QD_MUX → loud named error, exit code 2 (NOT 1). ---
     let jail = Jail::establish("gsel-bogus");
-    let (code, _out, err) = run_sb_env(&jail, &["ls", "--json"], &[("SB_MUX", "nonsense")]);
+    let (code, _out, err) = run_sb_env(&jail, &["ls", "--json"], &[("QD_MUX", "nonsense")]);
     let bogus_ok = code == 2 && err.contains("nonsense") && err.contains("zmx");
     detail.push_str(&format!(
-        "bogus SB_MUX: exit={code} (want 2), stderr contains nonsense+zmx: {}\n  stderr: {}\n",
+        "bogus QD_MUX: exit={code} (want 2), stderr contains nonsense+zmx: {}\n  stderr: {}\n",
         err.contains("nonsense") && err.contains("zmx"),
         err.trim()
     ));
@@ -138,12 +138,12 @@ fn g_sel() {
         "embedded lane: exit={c_emb}, sees own emb-live(mux-live)={emb_sees_own}, leaks zmx-live(mux-live)={emb_leaks_other}\n"
     ));
 
-    // ZMX LANE: SB_MUX=zmx. Its mux is the real zmx binary which is ABSENT on
+    // ZMX LANE: QD_MUX=zmx. Its mux is the real zmx binary which is ABSENT on
     // PATH here, so the zmx mux list degrades to empty — the zmx lane therefore
     // CANNOT surface emb-live's embedded mux liveness (the cross-lane invisibility
     // direction we assert positively: emb-live's MUX row is embedded-only). We
     // assert the zmx lane does NOT surface emb-live as a live MUX session.
-    let (c_zmx, out_zmx, _e2) = run_sb_env(&jail, &["ls", "--json"], &[("SB_MUX", "zmx")]);
+    let (c_zmx, out_zmx, _e2) = run_sb_env(&jail, &["ls", "--json"], &[("QD_MUX", "zmx")]);
     let zmx_sessions = parse_ls_json(&out_zmx);
     let zmx_leaks_emb = zmx_sessions.iter().any(|s| {
         s.get("name").and_then(|n| n.as_str()) == Some("emb-live")
@@ -181,7 +181,7 @@ fn g_sel() {
 }
 
 // ===========================================================================
-// G-E — NEW. Escape hatch WORKS: full chain through `qd` under SB_MUX=zmx,
+// G-E — NEW. Escape hatch WORKS: full chain through `qd` under QD_MUX=zmx,
 // jailed, REAL zmx binary, jailed ZMX_DIR.
 // ===========================================================================
 
@@ -235,8 +235,8 @@ fn g_e() {
     let zmx_dir = jail.root.join("zmxdir");
     std::fs::create_dir_all(&zmx_dir).unwrap();
 
-    // Drive the chain through `qd` under SB_MUX=zmx with ZMX_DIR jailed.
-    let env: &[(&str, &str)] = &[("SB_MUX", "zmx"), ("CLAUDE_BIN", "/bin/cat")];
+    // Drive the chain through `qd` under QD_MUX=zmx with ZMX_DIR jailed.
+    let env: &[(&str, &str)] = &[("QD_MUX", "zmx"), ("CLAUDE_BIN", "/bin/cat")];
     // create: `qd start` under zmx. We cannot boot real claude; use a fake-claude
     // that writes the row + execs cat (zmx hosts the pty).
     let app = "cat";
@@ -244,7 +244,7 @@ fn g_e() {
     let fake_s = fake.to_string_lossy().into_owned();
     let mut create_env = env.to_vec();
     create_env.push(("CLAUDE_BIN", &fake_s));
-    create_env.push(("SB_FAKE_NAME", "ge-sess"));
+    create_env.push(("QD_FAKE_NAME", "ge-sess"));
     create_env.push(("ZMX_DIR", zmx_dir.to_str().unwrap()));
     // Ensure zmx is on PATH for the qd child.
     let path_with_zmx = format!("{}:/usr/bin:/bin", zmx.parent().unwrap().display());
@@ -342,7 +342,7 @@ fn g_e() {
     // non-goal (zmx is not re-certified).
     let chain_ok = c_new == 0 && listed && c_kill == 0 && positive_control_ok;
     let verdict = if chain_ok {
-        "G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under SB_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded qrmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)"
+        "G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under QD_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded qrmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)"
     } else {
         "G-E VERDICT: FAIL"
     };
@@ -1158,9 +1158,9 @@ fn g_neg() {
     let mut detail = String::new();
     let mut ok = true;
 
-    // --- (ii) selector bogus arm: SB_MUX=bogus → exit 2 + named error. ---
+    // --- (ii) selector bogus arm: QD_MUX=bogus → exit 2 + named error. ---
     let jail = Jail::establish("gneg-bogus");
-    let (code, _o, err) = run_sb_env(&jail, &["ls", "--json"], &[("SB_MUX", "garbage-value")]);
+    let (code, _o, err) = run_sb_env(&jail, &["ls", "--json"], &[("QD_MUX", "garbage-value")]);
     let bogus_ok = code == 2 && err.contains("garbage-value") && err.contains("zmx");
     detail.push_str(&format!(
         "(ii) selector bogus arm: exit={code} (want 2), named error present={}\n  stderr: {}\n",
@@ -1234,7 +1234,7 @@ fn g_neg() {
     ok &= breaker_bites;
 
     // --- (iii) zmx-absent CREATE arm: PATH has NO zmx binary; op = CREATE under
-    // SB_MUX=zmx → the SPECIFIC ZmxMissing guidance error (list would vacuously
+    // QD_MUX=zmx → the SPECIFIC ZmxMissing guidance error (list would vacuously
     // pass by degrading to empty — BANNED for this arm). ---
     let jail_z = Jail::establish("gneg-zmxabsent");
     let zmx_dir = jail_z.root.join("zmxdir");
@@ -1252,10 +1252,10 @@ fn g_neg() {
         &jail_z,
         &["start", "zabsent"],
         &[
-            ("SB_MUX", "zmx"),
+            ("QD_MUX", "zmx"),
             ("PATH", &path_no_zmx),
             ("CLAUDE_BIN", &fake_s),
-            ("SB_FAKE_NAME", "zabsent"),
+            ("QD_FAKE_NAME", "zabsent"),
             ("ZMX_DIR", &zmx_dir_s),
         ],
     );
@@ -1279,7 +1279,7 @@ fn g_neg() {
     jail_z.teardown();
 
     let verdict = if ok {
-        "G-NEG VERDICT: PASS — (i) breaker bites (broken<healthy intact markers); (ii) bogus SB_MUX exit2+named; (iii) zmx-absent CREATE arm reds with ZmxMissing guidance (list BANNED for this arm)"
+        "G-NEG VERDICT: PASS — (i) breaker bites (broken<healthy intact markers); (ii) bogus QD_MUX exit2+named; (iii) zmx-absent CREATE arm reds with ZmxMissing guidance (list BANNED for this arm)"
     } else {
         "G-NEG VERDICT: FAIL"
     };
@@ -1358,7 +1358,7 @@ fn g_coldstart() {
 
     let fake = write_fake_claude(&jail, "cat");
     let fake_s = fake.to_string_lossy().into_owned();
-    let create_env: &[(&str, &str)] = &[("CLAUDE_BIN", &fake_s), ("SB_FAKE_NAME", name)];
+    let create_env: &[(&str, &str)] = &[("CLAUDE_BIN", &fake_s), ("QD_FAKE_NAME", name)];
 
     // --- COLD START: the FIRST `qd start` under embedded default. SB must launch
     //     the daemon itself (no pre-spawn). End-to-end success = exit 0. --------
@@ -1418,8 +1418,8 @@ fn g_coldstart() {
     let fake_m_s = fake_m.to_string_lossy().into_owned();
     let mut_env: &[(&str, &str)] = &[
         ("CLAUDE_BIN", &fake_m_s),
-        ("SB_FAKE_NAME", "mut-sess"),
-        ("SB_EMBEDDED_DAEMON_PROGRAM", &bogus_s),
+        ("QD_FAKE_NAME", "mut-sess"),
+        ("QD_EMBEDDED_DAEMON_PROGRAM", &bogus_s),
     ];
     let (c_mut, o_mut, e_mut) = run_sb_env(&jail_m, &["start", "mut-sess"], mut_env);
     // WS-C M3b: the per-session leaf the severed cold-start would have bound.

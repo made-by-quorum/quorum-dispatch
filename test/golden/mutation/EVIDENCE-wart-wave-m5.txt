@@ -15,7 +15,7 @@
   [PASS] stall-run2             exit 10 + WARNING block + session survives
   [PASS] no-prompt              exit 0 (10 unreachable without -p)
   [PASS] refuse-clean           exit 13 (belt refuses a clean env)
-  [PASS] refuse-spoof           exit 13 on SB_HOME coherence (not just HOME shape)
+  [PASS] refuse-spoof           exit 13 on QD_HOME coherence (not just HOME shape)
   [PASS] w8-trunc               exit 1 + named truncation error after went-busy
   [PASS] w8-accept-chunked      exit 0 verified (intact chunked delivery not punished)
 PASS=9 FAIL=0
@@ -34,7 +34,7 @@ PASS=9 FAIL=0
   exit=13 (expect 13)
   [PASS] refuse-clean           exit 13 (belt refuses a clean env)
   exit=13 (expect 13)
-  [PASS] refuse-spoof           exit 13 on SB_HOME coherence (not just HOME shape)
+  [PASS] refuse-spoof           exit 13 on QD_HOME coherence (not just HOME shape)
   --- W8-TRUNC (name=sbrg-wb43434-w8trunc1) ---
   exit=0 (expect 1)
   [FAIL] w8-trunc                exit=0(want 1); missing 'payload truncated in delivery' error; missing the no-retry guidance; stdout claims delivery despite truncation;

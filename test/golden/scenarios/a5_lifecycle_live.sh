@@ -12,7 +12,7 @@
 # no ${var,,}, no mapfile.
 #
 # Usage:  bash test/golden/scenarios/a5_lifecycle_live.sh
-# Env override: SB_BIN (qd-under-test), ZMX_BIN (zmx). Defaults autodetect.
+# Env override: QD_BIN (qd-under-test), ZMX_BIN (zmx). Defaults autodetect.
 set -u
 
 # --- locate the worktree + binaries (no hardcoded worktree path) --------------
@@ -20,12 +20,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WT="$(cd "$HERE/../../.." && pwd)"            # scenarios -> golden -> test -> repo root
 cd "$WT" || { echo "FATAL: cannot cd to worktree root"; exit 1; }
 
-SB_BIN="${SB_BIN:-$WT/target/debug/qd}"
+QD_BIN="${QD_BIN:-$WT/target/debug/qd}"
 ZMX_BIN="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}"
-[ -x "$SB_BIN" ]  || { echo "FATAL: qd binary not found/executable: $SB_BIN"; exit 1; }
+[ -x "$QD_BIN" ]  || { echo "FATAL: qd binary not found/executable: $QD_BIN"; exit 1; }
 [ -x "$ZMX_BIN" ] || { echo "FATAL: zmx binary not found/executable: $ZMX_BIN"; exit 1; }
 
-export JAIL_SB_CMD="$SB_BIN"
+export JAIL_SB_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$ZMX_BIN"
 . test/golden/lib/jail.sh
 # zmx caps session names at 20 bytes. The jail prefix is `sbrg-<runid>-`, so we
@@ -541,7 +541,7 @@ fi
 
 # Real-reconcile row: OFF on macOS PERMANENTLY (orc-3 standing constraint). It runs
 # ONLY in the Lima lane (G-X1), gated by ALL of: (1) jail_require_destructive_ok —
-# the Lima sentinel /etc/qd-rust-lima + hostname!=brano + SB_RUST_DESTRUCTIVE_OK=1,
+# the Lima sentinel /etc/qd-rust-lima + hostname!=brano + QD_RUST_DESTRUCTIVE_OK=1,
 # which FAILS CLOSED on brano/macOS; (2) the sweep belt; (3) the explicit opt-in.
 # On brano this branch is unreachable (the Lima gate alone refuses).
 if jail_require_destructive_ok 2>/dev/null \

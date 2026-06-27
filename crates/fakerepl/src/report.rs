@@ -1,5 +1,5 @@
 //! Report channel: one JSON object per event, newline-delimited, to
-//! `$SB_FAKEREPL_REPORT` (a4-spec §5). The harness CROSS-CHECKS this against the
+//! `$QD_FAKEREPL_REPORT` (a4-spec §5). The harness CROSS-CHECKS this against the
 //! application output; the gate's turn-count oracle keys on app-output, NEVER on
 //! this report (ADD-6 — the report records echo-INDEPENDENT facts only).
 //!
@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-/// Append-only JSONL sink. A no-op if `$SB_FAKEREPL_REPORT` is unset or the file
+/// Append-only JSONL sink. A no-op if `$QD_FAKEREPL_REPORT` is unset or the file
 /// can't be opened (the report is a diagnostic cross-check, never load-bearing —
 /// its absence must not crash the harness child).
 pub struct Reporter {

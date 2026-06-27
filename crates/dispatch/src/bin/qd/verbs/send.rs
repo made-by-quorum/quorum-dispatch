@@ -239,7 +239,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
         // mux session linked" — generic, NOT zmx-specific. Under the embedded
         // backend the stale "not in zmx" wording named the wrong layer. Key the
         // text off the selected backend: zmx keeps the BYTE-STABLE legacy wording;
-        // embedded names the actual backend (qrmux). A bogus SB_MUX here would have
+        // embedded names the actual backend (qrmux). A bogus QD_MUX here would have
         // already failed `all_sessions` above, so the parse is effectively infallible
         // on this path; on the impossible error we fall back to the generic wording.
         match common::send_backend_label() {
@@ -347,8 +347,8 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
 
     // --- ACK-2 §9: engine event emission (additive, best-effort non-fatal) ----
     // The sessionId is ALWAYS resolved on the send:pty path, so the events file
-    // is keyed on it (§4.1; no byname fallback here). The state_dir honors SB_HOME
-    // (§4.1 / ADD-14): resolve it via the SB_HOME-aware paths.
+    // is keyed on it (§4.1; no byname fallback here). The state_dir honors QD_HOME
+    // (§4.1 / ADD-14): resolve it via the QD_HOME-aware paths.
     let ev_state = dispatch::paths::SbPaths::from_home_env(&paths.home, &env).state_dir;
     let writer = EventWriter::for_key(
         &ev_state,

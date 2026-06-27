@@ -64,11 +64,11 @@ _zd_collapse() {
 _zd_drive_and_observe() {
     local name="$1" expected="$2"; shift 2
     # Boot under the overridden env. The override is applied PER-INVOCATION via
-    # env(1); the jail env (HOME/SB_HOME/etc.) is otherwise inherited so the run
+    # env(1); the jail env (HOME/QD_HOME/etc.) is otherwise inherited so the run
     # stays hermetic. CLAUDE_BIN points at the jail-rooted stub shim.
     scn_capture_pty "$SCN_OUT.boottrace.$name" 30 -- \
         env "$@" CLAUDE_BIN="${CLAUDE_BIN:-}" \
-        sh -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1
+        sh -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1
 
     # Observe: poll for the session socket appearing under the EXPECTED dir. We
     # check the rule's predicted dir; if qd resolved elsewhere the socket is NOT
@@ -103,7 +103,7 @@ scn_run() {
     name_xdg="$(scn_session_name zdx)"
     exp_xdg="$XDG_RUNTIME_DIR/zmx"
     res_xdg="$(_zd_drive_and_observe "$name_xdg" "$exp_xdg" \
-        -u ZMX_DIR XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" SB_UNDER_TEST="$SB_UNDER_TEST")"
+        -u ZMX_DIR XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" QD_UNDER_TEST="$QD_UNDER_TEST")"
 
     # --- TIER B: TMPDIR collapse (Claude-spawns-Claude compounding) ----------
     # ZMX_DIR + XDG_RUNTIME_DIR UNSET, a COMPOUNDED TMPDIR (segment repeated) ->
@@ -118,7 +118,7 @@ scn_run() {
     name_tc="$(scn_session_name zdt)"
     exp_tc="$collapsed/zmx-$uid"
     res_tc="$(_zd_drive_and_observe "$name_tc" "$exp_tc" \
-        -u ZMX_DIR -u XDG_RUNTIME_DIR TMPDIR="$comp" SB_UNDER_TEST="$SB_UNDER_TEST")"
+        -u ZMX_DIR -u XDG_RUNTIME_DIR TMPDIR="$comp" QD_UNDER_TEST="$QD_UNDER_TEST")"
 
     # Record the OUTCOME (path tokens normalized; the tier labels + the
     # expected==resolved equality is the load-bearing, run-stable signal).

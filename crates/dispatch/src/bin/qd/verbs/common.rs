@@ -1,5 +1,5 @@
 //! Shared real-deps wiring for the REAL backends (spec §3). Centralizes the
-//! backend-selected mux (C1 D3: SB_MUX → embedded/zmx via [`select_backend`] +
+//! backend-selected mux (C1 D3: QD_MUX → embedded/zmx via [`select_backend`] +
 //! [`build_mux`]/[`build_mux_dirs`]), `RealEnv`/`RealClock`/`SbPaths`
 //! construction, and the A1 `gather`+`join`+`assign_codes` pipeline `ls`/`info`/
 //! `attach` all consume.
@@ -33,7 +33,7 @@ pub fn paths_from_home(env: &dyn Env) -> Result<SbPaths, i32> {
 }
 
 /// The stable-id store path: `<sbHome>/state/ids.jsonl` where `sbHome =
-/// SB_HOME || <home>/.quorum/dispatch` (P0 wave-1; the SB_HOME-honoring `from_home_env`
+/// QD_HOME || <home>/.quorum/dispatch` (P0 wave-1; the QD_HOME-honoring `from_home_env`
 /// resolution, same as marks.jsonl). Returns `Err(exit)` if HOME is unset.
 pub fn ids_store_path(env: &dyn Env) -> Result<std::path::PathBuf, i32> {
     let home = home_path(env)?;
@@ -53,10 +53,10 @@ fn home_path(env: &dyn Env) -> Result<std::path::PathBuf, i32> {
     }
 }
 
-/// Parse the SB_MUX backend ONCE (spec item 4). A bogus value prints the loud
+/// Parse the QD_MUX backend ONCE (spec item 4). A bogus value prints the loud
 /// named error + returns its DISTINCT exit code (G-SEL/G-NEG); valid values map
 /// to [`Backend`]. The same parsed backend feeds BOTH the mux selection and the
-/// gather/`MuxDirs` lane below — no divergent double-read of SB_MUX.
+/// gather/`MuxDirs` lane below — no divergent double-read of QD_MUX.
 pub fn select_backend(env: &dyn Env) -> Result<Backend, i32> {
     mux_selector::parse_backend(env).map_err(|e| {
         eprintln!("{}", e.message);
@@ -106,7 +106,7 @@ pub fn build_mux_dirs(
 ) -> Result<MuxDirs, i32> {
     match backend {
         Backend::Zmx => {
-            // A14-2(c): the surviving legacy READ scan honors SB_TEST_SCAN_ROOTS
+            // A14-2(c): the surviving legacy READ scan honors QD_TEST_SCAN_ROOTS
             // (test lanes only); production stays literal /tmp. Visibility-only.
             let scan_roots =
                 dispatch::zmx_dir::legacy_scan_roots(env, std::path::Path::new("/tmp"));
@@ -145,7 +145,7 @@ pub fn all_sessions_counted(opts: JoinOpts) -> Result<(Vec<Session>, usize), i32
     let home = home_path(&env)?;
     let exec = RealExec;
 
-    // ONE SB_MUX parse drives BOTH the mux selection AND the MuxDirs lane (item 4).
+    // ONE QD_MUX parse drives BOTH the mux selection AND the MuxDirs lane (item 4).
     let backend = select_backend(&env)?;
     let mux = build_mux(backend, &home, &env)?;
     let mux_dirs = build_mux_dirs(backend, &home, &env)?;
@@ -225,7 +225,7 @@ pub enum SendBackend {
 }
 
 /// Resolve the active backend for a USER-FACING message (the "no live mux session"
-/// wording in `send:pty`). Parses SB_MUX with the SAME rule as the rest of the
+/// wording in `send:pty`). Parses QD_MUX with the SAME rule as the rest of the
 /// engine; a bogus value (already rejected upstream on every path that calls this)
 /// falls back to Embedded — the C1 DEFAULT — so the worst case still names the
 /// default backend rather than the stale zmx wording.
@@ -237,7 +237,7 @@ pub fn send_backend_label() -> SendBackend {
 }
 
 /// The real, backend-selected mux as a `Box<dyn Mux>` (used by attach/live for the
-/// live handoff). Parses SB_MUX once; a bogus value prints the loud named error +
+/// live handoff). Parses QD_MUX once; a bogus value prints the loud named error +
 /// returns its distinct exit code. The embedded backend needs HOME to resolve its
 /// socket dir, so HOME-unset is also surfaced here.
 pub fn real_mux() -> Result<Box<dyn Mux>, i32> {

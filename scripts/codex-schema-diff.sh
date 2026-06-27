@@ -25,7 +25,7 @@
 # error; 3 = installed codex version != VERSION.pin (named, before any diff).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-FIXTURE="${SB_CODEX_SCHEMA_FIXTURE:-$ROOT/crates/qd/tests/fixtures/codex-schema}"
+FIXTURE="${QD_CODEX_SCHEMA_FIXTURE:-$ROOT/crates/qd/tests/fixtures/codex-schema}"
 [ -d "$FIXTURE" ] || { echo "codex-schema-diff: FAIL — fixture dir missing: $FIXTURE" >&2; exit 2; }
 
 REGEN=""

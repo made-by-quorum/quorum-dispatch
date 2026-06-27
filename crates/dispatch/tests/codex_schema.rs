@@ -12,7 +12,7 @@
 //!      scripts/codex-schema-diff.sh (compare-only mode) exits nonzero on a
 //!      doctored tree + 0 on an identical tree — proving the harness CAN
 //!      fail (the spec section 16(d) refutation target).
-//!   3. ENV-GATED live lane (SB_CODEX_LIVE=1): full-mode script run —
+//!   3. ENV-GATED live lane (QD_CODEX_LIVE=1): full-mode script run —
 //!      version-pin check + jailed regenerate from the installed binary +
 //!      diff. Drift or version-drift = red, BY NAME.
 
@@ -146,7 +146,7 @@ fn run_differ(fix: &Path, regen: &Path) -> std::process::Output {
         .arg(diff_script())
         .arg("--regen-dir")
         .arg(regen)
-        .env("SB_CODEX_SCHEMA_FIXTURE", fix)
+        .env("QD_CODEX_SCHEMA_FIXTURE", fix)
         .output()
         .expect("codex-schema-diff.sh must be runnable")
 }
@@ -189,7 +189,7 @@ fn diff_script_green_on_identical_tree() {
 
 #[test]
 fn live_schema_diff_against_installed_binary() {
-    if std::env::var("SB_CODEX_LIVE").as_deref() != Ok("1") {
+    if std::env::var("QD_CODEX_LIVE").as_deref() != Ok("1") {
         return; // live lane is opt-in (rule 9: only the jailed lane runs it)
     }
     let out = Command::new("bash")

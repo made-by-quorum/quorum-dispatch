@@ -3,23 +3,23 @@
 //!
 //! `JAIL_ROOT` / `JAIL_RUNID` / `JAIL_PREFIX` are shell-LOCAL in jail.sh
 //! (jail.sh:86-98, NO `export`) — a child across the zmx boundary NEVER sees
-//! them. So neither v1's SB_HOME glob nor the red-team's JAIL_ROOT-keyed fix can
+//! them. So neither v1's QD_HOME glob nor the red-team's JAIL_ROOT-keyed fix can
 //! work. This belt is derived entirely from the EXPORTED isolation set
 //! (jail.sh:139-146):
 //!
 //!   export HOME="$JAIL_ROOT/home"
-//!   export SB_HOME="$JAIL_ROOT/sb_home"
+//!   export QD_HOME="$JAIL_ROOT/sb_home"
 //!   export ZMX_DIR="$JAIL_ROOT/zmx"
 //!   export TMPDIR="$JAIL_ROOT/tmp"
 //!
 //! Refuse (Err with the failed-check reason) unless ALL hold:
 //!   (a) HOME matches `*/sbrg-runs/*/home`  (the positive jail-layout marker);
-//!   (b) with `root := dirname(HOME)`:  SB_HOME == root/sb_home
+//!   (b) with `root := dirname(HOME)`:  QD_HOME == root/sb_home
 //!                                       ZMX_DIR == root/zmx
 //!                                       TMPDIR == root/tmp
 //!
 //! (b) is the COHERENCE check: the full exported isolation set must agree on ONE
-//! jail root, so a partial spoof (HOME jail-shaped but SB_HOME pointing
+//! jail root, so a partial spoof (HOME jail-shaped but QD_HOME pointing
 //! elsewhere) is refused. Mirrors `jail_assert_established`'s positive-detection
 //! philosophy (jail.sh:202-258) without inventing a parallel convention OR
 //! depending on un-exported vars.
@@ -49,7 +49,7 @@ pub fn assert_jailed_env() -> Result<(), String> {
         .to_string();
 
     // (b) coherence: every exported isolation var must sit under the SAME root.
-    check_under_root("SB_HOME", "sb_home", &root)?;
+    check_under_root("QD_HOME", "sb_home", &root)?;
     check_under_root("ZMX_DIR", "zmx", &root)?;
     check_under_root("TMPDIR", "tmp", &root)?;
 

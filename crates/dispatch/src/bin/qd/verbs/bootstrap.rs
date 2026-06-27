@@ -89,13 +89,13 @@ pub fn run() -> i32 {
     //
     // The HTTP port-scan FALLBACK (HttpRelayProbe) probes fixed localhost ports
     // 8900-9000 — a HOST-WIDE probe that is NOT jail-scoped (the jail isolates
-    // HOME/SB_HOME/ZMX_DIR but cannot sandbox a localhost TCP scan). For the
+    // HOME/QD_HOME/ZMX_DIR but cannot sandbox a localhost TCP scan). For the
     // hermetic gate's relay-ABSENT arm to be deterministic on a shared host,
-    // `SB_RELAY_DISABLE_SCAN=1` suppresses the scan so discovery sees ONLY
+    // `QRM_RELAY_DISABLE_SCAN=1` suppresses the scan so discovery sees ONLY
     // jailed sidecar files. Default (unset) keeps the production scan.
     let sb_paths = SbPaths::from_home(&home);
     let scan_disabled = env
-        .var("SB_RELAY_DISABLE_SCAN")
+        .var("QRM_RELAY_DISABLE_SCAN")
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let http_probe = HttpRelayProbe::new();
     let empty_probe = dispatch::effects::FixtureRelayProbe(vec![]);
@@ -183,14 +183,14 @@ pub fn run() -> i32 {
     //
     // OPT-IN gate: the cascade prompts (and runs real network installs:
     // `cargo install --git` + `claude plugin ...`) ONLY when
-    // `SB_BOOTSTRAP_INSTALL_EXTENSIONS=1`. Default OFF so (a) the hermetic
+    // `QD_BOOTSTRAP_INSTALL_EXTENSIONS=1`. Default OFF so (a) the hermetic
     // bootstrap gate's PTY arm is not disturbed by extra prompts/real installs,
     // and (b) a default bootstrap never reaches out to the network unasked. With
     // the flag unset the step is forced non-interactive: it prints only the
     // "install later" FYI and prompts/installs nothing. Once the gate is
     // extended to feed the two extra answers, this opt-in can become the default.
     let install_extensions_enabled = env
-        .var("SB_BOOTSTRAP_INSTALL_EXTENSIONS")
+        .var("QD_BOOTSTRAP_INSTALL_EXTENSIONS")
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let ext_interactive = interactive && install_extensions_enabled;
     let pins = dispatch::extensions::pinned();
@@ -199,7 +199,7 @@ pub fn run() -> i32 {
     let install_script = resolve_install_script(&env);
     let run_installer = |sub: &str| -> Result<(), String> {
         let script = install_script.clone().ok_or_else(|| {
-            "install script not found — set SB_INSTALL_EXTENSIONS_SCRIPT to its path \
+            "install script not found — set QD_INSTALL_EXTENSIONS_SCRIPT to its path \
              (ships in the repo under scripts/; a packaged binary needs it staged)"
                 .to_string()
         })?;
@@ -258,7 +258,7 @@ fn short_pin(rev: &str) -> String {
 }
 
 /// Locate the external extension installer script. Resolution order:
-///   1. `$SB_INSTALL_EXTENSIONS_SCRIPT` (explicit override — the packaged-install
+///   1. `$QD_INSTALL_EXTENSIONS_SCRIPT` (explicit override — the packaged-install
 ///      path: a binary install has no repo, so the packager stages the script and
 ///      points this at it).
 ///   2. `<dir-of-running-exe>/../scripts/install-extensions.sh` and
@@ -268,7 +268,7 @@ fn short_pin(rev: &str) -> String {
 /// "install script not found" rather than silently skipping.
 fn resolve_install_script(env: &impl Env) -> Option<std::path::PathBuf> {
     if let Some(p) = env
-        .var("SB_INSTALL_EXTENSIONS_SCRIPT")
+        .var("QD_INSTALL_EXTENSIONS_SCRIPT")
         .filter(|s| !s.is_empty())
     {
         let path = std::path::PathBuf::from(p);

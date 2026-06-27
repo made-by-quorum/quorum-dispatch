@@ -24,7 +24,7 @@
 //! The critical-section detector is itself atomic (mkdir), so a violation can
 //! never be missed for overlap ≥ the section length.
 //!
-//! Hermetic per Rule 9: SB_RUST_LOCK_DIR points at a per-test temp dir — the
+//! Hermetic per Rule 9: QD_RUST_LOCK_DIR points at a per-test temp dir — the
 //! real ~/.quorum/dispatch-rust is never touched.
 
 use std::path::PathBuf;
@@ -80,8 +80,8 @@ fn spawn_contender(
         .arg(CRITICAL_SECTION)
         .arg("sh")
         .arg(work)
-        .env("SB_RUST_LOCK_DIR", lock_base)
-        .env("SB_RUST_LOCK_TIMEOUT", "60")
+        .env("QD_RUST_LOCK_DIR", lock_base)
+        .env("QD_RUST_LOCK_TIMEOUT", "60")
         .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))

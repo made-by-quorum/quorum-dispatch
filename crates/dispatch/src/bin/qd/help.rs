@@ -411,11 +411,11 @@ runs (-p/--print), --version/--help, and non-TTY launches straight through to
 the real claude. Escape hatch: `command claude ...`.
 
 Environment (read by the emitted wrapper at call time):
-  SB_CLAUDE_WRAPPER_FLAGS  Extra flags (whitespace-split) injected on
+  QD_CLAUDE_WRAPPER_FLAGS  Extra flags (whitespace-split) injected on
                            passthrough REAL launches (headless / non-TTY /
                            inside-zmx) — never on management subcommands or
                            --version/--help. qd-routed launches take their
-                           flags from the engine launcher (SB_CLAUDE_FLAGS /
+                           flags from the engine launcher (QD_CLAUDE_FLAGS /
                            config / defaults) instead.
   CLAUDE_NO_ZMX            Set to disable routing entirely (always passthrough).
 

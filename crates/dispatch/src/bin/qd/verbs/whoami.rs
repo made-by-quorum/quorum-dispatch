@@ -1,6 +1,6 @@
 //! `qd whoami` (alias `name`) — REAL (findCallerSession port, commands/status.ts:159-210).
 //!
-//! P0 wave-2 (spec-w2-env D2): whoami PREFERS `SB_SESSION_ID` (the env-carried
+//! P0 wave-2 (spec-w2-env D2): whoami PREFERS `QD_SESSION_ID` (the env-carried
 //! identity the engine injects at every launch — works at ANY process depth and
 //! for detached processes), resolving it through the idstore fold → provider
 //! UUID → registry row. It falls back to the original ppid-chain walk
@@ -30,7 +30,7 @@ struct Answer {
 /// The PURE resolution core (the testable seam — D2's ">10 levels deep" test
 /// stubs `walk` to fail and proves the env path answers alone).
 ///
-/// Env path: a well-formed `SB_SESSION_ID` that the idstore fold maps to a
+/// Env path: a well-formed `QD_SESSION_ID` that the idstore fold maps to a
 /// provider UUID answers as `source: "env"`; name/pid come from the live
 /// registry row carrying that UUID when one exists (a cold session still
 /// answers — sessionId + sbId are known without a row). Otherwise (unset,
@@ -88,7 +88,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     };
     let paths = SbPaths::from_home(std::path::Path::new(&home));
 
-    // READ-ONLY idstore fold (whoami never mints) — SB_HOME-honoring path.
+    // READ-ONLY idstore fold (whoami never mints) — QD_HOME-honoring path.
     let state_dir = SbPaths::from_home_env(std::path::Path::new(&home), &env).state_dir;
     let ids = dispatch::idstore::fold(&dispatch::idstore::ids_path(&state_dir));
 
@@ -104,7 +104,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // the injected Exec seam, now as this fn's FALLBACK (D2).
     let walk = || dispatch::telemetry::find_caller_session(&paths, &RealExec);
 
-    match resolve_identity(env.var("SB_SESSION_ID"), &ids, &row_for_uuid, &walk) {
+    match resolve_identity(env.var("QD_SESSION_ID"), &ids, &row_for_uuid, &walk) {
         Some(ans) => {
             if json {
                 // commands/status.ts:201-206 — {name: name||null, sessionId, pid},

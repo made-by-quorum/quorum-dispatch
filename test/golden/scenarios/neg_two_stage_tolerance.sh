@@ -43,7 +43,7 @@ scn_run() {
     name="$(scn_session_name n2s)"
     # Boot with STUB_TWO_STAGE_PID_WRITE=1 INLINE (default ~1500ms gap). Every PID
     # write is partial-then-complete; the engine must tolerate the mid-write partial.
-    STUB_TWO_STAGE_PID_WRITE=1 bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    STUB_TWO_STAGE_PID_WRITE=1 bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
 
     # Poll `qd ls` DURING the write window — it must never crash (rc!=0). This

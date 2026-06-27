@@ -11,7 +11,7 @@ mkdir -p "$DIAG"
 SUT="${SUT:-/home/u/work/wt-a4-passb/target/debug/qd}"
 
 # Launch the real harness run in the background.
-( cd "$HERE" && SB_UNDER_TEST="$SUT" ./verify.sh --scenario scenarios/send_pty_paste_burst.sh \
+( cd "$HERE" && QD_UNDER_TEST="$SUT" ./verify.sh --scenario scenarios/send_pty_paste_burst.sh \
     > "$DIAG/verify.log" 2>&1; echo "$?" > "$DIAG/verify.rc" ) &
 vpid=$!
 

@@ -41,13 +41,13 @@ REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 . "$REPO_ROOT/test/golden/lib/jail.sh"
 
 # The Rust binary under test. Default to the workspace debug build; overridable.
-SB_BIN="${SB_BIN:-$REPO_ROOT/target/debug/qd}"
-if [ ! -x "$SB_BIN" ]; then
-    echo "bootstrap-audit: building qd (no binary at $SB_BIN)..." >&2
+QD_BIN="${QD_BIN:-$REPO_ROOT/target/debug/qd}"
+if [ ! -x "$QD_BIN" ]; then
+    echo "bootstrap-audit: building qd (no binary at $QD_BIN)..." >&2
     ( cd "$REPO_ROOT" && ./scripts/build-lock.sh cargo build -p qd --bin qd >/dev/null 2>&1 ) \
         || { echo "FAIL: could not build qd" >&2; exit 2; }
 fi
-export JAIL_SB_CMD="$SB_BIN"
+export JAIL_SB_CMD="$QD_BIN"
 # NOTE: the relay registration now uses the BARE `qd` command (resolved via PATH,
 # never goes stale on a binary move — relay-path hardening v2), so the recorded
 # `mcp add` argv carries `qd`, NOT this binary's absolute path. The G-B4 assertion
@@ -62,7 +62,7 @@ bad() { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$1"; }
 # additions. Case-insensitive. A match in bootstrap's stdout/stderr is a
 # content leak (qb-side VOCABULARY stays banned even though the shell + relay
 # steps are sanctioned engine behavior).
-FORBIDDEN='substrate|marketplace|SB_PLUGINS_ROOT|plugins-root|plugins_root|spawn|qb'
+FORBIDDEN='substrate|marketplace|QD_PLUGINS_ROOT|plugins-root|plugins_root|spawn|qb'
 
 # --- jail up ---------------------------------------------------------------
 jail_establish >/dev/null 2>&1 || { echo "FAIL: jail_establish" >&2; exit 2; }
@@ -74,7 +74,7 @@ JAIL_BASHRC="$HOME/.bashrc"
 
 # Mute the host-wide localhost relay port-scan so the relay health FYI is
 # deterministic on a shared host (brano runs a real relay on 8900-9000).
-export SB_RELAY_DISABLE_SCAN=1
+export QRM_RELAY_DISABLE_SCAN=1
 
 # --- in-jail stubs: `claude` (the MCP registrar) + `zmx` (capable) ---------
 # The `claude` stub emulates exactly the three subcommands register.rs drives:
@@ -134,10 +134,10 @@ RC2=$?
 [ "$RC2" = "0" ] && ok "G-B1/exit-0-second-run" || bad "G-B1/exit-0-second-run (rc=$RC2)"
 
 # G-B1: state-dir layout present.
-if [ -d "$SB_HOME" ] && [ -d "$SB_HOME/state" ]; then
+if [ -d "$QD_HOME" ] && [ -d "$QD_HOME/state" ]; then
     ok "G-B1/state-dirs-present (~/.quorum/dispatch + ~/.quorum/dispatch/state)"
 else
-    bad "G-B1/state-dirs-present — missing $SB_HOME or $SB_HOME/state"
+    bad "G-B1/state-dirs-present — missing $QD_HOME or $QD_HOME/state"
 fi
 
 # G-B5: NO forbidden token in EITHER run.
@@ -195,7 +195,7 @@ if grep -rIE 'server:channels' "$OUT1" "$OUT2" >/dev/null 2>&1; then
 else
     ok "G-N2/server-channels-absent-from-output"
 fi
-if grep -rIE 'server:channels' "$HOME" "$SB_HOME" >/dev/null 2>&1; then
+if grep -rIE 'server:channels' "$HOME" "$QD_HOME" >/dev/null 2>&1; then
     bad "G-N2/server-channels-absent-from-config-tree"
 else
     ok "G-N2/server-channels-absent-from-config-tree"

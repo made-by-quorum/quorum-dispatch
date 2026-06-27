@@ -24,13 +24,13 @@
 #     an opaque trace. The engine reports the exit status.
 #   - Installs over private SSH (the repos are private; SSH URLs in the manifest).
 #
-# Honors $SB_EXTENSIONS_MANIFEST to override the manifest path (test seam);
+# Honors $QD_EXTENSIONS_MANIFEST to override the manifest path (test seam);
 # defaults to the repo-root extensions.toml next to this script's parent.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-manifest="${SB_EXTENSIONS_MANIFEST:-$repo_root/extensions.toml}"
+manifest="${QD_EXTENSIONS_MANIFEST:-$repo_root/extensions.toml}"
 
 if [ ! -f "$manifest" ]; then
     echo "install-extensions: FAIL — no pin manifest at $manifest" >&2
@@ -97,7 +97,7 @@ install_plugin() {
     # Code's marketplace at the local checkout (the repo is PRIVATE — a git-URL
     # marketplace would need Claude Code to carry SSH auth; a local checkout we
     # control sidesteps that). plugins/core is consumed RAW (no build step).
-    local cache_dir="${SB_HOME:-$HOME/.quorum/dispatch}/extensions/plugins"
+    local cache_dir="${QD_HOME:-$HOME/.quorum/dispatch}/extensions/plugins"
     if [ -d "$cache_dir/.git" ]; then
         echo "install-extensions: plugin — refreshing checkout at $cache_dir"
         git -C "$cache_dir" fetch --quiet origin

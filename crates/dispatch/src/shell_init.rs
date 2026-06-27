@@ -36,11 +36,11 @@
 //! - headless (`-p`/`--print`) or stdout-not-a-TTY → passthrough
 //! - escape hatch: `command claude ...`
 //!
-//! `SB_CLAUDE_WRAPPER_FLAGS` (whitespace-split) is injected on passthrough REAL
+//! `QD_CLAUDE_WRAPPER_FLAGS` (whitespace-split) is injected on passthrough REAL
 //! launches only (headless / non-TTY / inside-zmx) — never on management
 //! subcommands or help/version. qd-routed launches do NOT need it: the engine's
-//! launcher already applies `SB_CLAUDE_FLAGS` / config / built-in defaults
-//! (launch.rs). The two seams are deliberately separate: `SB_CLAUDE_FLAGS`
+//! launcher already applies `QD_CLAUDE_FLAGS` / config / built-in defaults
+//! (launch.rs). The two seams are deliberately separate: `QD_CLAUDE_FLAGS`
 //! would also override the engine launcher's defaults, which is not what a
 //! wrapper-only flag preference means.
 //!
@@ -142,16 +142,16 @@ pub fn rc_path(shell: Shell, home: &Path, env: &dyn Env) -> PathBuf {
 /// always wins — the export only fills the unset case).
 pub fn init_script(shell: Shell, zmx_dir: &str) -> String {
     match shell {
-        Shell::Bash => posix_script(zmx_dir, "$SB_CLAUDE_WRAPPER_FLAGS", "bash"),
+        Shell::Bash => posix_script(zmx_dir, "$QD_CLAUDE_WRAPPER_FLAGS", "bash"),
         // zsh does not word-split unquoted parameters; `${=VAR}` forces the
         // sh-style split the flag list needs.
-        Shell::Zsh => posix_script(zmx_dir, "${=SB_CLAUDE_WRAPPER_FLAGS}", "zsh"),
+        Shell::Zsh => posix_script(zmx_dir, "${=QD_CLAUDE_WRAPPER_FLAGS}", "zsh"),
         Shell::Fish => fish_script(zmx_dir),
     }
 }
 
 /// The bash/zsh emission. `wflags` is the (shell-specific) word-splitting
-/// expansion of `SB_CLAUDE_WRAPPER_FLAGS`.
+/// expansion of `QD_CLAUDE_WRAPPER_FLAGS`.
 fn posix_script(zmx_dir: &str, wflags: &str, shell_name: &str) -> String {
     format!(
         r#"# qd shell integration — emitted by `qd init {shell_name}`; do not edit.
@@ -161,7 +161,7 @@ export ZMX_DIR="${{ZMX_DIR:-{zmx_dir}}}"
 
 # claude wrapper: passthrough by default; only a bare interactive launch
 # OUTSIDE zmx routes through 'qd start'. Escape hatch: 'command claude ...'.
-# SB_CLAUDE_WRAPPER_FLAGS (whitespace-split) is injected on passthrough REAL
+# QD_CLAUDE_WRAPPER_FLAGS (whitespace-split) is injected on passthrough REAL
 # launches only — never on management subcommands or --version/--help.
 claude() {{
   local _sb_arg _sb_name
@@ -211,7 +211,7 @@ end
 # claude wrapper: passthrough by default; only a bare interactive launch
 # OUTSIDE zmx routes through 'qd start'. Escape hatch: 'command claude ...'.
 function claude
-    set -l _sb_wflags (string split -n ' ' -- "$SB_CLAUDE_WRAPPER_FLAGS")
+    set -l _sb_wflags (string split -n ' ' -- "$QD_CLAUDE_WRAPPER_FLAGS")
     if test -n "$ZMX_SESSION"; or test -n "$CLAUDE_NO_ZMX"
         command claude $_sb_wflags $argv
         return
@@ -363,7 +363,7 @@ mod tests {
         assert!(
             s.contains(
                 r#"else
-    command claude $SB_CLAUDE_WRAPPER_FLAGS "$@""#
+    command claude $QD_CLAUDE_WRAPPER_FLAGS "$@""#
             ),
             "fallback: {s}"
         );
@@ -372,7 +372,7 @@ mod tests {
             "must NOT invoke the A5-deferred `qd start --attach`: {s}"
         );
         assert!(s.contains("logout|login|config|mcp|plugin|doctor|update|install"));
-        assert!(s.contains("-p|--print) command claude $SB_CLAUDE_WRAPPER_FLAGS"));
+        assert!(s.contains("-p|--print) command claude $QD_CLAUDE_WRAPPER_FLAGS"));
         assert!(s.contains(r#"--version|-h|--help) command claude "$@""#));
         assert!(s.contains(r#"export ZMX_DIR="${ZMX_DIR:-/run/user/501}""#));
         assert!(s.contains("CLAUDE_NO_ZMX"));
@@ -382,8 +382,8 @@ mod tests {
     fn zsh_script_uses_forced_word_split() {
         let s = init_script(Shell::Zsh, "/run/user/501");
         // zsh must use ${=VAR} (no implicit word splitting in zsh).
-        assert!(s.contains("${=SB_CLAUDE_WRAPPER_FLAGS}"), "{s}");
-        assert!(!s.contains(" $SB_CLAUDE_WRAPPER_FLAGS "), "{s}");
+        assert!(s.contains("${=QD_CLAUDE_WRAPPER_FLAGS}"), "{s}");
+        assert!(!s.contains(" $QD_CLAUDE_WRAPPER_FLAGS "), "{s}");
         assert!(s.contains("qd connect"));
         assert!(s.contains("if qd start"));
         assert!(!s.contains("qd start --attach"));

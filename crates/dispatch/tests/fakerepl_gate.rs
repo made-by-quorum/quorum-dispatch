@@ -64,7 +64,7 @@ fn fakerepl_bin() -> PathBuf {
     // STALENESS GUARD (A4 chunking follow-up, lead re-verification incident): an
     // existing binary OLDER than the newest fakerepl source is a STALE ORACLE —
     // a gate run against it silently tests the wrong model (observed live: an
-    // M4a-era binary without SB_FAKEREPL_DROP_OVER_BYTES made the overflow
+    // M4a-era binary without QD_FAKEREPL_DROP_OVER_BYTES made the overflow
     // negative-control fail as a false-RED-missing). Fail LOUD; never trust an
     // out-of-date oracle. (We cannot `cargo build` here unconditionally — a
     // nested cargo invocation can deadlock on the parent `cargo test`'s target
@@ -113,7 +113,7 @@ fn mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
 // Jail-shaped tempdir.
 //
 // Constructs the EXACT exported isolation layout the fakerepl belt requires
-// (a4-spec §5): HOME=<root>/sbrg-runs/<id>/home, SB_HOME=<root>/.../sb_home,
+// (a4-spec §5): HOME=<root>/sbrg-runs/<id>/home, QD_HOME=<root>/.../sb_home,
 // ZMX_DIR=.../zmx, TMPDIR=.../tmp. This doubles as a positive control that the
 // belt ACCEPTS a valid jail (every non-refusal row proves it).
 // ===========================================================================
@@ -154,7 +154,7 @@ impl Jail {
     fn apply(&self, cmd: &mut CommandBuilder) {
         cmd.env_clear();
         cmd.env("HOME", &self.home);
-        cmd.env("SB_HOME", &self.sb_home);
+        cmd.env("QD_HOME", &self.sb_home);
         cmd.env("ZMX_DIR", &self.zmx);
         cmd.env("TMPDIR", &self.tmp);
         // PATH kept minimal but present so the child can exec (it execs nothing,
@@ -200,7 +200,7 @@ impl PtyChild {
         jail.apply(&mut cmd);
         cmd.arg("--name");
         cmd.arg(name);
-        cmd.env("SB_FAKEREPL_REPORT", &report_path);
+        cmd.env("QD_FAKEREPL_REPORT", &report_path);
         for (k, v) in extra_env {
             cmd.env(k, v);
         }
@@ -326,7 +326,7 @@ impl PtyChild {
     }
 
     /// Count `drop` events (tty-queue overflow, ADR 0009 mode (a)) — a burst that
-    /// exceeded SB_FAKEREPL_DROP_OVER_BYTES and was dropped wholesale.
+    /// exceeded QD_FAKEREPL_DROP_OVER_BYTES and was dropped wholesale.
     fn report_drop_count(&self) -> usize {
         self.report_events()
             .iter()
@@ -572,7 +572,7 @@ fn settle(ms: u64) {
 #[test]
 fn diag_raw_4k_write_burst_shape() {
     let jail = Jail::new("diag4k");
-    let child = PtyChild::spawn(&jail, "diag4k", &[("SB_FAKEREPL_BUSY_MS", "150")]);
+    let child = PtyChild::spawn(&jail, "diag4k", &[("QD_FAKEREPL_BUSY_MS", "150")]);
     let pid_file = child.wait_for_row(5000).expect("row");
 
     let mut payload = vec![b'P'; 4096];
@@ -629,7 +629,7 @@ fn l1_paste_large_single_write_lands_exactly_one_turn() {
     // margin. (Real claude busy windows are seconds; a <250ms window is not a
     // realistic acceptance signal — see README "busy-window vs poll interval".)
     let (app_turns, report_turns, outcome) =
-        drive_once(&jail, "l1paste", &msg, &[("SB_FAKEREPL_BUSY_MS", "800")]);
+        drive_once(&jail, "l1paste", &msg, &[("QD_FAKEREPL_BUSY_MS", "800")]);
 
     assert_eq!(outcome, DeliverOutcome::Accepted, "must be accepted");
     // ORACLE: exactly one accepted turn in the APP OUTPUT.
@@ -661,7 +661,7 @@ fn l1_paste_large_single_write_lands_exactly_one_turn() {
 fn l1_fragmented_paste_across_stall_lands_exactly_one_turn() {
     let jail = Jail::new("l1frag");
     let name = "l1frag";
-    let child = PtyChild::spawn(&jail, name, &[("SB_FAKEREPL_BUSY_MS", "150")]);
+    let child = PtyChild::spawn(&jail, name, &[("QD_FAKEREPL_BUSY_MS", "150")]);
     child.wait_for_row(5000).expect("row appears");
 
     // Deliver a paste as TWO sub-bursts with a >50ms (here 120ms) stall between
@@ -803,7 +803,7 @@ fn r4_idle_two_write_large_paste_lands_exactly_one_turn() {
         &jail,
         "r4idle",
         &msg,
-        &[("SB_FAKEREPL_BUSY_MS", "800")],
+        &[("QD_FAKEREPL_BUSY_MS", "800")],
         None,
     );
 
@@ -822,7 +822,7 @@ fn r4_idle_two_write_large_paste_lands_exactly_one_turn() {
 
 // ===========================================================================
 // R4 ROW (b) — NEGATIVE CONTROL: the OLD single-write mechanism under a fakerepl
-// config modeling the LIVE behavior (SB_FAKEREPL_ABSORB_ALL_CRS=1 — every CR is
+// config modeling the LIVE behavior (QD_FAKEREPL_ABSORB_ALL_CRS=1 — every CR is
 // absorbed as a literal newline, never a submit, exactly the observed "the
 // remediation CR does NOT recover it" 2-boot finding). With this config a single
 // `message+"\r"` write MUST fail to land a turn AND the remediation CR cannot
@@ -839,8 +839,8 @@ fn r4_single_write_under_absorb_all_crs_fails_to_land_negative_control() {
         &jail,
         name,
         &[
-            ("SB_FAKEREPL_BUSY_MS", "800"),
-            ("SB_FAKEREPL_ABSORB_ALL_CRS", "1"),
+            ("QD_FAKEREPL_BUSY_MS", "800"),
+            ("QD_FAKEREPL_ABSORB_ALL_CRS", "1"),
         ],
     );
     let pid_file = child.wait_for_row(5000).expect("row");
@@ -902,7 +902,7 @@ fn r4_fragmented_paste_inside_delivery_lands_exactly_one_turn() {
         &jail,
         "r4frag",
         &msg,
-        &[("SB_FAKEREPL_BUSY_MS", "800")],
+        &[("QD_FAKEREPL_BUSY_MS", "800")],
         Some(2048),
     );
 
@@ -932,7 +932,7 @@ fn msg_bytes(n: usize) -> Vec<u8> {
 // FIX (parity port of 8c59ec4:src/commands/submit.ts) chunks the text into ≤1024B
 // code-point-safe pieces ~150ms apart so the reader drains between writes.
 //
-// fakerepl models the CLASS via SB_FAKEREPL_DROP_OVER_BYTES: a single burst longer
+// fakerepl models the CLASS via QD_FAKEREPL_DROP_OVER_BYTES: a single burst longer
 // than the bound is dropped wholesale (no composer content, a `drop` report event).
 // 4096 is a representative model default — the live boundary is machine/load
 // dependent; the INVARIANT proven here is the ≤1024B chunk size.
@@ -960,7 +960,7 @@ fn gate_chunk_opts() -> dispatch::submit::ChunkSendOptions {
 fn jumbo_16kb_chunked_lands_exactly_one_turn_full_payload() {
     let jail = Jail::new("jumbo16k");
     let msg = "J".repeat(JUMBO_BYTES);
-    let child = PtyChild::spawn(&jail, "jumbo16k", &[("SB_FAKEREPL_BUSY_MS", "800")]);
+    let child = PtyChild::spawn(&jail, "jumbo16k", &[("QD_FAKEREPL_BUSY_MS", "800")]);
     let (app_turns, outcome) = drive_idle_chunked(&child, &msg, gate_chunk_opts());
 
     assert!(
@@ -994,7 +994,7 @@ fn jumbo_multibyte_straddle_chunked_delivered_intact() {
     let reps = (JUMBO_BYTES / unit.len()) + 1;
     let msg = unit.repeat(reps);
     let sent_bytes = msg.len();
-    let child = PtyChild::spawn(&jail, "jumbomb", &[("SB_FAKEREPL_BUSY_MS", "800")]);
+    let child = PtyChild::spawn(&jail, "jumbomb", &[("QD_FAKEREPL_BUSY_MS", "800")]);
     let (app_turns, outcome) = drive_idle_chunked(&child, &msg, gate_chunk_opts());
 
     assert!(
@@ -1012,7 +1012,7 @@ fn jumbo_multibyte_straddle_chunked_delivered_intact() {
 
 // ROW (iii) NEGATIVE-CONTROL PAIRING — chunking is load-bearing.
 //
-// Under SB_FAKEREPL_DROP_OVER_BYTES=4096 (the tty-queue overflow model):
+// Under QD_FAKEREPL_DROP_OVER_BYTES=4096 (the tty-queue overflow model):
 //   - the UNCHUNKED mutation (chunk_bytes = usize::MAX → one giant write) sends 16KB
 //     as a SINGLE burst > 4096 → DROPPED WHOLESALE → ZERO turns, not accepted, a
 //     `drop` event recorded. We ASSERT THE RED.
@@ -1028,8 +1028,8 @@ fn negctl_unchunked_jumbo_drops_under_overflow_model_red() {
         &jail,
         "negunchunk",
         &[
-            ("SB_FAKEREPL_BUSY_MS", "800"),
-            ("SB_FAKEREPL_DROP_OVER_BYTES", "4096"),
+            ("QD_FAKEREPL_BUSY_MS", "800"),
+            ("QD_FAKEREPL_DROP_OVER_BYTES", "4096"),
         ],
     );
     // UNCHUNKED mutation: chunk_bytes = usize::MAX → chunk_text yields ONE chunk →
@@ -1072,8 +1072,8 @@ fn negctl_chunked_jumbo_passes_under_same_overflow_model_green() {
         &jail,
         "negchunk",
         &[
-            ("SB_FAKEREPL_BUSY_MS", "800"),
-            ("SB_FAKEREPL_DROP_OVER_BYTES", "4096"),
+            ("QD_FAKEREPL_BUSY_MS", "800"),
+            ("QD_FAKEREPL_DROP_OVER_BYTES", "4096"),
         ],
     );
     // CHUNKED: 1024B chunks, each < the 4096 drop bound → every chunk passes.
@@ -1187,8 +1187,8 @@ fn l1_soak_zero_dropped_zero_double() {
             &name,
             &msg,
             &[
-                ("SB_FAKEREPL_BUSY_MS", &busy_ms.to_string()),
-                ("SB_FAKEREPL_PASTE_THRESHOLD", &threshold.to_string()),
+                ("QD_FAKEREPL_BUSY_MS", &busy_ms.to_string()),
+                ("QD_FAKEREPL_PASTE_THRESHOLD", &threshold.to_string()),
             ],
         );
 
@@ -1253,7 +1253,7 @@ fn neg_control_a_cr_while_busy_is_detected_and_fails() {
     let name = "negA";
     // Wide busy window (1500ms) so a CR injected just after we observe busy lands
     // squarely INSIDE it — deterministic, not timing-racy.
-    let child = PtyChild::spawn(&jail, name, &[("SB_FAKEREPL_BUSY_MS", "1500")]);
+    let child = PtyChild::spawn(&jail, name, &[("QD_FAKEREPL_BUSY_MS", "1500")]);
     let pid_file = child.wait_for_row(5000).expect("row");
 
     // Submit turn 1: a small non-paste content byte, then a lone CR (non-paste
@@ -1312,11 +1312,11 @@ fn neg_control_b_swallowed_remediation_cr_goes_red() {
         &jail,
         name,
         &[
-            ("SB_FAKEREPL_BUSY_MS", "100"),
+            ("QD_FAKEREPL_BUSY_MS", "100"),
             // W8 pinned config: threshold below the message size so the message's
             // trailing \r is ALWAYS absorbed (paste burst) — remediation is the
             // ONLY way to submit.
-            ("SB_FAKEREPL_PASTE_THRESHOLD", "4"),
+            ("QD_FAKEREPL_PASTE_THRESHOLD", "4"),
         ],
     );
     child.swallow_cr = true; // the mutation: drop every remediation CR
@@ -1381,20 +1381,20 @@ fn jail_refusal_clean_env_exits_13() {
 
 #[test]
 fn jail_refusal_partial_spoof_exits_13() {
-    // HOME jail-shaped but SB_HOME points elsewhere → refuse, naming SB_HOME (the
+    // HOME jail-shaped but QD_HOME points elsewhere → refuse, naming QD_HOME (the
     // coherence check, not just HOME).
     let jail = Jail::new("spoof");
     let env = [
         ("HOME", jail.home.to_str().unwrap()),
-        ("SB_HOME", "/elsewhere/sb_home"),
+        ("QD_HOME", "/elsewhere/sb_home"),
         ("ZMX_DIR", jail.zmx.to_str().unwrap()),
         ("TMPDIR", jail.tmp.to_str().unwrap()),
     ];
     let (code, stderr) = run_fakerepl_env(&env);
     assert_eq!(code, 13, "partial spoof must exit 13: stderr={stderr}");
     assert!(
-        stderr.contains("SB_HOME"),
-        "stderr must name the failed coherence check (SB_HOME): {stderr}"
+        stderr.contains("QD_HOME"),
+        "stderr must name the failed coherence check (QD_HOME): {stderr}"
     );
 }
 
@@ -1404,7 +1404,7 @@ fn jail_refusal_valid_jail_starts() {
     // stdin. We spawn, confirm the row appears (proves it got past the belt), then
     // SIGTERM it (finish()): the handler unlinks the row and exits 0.
     let jail = Jail::new("valid");
-    let child = PtyChild::spawn(&jail, "valid", &[("SB_FAKEREPL_BUSY_MS", "50")]);
+    let child = PtyChild::spawn(&jail, "valid", &[("QD_FAKEREPL_BUSY_MS", "50")]);
     let row = child.wait_for_row(5000);
     assert!(
         row.is_some(),
@@ -1441,8 +1441,8 @@ fn coalescing_note_measures_pty_burst_boundaries() {
         &jail,
         name,
         &[
-            ("SB_FAKEREPL_BUSY_MS", "50"),
-            ("SB_FAKEREPL_PASTE_THRESHOLD", "1000000"),
+            ("QD_FAKEREPL_BUSY_MS", "50"),
+            ("QD_FAKEREPL_PASTE_THRESHOLD", "1000000"),
         ],
     );
     child.wait_for_row(5000).expect("row");
@@ -1484,9 +1484,9 @@ fn coalescing_note_measures_pty_burst_boundaries() {
 // W8 — verify-after-submit (silent mid-truncation closure; A4 R1 / D16 flip).
 //
 // The fakerepl now models the D16 reader-stall window: under
-// SB_FAKEREPL_STALL_AFTER_BYTES/_MS/_QUEUE_CAP a mid-delivery reader pause drops
+// QD_FAKEREPL_STALL_AFTER_BYTES/_MS/_QUEUE_CAP a mid-delivery reader pause drops
 // payload bytes past the queue cap (saturation) — the silent loss the existing
-// went-busy acceptance cannot see. SB_FAKEREPL_CONVO_JSONL gives the verify step a
+// went-busy acceptance cannot see. QD_FAKEREPL_CONVO_JSONL gives the verify step a
 // claude-shaped transcript to read back. These rows prove:
 //   - the silent-loss window is REAL (the convo record is SHORTER than sent) and
 //     the UNVERIFIED delivery path reports accepted/success (the pre-fix silence);
@@ -1575,11 +1575,11 @@ fn convo_last_user_text(path: &std::path::Path) -> Option<String> {
 /// queue cap injected (the only differing knob between RED and the negctl).
 fn w8_stall_env<'a>(convo: &'a str, queue_cap: &'a str) -> Vec<(&'a str, &'a str)> {
     vec![
-        ("SB_FAKEREPL_BUSY_MS", "800"),
-        ("SB_FAKEREPL_STALL_AFTER_BYTES", "3072"),
-        ("SB_FAKEREPL_STALL_MS", "800"),
-        ("SB_FAKEREPL_STALL_QUEUE_CAP", queue_cap),
-        ("SB_FAKEREPL_CONVO_JSONL", convo),
+        ("QD_FAKEREPL_BUSY_MS", "800"),
+        ("QD_FAKEREPL_STALL_AFTER_BYTES", "3072"),
+        ("QD_FAKEREPL_STALL_MS", "800"),
+        ("QD_FAKEREPL_STALL_QUEUE_CAP", queue_cap),
+        ("QD_FAKEREPL_CONVO_JSONL", convo),
     ]
 }
 

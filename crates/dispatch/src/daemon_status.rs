@@ -282,7 +282,7 @@ impl RegistryStatusSink {
     /// outcome (or an I/O error) is logged and SWALLOWED — a status write never
     /// panics the reader/pump.
     ///
-    /// Diagnostics use the crate's `SB_DEBUG`-gated `eprintln!` convention
+    /// Diagnostics use the crate's `QD_DEBUG`-gated `eprintln!` convention
     /// (cf. `registry::debug_warn`) rather than a `tracing` dependency the crate
     /// does not carry — the swallow behavior is what the spec's contract demands.
     fn write_status(&self, status: &str) {
@@ -319,10 +319,10 @@ impl RegistryStatusSink {
     }
 }
 
-/// One diagnostic line to stderr, gated behind `SB_DEBUG=1` (silent by default —
+/// One diagnostic line to stderr, gated behind `QD_DEBUG=1` (silent by default —
 /// mirrors `registry::debug_warn`; a status write never crashes the pump).
 fn debug_warn(msg: &str) {
-    if std::env::var_os("SB_DEBUG").is_some_and(|v| v == "1") {
+    if std::env::var_os("QD_DEBUG").is_some_and(|v| v == "1") {
         eprintln!("qd[daemon_status]: {msg}");
     }
 }

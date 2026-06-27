@@ -237,7 +237,7 @@ fn claude_fixture() -> Fixture {
     let cwd = "/work/proj".to_string();
 
     // PID file → the EventBootWaiter's phase-1 scan finds it idle immediately.
-    // (Fix-A's relay-sidecar phase is opt-in via SB_BOOT_AWAIT_RELAY and OFF here,
+    // (Fix-A's relay-sidecar phase is opt-in via QD_BOOT_AWAIT_RELAY and OFF here,
     // so conformance keeps the pid+idle readiness — no sidecar needed.)
     std::fs::create_dir_all(&paths.sessions_dir).unwrap();
     std::fs::write(
@@ -1208,7 +1208,7 @@ fn codex_status_map_truth_table() {
 ///
 /// MUTATION EVIDENCE: if codex launch_plan read a claude config surface
 /// (claude_bin/claude_flags off env+config) it would NOT yield the bare
-/// `[codex, app-server]` argv. The SB_CODEX_BIN override is also pinned.
+/// `[codex, app-server]` argv. The QD_CODEX_BIN override is also pinned.
 #[test]
 fn codex_launch_plan_minimal_fx_uses_codex_bin() {
     let tmp = TempDir::new().unwrap();
@@ -1242,10 +1242,10 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
         "codex plan must not carry claude flags"
     );
 
-    // SB_CODEX_BIN override + CODEX_HOME passthrough.
+    // QD_CODEX_BIN override + CODEX_HOME passthrough.
     let mut env2 = MapEnv::default();
     env2.vars
-        .insert("SB_CODEX_BIN".to_string(), "/opt/codex".to_string());
+        .insert("QD_CODEX_BIN".to_string(), "/opt/codex".to_string());
     env2.vars
         .insert("CODEX_HOME".to_string(), "/jail/codex-home".to_string());
     let fx2 = ProviderFx {

@@ -17,7 +17,7 @@
 #       new fields byte-wise (rename never rewrites — tolerance proof is r2-r4;
 #       this row proves the fields survive the TS lifecycle end-state).
 #
-# Env: SB_BIN (Rust binary), TS_DIR (pinned clone; default /tmp/a6-ts-pin).
+# Env: QD_BIN (Rust binary), TS_DIR (pinned clone; default /tmp/a6-ts-pin).
 # Bash 3.2. ADDITIVE-NOT-PARITY evidence.
 set -u
 
@@ -26,10 +26,10 @@ REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 WT="$REPO_ROOT"
-SB_BIN="${SB_BIN:-$WT/target/debug/qd}"
+QD_BIN="${QD_BIN:-$WT/target/debug/qd}"
 TS_DIR="${TS_DIR:-/tmp/a6-ts-pin}"
 BUN_BIN="${BUN_BIN:-$(command -v bun || echo "$HOME/.bun/bin/bun")}"
-[ -x "$SB_BIN" ] || { echo "FATAL: qd binary missing: $SB_BIN"; exit 1; }
+[ -x "$QD_BIN" ] || { echo "FATAL: qd binary missing: $QD_BIN"; exit 1; }
 [ -f "$TS_DIR/src/index.ts" ] || { echo "FATAL: pinned TS clone missing: $TS_DIR (run prep_pinned_ts.sh)"; exit 1; }
 [ -x "$BUN_BIN" ] || { echo "FATAL: bun not found"; exit 1; }
 # Anti-drift belt: the clone must BE at the pin.
@@ -37,7 +37,7 @@ TS_HEAD="$(git -C "$TS_DIR" rev-parse HEAD 2>/dev/null)"
 [ "$TS_HEAD" = "8c59ec456fe82780fd75d8afb5fe48dc72e10bc8" ] \
     || { echo "FATAL: TS clone not at pin (HEAD=$TS_HEAD)"; exit 1; }
 
-export JAIL_SB_CMD="$SB_BIN"
+export JAIL_SB_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}"
 . test/golden/lib/jail.sh
 SHORT_RUNID="$(printf '%s' "${RANDOM:-0}${RANDOM:-0}" | tr -cd 'a-z0-9' | cut -c1-4)"
@@ -76,14 +76,14 @@ WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"
 NAME="${JAIL_PREFIX}mf"
 
 echo "--- r1: Rust new (entry carries backend+spawnedBy; marks stamped) ---"
-( cd "$WORKDIR" && env SBRG_STUB_NAME="$NAME" "$SB_BIN" new "$NAME" --cwd "$WORKDIR" ) \
+( cd "$WORKDIR" && env SBRG_STUB_NAME="$NAME" "$QD_BIN" new "$NAME" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/r1.out" 2> "$JAIL_ROOT/r1.err"
 r1=$?
 [ "$r1" = 0 ] && ok "r1 rust new exit 0" || note_fail "r1 rust new exit $r1 ($(cat "$JAIL_ROOT/r1.err"))"
 ENTRY_FILE="$(ls "$HOME/.claude/sessions/" | grep '^[0-9]*\.json$' | head -1)"
 grep -q '"backend":"ccr-test"' "$HOME/.claude/sessions/$ENTRY_FILE" \
     && ok "r1 entry carries backend field" || note_fail "r1 entry missing backend field"
-MARKS="$SB_HOME/state/marks.jsonl"
+MARKS="$QD_HOME/state/marks.jsonl"
 [ -f "$MARKS" ] && grep -q '"event":"create"' "$MARKS" \
     && ok "r1 marks.jsonl has the create event" || note_fail "r1 marks.jsonl create event missing"
 

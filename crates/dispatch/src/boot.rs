@@ -427,10 +427,10 @@ const DEFAULT_BOOT_POLL_MS: u64 = 125;
 /// pathological busy-spin from a tiny/zero override.
 const MIN_BOOT_POLL_MS: u64 = 10;
 
-/// Resolve the boot poll interval: `SB_BOOT_POLL_MS` if set to a valid integer,
+/// Resolve the boot poll interval: `QD_BOOT_POLL_MS` if set to a valid integer,
 /// else [`DEFAULT_BOOT_POLL_MS`]; clamped to a [`MIN_BOOT_POLL_MS`] floor.
 fn resolve_boot_poll_ms() -> u64 {
-    std::env::var("SB_BOOT_POLL_MS")
+    std::env::var("QD_BOOT_POLL_MS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(DEFAULT_BOOT_POLL_MS)
@@ -443,7 +443,7 @@ impl Default for BootTimeouts {
             overall_ms: 60_000,   // TS timeoutSec = 60 (lifecycle.ts:187)
             pid_phase_ms: 40_000, // TS Date.now() + 40000 (lifecycle.ts:205)
             // INTENTIONAL divergence from TS Bun.sleep(1000) (lifecycle.ts:150);
-            // see DEFAULT_BOOT_POLL_MS. Env-overridable via SB_BOOT_POLL_MS.
+            // see DEFAULT_BOOT_POLL_MS. Env-overridable via QD_BOOT_POLL_MS.
             poll_ms: resolve_boot_poll_ms(),
             settle_ms: 1_000,
         }
@@ -971,7 +971,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    /// Poll-interval resolution: the new fast default, the SB_BOOT_POLL_MS
+    /// Poll-interval resolution: the new fast default, the QD_BOOT_POLL_MS
     /// override, invalid-value fallback, and the floor clamp. Pure value
     /// resolution — no real sleeps. All env cases live in ONE test because the
     /// process environment is global and Rust runs tests in parallel threads;
@@ -979,8 +979,8 @@ mod tests {
     #[test]
     fn boot_poll_ms_resolution() {
         // Snapshot + clear so the default branch is observed cleanly.
-        let prior = std::env::var("SB_BOOT_POLL_MS").ok();
-        std::env::remove_var("SB_BOOT_POLL_MS");
+        let prior = std::env::var("QD_BOOT_POLL_MS").ok();
+        std::env::remove_var("QD_BOOT_POLL_MS");
 
         // (a) Unset → fast default (NOT the old TS 1000ms pin).
         assert_eq!(resolve_boot_poll_ms(), 125);
@@ -991,27 +991,27 @@ mod tests {
         assert_eq!(BootTimeouts::default().pid_phase_ms, 40_000);
 
         // (b) Valid override is honored.
-        std::env::set_var("SB_BOOT_POLL_MS", "50");
+        std::env::set_var("QD_BOOT_POLL_MS", "50");
         assert_eq!(resolve_boot_poll_ms(), 50);
-        std::env::set_var("SB_BOOT_POLL_MS", " 200 "); // trimmed
+        std::env::set_var("QD_BOOT_POLL_MS", " 200 "); // trimmed
         assert_eq!(resolve_boot_poll_ms(), 200);
 
         // (c) Invalid value → falls back to the default.
-        std::env::set_var("SB_BOOT_POLL_MS", "not-a-number");
+        std::env::set_var("QD_BOOT_POLL_MS", "not-a-number");
         assert_eq!(resolve_boot_poll_ms(), 125);
-        std::env::set_var("SB_BOOT_POLL_MS", "");
+        std::env::set_var("QD_BOOT_POLL_MS", "");
         assert_eq!(resolve_boot_poll_ms(), 125);
 
         // (d) Floor clamp: a too-small / zero override is raised to the floor.
-        std::env::set_var("SB_BOOT_POLL_MS", "0");
+        std::env::set_var("QD_BOOT_POLL_MS", "0");
         assert_eq!(resolve_boot_poll_ms(), MIN_BOOT_POLL_MS);
-        std::env::set_var("SB_BOOT_POLL_MS", "3");
+        std::env::set_var("QD_BOOT_POLL_MS", "3");
         assert_eq!(resolve_boot_poll_ms(), MIN_BOOT_POLL_MS);
 
         // Restore prior environment.
         match prior {
-            Some(v) => std::env::set_var("SB_BOOT_POLL_MS", v),
-            None => std::env::remove_var("SB_BOOT_POLL_MS"),
+            Some(v) => std::env::set_var("QD_BOOT_POLL_MS", v),
+            None => std::env::remove_var("QD_BOOT_POLL_MS"),
         }
     }
 

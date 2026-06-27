@@ -7,7 +7,7 @@ OUTDIR="$1"
 # REPO-relative (this file lives at test/golden/mutation/); GOLDEN_TOP = test/golden.
 GOLDEN_TOP="$(cd "$(dirname "$0")/.." && pwd)"
 export TMPDIR="${TMPDIR:-/tmp}"
-export SB_UNDER_TEST="${SB_UNDER_TEST:-bun /tmp/qd-rust-ts-prep/8c59ec456fe82780fd75d8afb5fe48dc72e10bc8/src/index.ts}"
+export QD_UNDER_TEST="${QD_UNDER_TEST:-bun /tmp/qd-rust-ts-prep/8c59ec456fe82780fd75d8afb5fe48dc72e10bc8/src/index.ts}"
 cd "$GOLDEN_TOP"
 _run_seam() {
   local seam_env="$1" scn="$2" out="$3" budget="${4:-30000}"

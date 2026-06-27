@@ -12,7 +12,7 @@ jail; claude = committed stub 1.7.0 (provenance belt asserted per row).
 
 Invocation per row (from this worktree's test/golden):
 
-    TMPDIR=/tmp SB_UNDER_TEST=$SB JAIL_SB_CMD=$SB \
+    TMPDIR=/tmp QD_UNDER_TEST=$SB JAIL_SB_CMD=$SB \
       ./verify.sh --scenario scenarios/<row>.sh
     # $SB = ~/work/wt-a2-passb/target/debug/qd
 
@@ -78,7 +78,7 @@ pin" was executed as a CHECK, and the check found drift:
 `build_claude_cmd_config.sh` was sanctioned (ADR-0010 §a) as a RUST-TARGET row,
 UNticked "until the Rust engine exists to DRIVE it". The Rust engine now
 exists and drove it: a NON-DEFAULT flag supplied via the ADR-0006 config seam
-(`SB_CLAUDE_FLAGS` tier 1) reached the launch argv byte-exactly
+(`QD_CLAUDE_FLAGS` tier 1) reached the launch argv byte-exactly
 (`--dangerously-skip-permissions --name <NAME>`) — a constant-echo loader
 would have emitted the default triple and DIFFed. Matrix tick (and whether it
 joins the green gate) = orc ruling; the row's own header says it is never

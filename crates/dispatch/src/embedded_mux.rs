@@ -104,7 +104,7 @@ use qrmux::server::socket::{session_socket_path_for, validate_session_identity};
 /// so a test can deliberately sever the wiring (point at a nonexistent binary)
 /// and prove the cold-start path REDs. UNSET in production → `current_exe()` (the
 /// real `qd` binary). Read ONLY here; never consulted on a non-test path by value.
-const DAEMON_PROGRAM_ENV: &str = "SB_EMBEDDED_DAEMON_PROGRAM";
+const DAEMON_PROGRAM_ENV: &str = "QD_EMBEDDED_DAEMON_PROGRAM";
 
 /// The argv-prefix the qd embedder uses for its hidden daemon entry: the qd binary
 /// IS the daemon via `qd qrmux-server` (main.rs pre-clap dispatch).

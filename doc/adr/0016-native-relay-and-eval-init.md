@@ -10,7 +10,7 @@ implementation, and both broke in the field on 2026-06-09:
 
 1. **The relay step offered a dead external installer.** The ADD-5 design
    treated the relay transport as a standalone external driver with its own
-   installer (`cc-relay install`, overridable via `SB_RELAY_DRIVER_INSTALL`).
+   installer (`cc-relay install`, overridable via `QRM_RELAY_DRIVER_INSTALL`).
    The native Rust relay (`qd relay:serve`) made that obsolete: the only thing
    "installing the relay" still means is writing the `relay` entry in the
    user-scope `~/.claude/.mcp.json`. On a box without the bun toolchain the
@@ -34,7 +34,7 @@ implementation, and both broke in the field on 2026-06-09:
 
 **Relay: bootstrap registers the native relay itself, with consent.**
 The external-driver concept is retired: `DEFAULT_RELAY_DRIVER_INSTALL`,
-`SB_RELAY_DRIVER_INSTALL`, and the installer exec seam are gone. The bootstrap
+`QRM_RELAY_DRIVER_INSTALL`, and the installer exec seam are gone. The bootstrap
 relay step now keys off the CONFIG state of `~/.claude/.mcp.json` (driver
 classification + does-the-configured-binary-exist), not runtime health (which
 remains an FYI line): anything but healthy-native gets a TTY-only, default-No
@@ -60,10 +60,10 @@ when it is already present, and DETECTS the retired baked block
 existing rc content.
 
 Wrapper flag seams are deliberately split: the emitted wrapper injects
-`SB_CLAUDE_WRAPPER_FLAGS` on passthrough REAL launches only (headless /
+`QD_CLAUDE_WRAPPER_FLAGS` on passthrough REAL launches only (headless /
 non-TTY / inside-zmx); qd-routed launches keep taking flags from the engine
-launcher (`SB_CLAUDE_FLAGS` / config / defaults, launch.rs). Reusing
-`SB_CLAUDE_FLAGS` for the wrapper would have silently overridden the
+launcher (`QD_CLAUDE_FLAGS` / config / defaults, launch.rs). Reusing
+`QD_CLAUDE_FLAGS` for the wrapper would have silently overridden the
 launcher's defaults.
 
 **Supersession.** This reverses the A5 §9-item-4 ruling that shell-profile

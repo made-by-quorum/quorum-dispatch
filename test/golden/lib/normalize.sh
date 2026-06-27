@@ -22,7 +22,7 @@
 #   - timestamps (ISO-8601, epoch-ms, hh:mm:ss.ffffff) -> <TS>
 #   - PIDs -> <PID>  (but the PID-FILE APPEARANCE event is preserved structurally;
 #                     see normalize_event_stream)
-#   - hermetic temp paths (the jail dirs) -> <SB_HOME>/<ZMX_DIR>/<XDG_*>/<TMPDIR>
+#   - hermetic temp paths (the jail dirs) -> <QD_HOME>/<ZMX_DIR>/<XDG_*>/<TMPDIR>
 #   - run ids / session-name run prefixes / socket prefixes / relay ports -> tokens
 #
 # Each public function is a stdin->stdout filter so they compose and are unit
@@ -75,7 +75,7 @@ normalize_pids() {
 }
 
 # normalize_paths <jail_root>: collapse hermetic jail paths to stable tokens.
-# Order matters: longest/most-specific subdir tokens first so SB_HOME etc. win
+# Order matters: longest/most-specific subdir tokens first so QD_HOME etc. win
 # before the JAIL_ROOT catch-all. Preserves the SUFFIX after the dir (e.g.
 # /zmx-501 resolution structure) — only the volatile prefix is tokenized.
 #
@@ -98,7 +98,7 @@ normalize_paths() {
         local esc
         esc="$(printf '%s' "$root" | sed -e 's/[\/&]/\\&/g')"
         sed -E \
-            -e "s/${esc}\/sb_home/<SB_HOME>/g" \
+            -e "s/${esc}\/sb_home/<QD_HOME>/g" \
             -e "s/${esc}\/zmx/<ZMX_DIR>/g" \
             -e "s/${esc}\/xdg_config/<XDG_CONFIG>/g" \
             -e "s/${esc}\/xdg_data/<XDG_DATA>/g" \

@@ -109,8 +109,8 @@ impl Jail {
                 "PATH",
                 std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
             )
-            .env_remove("SB_HOME")
-            .env_remove("SB_MUX")
+            .env_remove("QD_HOME")
+            .env_remove("QD_MUX")
             .env_remove("CLAUDE_CODE_SESSION_ID");
         c
     }

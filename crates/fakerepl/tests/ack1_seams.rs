@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 /// Build a jail-shaped env rooted in a tempdir: HOME=*/sbrg-runs/<x>/home,
-/// SB_HOME/ZMX_DIR/TMPDIR siblings under the same root.
+/// QD_HOME/ZMX_DIR/TMPDIR siblings under the same root.
 fn jail_env(root: &Path) -> Vec<(String, String)> {
     let run_root = root.join("sbrg-runs").join("ack1seams");
     for sub in ["home", "sb_home", "zmx", "tmp"] {
@@ -22,7 +22,7 @@ fn jail_env(root: &Path) -> Vec<(String, String)> {
             run_root.join("home").to_string_lossy().into_owned(),
         ),
         (
-            "SB_HOME".into(),
+            "QD_HOME".into(),
             run_root.join("sb_home").to_string_lossy().into_owned(),
         ),
         (
@@ -79,12 +79,12 @@ fn start(extra: &[(&str, String)], tmp: &Path) -> SeamRun {
     let report = tmp.join("report.jsonl");
     let convo = tmp.join("convo.jsonl");
     let mut all: Vec<(&str, String)> = vec![
-        ("SB_FAKEREPL_REPORT", report.to_string_lossy().into_owned()),
+        ("QD_FAKEREPL_REPORT", report.to_string_lossy().into_owned()),
         (
-            "SB_FAKEREPL_CONVO_JSONL",
+            "QD_FAKEREPL_CONVO_JSONL",
             convo.to_string_lossy().into_owned(),
         ),
-        ("SB_FAKEREPL_BUSY_MS", "50".to_string()),
+        ("QD_FAKEREPL_BUSY_MS", "50".to_string()),
     ];
     all.extend(extra.iter().cloned());
     let child = spawn_fakerepl(&env, &all).expect("spawn fakerepl");
@@ -120,7 +120,7 @@ fn start(extra: &[(&str, String)], tmp: &Path) -> SeamRun {
 #[test]
 fn r_fr1_eat_input() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut run = start(&[("SB_FAKEREPL_EAT_INPUT", "1".into())], tmp.path());
+    let mut run = start(&[("QD_FAKEREPL_EAT_INPUT", "1".into())], tmp.path());
     let mut stdin = run.child.stdin.take().unwrap();
     write_burst(&mut stdin, b"hello eaten input");
     write_burst(&mut stdin, b"\r");
@@ -160,7 +160,7 @@ fn r_fr1_eat_input() {
 fn r_fr2_truncate_user_record() {
     let tmp = tempfile::tempdir().unwrap();
     let mut run = start(
-        &[("SB_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "8".into())],
+        &[("QD_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "8".into())],
         tmp.path(),
     );
     let mut stdin = run.child.stdin.take().unwrap();
@@ -204,7 +204,7 @@ fn r_fr2_truncate_user_record() {
 fn r_fr4_truncate_rounds_down_at_utf8_boundary() {
     let tmp = tempfile::tempdir().unwrap();
     let mut run = start(
-        &[("SB_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "3".into())],
+        &[("QD_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "3".into())],
         tmp.path(),
     );
     let mut stdin = run.child.stdin.take().unwrap();
@@ -244,8 +244,8 @@ fn r_fr3_conflicting_seams_refused() {
     let child = spawn_fakerepl(
         &env,
         &[
-            ("SB_FAKEREPL_EAT_INPUT", "1".to_string()),
-            ("SB_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "8".to_string()),
+            ("QD_FAKEREPL_EAT_INPUT", "1".to_string()),
+            ("QD_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "8".to_string()),
         ],
     )
     .expect("spawn fakerepl");

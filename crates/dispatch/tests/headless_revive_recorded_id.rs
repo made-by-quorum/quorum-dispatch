@@ -44,7 +44,7 @@ const SID: &str = "fa4ec110-0000-4000-8000-0000000000b1";
 /// false → `TargetMode::Cold`).
 const DEAD_PID: i64 = 999_111;
 
-/// A fake `claude` that LOGS its argv to `$SBX_ARGV_LOG` on every invocation, then,
+/// A fake `claude` that LOGS its argv to `$QD_ARGV_LOG` on every invocation, then,
 /// when revived with `--resume <id>`, records `RESUME <id>` and echoes a
 /// `system/init` carrying THAT id (continuity). A `--resume ""` (the mutation)
 /// records the empty id — a non-resumed identity. It also stamps an `idle`
@@ -53,7 +53,7 @@ fn write_fixture(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let p = dir.join("fake_claude.sh");
     let body = "#!/bin/bash\n\
-         printf '%s\\n' \"$*\" >> \"$SBX_ARGV_LOG\"\n\
+         printf '%s\\n' \"$*\" >> \"$QD_ARGV_LOG\"\n\
          resume_id=\"\"\n\
          prev=\"\"\n\
          has_resume=no\n\
@@ -63,10 +63,10 @@ fn write_fixture(dir: &Path) -> PathBuf {
            prev=\"$a\"\n\
          done\n\
          if [ \"$has_resume\" = yes ]; then\n\
-           printf 'RESUME %s\\n' \"$resume_id\" >> \"$SBX_ARGV_LOG\"\n\
+           printf 'RESUME %s\\n' \"$resume_id\" >> \"$QD_ARGV_LOG\"\n\
            # Confirm boot for the revive waiter: an idle row named for this session.\n\
            printf '{\"pid\":%s,\"name\":\"%s\",\"status\":\"idle\",\"sessionId\":\"%s\"}' \\\n\
-             \"$$\" \"$SBX_SESSION\" \"$resume_id\" > \"$HOME/.claude/sessions/$$.json\"\n\
+             \"$$\" \"$QD_SESSION\" \"$resume_id\" > \"$HOME/.claude/sessions/$$.json\"\n\
            echo \"{\\\"type\\\":\\\"system\\\",\\\"subtype\\\":\\\"init\\\",\\\"session_id\\\":\\\"$resume_id\\\"}\"\n\
            sleep 0.8\n\
            exit 0\n\
@@ -136,10 +136,10 @@ impl Jail {
             .env("HOME", &self.home)
             .env("XDG_RUNTIME_DIR", &self.xdg)
             .env("CLAUDE_BIN", &self.fixture)
-            .env("SBX_ARGV_LOG", &self.argv_log)
-            .env("SBX_SESSION", SESSION)
-            .env_remove("SB_HOME")
-            .env_remove("SB_MUX")
+            .env("QD_ARGV_LOG", &self.argv_log)
+            .env("QD_SESSION", SESSION)
+            .env_remove("QD_HOME")
+            .env_remove("QD_MUX")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .output()
             .expect("spawn qd")

@@ -170,7 +170,7 @@ pub fn dispatch(argv_tail: &[String]) -> i32 {
 /// key is ABSENT and `resolve_secret` reports `locked == true` (env-forced
 /// keychain + locked, the INACCESSIBLE-not-ABSENT case), the message says the
 /// keychain is locked rather than "no key configured" — so an operator who pinned
-/// `SB_SECRET_BACKEND=keychain` and hit a locked keychain is not misled into
+/// `QD_SECRET_BACKEND=keychain` and hit a locked keychain is not misled into
 /// thinking they never set a key.
 fn resolve_api_key(env: &dispatch::effects::RealEnv) -> Result<String, String> {
     // Env always wins (without touching any backend), survey.ts:111-113.
@@ -192,7 +192,7 @@ fn resolve_api_key(env: &dispatch::effects::RealEnv) -> Result<String, String> {
         // Same detector as config (§3.2): the null is INACCESSIBLE, not ABSENT.
         return Err(
             "qd survey: keychain is locked — a key may exist but is inaccessible \
-             (SB_SECRET_BACKEND=keychain is env-forced; unlock or unset to use the \
+             (QD_SECRET_BACKEND=keychain is env-forced; unlock or unset to use the \
              file fallback)."
                 .to_string(),
         );

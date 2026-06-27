@@ -122,7 +122,7 @@ pub fn establish_jail(base: &Path, tag: &str) -> JailScaffold {
 }
 
 /// Run `qd <args>` fully jailed (`env_clear` + the jail env contract):
-/// HOME/SB_HOME/XDG_RUNTIME_DIR/TMPDIR/ZMX_DIR off the scaffold, PATH =
+/// HOME/QD_HOME/XDG_RUNTIME_DIR/TMPDIR/ZMX_DIR off the scaffold, PATH =
 /// fakerepl's dir + `/usr/bin:/bin`, TERM, and `claude_bin` as CLAUDE_BIN.
 /// `extra` pairs land LAST (per-launch fakerepl identity knobs).
 pub fn run_sb_jailed(
@@ -136,7 +136,7 @@ pub fn run_sb_jailed(
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &j.home)
-        .env("SB_HOME", &j.sb_home)
+        .env("QD_HOME", &j.sb_home)
         .env("XDG_RUNTIME_DIR", &j.xdg)
         .env("TMPDIR", j.root.join("tmp"))
         .env("ZMX_DIR", j.root.join("zmx"))

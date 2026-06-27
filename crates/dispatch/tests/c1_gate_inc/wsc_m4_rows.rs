@@ -8,7 +8,7 @@
 //                             shared-fate NEGATIVE control (must RED).
 //   * G-COLDSTART-N (R-1(3))— (a) same-session race → 1 daemon; (b) cross-session
 //                             burst → N daemons no convoy; (d) create-vs-teardown;
-//                             plus the SB_EMBEDDED_DAEMON_PROGRAM mutation control.
+//                             plus the QD_EMBEDDED_DAEMON_PROGRAM mutation control.
 //   * G-EVSPLIT             — two daemons write disjoint events files concurrently
 //                             with clean bookends + epoch fencing across respawn.
 //
@@ -77,7 +77,7 @@ fn sigkill(pid: u32) {
 fn sb_new_live(jail: &Jail, name: &str, app: &str) -> (i32, String, String) {
     let fake = write_fake_claude(jail, app);
     let fake_s = fake.to_string_lossy().into_owned();
-    let r = run_sb_env(jail, &["start", name], &[("CLAUDE_BIN", &fake_s), ("SB_FAKE_NAME", name)]);
+    let r = run_sb_env(jail, &["start", name], &[("CLAUDE_BIN", &fake_s), ("QD_FAKE_NAME", name)]);
     // Teardown-leak belt: `qd start` AUTO-LAUNCHED a per-session daemon we never saw
     // a pid for at spawn. Record it post-boot via the exact-socket-dir ps lookup so
     // a future run can identity-reap it if this run dies before teardown.
@@ -238,7 +238,7 @@ fn g_isol() {
 //   (a) same-session race: K concurrent ops on ONE absent session → 1 daemon.
 //   (b) cross-session burst: N concurrent creations → N daemons, no convoy.
 //   (d) create-vs-teardown: create racing a predecessor exit-on-end → clean.
-//   MUTATION: SB_EMBEDDED_DAEMON_PROGRAM severed → cold start REDS (embedded-named).
+//   MUTATION: QD_EMBEDDED_DAEMON_PROGRAM severed → cold start REDS (embedded-named).
 // (c claim-timeout + grace are the qrmux-level wsc_m4 arms.)
 // ===========================================================================
 
@@ -276,14 +276,14 @@ fn g_coldstart_n() {
                     .args(["start", "--interactive", "alpha"])
                     .env_clear()
                     .env("HOME", &home)
-                    .env("SB_HOME", &sb_home)
+                    .env("QD_HOME", &sb_home)
                     .env("XDG_RUNTIME_DIR", &xdg)
                     .env("TMPDIR", &tmp)
                     .env("ZMX_DIR", &zmx)
                     .env("PATH", "/usr/bin:/bin")
                     .env("TERM", "xterm-256color")
                     .env("CLAUDE_BIN", &fake_s)
-                    .env("SB_FAKE_NAME", "alpha")
+                    .env("QD_FAKE_NAME", "alpha")
                     .output()
                     .expect("spawn qd start");
                 out.status.code().unwrap_or(-1)
@@ -341,14 +341,14 @@ fn g_coldstart_n() {
                     .args(["start", "--interactive", &name])
                     .env_clear()
                     .env("HOME", &home)
-                    .env("SB_HOME", &sb_home)
+                    .env("QD_HOME", &sb_home)
                     .env("XDG_RUNTIME_DIR", &xdg)
                     .env("TMPDIR", &tmp)
                     .env("ZMX_DIR", &zmx)
                     .env("PATH", "/usr/bin:/bin")
                     .env("TERM", "xterm-256color")
                     .env("CLAUDE_BIN", &fake_s)
-                    .env("SB_FAKE_NAME", &name)
+                    .env("QD_FAKE_NAME", &name)
                     .output()
                     .expect("spawn qd start");
                 out.status.code().unwrap_or(-1)
@@ -428,8 +428,8 @@ fn g_coldstart_n() {
             &["start", "mut"],
             &[
                 ("CLAUDE_BIN", &fake_s),
-                ("SB_FAKE_NAME", "mut"),
-                ("SB_EMBEDDED_DAEMON_PROGRAM", &bogus_s),
+                ("QD_FAKE_NAME", "mut"),
+                ("QD_EMBEDDED_DAEMON_PROGRAM", &bogus_s),
             ],
         );
         let mut_socket = dir.join("mut.sock");
@@ -437,7 +437,7 @@ fn g_coldstart_n() {
         let names_embedded = combined.contains("embedded") && combined.contains("qrmux");
         let red = cm != 0 && !mut_socket.exists();
         detail.push_str(&format!(
-            "MUTATION (severed SB_EMBEDDED_DAEMON_PROGRAM={}): qd start exit={cm} (want nonzero), no per-session socket={}, error names embedded qrmux={names_embedded}\n  stderr: {}\n",
+            "MUTATION (severed QD_EMBEDDED_DAEMON_PROGRAM={}): qd start exit={cm} (want nonzero), no per-session socket={}, error names embedded qrmux={names_embedded}\n  stderr: {}\n",
             bogus.display(),
             !mut_socket.exists(),
             em.trim()
@@ -514,7 +514,7 @@ fn g_evsplit() {
                     .args(["send:pty", name, &format!("{marker}{i}")])
                     .env_clear()
                     .env("HOME", &home)
-                    .env("SB_HOME", &sb_home)
+                    .env("QD_HOME", &sb_home)
                     .env("XDG_RUNTIME_DIR", &xdg)
                     .env("TMPDIR", &tmp)
                     .env("ZMX_DIR", &zmx)

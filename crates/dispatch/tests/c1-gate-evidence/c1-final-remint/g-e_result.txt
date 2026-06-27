@@ -1,4 +1,4 @@
-G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under SB_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded qrmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)
+G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under QD_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded qrmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)
 
 zmx binary: /opt/homebrew/bin/zmx
 PROVENANCE: which zmx=/opt/homebrew/bin/zmx

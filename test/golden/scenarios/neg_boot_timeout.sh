@@ -46,7 +46,7 @@ scn_run() {
     # (the failure-shape carrier) to a sibling; the volatile readiness byte trace
     # to another. new's exit code is the load-bearing rc.
     STUB_WITHHOLD_PID=1 \
-        bash -c "exec $SB_UNDER_TEST new $name" \
+        bash -c "exec $QD_UNDER_TEST new $name" \
         > "$SCN_OUT.stdout" 2> "$SCN_OUT.stderr"
     local newrc=$?
 

@@ -4,12 +4,12 @@
 //! integration tests. Per ADD-4 and spec ground rule 3:
 //!
 //! Every daemon/test runs under a per-run hermetic environment: own HOME (load-bearing
-//! for qd's registry), SB_HOME, ZMX_DIR, XDG_CONFIG/DATA/STATE/RUNTIME_DIR, TMPDIR,
+//! for qd's registry), QD_HOME, ZMX_DIR, XDG_CONFIG/DATA/STATE/RUNTIME_DIR, TMPDIR,
 //! relay port, socket prefix. Daemon sockets live ONLY at $XDG_RUNTIME_DIR/qrmux/.
 //!
 //! Jail setup:
 //! 1. Create per-run temp dirs under a sandbox base (qrmux-<runid>-* prefix for safety)
-//! 2. Export hermetic env vars (HOME, XDG_*, ZMX_DIR, TMPDIR, SB_RUST_LOCK_DIR)
+//! 2. Export hermetic env vars (HOME, XDG_*, ZMX_DIR, TMPDIR, QD_RUST_LOCK_DIR)
 //! 3. Verify positive sandboxing (fail-closed: refuse production paths)
 //! 4. Capture real HOME for production-path refusal belt
 //!
@@ -199,14 +199,14 @@ impl Jail {
         // Each isolation var must be set AND live under JAIL_ROOT
         let vars = [
             ("HOME", &self.home),
-            ("SB_HOME", &self.sb_home),
+            ("QD_HOME", &self.sb_home),
             ("ZMX_DIR", &self.zmx_dir),
             ("XDG_CONFIG_HOME", &self.xdg_config),
             ("XDG_DATA_HOME", &self.xdg_data),
             ("XDG_STATE_HOME", &self.xdg_state),
             ("XDG_RUNTIME_DIR", &self.xdg_runtime),
             ("TMPDIR", &self.tmpdir),
-            ("SB_RUST_LOCK_DIR", &self.lock_dir),
+            ("QD_RUST_LOCK_DIR", &self.lock_dir),
         ];
 
         for (name, val) in &vars {
@@ -248,7 +248,7 @@ impl Jail {
         vec![
             ("HOME".to_string(), self.home.to_string_lossy().to_string()),
             (
-                "SB_HOME".to_string(),
+                "QD_HOME".to_string(),
                 self.sb_home.to_string_lossy().to_string(),
             ),
             (
@@ -276,10 +276,10 @@ impl Jail {
                 self.tmpdir.to_string_lossy().to_string(),
             ),
             (
-                "SB_RUST_LOCK_DIR".to_string(),
+                "QD_RUST_LOCK_DIR".to_string(),
                 self.lock_dir.to_string_lossy().to_string(),
             ),
-            ("SB_RELAY_PORT".to_string(), self.relay_port.to_string()),
+            ("QRM_RELAY_PORT".to_string(), self.relay_port.to_string()),
         ]
     }
 

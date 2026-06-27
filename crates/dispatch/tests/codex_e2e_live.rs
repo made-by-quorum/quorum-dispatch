@@ -45,7 +45,7 @@
 //! addressed by the recorded pgid — the W4 launcher-orphan finding) + a no-survivor
 //! belt after both the kill and the final cleanup.
 //!
-//! Gated on `SB_CODEX_LIVE=1`; a no-op (compiled + ignored) otherwise so the default
+//! Gated on `QD_CODEX_LIVE=1`; a no-op (compiled + ignored) otherwise so the default
 //! suite never spawns a real codex daemon or spends API budget.
 
 use std::path::{Path, PathBuf};
@@ -72,9 +72,9 @@ use dispatch::render;
 use dispatch::resume_daemon::{kill_codex, resume_codex, ResumeOutcome, ResumeParams, ReviveDeps};
 use dispatch::wait::{run_codex_wait_loop, RealCodexWaitDeps, WaitStatusOutcome};
 
-/// The live gate: skip unless `SB_CODEX_LIVE=1`.
+/// The live gate: skip unless `QD_CODEX_LIVE=1`.
 fn live() -> bool {
-    std::env::var("SB_CODEX_LIVE").as_deref() == Ok("1")
+    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
 }
 
 /// A jail Env: only the codex-relevant vars resolve. `env -i` shape via the seam.
@@ -323,7 +323,7 @@ fn ls_snapshot(
 #[test]
 fn codex_full_lifecycle_live_jailed() {
     if !live() {
-        eprintln!("SB_CODEX_LIVE != 1 — skipping the codex full-lifecycle capstone");
+        eprintln!("QD_CODEX_LIVE != 1 — skipping the codex full-lifecycle capstone");
         return;
     }
 

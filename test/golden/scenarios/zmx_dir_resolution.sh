@@ -30,8 +30,8 @@ scn_run() {
     # side to canonicalZmxDir() = ZMX_DIR (explicit tier, utils.ts:70). Capture the
     # boot trace forensically; the OUTCOME is read from where the socket landed.
     scn_capture_pty "$SCN_OUT" 40 -- \
-        env SB_UNDER_TEST="$SB_UNDER_TEST" CLAUDE_BIN="${CLAUDE_BIN:-}" \
-        sh -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1
+        env QD_UNDER_TEST="$QD_UNDER_TEST" CLAUDE_BIN="${CLAUDE_BIN:-}" \
+        sh -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1
     printf '%s\n' "$?" > "$SCN_OUT.exit"
 
     # OUTCOME observation: the session's zmx socket must live under the jail's

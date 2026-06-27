@@ -198,11 +198,11 @@ impl Drop for McpChild {
 /// absent on this host — print a LOUD skip and let the test return early,
 /// mirroring `relay_server_differential.rs`'s bun_precondition_check (never
 /// silently pass). The fixture was recorded on the QA host at an absolute
-/// path; `SB_MCP_FIXTURE` overrides the location, and `REQUIRE_MCP_FIXTURE=1`
+/// path; `QD_MCP_FIXTURE` overrides the location, and `REQUIRE_MCP_FIXTURE=1`
 /// panics instead of skipping (the QA-host posture — prevents silent-green
 /// rot where the fixture moves and the interop rows stop running).
 fn load_fixture(test_name: &str) -> Option<Value> {
-    let path = std::env::var("SB_MCP_FIXTURE").unwrap_or_else(|_| {
+    let path = std::env::var("QD_MCP_FIXTURE").unwrap_or_else(|_| {
         "/home/u/work/ws/switchboard/rust/exec/ccrelay-mcp-handshake-fixture.json".to_string()
     });
     let path = Path::new(&path);
@@ -212,7 +212,7 @@ fn load_fixture(test_name: &str) -> Option<Value> {
         }
         eprintln!(
             "SKIP mcp interop ({test_name}): captured fixture absent on this host ({path:?}) \
-             — set SB_MCP_FIXTURE to point at it, or REQUIRE_MCP_FIXTURE=1 to enforce."
+             — set QD_MCP_FIXTURE to point at it, or REQUIRE_MCP_FIXTURE=1 to enforce."
         );
         return None;
     }

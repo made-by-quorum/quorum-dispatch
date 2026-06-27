@@ -1,5 +1,5 @@
 //! Codex P2 W4 — LIVE jailed end-to-end of the daemon create sequence
-//! (codex-p2-spec §7.2, §10). Gated on `SB_CODEX_LIVE=1`; a no-op otherwise so
+//! (codex-p2-spec §7.2, §10). Gated on `QD_CODEX_LIVE=1`; a no-op otherwise so
 //! the default suite never spawns a real codex daemon.
 //!
 //! What it drives REAL (no fakes): [`dispatch::create_daemon::run_new_daemon`] with the
@@ -33,9 +33,9 @@ use dispatch::effects::{Env, RealClock};
 use dispatch::exec::RealExec;
 use dispatch::provider::codex::{AppServerRpc, RpcError, WsAppServer};
 
-/// The live gate: skip unless `SB_CODEX_LIVE=1`.
+/// The live gate: skip unless `QD_CODEX_LIVE=1`.
 fn live() -> bool {
-    std::env::var("SB_CODEX_LIVE").as_deref() == Ok("1")
+    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
 }
 
 /// A jail Env: only the codex-relevant vars resolve (HOME / CODEX_HOME / XDG /
@@ -146,7 +146,7 @@ fn reap(pid: i64) {
 #[test]
 fn codex_daemon_create_live_jailed_end_to_end() {
     if !live() {
-        eprintln!("SB_CODEX_LIVE != 1 — skipping the live codex daemon create test");
+        eprintln!("QD_CODEX_LIVE != 1 — skipping the live codex daemon create test");
         return;
     }
 

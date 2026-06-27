@@ -17,14 +17,14 @@
 # constant, so this scenario would FAIL against pinned TS BY CONSTRUCTION (TS emits
 # the constant regardless of any override). It is therefore a RUST-TARGET row: the
 # expectation is what the Rust `launch::claude_flags()` precedence (ADR 0006:
-# SB_CLAUDE_FLAGS env > config.toml `claude_flags` > default triple) MUST produce.
+# QD_CLAUDE_FLAGS env > config.toml `claude_flags` > default triple) MUST produce.
 # There is no symmetric counterpart to record now (recording the TS side would
 # launder the constant-echo bug into gold), so the row is UNticked and carries NO
 # fixture/MATCH-PROOF until the Rust engine exists to DRIVE it (W?+). It is NOT
 # wired into the green verify suite — adding the matrix row UNticked keeps it out of
 # the gate by construction (scenarios are invoked per-row, never auto-globbed).
 #
-# The config seam used here is the env override `SB_CLAUDE_FLAGS` (ADR 0006 tier 1),
+# The config seam used here is the env override `QD_CLAUDE_FLAGS` (ADR 0006 tier 1),
 # the cheapest per-invocation seam; a non-default single flag is supplied and the
 # stub (which dumps its received launch argv verbatim) reports what buildClaudeCmd
 # actually emitted. The assertion is byte-exact on the normalized flag sequence.
@@ -53,8 +53,8 @@ scn_run() {
     # Drive qd-under-test with the config-seam override in the environment. The
     # Rust engine MUST honor it (ADR 0006); pinned TS ignores it (constant) — which
     # is exactly why this is expectation-only.
-    SB_CLAUDE_FLAGS="$SCN_CONFIG_FLAGS" \
-        bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    QD_CLAUDE_FLAGS="$SCN_CONFIG_FLAGS" \
+        bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     local i=0
     while [ "$i" -lt 30 ]; do

@@ -22,18 +22,18 @@
 #   e.g. scripts/build-lock.sh cargo test --workspace
 #
 # ENV:
-#   SB_RUST_LOCK_DIR  Base dir for the lock (default: $HOME/.quorum/dispatch-rust). Override for
+#   QD_RUST_LOCK_DIR  Base dir for the lock (default: $HOME/.quorum/dispatch-rust). Override for
 #                     hermetic tests so we never touch a real ~/.quorum/dispatch-rust.
-#   SB_RUST_LOCK_TIMEOUT  Max seconds to wait for the lock (default: 300).
-#   SB_RUST_LOCK_POLL     Poll interval seconds while waiting (default: 0.2).
+#   QD_RUST_LOCK_TIMEOUT  Max seconds to wait for the lock (default: 300).
+#   QD_RUST_LOCK_POLL     Poll interval seconds while waiting (default: 0.2).
 #
 set -euo pipefail
 
-LOCK_BASE="${SB_RUST_LOCK_DIR:-$HOME/.quorum/dispatch-rust}"
+LOCK_BASE="${QD_RUST_LOCK_DIR:-$HOME/.quorum/dispatch-rust}"
 LOCK_DIR="$LOCK_BASE/build.lock"
 META_FILE="$LOCK_DIR/owner"
-TIMEOUT="${SB_RUST_LOCK_TIMEOUT:-300}"
-POLL="${SB_RUST_LOCK_POLL:-0.2}"
+TIMEOUT="${QD_RUST_LOCK_TIMEOUT:-300}"
+POLL="${QD_RUST_LOCK_POLL:-0.2}"
 
 if [ "$#" -lt 1 ]; then
   echo "build-lock.sh: usage: build-lock.sh <command> [args...]" >&2

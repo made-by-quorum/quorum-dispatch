@@ -46,7 +46,7 @@ scn_run() {
     local hostile_cwd="$HOME/$SCN_HOSTILE_BASE"
     mkdir -p "$hostile_cwd"
 
-    ( cd "$hostile_cwd" && bash -c "exec $SB_UNDER_TEST new $name" ) >/dev/null 2>&1 &
+    ( cd "$hostile_cwd" && bash -c "exec $QD_UNDER_TEST new $name" ) >/dev/null 2>&1 &
     local bootpid=$!
     local i=0 pidfile=""
     while [ "$i" -lt 30 ]; do

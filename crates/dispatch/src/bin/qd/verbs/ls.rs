@@ -851,7 +851,7 @@ mod tests {
     //! seam (`now`) is frozen via `render_table_human_at`, so the relative-time
     //! cell is byte-stable. The 4-col table carries NO paths, so no `<HOME>`
     //! normalization is needed. The named golden `golden/ls-human.txt` is minted
-    //! through the SAME assert_golden discipline (SB_REGEN_GOLDEN=1 to regen,
+    //! through the SAME assert_golden discipline (QD_REGEN_GOLDEN=1 to regen,
     //! byte-equality otherwise).
     use super::*;
     use dispatch::model::{SessionBranch, SessionStatus};
@@ -863,18 +863,18 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
     }
 
-    /// Byte-equality golden assert; SB_REGEN_GOLDEN=1 writes `actual`. Mirrors
+    /// Byte-equality golden assert; QD_REGEN_GOLDEN=1 writes `actual`. Mirrors
     /// the codex_ls.rs `assert_golden` exactly.
     fn assert_golden(name: &str, actual: &str) {
         let path = golden_dir().join(name);
-        if std::env::var("SB_REGEN_GOLDEN").is_ok() {
+        if std::env::var("QD_REGEN_GOLDEN").is_ok() {
             std::fs::create_dir_all(golden_dir()).unwrap();
             std::fs::write(&path, actual).unwrap();
             eprintln!("regenerated golden {name}");
             return;
         }
         let expected = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("missing golden {path:?}: {e} (run SB_REGEN_GOLDEN=1)"));
+            .unwrap_or_else(|e| panic!("missing golden {path:?}: {e} (run QD_REGEN_GOLDEN=1)"));
         assert_eq!(actual, expected, "golden mismatch for {name}");
     }
 

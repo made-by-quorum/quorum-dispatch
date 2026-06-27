@@ -21,7 +21,7 @@ A4 consumes depends on it, so it cannot simply be dropped.
 
 `launch::claude_flags()` resolves flags with precedence:
 
-1. `SB_CLAUDE_FLAGS` env var (whitespace-split) — per-invocation override.
+1. `QD_CLAUDE_FLAGS` env var (whitespace-split) — per-invocation override.
 2. `claude_flags` key in `~/.quorum/dispatch/config.toml` (the file `qd config` owns) —
    per-machine policy.
 3. Built-in default = the TS triple, verbatim — PARITY by default.
@@ -29,7 +29,7 @@ A4 consumes depends on it, so it cannot simply be dropped.
 Resolution is permissive (L8): a missing file/key falls through; a config read
 never fails a launch. The default stays TS-identical so golden parity holds and
 the relay keeps working out of the box; the dangerous part is now a CHOICE that
-an operator can narrow (e.g. `SB_CLAUDE_FLAGS="--dangerously-skip-permissions"`
+an operator can narrow (e.g. `QD_CLAUDE_FLAGS="--dangerously-skip-permissions"`
 for a relay-less jail boot) without forking qd.
 
 ## Consequences

@@ -10,15 +10,15 @@
 # Bash. Run INSIDE the VM. Args: $1 = repo dir, $2 = qd binary, $3 = target dir.
 set -u
 REPO="${1:-/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375}"
-SB_BIN="${2:-/tmp/qd-vm-target/debug/qd}"
+QD_BIN="${2:-/tmp/qd-vm-target/debug/qd}"
 cd "$REPO" || exit 1
 
-export JAIL_SB_CMD="$SB_BIN"
+export JAIL_SB_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$(command -v zmx)"
 . test/golden/lib/jail.sh
 
 echo "=== ENV ==="; uname -m; uname -s; hostname
-echo "qd=$SB_BIN  zmx=$JAIL_ZMX_CMD"
+echo "qd=$QD_BIN  zmx=$JAIL_ZMX_CMD"
 
 jail_establish || { echo "FATAL: jail_establish"; exit 1; }
 trap jail_teardown EXIT
@@ -50,7 +50,7 @@ NAME="${JAIL_PREFIX}lima"
 
 echo
 echo "=== CREATE: qd new (fake claude via CLAUDE_BIN) ==="
-( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" \
+( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
     "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/lima-out.txt" 2> "$JAIL_ROOT/lima-err.txt"
 code=$?

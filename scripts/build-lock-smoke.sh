@@ -8,7 +8,7 @@
 # nested-free, non-interleaved sections: one invocation's ENTER..EXIT completes
 # before the other's ENTER. Interleaving (ENTER A, ENTER B) means the lock failed.
 #
-# Hermetic: uses its own SB_RUST_LOCK_DIR under a mktemp dir; never touches
+# Hermetic: uses its own QD_RUST_LOCK_DIR under a mktemp dir; never touches
 # a real ~/.quorum/dispatch-rust.
 #
 set -euo pipefail
@@ -20,8 +20,8 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/qd-rust-locksmoke.XXXXXX")"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
-export SB_RUST_LOCK_DIR="$WORK/lockbase"
-export SB_RUST_LOCK_TIMEOUT=60
+export QD_RUST_LOCK_DIR="$WORK/lockbase"
+export QD_RUST_LOCK_TIMEOUT=60
 LOG="$WORK/events.log"
 : >"$LOG"
 

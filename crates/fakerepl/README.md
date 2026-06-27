@@ -20,42 +20,42 @@ It is driven by the Level-1 gate in `crates/qd/tests/fakerepl_gate.rs`.
 - **Application output** (the gate's ONLY turn-count oracle — ADD-6, never echo):
   on submit prints `[turn <n>] accepted bytes=<composer_len> composer_crs=<k>`;
   after the busy hold prints `[turn <n>] done`. Flushed per line.
-- **Report JSONL** to `$SB_FAKEREPL_REPORT` (cross-check only): one object per
+- **Report JSONL** to `$QD_FAKEREPL_REPORT` (cross-check only): one object per
   `burst` / `cr` / `transition` / `turn` event. Echo-independent facts only.
 
 ## Env knobs (set by the harness, no RNG inside)
 
 | var | default | meaning |
 |-----|---------|---------|
-| `--name <n>` / `SB_FAKEREPL_NAME` | `fakerepl` | registry-row name (find_pid_file key) |
-| `SB_FAKEREPL_PASTE_THRESHOLD` | `8` | burst ≥ this many bytes ⇒ PASTE |
-| `SB_FAKEREPL_BUSY_MS` | `500` | busy hold after a submit |
-| `SB_FAKEREPL_ABSORB_ALL_CRS` | unset | `=1` ⇒ EVERY CR absorbed (never submits) |
-| `SB_FAKEREPL_DROP_OVER_BYTES` | unset | tty-queue OVERFLOW model: a single burst **>** N bytes is DROPPED WHOLESALE (no composer content, a `drop` report event, no turn). Models the live ~4096B canonical-tty-queue overflow class (ADR 0009 mode (a)); the negative-control pairing uses `=4096`. The live drop boundary is machine/load-dependent — this knob models THE CLASS, it does NOT assert a specific size. |
-| `SB_FAKEREPL_STALL_AFTER_BYTES` | unset | W8 reader-stall seam (D16 window): once cumulative INPUT bytes first reach N, the reader PAUSES (one-shot). Arms the seam. |
-| `SB_FAKEREPL_STALL_MS` | `0` | W8: how long (ms) the reader pause lasts after it triggers. |
-| `SB_FAKEREPL_STALL_QUEUE_CAP` | `0` | W8: bytes admitted to the composer DURING the pause (counted from the stall trigger). Bytes beyond the cap that arrive while paused are DROPPED (saturation → a `stall_drop` report event). |
-| `SB_FAKEREPL_CONVO_JSONL` | unset | W8: path for the conversation transcript. When set, every SUBMIT appends a claude-shaped user record `{"type":"user","message":{"content":"<composer>"}}` and every turn-done appends a stub `{"type":"assistant","message":{"stop_reason":"end_turn",...}}`. serde_json escapes; flushed per line (the SUT's verify step polls this file). |
-| `SB_FAKEREPL_SESSION_ID` | unset | W8 end-to-end leg: the registry row gains `"sessionId": "<id>"` so the SUT's registry→sessionId→find_jsonl_path verify resolution chain works against the fakerepl (the scenario places `SB_FAKEREPL_CONVO_JSONL` at the projects-dir path this id resolves to). Unset → row byte-identical to before. |
-| `SB_FAKEREPL_REPORT` | unset | path for the JSONL report |
+| `--name <n>` / `QD_FAKEREPL_NAME` | `fakerepl` | registry-row name (find_pid_file key) |
+| `QD_FAKEREPL_PASTE_THRESHOLD` | `8` | burst ≥ this many bytes ⇒ PASTE |
+| `QD_FAKEREPL_BUSY_MS` | `500` | busy hold after a submit |
+| `QD_FAKEREPL_ABSORB_ALL_CRS` | unset | `=1` ⇒ EVERY CR absorbed (never submits) |
+| `QD_FAKEREPL_DROP_OVER_BYTES` | unset | tty-queue OVERFLOW model: a single burst **>** N bytes is DROPPED WHOLESALE (no composer content, a `drop` report event, no turn). Models the live ~4096B canonical-tty-queue overflow class (ADR 0009 mode (a)); the negative-control pairing uses `=4096`. The live drop boundary is machine/load-dependent — this knob models THE CLASS, it does NOT assert a specific size. |
+| `QD_FAKEREPL_STALL_AFTER_BYTES` | unset | W8 reader-stall seam (D16 window): once cumulative INPUT bytes first reach N, the reader PAUSES (one-shot). Arms the seam. |
+| `QD_FAKEREPL_STALL_MS` | `0` | W8: how long (ms) the reader pause lasts after it triggers. |
+| `QD_FAKEREPL_STALL_QUEUE_CAP` | `0` | W8: bytes admitted to the composer DURING the pause (counted from the stall trigger). Bytes beyond the cap that arrive while paused are DROPPED (saturation → a `stall_drop` report event). |
+| `QD_FAKEREPL_CONVO_JSONL` | unset | W8: path for the conversation transcript. When set, every SUBMIT appends a claude-shaped user record `{"type":"user","message":{"content":"<composer>"}}` and every turn-done appends a stub `{"type":"assistant","message":{"stop_reason":"end_turn",...}}`. serde_json escapes; flushed per line (the SUT's verify step polls this file). |
+| `QD_FAKEREPL_SESSION_ID` | unset | W8 end-to-end leg: the registry row gains `"sessionId": "<id>"` so the SUT's registry→sessionId→find_jsonl_path verify resolution chain works against the fakerepl (the scenario places `QD_FAKEREPL_CONVO_JSONL` at the projects-dir path this id resolves to). Unset → row byte-identical to before. |
+| `QD_FAKEREPL_REPORT` | unset | path for the JSONL report |
 
 ## Burst model (a4-spec §5, deterministic)
 
 stdin chunks arriving **< `GAP_MS` (50ms)** apart coalesce into ONE burst. A
-burst is a PASTE iff its total length ≥ `SB_FAKEREPL_PASTE_THRESHOLD`. CR
+burst is a PASTE iff its total length ≥ `QD_FAKEREPL_PASTE_THRESHOLD`. CR
 dispositions:
 
 - **busy** → recorded `cr_while_busy`, absorbed as `\n`, **no turn** (queued
   input, like claude). The busy hold is a TIMED STATE, not a blocking sleep, so
   the loop keeps reading and CRs arriving while busy are observed.
-- **`SB_FAKEREPL_ABSORB_ALL_CRS=1`** → every CR absorbed as `\n`.
+- **`QD_FAKEREPL_ABSORB_ALL_CRS=1`** → every CR absorbed as `\n`.
 - **inside a paste burst** → absorbed as `\n`.
 - **empty composer** → `empty_noop`: submits nothing (no turn). claude does not
   start a turn for an empty prompt; load-bearing for the overflow model (a dropped
   write leaves the composer empty, so the trailing `\r` must NOT fake a turn).
 - **lone non-paste keystroke CR on a NON-empty composer** → SUBMIT the composer.
 
-Independently of the burst model, **`SB_FAKEREPL_DROP_OVER_BYTES=N`** drops any
+Independently of the burst model, **`QD_FAKEREPL_DROP_OVER_BYTES=N`** drops any
 single burst longer than N bytes wholesale (the tty-queue overflow class). The SUT's
 ≤1024B chunking keeps every write under any realistic bound, so a chunked payload
 passes; an unchunked single ≥N-byte write is dropped — the negative-control pairing.
@@ -66,8 +66,8 @@ trailing `\n` would never arrive, and `ICRNL` would mangle CRs.
 
 ## W8 reader-stall / saturation model (D16 window)
 
-`SB_FAKEREPL_STALL_AFTER_BYTES=K` + `SB_FAKEREPL_STALL_MS=T` +
-`SB_FAKEREPL_STALL_QUEUE_CAP=Q` model the D16 silent-mid-truncation window: under
+`QD_FAKEREPL_STALL_AFTER_BYTES=K` + `QD_FAKEREPL_STALL_MS=T` +
+`QD_FAKEREPL_STALL_QUEUE_CAP=Q` model the D16 silent-mid-truncation window: under
 a sustained reader stall mid-chunked-delivery the tty queue saturates and
 mid-payload bytes drop silently. The fakerepl reproduces this **deterministically
 at the model boundary** (the spec's sanctioned simplification — a strictly
@@ -107,14 +107,14 @@ byte is admitted; with `CONVO_JSONL` unset no transcript is written.
 Refuses (stderr naming the failed check + **exit 13**) unless ALL hold:
 
 - (a) `HOME` matches `*/sbrg-runs/*/home` (component-based, not substring);
-- (b) with `root := dirname(HOME)`: `SB_HOME == root/sb_home`,
+- (b) with `root := dirname(HOME)`: `QD_HOME == root/sb_home`,
   `ZMX_DIR == root/zmx`, `TMPDIR == root/tmp`.
 
 Derived ENTIRELY from the EXPORTED isolation set (`test/golden/lib/jail.sh`
 :139-146). It does **not** depend on `JAIL_ROOT`/`JAIL_RUNID`/`JAIL_PREFIX` —
 those are shell-local in jail.sh (NO `export`), so a child across the zmx
 boundary never sees them. (b) is the COHERENCE check, so a partial spoof (HOME
-jail-shaped but SB_HOME elsewhere) is refused.
+jail-shaped but QD_HOME elsewhere) is refused.
 
 ## Locating the binary from the gate test
 
@@ -171,7 +171,7 @@ producing FALSE drops that are a harness artifact, not a discipline failure.
 
 Real claude busy windows are **seconds** (boot-to-accept ~1.5s, responses ~15s),
 so a sub-250ms acceptance window is not a realistic signal. The gate therefore
-floors `SB_FAKEREPL_BUSY_MS` at **700ms** in every `deliver_prompt`-driven row
+floors `QD_FAKEREPL_BUSY_MS` at **700ms** in every `deliver_prompt`-driven row
 (and the soak varies 700–1500ms), instead of the spec's nominal 100–1500ms
 range. This deviation is surfaced to the phase lead and documented in
 `soak_knobs()` in the gate.

@@ -1,4 +1,4 @@
-G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under SB_MUX=zmx, jailed ZMX_DIR
+G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under QD_MUX=zmx, jailed ZMX_DIR
 
 zmx binary: /opt/homebrew/bin/zmx
 qd new (zmx): exit=0

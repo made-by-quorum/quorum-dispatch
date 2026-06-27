@@ -41,9 +41,9 @@ pub struct DaemonHeadlessFactory {
     /// The idstore path (`<state_dir>/ids.jsonl`) — the SAME store `qd ls` folds.
     /// WP-B5-ii-b PROOF 3: on a headless RESUME the factory resolves the child's
     /// OWN stable sbId from its recorded `session_id` here (`mint_or_get`) and
-    /// injects it as `SB_SESSION_ID` (internal self-identity, parity with the
+    /// injects it as `QD_SESSION_ID` (internal self-identity, parity with the
     /// interactive path). Because it is the same store keyed by the same UUID, the
-    /// injected `SB_SESSION_ID` MATCHES the sbId `qd ls` surfaces for the
+    /// injected `QD_SESSION_ID` MATCHES the sbId `qd ls` surfaces for the
     /// daemon-minted child-pid row (the row↔env consistency invariant).
     pub ids_path: PathBuf,
     /// R3b-Step-0: the per-daemon shared **signal-B** progress producer. Threaded
@@ -113,14 +113,14 @@ impl HeadlessFactory for DaemonHeadlessFactory {
         // these ahead of `-p PROMPT`).
         let mut flags = self.flags.clone();
         flags.extend(claude_args.iter().cloned());
-        // WP-B5-ii-b PROOF 3 (headless SB_SESSION_ID parity, qd-supervisor-10
-        // ruling): a headless agent must self-identify via `$SB_SESSION_ID` exactly
+        // WP-B5-ii-b PROOF 3 (headless QD_SESSION_ID parity, qd-supervisor-10
+        // ruling): a headless agent must self-identify via `$QD_SESSION_ID` exactly
         // as the interactive path does (whoami.rs PREFERS it; relay self-registration
         // + self-directed `qd` need it). The interactive/zmux path injects it via
         // `launch_env_pairs` (`resume.rs` → `prepare_claude_resume_env`); the D3
         // headless path DIVERGED and never did — that divergence is the bug this
         // closes. Resolve the child's OWN stable sbId from its RECORDED `session_id`
-        // via the SAME idstore `qd ls` folds (so the injected `SB_SESSION_ID`
+        // via the SAME idstore `qd ls` folds (so the injected `QD_SESSION_ID`
         // MATCHES the sbId of the daemon-minted child-pid row — one identity, two
         // surfaces, the row↔env consistency invariant). A future fork resumes its
         // OWN session_id → mints its OWN sbId (never the parent's) — forward-
@@ -139,14 +139,14 @@ impl HeadlessFactory for DaemonHeadlessFactory {
                 Err(e) => {
                     // Self-id is best-effort — never fail the launch on an idstore
                     // hiccup; the external child-pid row identity still lands.
-                    eprintln!("qd[daemon_headless]: SB_SESSION_ID resolve skipped: {e}");
+                    eprintln!("qd[daemon_headless]: QD_SESSION_ID resolve skipped: {e}");
                     None
                 }
             }
         });
         // Reuse the ONE shared env-assembly (`launch_env_pairs`): backend pairs
         // FIRST, then `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` (rides every launch —
-        // the nested-spawn registration fix, board STATE 130), then `SB_SESSION_ID`
+        // the nested-spawn registration fix, board STATE 130), then `QD_SESSION_ID`
         // LAST (never in the capture whitelist — engine-asserted, never inherited).
         // `RenderMode::AltScreen` injects NO screen var (a headless agent has no TUI),
         // so START's env is byte-identical to the prior hand-rolled FORCE-only env.
@@ -327,15 +327,15 @@ mod tests {
     }
 
     /// WP-B5-ii-b PROOF 3 (cheap default-floor mirror of the a1/a4 end-to-end
-    /// seeds): a headless RESUME injects `SB_SESSION_ID` LAST, resolved from the
+    /// seeds): a headless RESUME injects `QD_SESSION_ID` LAST, resolved from the
     /// child's OWN recorded `session_id` via the SAME idstore — so the env self-id
     /// MATCHES the sbId `qd ls` surfaces for the daemon-minted row (the row↔env
     /// consistency invariant). A START launch (`resume_session_id == None`) injects
-    /// NONE (byte-stable with pre-B5-ii-b start: FORCE only, no `SB_SESSION_ID`).
+    /// NONE (byte-stable with pre-B5-ii-b start: FORCE only, no `QD_SESSION_ID`).
     ///
     /// FIX-SHAPED MUTATION (red-before): drop the `resume_session_id.and_then(...)`
     /// resolution (force `sb_session_id = None`, the pre-fix D3 divergence) → the
-    /// resume env carries NO `SB_SESSION_ID` → the "resume injects the recorded sbId"
+    /// resume env carries NO `QD_SESSION_ID` → the "resume injects the recorded sbId"
     /// assert reds (`a1` got `''`).
     #[test]
     fn resolve_injects_sb_session_id_on_resume_matching_idstore() {
@@ -354,7 +354,7 @@ mod tests {
         };
         let uuid = "11111111-2222-3333-4444-555555555555";
 
-        // RESUME: the injected SB_SESSION_ID is the sbId the SAME idstore resolves for
+        // RESUME: the injected QD_SESSION_ID is the sbId the SAME idstore resolves for
         // this session_id (the row↔env match — `qd ls` folds the same store/UUID).
         let plan = f.resolve("wk", "p", Some(uuid), None, &[]).unwrap();
         let want =
@@ -364,7 +364,7 @@ mod tests {
             .launch
             .env
             .iter()
-            .find(|(k, _)| k == "SB_SESSION_ID")
+            .find(|(k, _)| k == "QD_SESSION_ID")
             .map(|(_, v)| v.clone());
         assert_eq!(
             sid.as_deref(),
@@ -374,15 +374,15 @@ mod tests {
         // It lands LAST (the launch_env_pairs discipline).
         assert_eq!(
             plan.launch.env.last().map(|(k, _)| k.as_str()),
-            Some("SB_SESSION_ID"),
-            "SB_SESSION_ID lands LAST in the env"
+            Some("QD_SESSION_ID"),
+            "QD_SESSION_ID lands LAST in the env"
         );
 
-        // START (no resume_session_id): no SB_SESSION_ID — byte-stable with pre-fix.
+        // START (no resume_session_id): no QD_SESSION_ID — byte-stable with pre-fix.
         let start = f.resolve("wk", "p", None, None, &[]).unwrap();
         assert!(
-            !start.launch.env.iter().any(|(k, _)| k == "SB_SESSION_ID"),
-            "start injects no SB_SESSION_ID (the UUID is unknown pre-system/init)"
+            !start.launch.env.iter().any(|(k, _)| k == "QD_SESSION_ID"),
+            "start injects no QD_SESSION_ID (the UUID is unknown pre-system/init)"
         );
     }
 

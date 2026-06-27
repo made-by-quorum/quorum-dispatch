@@ -3,26 +3,26 @@
 #
 # Drives the spec §7 G-A3 (fault-model) + G-A6 (opaque-payload / usage / dirty-
 # state) rows fully JAILED, against the qd-under-test binary. Every qd invocation
-# runs through the jail env (jail_sb) and touches ONLY the jail HOME/SB_HOME — the
+# runs through the jail env (jail_sb) and touches ONLY the jail HOME/QD_HOME — the
 # `qd mark`/`ls`/`info` engine invocations with stub state are sanctioned (spec:
-# they touch only jail HOME/SB_HOME). No real sessions are created.
+# they touch only jail HOME/QD_HOME). No real sessions are created.
 #
 # Per-row PASS/FAIL + a SUMMARY footer. Bash 3.2 floor (macOS): no assoc arrays,
 # no ${var,,}, no mapfile. jail_establish/teardown with an EXIT trap.
 #
 # Usage:  bash test/golden/scenarios/a6_telemetry.sh
-# Env:    SB_BIN (qd-under-test; default target/debug/qd)
+# Env:    QD_BIN (qd-under-test; default target/debug/qd)
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 cd "$REPO_ROOT" || { echo "FATAL: cannot cd to repo root"; exit 1; }
 
-SB_BIN="${SB_BIN:-$REPO_ROOT/target/debug/qd}"
-[ -x "$SB_BIN" ] || { echo "FATAL: qd binary missing: $SB_BIN (build it first)"; exit 2; }
+QD_BIN="${QD_BIN:-$REPO_ROOT/target/debug/qd}"
+[ -x "$QD_BIN" ] || { echo "FATAL: qd binary missing: $QD_BIN (build it first)"; exit 2; }
 
 # Point the jail's qd-under-test at our binary BEFORE sourcing jail.sh.
-export JAIL_SB_CMD="$SB_BIN"
+export JAIL_SB_CMD="$QD_BIN"
 
 # shellcheck source=test/golden/lib/jail.sh
 . "$REPO_ROOT/test/golden/lib/jail.sh"
@@ -43,10 +43,10 @@ RUNID="a6tel-$$"
 jail_establish "$RUNID" || { echo "FATAL: jail_establish failed"; exit 3; }
 trap 'jail_teardown' EXIT
 
-# The marks file the engine writes to (SB_HOME-honored, same as `qd mark`).
-MARKS="$SB_HOME/state/marks.jsonl"
+# The marks file the engine writes to (QD_HOME-honored, same as `qd mark`).
+MARKS="$QD_HOME/state/marks.jsonl"
 SESSIONS_DIR="$HOME/.claude/sessions"
-mkdir -p "$SB_HOME/state" "$SESSIONS_DIR"
+mkdir -p "$QD_HOME/state" "$SESSIONS_DIR"
 
 # ---------------------------------------------------------------------------
 # Helper: seed a live-shape registry entry so `info`/`ls --json` can resolve a
@@ -202,12 +202,12 @@ hdr "G-A6b kill -9 a qd-mark loop driver → whole lines + ≤1 torn tail, fold 
 seed_registry 999005 "${JAIL_PREFIX}epsilon" "sid-epsilon"
 : > "$MARKS"
 # Background loop firing `qd mark` (sub-PIPE_BUF lines). The subshell INHERITS the
-# jailed HOME/SB_HOME exported by jail_establish, so every append lands in the
+# jailed HOME/QD_HOME exported by jail_establish, so every append lands in the
 # jail MARKS file. We kill -9 the LOOP PID directly (tracked via $!) — we do NOT
 # touch jail_register_pid (it requires <pid> <name>; a 1-arg call trips set -u and
 # would abort the script). The kill targets only OUR loop PID.
 ( i=0; while [ "$i" -lt 200 ]; do
-    "$SB_BIN" mark "${JAIL_PREFIX}epsilon" "{\"n\":$i}" >/dev/null 2>&1
+    "$QD_BIN" mark "${JAIL_PREFIX}epsilon" "{\"n\":$i}" >/dev/null 2>&1
     i=$((i+1))
   done ) &
 LOOP_PID=$!

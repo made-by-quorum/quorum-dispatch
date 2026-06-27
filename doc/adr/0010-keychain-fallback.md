@@ -30,7 +30,7 @@ agent/SSH session inherits a locked login keychain; `security
 add-generic-password` then fails with OSStatus **-25308**
 (`errSecInteractionNotAllowed`), whose CLI text is `User interaction is not
 allowed`. The TS has no fallback, so the secret cannot be stored at all — the
-documented workaround is `SB_SECRET_BACKEND=file qd config set <key> <value>`.
+documented workaround is `QD_SECRET_BACKEND=file qd config set <key> <value>`.
 
 The inbox bug explicitly routes the fix to the A5 Rust port: "the Rust port must
 implement locked-keychain fallback, and its gate should include a
@@ -39,7 +39,7 @@ headless-context config-set test."
 ## Decision
 
 When the keychain backend is **SELECTED** (the macOS+`security` default — NOT
-when `SB_SECRET_BACKEND=keychain` is set) and a `security` operation hits the
+when `QD_SECRET_BACKEND=keychain` is set) and a `security` operation hits the
 locked / no-interaction signature, retry the operation on the **file backend**
 and print a one-per-process notice.
 
@@ -57,17 +57,17 @@ happy path pays zero overhead and triggers no extra keychain prompts. A
 `security show-keychain-info` pre-probe was **REJECTED** — it can itself trigger a
 UI prompt in some states and adds a per-op subprocess.
 
-**Env-forced keychain NEVER falls back.** `SB_SECRET_BACKEND=keychain` is an
+**Env-forced keychain NEVER falls back.** `QD_SECRET_BACKEND=keychain` is an
 explicit operator demand for the OS-encrypted backend; a silent downgrade to a
 weaker file copy would betray that intent. Under a lock, the env-forced **SET**
 path fails **loud (exit 1)** with an actionable message (unlock the keychain or
-use `SB_SECRET_BACKEND=file`). This is the security-conservative reading.
+use `QD_SECRET_BACKEND=file`). This is the security-conservative reading.
 
 **Env-forced keychain + locked on a GET — diagnostic-stderr-only divergence
 (orc-2 ruling `relay-1780639217973-4`, "middle path c").** A GET cannot fail
 loud the way a SET does without breaking presence-probing scripts (a great many
 operators run `qd config get <key>` purely to branch on set/not-set). So under
-env-forced `SB_SECRET_BACKEND=keychain` + the detected locked signature on a
+env-forced `QD_SECRET_BACKEND=keychain` + the detected locked signature on a
 GET:
 
 - **stdout and exit are UNCHANGED — exact TS parity.** The value resolves to
@@ -76,7 +76,7 @@ GET:
 - **BUT one attributable stderr diagnostic line is emitted** when the null is
   attributable to the detected-locked signature (and only then), verbatim:
 
-  > `warning: keychain is locked — a key may exist but is inaccessible (SB_SECRET_BACKEND=keychain is env-forced; unlock or unset to use fallback).`
+  > `warning: keychain is locked — a key may exist but is inaccessible (QD_SECRET_BACKEND=keychain is env-forced; unlock or unset to use fallback).`
 
 - **Once per process.** The line is gated by its OWN once-per-process flag
   (`locked_diag_emitted`, separate from the fallback notice's flag) so that
@@ -166,13 +166,13 @@ secret to live only in process memory can still do so.
   2. `config set` non-TTY no-value → loud exit 1 (A5 §3.3; TS attempts the
      hidden prompt and breaks under zmx — inbox bug #1). Message:
      `qd config set: stdin is not a TTY; pass the value as an argument or use
-     SB_SECRET_BACKEND=file qd config set <key> <value>.`
+     QD_SECRET_BACKEND=file qd config set <key> <value>.`
 
 - The notice is **additive output** vs TS — golden shapes that compare `config
   set` / `config path` stderr under a locked keychain account for it.
 
 - The `select_backend` invalid-value behavior is matched to TS exactly: an
-  `SB_SECRET_BACKEND` value other than `file` / `keychain` is **silently ignored**
+  `QD_SECRET_BACKEND` value other than `file` / `keychain` is **silently ignored**
   (falls through to the platform default, no stderr notice). Matrix note recorded.
 
 - **Deferred:** a real (unlocked) keychain round-trip is a supervised DAYTIME

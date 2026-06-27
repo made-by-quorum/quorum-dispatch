@@ -34,7 +34,7 @@ SCN_STUB_BACKED=1
 scn_run() {
     local name
     name="$(scn_session_name tml)"
-    bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     local i=0 pidfile=""
     while [ "$i" -lt 30 ]; do

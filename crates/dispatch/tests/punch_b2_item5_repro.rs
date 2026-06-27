@@ -4,11 +4,11 @@
 //! PHASE-1 DEFECT (pinned then, fixed now): `qd send:relay` derived
 //! `from_session` from the INHERITED `CLAUDE_CODE_SESSION_ID`, so any process
 //! inheriting another session's env mis-attributed its messages — even when
-//! the engine's OWN identity (`SB_SESSION_ID`, idstore-resolvable) said
+//! the engine's OWN identity (`QD_SESSION_ID`, idstore-resolvable) said
 //! otherwise.
 //!
 //! PHASE-2 FIX (ratified precedence, pinned here full-stack): ENGINE-ASSERTED
-//! identity first — `SB_SESSION_ID` resolved through the idstore to the
+//! identity first — `QD_SESSION_ID` resolved through the idstore to the
 //! claude uuid (namespace preserved) — then `CLAUDE_CODE_SESSION_ID` only
 //! when no engine identity resolves, then `"cli"`. The unit precedence matrix
 //! lives in verbs/send_relay.rs; these rows pin the surface end-to-end.
@@ -18,7 +18,7 @@
 //! `notifications/claude/channel` frame on the target relay's MCP stdout —
 //! the exact surface where the fleet observed the wrong identity.
 //!
-//! Hermetic: tempdir HOME/SB_HOME; relay binds from RELAY_PORT_BASE 33700
+//! Hermetic: tempdir HOME/QD_HOME; relay binds from RELAY_PORT_BASE 33700
 //! (outside the live 8900-8999 band); registry/idstore are staged files.
 
 use std::io::{BufRead, BufReader, Write};
@@ -39,7 +39,7 @@ const READ_BUDGET: Duration = Duration::from_secs(8);
 /// The three identities in play:
 /// - the TARGET relay session (who we send to);
 /// - the IMPOSTER uuid planted in the inherited CLAUDE_CODE_SESSION_ID;
-/// - the TRUE identity: SB_SESSION_ID stable id, idstore-bound to a claude uuid.
+/// - the TRUE identity: QD_SESSION_ID stable id, idstore-bound to a claude uuid.
 const TARGET_UUID: &str = "11111111-aaaa-4bbb-8ccc-222222222222";
 const IMPOSTER_UUID: &str = "99999999-dead-4bee-8eef-888888888888";
 const TRUE_STABLE_ID: &str = "ab3kx9mq";
@@ -174,7 +174,7 @@ impl Drop for RelayChild {
 /// "tgt" to TARGET_UUID with pid = THIS TEST PROCESS (alive; the relay child
 /// is our direct child, so the verb's fast-path pid-ancestry walk —
 /// relay pid → test pid — matches in one hop), zmx/tmp dirs, and the idstore
-/// mint binding TRUE_STABLE_ID ↔ TRUE_UUID under SB_HOME/state.
+/// mint binding TRUE_STABLE_ID ↔ TRUE_UUID under QD_HOME/state.
 fn stage_home(home: &Path) {
     let claude = home.join(".claude");
     std::fs::create_dir_all(claude.join("sessions")).unwrap();
@@ -212,14 +212,14 @@ fn run_send_relay(home: &Path, message: &str, plant_env: impl FnOnce(&mut Comman
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_qd"));
     cmd.args(["send:relay", "tgt", message])
         .env("HOME", home)
-        .env("SB_HOME", home.join(".quorum").join("dispatch"))
+        .env("QD_HOME", home.join(".quorum").join("dispatch"))
         .env("ZMX_DIR", home.join("zmx"))
         .env("TMPDIR", home.join("tmp"))
         .env("XDG_RUNTIME_DIR", home.join("tmp"))
         // Keep any fallback port scan inside the jail band.
         .env("RELAY_PORT_BASE", PORT_BASE.to_string())
         .env_remove("CLAUDE_CODE_SESSION_ID")
-        .env_remove("SB_SESSION_ID");
+        .env_remove("QD_SESSION_ID");
     plant_env(&mut cmd);
     let out = cmd.output().expect("run qd send:relay");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -238,7 +238,7 @@ fn run_send_relay(home: &Path, message: &str, plant_env: impl FnOnce(&mut Comman
 }
 
 // ---------------------------------------------------------------------------
-// FIXED (was the phase-1 defect pin) — both identities planted: SB_SESSION_ID
+// FIXED (was the phase-1 defect pin) — both identities planted: QD_SESSION_ID
 // (the engine birth property, idstore-bound to TRUE_UUID) and a leaked
 // CLAUDE_CODE_SESSION_ID from a different session. The channel header now
 // carries the ENGINE-ASSERTED identity (the idstore-resolved claude uuid —
@@ -257,7 +257,7 @@ fn engine_identity_wins_over_inherited_env_uuid() {
 
     let mid = run_send_relay(home, "attribution probe", |cmd| {
         cmd.env("CLAUDE_CODE_SESSION_ID", IMPOSTER_UUID)
-            .env("SB_SESSION_ID", TRUE_STABLE_ID);
+            .env("QD_SESSION_ID", TRUE_STABLE_ID);
     });
 
     let notif = relay.next_json_matching("channel notification", |v| {
@@ -277,13 +277,13 @@ fn engine_identity_wins_over_inherited_env_uuid() {
         notif["params"]["meta"]["from_session"].as_str(),
         Some(TRUE_UUID),
         "from_session must be the ENGINE-ASSERTED identity \
-         (SB_SESSION_ID={TRUE_STABLE_ID} → idstore → {TRUE_UUID}); the leaked \
+         (QD_SESSION_ID={TRUE_STABLE_ID} → idstore → {TRUE_UUID}); the leaked \
          CLAUDE_CODE_SESSION_ID ({IMPOSTER_UUID}) must no longer win"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Fallback leg pinned full-stack: SB_SESSION_ID present but UNRESOLVABLE
+// Fallback leg pinned full-stack: QD_SESSION_ID present but UNRESOLVABLE
 // (unknown to the idstore) → the derivation falls through to the inherited
 // CLAUDE_CODE_SESSION_ID rather than inventing an identity.
 // ---------------------------------------------------------------------------
@@ -300,7 +300,7 @@ fn unresolvable_engine_identity_falls_back_to_claude_env() {
     let mid = run_send_relay(home, "fallback probe", |cmd| {
         cmd.env("CLAUDE_CODE_SESSION_ID", IMPOSTER_UUID)
             // valid id SHAPE, but no idstore mint for it → unresolvable.
-            .env("SB_SESSION_ID", "zzzzzzzz");
+            .env("QD_SESSION_ID", "zzzzzzzz");
     });
 
     let notif = relay.next_json_matching("channel notification", |v| {
@@ -313,14 +313,14 @@ fn unresolvable_engine_identity_falls_back_to_claude_env() {
     assert_eq!(
         notif["params"]["meta"]["from_session"].as_str(),
         Some(IMPOSTER_UUID),
-        "an unresolvable SB_SESSION_ID falls back to CLAUDE_CODE_SESSION_ID — \
+        "an unresolvable QD_SESSION_ID falls back to CLAUDE_CODE_SESSION_ID — \
          the derivation never invents an identity"
     );
 }
 
 // ---------------------------------------------------------------------------
 // Control — the operator-shell attribution that phase 2 must NOT break: with
-// neither CLAUDE_CODE_SESSION_ID nor SB_SESSION_ID in the env, from_session
+// neither CLAUDE_CODE_SESSION_ID nor QD_SESSION_ID in the env, from_session
 // is "cli" (verbs/send_relay.rs:111 fallback).
 // ---------------------------------------------------------------------------
 #[test]

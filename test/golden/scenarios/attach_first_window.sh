@@ -39,7 +39,7 @@ SCN_SENTINEL_K=7   # the deterministic backlog sentinel "SBLINE 7"
 scn_run() {
     local name
     name="$(scn_session_name afw)"
-    bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     local i=0 pidfile=""
     while [ "$i" -lt 30 ]; do
@@ -65,8 +65,8 @@ scn_run() {
     # targets OUR jailed session, not the recorder's own zmx wrapper.
     local attach_raw="$SCN_OUT.attachcap"
     scn_capture_pty "$attach_raw" 6 --inject-b64 "HA==" --inject-delay 3 -- \
-        env -u ZMX_SESSION SB_UNDER_TEST="$SB_UNDER_TEST" CLAUDE_BIN="${CLAUDE_BIN:-}" \
-        sh -c "exec $SB_UNDER_TEST attach $name" >/dev/null 2>&1
+        env -u ZMX_SESSION QD_UNDER_TEST="$QD_UNDER_TEST" CLAUDE_BIN="${CLAUDE_BIN:-}" \
+        sh -c "exec $QD_UNDER_TEST attach $name" >/dev/null 2>&1
 
     # FIRST WINDOW = the first 1024 bytes of the attach capture.
     local window="$SCN_OUT.window"

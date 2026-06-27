@@ -32,7 +32,7 @@
 # normalize trivially (a 1 stays a 1; the literal mid- token carries no pid/ts/path).
 #
 # §S: drives the pinned-TS qd against the stub's LIVE in-jail relay endpoint (the
-# stub binds $SB_RELAY_PORT and writes the sidecar). Comparator class = byte-exact on
+# stub binds $QRM_RELAY_PORT and writes the sidecar). Comparator class = byte-exact on
 # the normalized CONTRACT shape + the derived boolean/equality/token lines.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_scenario_lib.sh"
 
@@ -49,9 +49,9 @@ scn_run() {
     local name
     name="$(scn_session_name rl)"
     # Boot a stub-backed session WITH relay (the stub's server:relay flag makes it
-    # bind $SB_RELAY_PORT + write the sidecar). Boot via qd so zmx + PID-file +
+    # bind $QRM_RELAY_PORT + write the sidecar). Boot via qd so zmx + PID-file +
     # relay all come up the real way.
-    bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     # Wait for the name-matched PID file (boot complete).
     local i=0 pidfile=""
@@ -89,7 +89,7 @@ try:
     print(" keys=" + ",".join(sorted(keys)) + " status=" + str(d.get("status")))
 except Exception as e:
     print(" ERROR")
-' "${SB_RELAY_PORT:-0}"
+' "${QRM_RELAY_PORT:-0}"
 
         # (c) POST /message -> {message_id} — the send:relay client contract, driven
         # against the live stub endpoint (the real round-trip, not a fabricated line).
@@ -105,7 +105,7 @@ try:
     print(" has_message_id=" + ("1" if "message_id" in d else "0"))
 except Exception:
     print(" ERROR")
-' "${SB_RELAY_PORT:-0}" "$SCN_PROBE_TEXT"
+' "${QRM_RELAY_PORT:-0}" "$SCN_PROBE_TEXT"
 
         # (d) ls join — relayPort surfaces in `qd ls --json` (PID-parentage join).
         printf 'CONTRACT ls-join:'
@@ -129,7 +129,7 @@ print(" relay_joined_rows=%d has_relayPort=%s" % (joined, "1" if joined else "0"
         # pid or wrong sessionId or empty message_id FLIPS a derived line (B2). The
         # normalizer then collapses these trivially (1 stays 1; the mid- token has no
         # pid/ts/path byte).
-        python3 - "$sc" "${SB_RELAY_PORT:-0}" "$SCN_OUT.lsjson" "$SCN_PROBE_TEXT" "$pidfile" <<'PY'
+        python3 - "$sc" "${QRM_RELAY_PORT:-0}" "$SCN_OUT.lsjson" "$SCN_PROBE_TEXT" "$pidfile" <<'PY'
 import sys, json, hashlib, urllib.request, subprocess
 
 sidecar_path, port, lsjson_path, probe_text, pidfile = sys.argv[1:6]

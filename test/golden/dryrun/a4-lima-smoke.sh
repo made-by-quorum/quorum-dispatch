@@ -11,14 +11,14 @@
 # Args: $1 = repo dir in VM, $2 = qd binary in VM, $3 = (unused).
 set -u
 REPO="${1:-/tmp/wt-a4-lead}"
-SB_BIN="${2:-/tmp/qd-vm-target/debug/qd}"
+QD_BIN="${2:-/tmp/qd-vm-target/debug/qd}"
 cd "$REPO" || { echo "FATAL: no repo at $REPO"; exit 1; }
-export JAIL_SB_CMD="$SB_BIN"
+export JAIL_SB_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$(command -v zmx)"
 . test/golden/lib/jail.sh
 
 echo "=== ENV ==="; uname -m; uname -s; hostname
-echo "qd=$SB_BIN  zmx=$JAIL_ZMX_CMD  claude=$(claude --version 2>&1 | head -1)"
+echo "qd=$QD_BIN  zmx=$JAIL_ZMX_CMD  claude=$(claude --version 2>&1 | head -1)"
 
 echo
 echo "=== REAL-CLAUDE-ON-LINUX: NAMED EXCLUSION ==="
@@ -59,7 +59,7 @@ NAME="${JAIL_PREFIX}lima"
 
 echo
 echo "=== CREATE: qd new (fake claude) ==="
-( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" \
+( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
     "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) > "$JAIL_ROOT/o" 2> "$JAIL_ROOT/e"
 code=$?
 echo "  exit=$code  stdout: $(cat "$JAIL_ROOT/o")"

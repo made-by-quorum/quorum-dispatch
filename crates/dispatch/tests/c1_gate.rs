@@ -39,7 +39,7 @@
 //!
 //! ## Jail invariants (rule 9 + ADD-4 + ADD-12 + ADD-14)
 //!
-//! Each row gets its own jail (own HOME/SB_HOME/XDG_RUNTIME_DIR/TMPDIR/ZMX_DIR),
+//! Each row gets its own jail (own HOME/QD_HOME/XDG_RUNTIME_DIR/TMPDIR/ZMX_DIR),
 //! launches a fresh jailed qrmux daemon, and tears down by killing the daemon by
 //! pid + removing the jail dir. No destructive sweeps; per-target verbs only.
 
@@ -184,7 +184,7 @@ impl Jail {
     fn apply_embedded(&self, cmd: &mut Command) {
         cmd.env_clear()
             .env("HOME", &self.home)
-            .env("SB_HOME", self.root.join("sbhome"))
+            .env("QD_HOME", self.root.join("sbhome"))
             .env("XDG_RUNTIME_DIR", &self.xdg_runtime)
             .env("TMPDIR", self.root.join("tmp"))
             .env("ZMX_DIR", self.root.join("zmx"))
@@ -198,7 +198,7 @@ impl Jail {
     fn apply_embedded_pty(&self, cmd: &mut CommandBuilder) {
         cmd.env_clear();
         cmd.env("HOME", &self.home);
-        cmd.env("SB_HOME", self.root.join("sbhome"));
+        cmd.env("QD_HOME", self.root.join("sbhome"));
         cmd.env("XDG_RUNTIME_DIR", &self.xdg_runtime);
         cmd.env("TMPDIR", self.root.join("tmp"));
         cmd.env("ZMX_DIR", self.root.join("zmx"));
@@ -418,7 +418,7 @@ fn run_sb(jail: &Jail, args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// Run `qd <args>` with an explicit SB_MUX value + optional extra env.
+/// Run `qd <args>` with an explicit QD_MUX value + optional extra env.
 fn run_sb_env(jail: &Jail, args: &[&str], extra: &[(&str, &str)]) -> (i32, String, String) {
     let mut cmd = Command::new(sb_bin());
     cmd.args(with_interactive_start(args));
@@ -797,7 +797,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Claude would write (so EventBootWaiter sees the row + idle status), then execs
 /// `<app>` so the session has a real interactive child. Returns the script path.
 ///
-/// `$SB_FAKE_NAME` carries the session name (set by the caller via env). The
+/// `$QD_FAKE_NAME` carries the session name (set by the caller via env). The
 /// script writes `<sessions_dir>/<pid>.json` with that name + status idle.
 fn write_fake_claude(jail: &Jail, app: &str) -> PathBuf {
     let path = jail.root.join("fake-claude.sh");
@@ -807,7 +807,7 @@ fn write_fake_claude(jail: &Jail, app: &str) -> PathBuf {
 # Fake-claude (TEST INFRA): write the registry row real Claude writes, then exec
 # a real interactive app so the engine attach/send paths have a live child.
 PID=$$
-NAME="${{SB_FAKE_NAME:-fake}}"
+NAME="${{QD_FAKE_NAME:-fake}}"
 SESS="{sessions}"
 mkdir -p "$SESS"
 # startedAt/updatedAt = NOW (fidelity: real Claude stamps its boot instant —

@@ -51,7 +51,7 @@ else
     bad "happy/hash-matches-mirror — got '$got' want '$want'"
 fi
 
-# --- 2. NEGATIVE CONTROL: corrupt mirror via SB_ZMX_MIRROR_URL --------------
+# --- 2. NEGATIVE CONTROL: corrupt mirror via QD_ZMX_MIRROR_URL --------------
 # Copy the real mirror, flip one byte, and point the script at it through the
 # file:// URL seam. The script must REFUSE (non-zero) and leave NO tarball.
 corrupt="$WORK/corrupt-mirror.tar.gz"
@@ -59,7 +59,7 @@ cp "$MIRROR" "$corrupt"
 # Append one byte — changes the bytes (and the length), so the sha256 cannot match.
 printf 'X' >> "$corrupt"
 dest2="$WORK/dest-corrupt"
-if SB_ZMX_MIRROR_URL="file://$corrupt" bash "$FETCH" "$dest2" >/dev/null 2>&1; then
+if QD_ZMX_MIRROR_URL="file://$corrupt" bash "$FETCH" "$dest2" >/dev/null 2>&1; then
     bad "corrupt-mirror/refuses — expected REFUSAL but exit 0"
 else
     ok "corrupt-mirror/refuses (non-zero)"

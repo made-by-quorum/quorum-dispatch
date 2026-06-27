@@ -12,12 +12,12 @@
 # byte-diff of the normalized outputs (determinism proof), raw + normalized both
 # written, provenance stamped. SUT = the RUST binary (the contract being pinned).
 #
-# Usage: SB_BIN=<abs qd> bash test/golden/remint_kill_wave.sh
+# Usage: QD_BIN=<abs qd> bash test/golden/remint_kill_wave.sh
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SB_BIN="${SB_BIN:?SB_BIN required (abs path to the Rust qd)}"
-[ -x "$SB_BIN" ] || { echo "FATAL: SB_BIN not executable: $SB_BIN"; exit 64; }
+QD_BIN="${QD_BIN:?QD_BIN required (abs path to the Rust qd)}"
+[ -x "$QD_BIN" ] || { echo "FATAL: QD_BIN not executable: $QD_BIN"; exit 64; }
 
 STAGE="$HERE/.remint-stage.$$"
 mkdir -p "$STAGE"
@@ -26,12 +26,12 @@ trap 'rm -rf "$STAGE" 2>/dev/null || true' EXIT INT TERM
 one_run() {
     local tag="$1"
     # Subshell: each run gets a fresh jail + fresh scenario sourcing; teardown
-    # inside so run B starts clean. SB_UNDER_TEST/JAIL_SB_CMD -> Rust binary.
+    # inside so run B starts clean. QD_UNDER_TEST/JAIL_SB_CMD -> Rust binary.
     (
         set -u
         . "$HERE/lib/jail.sh"
         . "$HERE/lib/normalize.sh"
-        export SB_UNDER_TEST="$SB_BIN" JAIL_SB_CMD="$SB_BIN"
+        export QD_UNDER_TEST="$QD_BIN" JAIL_SB_CMD="$QD_BIN"
         jail_establish "rmk${tag}$$" || exit 3
         SCN_OUT="$JAIL_ROOT/scn-out.raw"
         # shellcheck source=/dev/null

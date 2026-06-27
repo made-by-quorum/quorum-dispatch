@@ -10,19 +10,19 @@
 //!   →  assert the bridge's CC JSONL CONTINUED (SAME sessionId, both turns, nonce recalled).
 //!
 //! Jailed HOME (a tempdir with the real CC creds copied in) so the dispatch registry +
-//! bridge JSONL stay inside the jail — NO real-registry pollution. Gated `SB_ACP_LIVE=1`
+//! bridge JSONL stay inside the jail — NO real-registry pollution. Gated `QD_ACP_LIVE=1`
 //! (real bridge + ~2 model turns). Run:
-//!   SB_ACP_LIVE=1 ~/cap-cargo.sh test -p dispatch --test acp_verb_roundtrip_live -- --nocapture --test-threads=1
+//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p dispatch --test acp_verb_roundtrip_live -- --nocapture --test-threads=1
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn live() -> bool {
-    std::env::var("SB_ACP_LIVE").as_deref() == Ok("1")
+    std::env::var("QD_ACP_LIVE").as_deref() == Ok("1")
 }
 
 fn bridge_bin_dir() -> PathBuf {
-    std::env::var("SB_ACP_BRIDGE_BIN_DIR")
+    std::env::var("QD_ACP_BRIDGE_BIN_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             PathBuf::from(std::env::var("HOME").expect("HOME")).join("work/acp-step0/node_modules/.bin")
@@ -125,7 +125,7 @@ fn wait_for_jail_jsonl(
 #[test]
 fn acp_verb_roundtrip_by_name_live() {
     if !live() {
-        eprintln!("SB_ACP_LIVE != 1 — skipping the acp verb-level by-name round-trip");
+        eprintln!("QD_ACP_LIVE != 1 — skipping the acp verb-level by-name round-trip");
         return;
     }
     let qd = env!("CARGO_BIN_EXE_qd");

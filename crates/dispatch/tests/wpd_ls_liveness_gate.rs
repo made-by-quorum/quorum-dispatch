@@ -46,8 +46,8 @@ impl Jail {
         let out = Command::new(sb_bin())
             .args(["ls", "--json"])
             .env("HOME", &self.home)
-            .env_remove("SB_HOME")
-            .env_remove("SB_MUX")
+            .env_remove("QD_HOME")
+            .env_remove("QD_MUX")
             .output()
             .expect("spawn qd ls --json");
         assert_eq!(out.status.code(), Some(0), "qd ls --json exit 0");

@@ -353,10 +353,10 @@ impl BootJail {
     /// fakerepl env for a session adopting `uuid` as its provider session id.
     fn fakerepl_env(&self, name: &str, uuid: &str) -> Vec<(&'static str, String)> {
         vec![
-            ("SB_FAKEREPL_NAME", name.to_string()),
-            ("SB_FAKEREPL_SESSION_ID", uuid.to_string()),
+            ("QD_FAKEREPL_NAME", name.to_string()),
+            ("QD_FAKEREPL_SESSION_ID", uuid.to_string()),
             (
-                "SB_FAKEREPL_CONVO_JSONL",
+                "QD_FAKEREPL_CONVO_JSONL",
                 self.projects
                     .join(format!("{uuid}.jsonl"))
                     .to_string_lossy()
@@ -450,7 +450,7 @@ fn start_fork_live_matrix_e2e() {
     // uuid is whatever qd minted.
     let (code, _out, err) = jail.run_sb(
         &["start", "forked", "--fork", "orig"],
-        &[("SB_FAKEREPL_NAME", "forked".to_string())],
+        &[("QD_FAKEREPL_NAME", "forked".to_string())],
     );
     assert_eq!(
         code, 0,
@@ -593,7 +593,7 @@ fn start_fork_in_flight_source_reports_staleness() {
     // Fork it: succeeds (forks the SAFE turn-1 prefix) AND reports staleness.
     let (code, _out, err) = jail.run_sb(
         &["start", "forked", "--fork", "orig"],
-        &[("SB_FAKEREPL_NAME", "forked".to_string())],
+        &[("QD_FAKEREPL_NAME", "forked".to_string())],
     );
     assert_eq!(
         code, 0,

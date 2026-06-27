@@ -98,7 +98,7 @@ from. Paths are relative to the pinned clone src/.
 |   | QUEUED and drained (its own user+assistant   | --wait anchors on the queued    | commands/send.ts:154-222 (send-queue |
 |   | JSONL pair) when the current turn ends.      | message's user record.          | two-write), send.ts:224-294 (anchor).|
 | 7 | server:relay flag -> spawn a CHILD relay      | getRelayPorts reads sidecar     | session.ts:148-183 (RELAY_DIR,       |
-|   | server binding $SB_RELAY_PORT; write sidecar | {sessionId,port,pid,status};    | getRelayPorts), session.ts:185-212   |
+|   | server binding $QRM_RELAY_PORT; write sidecar | {sessionId,port,pid,status};    | getRelayPorts), session.ts:185-212   |
 |   | ~/.claude/relay/<sessionId>.json {sessionId, | ls-join maps relay child PID    | (/health RelayHealth), session.ts:   |
 |   | port,pid,status:"ok"}; the sidecar `pid` is   | up to the claude PID; send:relay| 845-873,922 (ls relay join by PID    |
 |   | the relay CHILD pid (PID-parentage join).    | POSTs /message -> {message_id}. | parentage), commands/send.ts:414-426.|
@@ -375,7 +375,7 @@ class Jsonl(object):
 # --- relay server (citations #7/#8) ------------------------------------------
 def _run_relay_child(port, sidecar_path):
     """Run in a forked CHILD so the sidecar pid is the relay child's pid (the
-    PID-parentage join: session.ts:845-873). Binds $SB_RELAY_PORT, writes the
+    PID-parentage join: session.ts:845-873). Binds $QRM_RELAY_PORT, writes the
     sidecar, serves /health + /message + /replies until killed."""
     replies = {}
 
@@ -443,7 +443,7 @@ def _run_relay_child(port, sidecar_path):
 def _maybe_start_relay(argv):
     if not _wants_relay(argv):
         return None
-    port = os.environ.get("SB_RELAY_PORT")
+    port = os.environ.get("QRM_RELAY_PORT")
     if not port:
         return None
     try:

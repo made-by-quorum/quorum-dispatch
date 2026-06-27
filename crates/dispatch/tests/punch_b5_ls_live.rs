@@ -165,8 +165,8 @@ impl Jail {
             .args(args)
             .env("HOME", &self.home)
             .env("ZMX_DIR", &self.zmx)
-            .env_remove("SB_HOME")
-            .env_remove("SB_MUX")
+            .env_remove("QD_HOME")
+            .env_remove("QD_MUX")
             .output()
             .expect("spawn qd");
         (

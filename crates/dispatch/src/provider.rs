@@ -111,7 +111,7 @@ pub struct LaunchRequest {
     pub agent: Option<String>,
     /// `--model <m>`, if given — emitted as a LAUNCH FLAG (warranty #2,
     /// 2026-06-11). Model is a BIRTH PROPERTY of the session (same principle as
-    /// SB_SESSION_ID's explicit-set-at-every-launch), NOT a post-boot mutation:
+    /// QD_SESSION_ID's explicit-set-at-every-launch), NOT a post-boot mutation:
     /// the create path used to deliver it as a `/model <m>` slash command, which
     /// in current Claude Code PERSISTS as the shared global default ("saved as
     /// your default for new sessions") — so every `--model` commission polluted
@@ -433,13 +433,13 @@ impl Provider for ClaudeProvider {
         // priming transport is sound (§4.3). `relay_dir` is the global
         // `<home>/.claude/relay` sidecar dir.
         //
-        // OPT-IN (SB_BOOT_AWAIT_RELAY): dispatch's `boot_waiter` is SHARED by every
+        // OPT-IN (QD_BOOT_AWAIT_RELAY): dispatch's `boot_waiter` is SHARED by every
         // claude boot, but only the relay-DEFAULT PRIMING create-head needs the
         // sidecar wait — and a fresh dispatch boot cannot tell a relay-priming boot
         // from a non-relay one (a plain `qd start`, or a fakerepl-backed test boot
         // that never writes a sidecar: `fx.relay`/`relay_port` are None on EVERY
         // boot path, lifecycle.rs:1013). So the phase is engaged only when the
-        // caller opts in via SB_BOOT_AWAIT_RELAY — armed by the commission/priming
+        // caller opts in via QD_BOOT_AWAIT_RELAY — armed by the commission/priming
         // create-head; OFF for plain starts, resume, and the fakerepl suite (which
         // keeps the pre-Fix-A pid+idle readiness, byte-for-byte). See the
         // BUILD-REPORT bubble: whether to keep this opt-in, default it on with a
@@ -453,7 +453,7 @@ impl Provider for ClaudeProvider {
         );
         let await_relay = fx
             .env
-            .var("SB_BOOT_AWAIT_RELAY")
+            .var("QD_BOOT_AWAIT_RELAY")
             .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
         Box::new(if await_relay {
             waiter.with_relay_dir(fx.paths.relay_dir.clone())

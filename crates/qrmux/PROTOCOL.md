@@ -349,23 +349,23 @@ not on echo render. Evidence chain: B1 decision memo divergence #2 + ADD-6.
 Socket dir resolves in **two tiers** (`src/server/socket.rs`):
 
 1. `$XDG_RUNTIME_DIR/qrmux`
-2. `<sbHome>/mux` where `sbHome = $SB_HOME || $HOME/.quorum/dispatch`
+2. `<sbHome>/mux` where `sbHome = $QD_HOME || $HOME/.quorum/dispatch`
 
 Socket file: `<dir>/qrmux.sock`; lockfile `<dir>/qrmux.lock`.
 
 **De-/tmp'd fallback (C1 D1, checkpoint rider R-B / ADD-14):** the legacy
 `/tmp/qrmux-{uid}` fallback is GONE — no shipped binary writes under literal
-`/tmp` anymore. Tier 2 **honors `SB_HOME`** (implementer choice, recommended by
+`/tmp` anymore. Tier 2 **honors `QD_HOME`** (implementer choice, recommended by
 the C1 spec and named in ADR 0008): the standalone `socket.rs` fallback mirrors
 the engine's `resolve_qrmux_dir`, so a relocated engine state dir or an
-SB_HOME-only jail moves the mux dir too, and engine + standalone agree fully.
-`$HOME/.quorum/dispatch` is used only when SB_HOME is unset; if neither XDG_RUNTIME_DIR,
-SB_HOME, nor HOME is set, resolution fails with a named error.
+QD_HOME-only jail moves the mux dir too, and engine + standalone agree fully.
+`$HOME/.quorum/dispatch` is used only when QD_HOME is unset; if neither XDG_RUNTIME_DIR,
+QD_HOME, nor HOME is set, resolution fails with a named error.
 
 A **`sun_path`-length guard** runs at resolve time: if `<dir>/qrmux.sock` would
 exceed the platform `sockaddr_un` capacity (104 bytes, the smaller of
 macOS/Linux), resolution fails with an error naming the remedy ("set
-XDG_RUNTIME_DIR … or shorten SB_HOME/HOME"), instead of an opaque `bind()`
+XDG_RUNTIME_DIR … or shorten QD_HOME/HOME"), instead of an opaque `bind()`
 failure.
 
 **Override seam (C1 D1/R26):** the engine resolves the dir itself and passes it

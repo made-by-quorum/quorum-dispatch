@@ -428,7 +428,7 @@ pub fn dispatch(argv_tail: &[String]) -> i32 {
             // message — never a broken/hung prompt.
             let key = &argv_tail[1];
             eprintln!(
-                "qd config set: stdin is not a TTY; pass the value as an argument or use SB_SECRET_BACKEND=file qd config set {key} <value>."
+                "qd config set: stdin is not a TTY; pass the value as an argument or use QD_SECRET_BACKEND=file qd config set {key} <value>."
             );
             return 1;
         }

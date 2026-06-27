@@ -118,7 +118,7 @@ through the same helper. **(d) is SUPERSEDED 2026-06-11 — see the note below.*
 
 > **SUPERSEDED (warranty #2, 2026-06-11): `--model` is no longer delivered via a
 > post-boot `/model <m>` slash command on the create path.** Model is a BIRTH
-> PROPERTY of the session (the same principle as SB_SESSION_ID's
+> PROPERTY of the session (the same principle as QD_SESSION_ID's
 > explicit-set-at-every-launch), now emitted as a `--model <m>` LAUNCH FLAG in
 > `build_new_extra_args`. The post-boot `/model` delivery was withdrawn because,
 > in current Claude Code, the `/model` slash command PERSISTS the choice as the
@@ -181,12 +181,12 @@ stayed green while the live findings surfaced), so the gate cannot itself catch 
 live bugs — but it CAN, and now does, prove BOTH mechanisms are load-bearing:
 
 - **mode (b):** a ≥4KB IDLE row drives the real two-write helper to exactly one
-  turn, and a single-write negative control under `SB_FAKEREPL_ABSORB_ALL_CRS=1`
+  turn, and a single-write negative control under `QD_FAKEREPL_ABSORB_ALL_CRS=1`
   (modeling the observed "CR doesn't recover it" behavior) MUST fail to land a turn.
 - **mode (a):** a jumbo 16KB row through the real shared chunked helper lands
   exactly one turn with the FULL payload (report bytes == sent bytes), incl. a
   multibyte-straddle payload (構築日本語café☕ across many chunk boundaries) delivered
-  intact. The negative-control PAIRING uses `SB_FAKEREPL_DROP_OVER_BYTES=4096` (which
+  intact. The negative-control PAIRING uses `QD_FAKEREPL_DROP_OVER_BYTES=4096` (which
   drops any single burst >4096B wholesale — modeling THE CLASS, not the live
   boundary): the UNCHUNKED mutation (`chunk_bytes = usize::MAX`) is dropped → ZERO
   turns (asserted RED), while the CHUNKED delivery under the SAME env passes → ONE

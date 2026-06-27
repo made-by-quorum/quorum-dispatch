@@ -500,14 +500,14 @@ fn cmd_bootstrap() -> Command {
     // The relay env seam is an OPERATOR surface with visibility parity (orc-3
     // ruling relay-1780662680745-11 condition c): documented together here, in
     // `bootstrap --help`, and in the bootstrap.rs source.
-    // (SB_RELAY_DRIVER_INSTALL is GONE with the external bun driver, 2026-06-09
+    // (QRM_RELAY_DRIVER_INSTALL is GONE with the external bun driver, 2026-06-09
     // ruling: the relay is native — bootstrap registers `qd relay:serve` in
     // ~/.claude/.mcp.json itself, with consent.)
     Command::new("bootstrap")
         .about("Set up qd's local data directory under ~/.quorum/dispatch (idempotent)")
         .after_help(
             "Environment:\n  \
-             SB_RELAY_DISABLE_SCAN    Set to 1/true to skip the localhost relay \
+             QRM_RELAY_DISABLE_SCAN    Set to 1/true to skip the localhost relay \
              port-scan (sidecar-file discovery still runs).",
         )
 }

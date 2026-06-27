@@ -1,5 +1,5 @@
 //! Codex P2 W6 — LIVE jailed end-to-end of the SEND + WAIT paths (codex-p2-spec
-//! sections 7.5, 7.6, 10). Gated on `SB_CODEX_LIVE=1`; a no-op otherwise so the
+//! sections 7.5, 7.6, 10). Gated on `QD_CODEX_LIVE=1`; a no-op otherwise so the
 //! default suite never spawns a real codex daemon or spends API budget.
 //!
 //! What it drives REAL (no fakes): spawn a jailed `codex app-server` daemon via
@@ -42,9 +42,9 @@ use dispatch::provider::codex::{
 use dispatch::provider::{Provider, ProviderFx, SessionKey};
 use dispatch::wait::{run_codex_wait_loop, RealCodexWaitDeps, WaitStatusOutcome};
 
-/// The live gate: skip unless `SB_CODEX_LIVE=1`.
+/// The live gate: skip unless `QD_CODEX_LIVE=1`.
 fn live() -> bool {
-    std::env::var("SB_CODEX_LIVE").as_deref() == Ok("1")
+    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
 }
 
 /// A jail Env: only the codex-relevant vars resolve. `env -i` shape via the seam.
@@ -202,7 +202,7 @@ fn jail_codex_daemon_alive(codex_home: &Path) -> bool {
 #[test]
 fn codex_send_wait_live_jailed_e2e() {
     if !live() {
-        eprintln!("SB_CODEX_LIVE != 1 — skipping the live codex send/wait test");
+        eprintln!("QD_CODEX_LIVE != 1 — skipping the live codex send/wait test");
         return;
     }
 

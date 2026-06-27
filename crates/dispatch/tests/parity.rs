@@ -7,7 +7,7 @@
 //! ## Golden verification (gate item 2 — how the frozen files were validated)
 //!
 //! The `golden/*.json|*.txt` files were generated ONCE by this pipeline
-//! (`SB_REGEN_GOLDEN=1`), then HAND-VERIFIED field-by-field against the TS
+//! (`QD_REGEN_GOLDEN=1`), then HAND-VERIFIED field-by-field against the TS
 //! semantics before freezing:
 //!   - Per-branch key SET + ORDER vs session.ts:913-933 (live), 960-977 (cold —
 //!     jsonlPath BEFORE gitBranch), 981-995 (zmx-only — no userNamed, sessionId
@@ -26,7 +26,7 @@
 //!   - Strays (`epsilon-stray`) are appended after the TS rows as
 //!     `status: "unmanaged"` objects (PROVISIONAL shape, render.rs).
 //!
-//! Re-freeze by running with `SB_REGEN_GOLDEN=1` (writes the files) and
+//! Re-freeze by running with `QD_REGEN_GOLDEN=1` (writes the files) and
 //! re-verifying by hand — expected at pass (b) when the fix-wave lands.
 
 mod common;
@@ -42,18 +42,18 @@ fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
 }
 
-/// Read a golden file, or — when `SB_REGEN_GOLDEN=1` — write `actual` to it and
+/// Read a golden file, or — when `QD_REGEN_GOLDEN=1` — write `actual` to it and
 /// return it (so the first run freezes the file). Asserts byte-equality.
 fn assert_golden(name: &str, actual: &str) {
     let path = golden_dir().join(name);
-    if std::env::var("SB_REGEN_GOLDEN").is_ok() {
+    if std::env::var("QD_REGEN_GOLDEN").is_ok() {
         std::fs::create_dir_all(golden_dir()).unwrap();
         std::fs::write(&path, actual).unwrap();
         eprintln!("regenerated golden {name}");
         return;
     }
     let expected = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("missing golden {path:?}: {e} (run SB_REGEN_GOLDEN=1)"));
+        .unwrap_or_else(|e| panic!("missing golden {path:?}: {e} (run QD_REGEN_GOLDEN=1)"));
     assert_eq!(actual, expected, "golden mismatch for {name}");
 }
 

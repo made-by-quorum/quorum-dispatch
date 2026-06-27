@@ -922,10 +922,10 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         }
     }
 
-    // Backend-selected create dirs (C1 D2/D3). ONE SB_MUX parse drives the canonical
+    // Backend-selected create dirs (C1 D2/D3). ONE QD_MUX parse drives the canonical
     // dir, the legacy list, AND the mux below — the embedded lane creates the
     // session in its single qrmux dir (legacy EMPTY); the zmx lane keeps the
-    // canonical + cross-dir legacy scan (Bug-D). A bogus SB_MUX exits loudly here.
+    // canonical + cross-dir legacy scan (Bug-D). A bogus QD_MUX exits loudly here.
     let backend = match common::select_backend(&env) {
         Ok(b) => b,
         Err(code) => return code,
@@ -935,7 +935,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             let canonical = resolve_zmx_dir(&env);
             // PRODUCTION: scan `/tmp` AND the env-derived XDG family (independent
             // axes; ADD-9b red-team BLOCKER 1). A14-2(c): the surviving READ scan
-            // honors SB_TEST_SCAN_ROOTS (test lanes only; production = literal /tmp).
+            // honors QD_TEST_SCAN_ROOTS (test lanes only; production = literal /tmp).
             let scan_roots =
                 dispatch::zmx_dir::legacy_scan_roots(&env, std::path::Path::new("/tmp"));
             let xdg = XdgFamily::from_env(&env, env.uid());
@@ -965,7 +965,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
 
     let exec = RealExec;
     // Backend-selected mux (C1 D3): the create path drives whichever backend
-    // SB_MUX names. NewDeps.mux + EventBootWaiter.mux are `&dyn Mux`, so we pass
+    // QD_MUX names. NewDeps.mux + EventBootWaiter.mux are `&dyn Mux`, so we pass
     // the boxed mux by reference.
     let mux = match common::build_mux(backend, &home, &env) {
         Ok(m) => m,
@@ -1117,14 +1117,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                             "WARNING: stable-id divergence for session \"{name}\": env \
                              carries {sb_session_id}, registry session {sid} already \
                              maps to {existing} — sessions disagree; `qd ls` will \
-                             surface {existing}, not the session's SB_SESSION_ID."
+                             surface {existing}, not the session's QD_SESSION_ID."
                         );
                     }
                     Err(e) => {
                         eprintln!(
                             "WARNING: could not bind stable id {sb_session_id} to session \
                              {sid}: {e} — `qd ls` may surface a different id than the \
-                             session's SB_SESSION_ID."
+                             session's QD_SESSION_ID."
                         );
                     }
                 }
@@ -1133,7 +1133,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                 eprintln!(
                     "WARNING: session \"{name}\" booted but its registry row carries no \
                      sessionId yet — stable id {sb_session_id} is unbound; `qd ls` may \
-                     surface a different id than the session's SB_SESSION_ID."
+                     surface a different id than the session's QD_SESSION_ID."
                 );
             }
             dispatch::registry::LiveNamePick::Ambiguous { count } => {
@@ -1240,7 +1240,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         // --- ACK-2 §9 (M3): engine event emission for the -p send (best-effort) -
         // events key: sessionId if resolvable NOW (the existing non-blocking
         // registry read), else byname(name) — the key choice is STICKY for ALL of
-        // this send's events (§4.1). state_dir honors SB_HOME (§4.1 / ADD-14).
+        // this send's events (§4.1). state_dir honors QD_HOME (§4.1 / ADD-14).
         let ev_state = dispatch::paths::SbPaths::from_home_env(&home, &env).state_dir;
         let ev_session_id = dispatch::registry::read_entries(&paths.sessions_dir, false)
             .into_iter()
@@ -1697,7 +1697,7 @@ fn run_new_acp_daemon(
 }
 
 /// §2.3.2 `chunks-delivered.ack_source` for the `new -p` create path. The create
-/// lane drives whichever backend SB_MUX names; the embedded daemon blocks on its
+/// lane drives whichever backend QD_MUX names; the embedded daemon blocks on its
 /// per-write InputSent ack ("input-sent"), zmx observes only `zmx send` exit 0
 /// ("cli-exit"). Reuse the send-verb label so both verbs name the channel the same.
 fn new_p_ack_source() -> &'static str {
@@ -1997,7 +1997,7 @@ fn compose_backend_env(
         return Err(1);
     }
 
-    // Resolve <sbHome>/state via SB_HOME-honoring paths (same as marks.jsonl);
+    // Resolve <sbHome>/state via QD_HOME-honoring paths (same as marks.jsonl);
     // independent of the create path's own `paths` so nothing else changes.
     let state_paths = dispatch::paths::SbPaths::from_home_env(home, env);
     let file_path = dispatch::backends::backends_file_path(&state_paths.state_dir);
@@ -2513,7 +2513,7 @@ mod tests {
     use dispatch::events::{byname_key, parse_events};
 
     /// The byname events file emit_priming_timeout writes to, resolved the SAME
-    /// way the function does (SB_HOME-honoring) so the test is hermetic.
+    /// way the function does (QD_HOME-honoring) so the test is hermetic.
     fn byname_events_file(home: &std::path::Path, name: &str) -> std::path::PathBuf {
         let state = dispatch::paths::SbPaths::from_home_env(home, &RealEnv).state_dir;
         dispatch::events::events_path(&state, &byname_key(name))

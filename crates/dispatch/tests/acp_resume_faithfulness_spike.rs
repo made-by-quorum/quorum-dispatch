@@ -18,9 +18,9 @@
 //!       nonce told ONLY in the pre-stop turn (history was truly loaded into the
 //!       model's context, not merely file-appended).
 //!
-//! Gated on `SB_ACP_LIVE=1` (real bridge + real CC creds + model budget). A no-op
+//! Gated on `QD_ACP_LIVE=1` (real bridge + real CC creds + model budget). A no-op
 //! otherwise, so the default suite never spends budget. Run:
-//!   SB_ACP_LIVE=1 ~/cap-cargo.sh test -p dispatch --test acp_resume_faithfulness_spike -- --nocapture --include-ignored
+//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p dispatch --test acp_resume_faithfulness_spike -- --nocapture --include-ignored
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -30,7 +30,7 @@ use dispatch::provider::acp::{AcpClient, AcpEvent, AcpHost, StopReason};
 use tempfile::TempDir;
 
 fn live() -> bool {
-    std::env::var("SB_ACP_LIVE").as_deref() == Ok("1")
+    std::env::var("QD_ACP_LIVE").as_deref() == Ok("1")
 }
 
 fn node_program() -> Option<String> {
@@ -48,7 +48,7 @@ fn node_program() -> Option<String> {
 }
 
 fn real_bridge_script() -> PathBuf {
-    if let Ok(p) = std::env::var("SB_ACP_BRIDGE") {
+    if let Ok(p) = std::env::var("QD_ACP_BRIDGE") {
         return PathBuf::from(p);
     }
     let home = std::env::var("HOME").expect("HOME");
@@ -164,7 +164,7 @@ struct EvidenceLog {
 }
 impl EvidenceLog {
     fn open() -> Self {
-        let path = std::env::var("SB_ACP_SPIKE_EVIDENCE")
+        let path = std::env::var("QD_ACP_SPIKE_EVIDENCE")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -193,12 +193,12 @@ impl EvidenceLog {
 #[test]
 fn acp_resume_faithfulness_spike() {
     if !live() {
-        eprintln!("SB_ACP_LIVE != 1 — skipping Component-0 faithfulness spike");
+        eprintln!("QD_ACP_LIVE != 1 — skipping Component-0 faithfulness spike");
         return;
     }
     let node = node_program().expect("node required for the live bridge");
     let bridge = real_bridge_script();
-    assert!(bridge.exists(), "bridge script not found at {bridge:?} (set SB_ACP_BRIDGE)");
+    assert!(bridge.exists(), "bridge script not found at {bridge:?} (set QD_ACP_BRIDGE)");
     let bridge_arg = bridge.to_string_lossy().to_string();
 
     let mut log = EvidenceLog::open();

@@ -204,7 +204,7 @@ impl RelayServer {
         // coordinator/supervisor flips it on AFTER the dry-run is reviewed + the
         // oracle passes. Read once at spawn (the relay is a real long-running
         // process; this is a behavioral toggle, not a path — distinct from the L9a
-        // home/SB_HOME seam discipline).
+        // home/QD_HOME seam discipline).
         let inbox_sweep_enabled = std::env::var("QD_RELAY_INBOX_SWEEP")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);

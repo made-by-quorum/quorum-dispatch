@@ -25,18 +25,18 @@ fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
 }
 
-/// Read a golden file, or — when `SB_REGEN_GOLDEN=1` — write `actual` and return
+/// Read a golden file, or — when `QD_REGEN_GOLDEN=1` — write `actual` and return
 /// (so the first run freezes it). Byte-equality assert. Mirrors codex_ls.rs.
 fn assert_golden(name: &str, actual: &str) {
     let path = golden_dir().join(name);
-    if std::env::var("SB_REGEN_GOLDEN").is_ok() {
+    if std::env::var("QD_REGEN_GOLDEN").is_ok() {
         std::fs::create_dir_all(golden_dir()).unwrap();
         std::fs::write(&path, actual).unwrap();
         eprintln!("regenerated golden {name}");
         return;
     }
     let expected = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("missing golden {path:?}: {e} (run SB_REGEN_GOLDEN=1)"));
+        .unwrap_or_else(|e| panic!("missing golden {path:?}: {e} (run QD_REGEN_GOLDEN=1)"));
     assert_eq!(actual, expected, "golden mismatch for {name}");
 }
 
@@ -124,9 +124,9 @@ impl Jail {
             .args(args)
             .env("HOME", &self.home)
             .env("ZMX_DIR", &self.zmx)
-            // The ids store resolves SB_HOME || <home>/.quorum/dispatch — pin to the jail.
-            .env_remove("SB_HOME")
-            .env_remove("SB_MUX")
+            // The ids store resolves QD_HOME || <home>/.quorum/dispatch — pin to the jail.
+            .env_remove("QD_HOME")
+            .env_remove("QD_MUX")
             .output()
             .expect("spawn qd");
         (

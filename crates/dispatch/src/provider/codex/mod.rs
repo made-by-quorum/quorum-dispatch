@@ -75,7 +75,7 @@ pub static CODEX_PROVIDER: CodexProvider = CodexProvider;
 /// `$HOME/.codex` (codex's own default).
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 /// The env var overriding the codex binary on the launch argv (else `"codex"`).
-const CODEX_BIN_ENV: &str = "SB_CODEX_BIN";
+const CODEX_BIN_ENV: &str = "QD_CODEX_BIN";
 /// The `sessions/` subdir of `$CODEX_HOME` — the rollout tree root.
 const SESSIONS_SUBDIR: &str = "sessions";
 
@@ -108,7 +108,7 @@ impl Provider for CodexProvider {
         Hosting::Daemon
     }
 
-    /// argv = `[<codex bin>, "app-server"]` where bin = `fx.env` `SB_CODEX_BIN`
+    /// argv = `[<codex bin>, "app-server"]` where bin = `fx.env` `QD_CODEX_BIN`
     /// override else `"codex"`. NO `--listen` here: the W4 create path appends
     /// `--listen ws://127.0.0.1:<port>` because PORT ALLOCATION is a create-path
     /// transport concern (the same altitude as W5's `relay_port` — a verb-layer

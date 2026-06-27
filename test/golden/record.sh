@@ -12,12 +12,12 @@
 # HARD GATES (all fail-closed, in order):
 #   G1  PINNED_TS_COMMIT must be set (Part-2 entry condition). Recording against
 #       unpinned/unsettled TS would bake UNFIXED behavior into the oracle.
-#   G2  SB_UNDER_TEST must resolve UNDER a prep-verified clone whose .prep-verified
+#   G2  QD_UNDER_TEST must resolve UNDER a prep-verified clone whose .prep-verified
 #       pin == PINNED_TS_COMMIT (prep_pinned_ts.sh writes it). Closes the scenario
 #       bypass: a recording can never be driven against the floating shared TS
 #       checkout or an arbitrary path (red-team scenario-bypass / m2).
 #   G3  Host-wide build-lock (red-team M5): the HOST lock dir is captured BEFORE
-#       jail_establish overrides SB_RUST_LOCK_DIR; the process-driving critical
+#       jail_establish overrides QD_RUST_LOCK_DIR; the process-driving critical
 #       section is wrapped in scripts/build-lock.sh against the HOST lock, so a
 #       concurrent build/recording cannot race. The lock is held ONLY during the
 #       scenario runs — NOT during normalize / compare / admit.
@@ -37,14 +37,14 @@
 #
 # Distinct exit codes:
 #   70  Part-2 gate closed (no pin)            — G1
-#   71  SB_UNDER_TEST not under a prep clone   — G2
+#   71  QD_UNDER_TEST not under a prep clone   — G2
 #   72  double-record MISMATCH (runs diverged) — the teeth: NO expectation written
 #   73  host build-lock unavailable / timed out — G3
 #   64  usage/scenario error
 #    3  jail refused
 #
 # Bash 3.2 floor. Usage (Part 2 only):
-#   PINNED_TS_COMMIT=<sha> SB_UNDER_TEST="bun <clone>/src/index.ts" \
+#   PINNED_TS_COMMIT=<sha> QD_UNDER_TEST="bun <clone>/src/index.ts" \
 #     record.sh --scenario <scenarios/foo.sh>
 # ---------------------------------------------------------------------------
 set -u
@@ -58,7 +58,7 @@ REPO_TOP="$(cd "$HERE/../.." && pwd)"
 . "$HERE/lib/fixture_admit.sh"
 
 EXIT_GATE=70          # Part-2 gate closed (no pin).
-EXIT_NOPREP=71        # SB_UNDER_TEST not under a prep-verified clone.
+EXIT_NOPREP=71        # QD_UNDER_TEST not under a prep-verified clone.
 EXIT_MISMATCH=72      # double-record runs diverged.
 EXIT_HOSTLOCK=73      # host build-lock unavailable.
 
@@ -85,7 +85,7 @@ fi
 # --- HARD GATE: if a pinned TS repo is named, its HEAD MUST equal the pin. -----
 # The SET-check above guarantees a pin was DECLARED; this check guarantees the TS
 # engine actually being recorded IS that pin. Without it, a recorder could declare
-# PINNED_TS_COMMIT=<good> while pointing SB_UNDER_TEST at a clone checked out to a
+# PINNED_TS_COMMIT=<good> while pointing QD_UNDER_TEST at a clone checked out to a
 # DIFFERENT commit — baking UNFIXED behavior under a correct-looking stamp (the
 # exact silent-divergence the pin rule exists to prevent). Fail-closed on mismatch.
 if [ -n "${PINNED_TS_REPO:-}" ]; then
@@ -115,28 +115,28 @@ fi
 check_python_floor || exit 64
 
 # --- Capture the HOST build-lock dir BEFORE jail_establish overrides it (G3,
-# red-team M5). jail_establish sets SB_RUST_LOCK_DIR to a jail-internal dir, which
+# red-team M5). jail_establish sets QD_RUST_LOCK_DIR to a jail-internal dir, which
 # would defeat the host-wide mutex; we snapshot the HOST value (or its default)
 # here, while $HOME is still the real home. ----------------------------------
-JAIL_HOST_LOCK_DIR="${SB_RUST_LOCK_DIR:-$HOME/.quorum/dispatch-rust}"
+JAIL_HOST_LOCK_DIR="${QD_RUST_LOCK_DIR:-$HOME/.quorum/dispatch-rust}"
 export JAIL_HOST_LOCK_DIR
 BUILD_LOCK="$REPO_TOP/scripts/build-lock.sh"
 
 main() {
     if [ "${1:-}" != "--scenario" ] || [ -z "${2:-}" ]; then
-        printf 'usage: PINNED_TS_COMMIT=<sha> SB_UNDER_TEST="bun <clone>/src/index.ts" record.sh --scenario <scenarios/foo.sh>\n' >&2
+        printf 'usage: PINNED_TS_COMMIT=<sha> QD_UNDER_TEST="bun <clone>/src/index.ts" record.sh --scenario <scenarios/foo.sh>\n' >&2
         exit 64
     fi
     local scn="$2"
     [ -f "$scn" ] || { printf '[record] scenario not found: %s\n' "$scn" >&2; exit 64; }
 
-    # --- G2: SB_UNDER_TEST must resolve under a prep-verified clone. ----------
+    # --- G2: QD_UNDER_TEST must resolve under a prep-verified clone. ----------
     # (Resolved BEFORE any jail establishes, while paths are still real.)
-    local sut="${SB_UNDER_TEST:-}"
+    local sut="${QD_UNDER_TEST:-}"
     if [ -z "$sut" ]; then
-        printf '[record] REFUSED (G2): SB_UNDER_TEST is unset.\n' >&2
+        printf '[record] REFUSED (G2): QD_UNDER_TEST is unset.\n' >&2
         printf '[record] Run prep_pinned_ts.sh --pin %s first, then export\n' "$PINNED_TS_COMMIT" >&2
-        printf '[record] SB_UNDER_TEST="bun <clone>/src/index.ts".\n' >&2
+        printf '[record] QD_UNDER_TEST="bun <clone>/src/index.ts".\n' >&2
         exit $EXIT_NOPREP
     fi
     if ! prep_verify_entrypoint "$sut" "$PINNED_TS_COMMIT" >/dev/null; then
@@ -186,7 +186,7 @@ main() {
     # SCOPE-MINIMIZED LOCK (red-team M5): the host build-lock wraps ONLY the live
     # process-driving (jail_establish + scn_run + copy the raw out). The child also
     # emits the run's JAIL_ROOT/RUNID/RELAY_PORT token values to a meta file. The
-    # child is invoked THROUGH scripts/build-lock.sh with SB_RUST_LOCK_DIR forced to
+    # child is invoked THROUGH scripts/build-lock.sh with QD_RUST_LOCK_DIR forced to
     # the HOST lock dir captured pre-jail. NORMALIZATION happens in the PARENT,
     # AFTER the lock releases (the child exits + teardown runs) — normalize needs
     # only the token STRINGS, not the now-removed jail dirs, so the lock is held
@@ -217,7 +217,7 @@ main() {
                 printf '. "$HERE/lib/stub_claude/stub_install.sh"\n'
                 printf 'stub_install || { printf "[record] stub install failed\\n" >&2; exit 3; }\n'
             fi
-            printf 'export SB_UNDER_TEST=%q\n' "$sut"
+            printf 'export QD_UNDER_TEST=%q\n' "$sut"
             printf 'export JAIL_SB_CMD=%q\n' "${JAIL_SB_CMD:-qd}"
             printf 'SCN_OUT="$JAIL_ROOT/rec.raw"\n'
             printf '. %q\n' "$scn"
@@ -230,7 +230,7 @@ main() {
         chmod +x "$locked_script"
 
         # === LOCK HELD: process-driving only ===
-        SB_RUST_LOCK_DIR="$JAIL_HOST_LOCK_DIR" \
+        QD_RUST_LOCK_DIR="$JAIL_HOST_LOCK_DIR" \
             "$BUILD_LOCK" bash "$locked_script"
         local rc=$?
         # === LOCK RELEASED (child exited) ===

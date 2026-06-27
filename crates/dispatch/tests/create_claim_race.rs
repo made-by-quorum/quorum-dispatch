@@ -32,11 +32,11 @@ use dispatch::paths::SbPaths;
 mod common;
 
 /// Env marker: when set, the process IS a re-exec'd child and runs `child_body`.
-const CHILD_ENV: &str = "SB_CREATE_RACE_CHILD";
+const CHILD_ENV: &str = "QD_CREATE_RACE_CHILD";
 /// The shared temp home the children + parent agree on.
-const HOME_ENV: &str = "SB_CREATE_RACE_HOME";
+const HOME_ENV: &str = "QD_CREATE_RACE_HOME";
 /// The canonical zmx dir the children list against.
-const CANON_ENV: &str = "SB_CREATE_RACE_CANON";
+const CANON_ENV: &str = "QD_CREATE_RACE_CANON";
 
 /// A mux that lists NOTHING but SLEEPS inside `run_detached` — so the claim
 /// winner holds its claim across a wide window, guaranteeing concurrently-spawned
@@ -92,7 +92,7 @@ Commands:
 
 /// Env: the file each child writes its WIN/LOSE result into (the test harness
 /// CAPTURES child stdout, so we signal via a file the parent reads instead).
-const RESULT_ENV: &str = "SB_CREATE_RACE_RESULT";
+const RESULT_ENV: &str = "QD_CREATE_RACE_RESULT";
 
 /// The body each re-exec'd child runs: one `run_new` for the SHARED name against
 /// the SHARED home → writes WIN (got past the claim) or LOSE (NameClaimed) to its

@@ -134,7 +134,7 @@ CONSTANT triple — which a BROKEN config-loader that simply hard-codes the same
 flags ALSO satisfies (panel finding P8, opus M5 + gpt): at the pin the byte-exact
 default row cannot distinguish a real config-loader from a constant-echo. The new
 `scenarios/build_claude_cmd_config.sh` row closes that gap: it supplies a NON-DEFAULT
-flag set through the ADR-0006 config seam (`SB_CLAUDE_FLAGS`, tier 1) and asserts the
+flag set through the ADR-0006 config seam (`QD_CLAUDE_FLAGS`, tier 1) and asserts the
 launch argv reflects the OVERRIDE (byte-exact), not the default triple — proving the
 loader READS config. **This row is EXPECTATION-ONLY / Rust-target (sanctioned by
 ADR-0011 §(a)):** at the pin TS has no config seam for `CLAUDE_FLAGS` (the triple is a

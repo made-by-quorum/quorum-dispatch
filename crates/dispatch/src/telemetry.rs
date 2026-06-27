@@ -99,11 +99,11 @@ pub fn ps_ppid(exec: &dyn Exec, pid: i32) -> Option<i32> {
 }
 
 // ===========================================================================
-// Marks path (shared with mark.rs's resolution — SB_HOME-honoring, L9a)
+// Marks path (shared with mark.rs's resolution — QD_HOME-honoring, L9a)
 // ===========================================================================
 
 /// Resolve `<sbHome>/state/marks.jsonl` via `SbPaths::from_home_env` (honors
-/// SB_HOME through the injected `Env` seam; L9a). `None` if HOME is unset. Same
+/// QD_HOME through the injected `Env` seam; L9a). `None` if HOME is unset. Same
 /// resolution `mark.rs` uses, hoisted so create/send/wait/mark all agree.
 pub fn marks_path(env: &dyn Env) -> Option<PathBuf> {
     let home = env.var("HOME").filter(|s| !s.is_empty())?;
@@ -202,7 +202,7 @@ pub fn append_line(marks_path: &Path, line: &str) -> Result<(), String> {
 // ===========================================================================
 
 /// Append a `create` lineage event line to `marks.jsonl`. Resolves the marks path
-/// via the injected `Env` (SB_HOME-honoring). `Err` carries a human reason for the
+/// via the injected `Env` (QD_HOME-honoring). `Err` carries a human reason for the
 /// caller to warn about; the caller MUST NOT change its exit code on failure
 /// (spec §4.1 — telemetry is best-effort-durable).
 pub fn append_create_event(

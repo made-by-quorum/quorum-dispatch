@@ -41,7 +41,7 @@ scn_run() {
     local name
     name="$(scn_session_name nwr)"
     # Boot with STUB_WITHHOLD_JSONL=1 set at BOOT (reaches the long-running stub).
-    STUB_WITHHOLD_JSONL=1 bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    STUB_WITHHOLD_JSONL=1 bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     local i=0 pidfile=""
     while [ "$i" -lt 30 ]; do

@@ -18,11 +18,11 @@
 #      postinstall.ts at the pin is GLOBAL-install-guarded: a local `bun install`
 #      (no --global) detects `npm_config_global != "true"` and SKIPS bootstrap
 #      entirely (verified read-only at pin: scripts/postinstall.ts isGlobalInstall).
-#      We ALSO export SB_SKIP_BOOTSTRAP=1 belt-and-suspenders. Offline fallback:
+#      We ALSO export QD_SKIP_BOOTSTRAP=1 belt-and-suspenders. Offline fallback:
 #      if the bun cache is warm, `bun install --offline` succeeds with no network;
 #      pass PREP_BUN_OFFLINE=1 to force it. A bun-install failure is REFUSED.
 #   4. Write a MARKER file (.prep-verified) in the clone root containing the
-#      verified pin. record.sh requires SB_UNDER_TEST to resolve UNDER a clone whose
+#      verified pin. record.sh requires QD_UNDER_TEST to resolve UNDER a clone whose
 #      marker pin matches — closing the red-team scenario-bypass hole (a scenario
 #      can no longer be pointed at the floating shared checkout or an arbitrary path).
 #
@@ -117,9 +117,9 @@ if [ "${PREP_SKIP_BUN:-0}" = "1" ]; then
 elif command -v bun >/dev/null 2>&1; then
     _bun_flags=""
     [ "${PREP_BUN_OFFLINE:-0}" = "1" ] && _bun_flags="--offline"
-    # SB_SKIP_BOOTSTRAP=1 is belt-and-suspenders; postinstall already skips a
+    # QD_SKIP_BOOTSTRAP=1 is belt-and-suspenders; postinstall already skips a
     # local (non-global) install. Run inside the clone.
-    if ! ( cd "$DEST" && SB_SKIP_BOOTSTRAP=1 bun install $_bun_flags ) >/dev/null 2>&1; then
+    if ! ( cd "$DEST" && QD_SKIP_BOOTSTRAP=1 bun install $_bun_flags ) >/dev/null 2>&1; then
         rm -rf "$DEST" 2>/dev/null || true
         _prep_die "bun install in the clone failed (try PREP_BUN_OFFLINE=1 if the cache is warm)" 1
     fi

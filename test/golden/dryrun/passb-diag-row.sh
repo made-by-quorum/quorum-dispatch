@@ -9,7 +9,7 @@ SCN_BASE="${1:?usage: passb-diag-row.sh <scenario-basename>}"
 DIAG="$HERE/dryrun/passb-diag/$SCN_BASE"
 mkdir -p "$DIAG"
 SUT="${SUT:-/home/u/work/wt-a4-passb/target/debug/qd}"
-export SB_UNDER_TEST="$SUT"
+export QD_UNDER_TEST="$SUT"
 
 . "$HERE/lib/jail.sh"
 . "$HERE/lib/normalize.sh"

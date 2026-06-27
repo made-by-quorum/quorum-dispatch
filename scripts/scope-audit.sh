@@ -10,7 +10,7 @@
 # audit makes that class of drift a CI failure instead of a review catch.
 #
 # DENY (case-insensitive, crates/** source = *.rs + *.toml):
-#   SB_PLUGINS_ROOT | substrate | marketplace
+#   QD_PLUGINS_ROOT | substrate | marketplace
 #
 # EXPLICITLY ALLOWED (contract documentation, not pattern holes):
 #   - spawned_by / spawnedBy — the ONE engine-stamped lineage field (ADD-3/3a);
@@ -27,7 +27,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-matches="$(grep -rinE 'SB_PLUGINS_ROOT|substrate|marketplace' crates \
+matches="$(grep -rinE 'QD_PLUGINS_ROOT|substrate|marketplace' crates \
     --include='*.rs' --include='*.toml' 2>/dev/null \
     | grep -v -E '/fixtures/' || true)"
 

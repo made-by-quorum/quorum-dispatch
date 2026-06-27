@@ -106,8 +106,8 @@ pub fn run(m: &ArgMatches) -> i32 {
 
     // --- claude-code kill: dual-reap, PID-targeted, loud-on-partial (Bug A / I4) ---
     let exec = RealExec;
-    // Backend-selected mux (C1 D3). ONE SB_MUX parse drives the mux AND the dir
-    // set below. A bogus SB_MUX exits loudly here.
+    // Backend-selected mux (C1 D3). ONE QD_MUX parse drives the mux AND the dir
+    // set below. A bogus QD_MUX exits loudly here.
     let backend = match common::select_backend(&env) {
         Ok(b) => b,
         Err(code) => return code,
@@ -125,7 +125,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // The socket dirs to scan/kill in. Backend-keyed (C1 D2): zmx keeps the
     // canonical + cross-dir legacy scan (Bug D); embedded uses the single qrmux
     // dir (legacy EMPTY). A14-2(c): the surviving zmx READ scan honors
-    // SB_TEST_SCAN_ROOTS (test lanes only; production = literal /tmp). Per the
+    // QD_TEST_SCAN_ROOTS (test lanes only; production = literal /tmp). Per the
     // A14-2 discriminator the kill TARGET is registry-known/user-named + socket-
     // addressed — NOT sourced from /tmp enumeration alone (visibility-only).
     let canonical = match backend {

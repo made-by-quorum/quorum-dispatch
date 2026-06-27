@@ -24,10 +24,10 @@
 //! # Burst model (a4-spec §5, deterministic)
 //!
 //! stdin chunks separated by < `GAP_MS` (50ms) belong to ONE burst. A burst is a
-//! PASTE iff its total length ≥ `SB_FAKEREPL_PASTE_THRESHOLD` (default 8). A CR
+//! PASTE iff its total length ≥ `QD_FAKEREPL_PASTE_THRESHOLD` (default 8). A CR
 //! INSIDE a paste burst is absorbed as a literal newline into the composer
 //! (claude's paste-burst behavior); a CR arriving as its OWN non-paste burst
-//! SUBMITS the composer. `SB_FAKEREPL_ABSORB_ALL_CRS=1` makes EVERY CR absorbed
+//! SUBMITS the composer. `QD_FAKEREPL_ABSORB_ALL_CRS=1` makes EVERY CR absorbed
 //! (powers the stalled exit-contract row + the W8 control). A CR arriving while
 //! BUSY is recorded (`cr_while_busy`), composer-buffered, and does NOT start a
 //! turn (matches claude: queued input).
@@ -36,7 +36,7 @@
 //!
 //! Refuse (stderr naming the failed check + exit 13) unless ALL hold: (a) `HOME`
 //! matches `*/sbrg-runs/*/home`; (b) with `root := dirname(HOME)`,
-//! `SB_HOME == root/sb_home`, `ZMX_DIR == root/zmx`, `TMPDIR == root/tmp`. NO
+//! `QD_HOME == root/sb_home`, `ZMX_DIR == root/zmx`, `TMPDIR == root/tmp`. NO
 //! dependence on `JAIL_ROOT`/`JAIL_RUNID`/`JAIL_PREFIX` — those are shell-local in
 //! jail.sh (NO export), so a child across the zmx boundary never sees them. The
 //! belt is derived purely from the EXPORTED isolation set (jail.sh:139-146).
@@ -81,10 +81,10 @@ extern "C" fn on_sigterm(_sig: libc::c_int) {
 const GAP_MS: u64 = 50;
 
 /// Default paste threshold: a burst ≥ this many bytes is a PASTE (its CRs are
-/// absorbed, not submits). Overridable via `SB_FAKEREPL_PASTE_THRESHOLD`.
+/// absorbed, not submits). Overridable via `QD_FAKEREPL_PASTE_THRESHOLD`.
 const DEFAULT_PASTE_THRESHOLD: usize = 8;
 
-/// Default busy-hold after a submit, ms. Overridable via `SB_FAKEREPL_BUSY_MS`.
+/// Default busy-hold after a submit, ms. Overridable via `QD_FAKEREPL_BUSY_MS`.
 const DEFAULT_BUSY_MS: u64 = 500;
 
 fn main() {
@@ -106,8 +106,8 @@ fn main() {
     // harness error, refused loudly (ack1-spec §4.2; no silent precedence).
     if cfg.eat_input && cfg.truncate_user_record_bytes.is_some() {
         eprintln!(
-            "fakerepl: REFUSED — SB_FAKEREPL_EAT_INPUT and \
-             SB_FAKEREPL_TRUNCATE_USER_RECORD_BYTES are mutually exclusive"
+            "fakerepl: REFUSED — QD_FAKEREPL_EAT_INPUT and \
+             QD_FAKEREPL_TRUNCATE_USER_RECORD_BYTES are mutually exclusive"
         );
         std::process::exit(13);
     }
@@ -176,7 +176,7 @@ struct Config {
 
 impl Config {
     fn from_env() -> Self {
-        // --name <n>  (the only flag); falls back to SB_FAKEREPL_NAME, then a
+        // --name <n>  (the only flag); falls back to QD_FAKEREPL_NAME, then a
         // deterministic default. This is the registry row's `name` the SUT's
         // find_pid_file keys on.
         let mut name: Option<String> = None;
@@ -188,7 +188,7 @@ impl Config {
             } else if a == "--resume" {
                 // WP-B5-iii: faithful claude emulation — `--resume <id>` continues
                 // session <id>, so the registry row's sessionId is <id> unless a
-                // test pins SB_FAKEREPL_SESSION_ID explicitly. This lets a
+                // test pins QD_FAKEREPL_SESSION_ID explicitly. This lets a
                 // Mechanism-S fork (whose uuid qd mints PRE-spawn and passes via
                 // `--resume <fork_uuid>`) register that uuid without the test
                 // pre-knowing it.
@@ -196,60 +196,60 @@ impl Config {
             }
         }
         let name = name
-            .or_else(|| std::env::var("SB_FAKEREPL_NAME").ok())
+            .or_else(|| std::env::var("QD_FAKEREPL_NAME").ok())
             .unwrap_or_else(|| "fakerepl".to_string());
 
-        let paste_threshold = std::env::var("SB_FAKEREPL_PASTE_THRESHOLD")
+        let paste_threshold = std::env::var("QD_FAKEREPL_PASTE_THRESHOLD")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(DEFAULT_PASTE_THRESHOLD);
 
-        let busy_ms = std::env::var("SB_FAKEREPL_BUSY_MS")
+        let busy_ms = std::env::var("QD_FAKEREPL_BUSY_MS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(DEFAULT_BUSY_MS);
 
-        let absorb_all_crs = std::env::var("SB_FAKEREPL_ABSORB_ALL_CRS")
+        let absorb_all_crs = std::env::var("QD_FAKEREPL_ABSORB_ALL_CRS")
             .map(|v| v == "1")
             .unwrap_or(false);
 
         // tty-queue overflow model: a single burst LONGER than this many bytes is
         // dropped wholesale (models the live ~4096B canonical-tty-queue overflow,
         // ADR 0009 mode (a)). Unset → no drop.
-        let drop_over_bytes = std::env::var("SB_FAKEREPL_DROP_OVER_BYTES")
+        let drop_over_bytes = std::env::var("QD_FAKEREPL_DROP_OVER_BYTES")
             .ok()
             .and_then(|s| s.parse::<usize>().ok());
 
         // W8 reader-stall seam. Armed only when STALL_AFTER_BYTES is set; the
         // other two carry sensible defaults so a partial config still models a
         // stall (cap 0 = total mid-loss, ms 0 = no-op pause).
-        let stall_after_bytes = std::env::var("SB_FAKEREPL_STALL_AFTER_BYTES")
+        let stall_after_bytes = std::env::var("QD_FAKEREPL_STALL_AFTER_BYTES")
             .ok()
             .and_then(|s| s.parse::<usize>().ok());
-        let stall_ms = std::env::var("SB_FAKEREPL_STALL_MS")
+        let stall_ms = std::env::var("QD_FAKEREPL_STALL_MS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
-        let stall_queue_cap = std::env::var("SB_FAKEREPL_STALL_QUEUE_CAP")
+        let stall_queue_cap = std::env::var("QD_FAKEREPL_STALL_QUEUE_CAP")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
 
         // W8 conversation-JSONL emulation path (None = unset → no transcript).
-        let convo_jsonl = std::env::var_os("SB_FAKEREPL_CONVO_JSONL").map(PathBuf::from);
+        let convo_jsonl = std::env::var_os("QD_FAKEREPL_CONVO_JSONL").map(PathBuf::from);
 
         // W8 end-to-end leg: optional sessionId for the registry row.
-        // SB_FAKEREPL_SESSION_ID pins it for the env-driven tests; absent, fall
+        // QD_FAKEREPL_SESSION_ID pins it for the env-driven tests; absent, fall
         // back to the `--resume <id>` argv (WP-B5-iii — real claude continues that
         // session id) so a Mechanism-S fork adopts its seeded uuid.
-        let session_id = std::env::var("SB_FAKEREPL_SESSION_ID").ok().or(resume_id);
+        let session_id = std::env::var("QD_FAKEREPL_SESSION_ID").ok().or(resume_id);
 
         // ACK-1 seams (ack1-spec §4.2). The both-set conflict is refused in
         // main() (exit 13 — fail-loud, no silent precedence).
-        let eat_input = std::env::var("SB_FAKEREPL_EAT_INPUT")
+        let eat_input = std::env::var("QD_FAKEREPL_EAT_INPUT")
             .map(|v| v == "1")
             .unwrap_or(false);
-        let truncate_user_record_bytes = std::env::var("SB_FAKEREPL_TRUNCATE_USER_RECORD_BYTES")
+        let truncate_user_record_bytes = std::env::var("QD_FAKEREPL_TRUNCATE_USER_RECORD_BYTES")
             .ok()
             .and_then(|s| s.parse::<usize>().ok());
 
@@ -258,7 +258,7 @@ impl Config {
         let home = std::env::var("HOME").expect("HOME present (belt passed)");
         let sessions_dir = Path::new(&home).join(".claude").join("sessions");
 
-        let report_path = std::env::var_os("SB_FAKEREPL_REPORT").map(PathBuf::from);
+        let report_path = std::env::var_os("QD_FAKEREPL_REPORT").map(PathBuf::from);
 
         Self {
             name,
@@ -717,7 +717,7 @@ impl Repl {
     }
 
     /// W8: append a claude-shaped USER record to the conversation JSONL (if
-    /// `SB_FAKEREPL_CONVO_JSONL` is set). serde_json does the escaping. Flushed per
+    /// `QD_FAKEREPL_CONVO_JSONL` is set). serde_json does the escaping. Flushed per
     /// line (the SUT polls this file). Best-effort: a write error must not crash
     /// the harness child (the convo file is a test fixture, not load-bearing).
     fn append_convo_user(&mut self, text: &str) {

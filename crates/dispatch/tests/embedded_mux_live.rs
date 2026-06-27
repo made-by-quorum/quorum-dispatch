@@ -538,13 +538,13 @@ fn selector_builds_embedded_and_errors_on_bogus() {
     let _mux = select_mux(Backend::Embedded, Path::new("/jail/home"), &env).unwrap();
 
     let mut bogus_vars = vars.clone();
-    bogus_vars.insert("SB_MUX".to_string(), "nonsense".to_string());
+    bogus_vars.insert("QD_MUX".to_string(), "nonsense".to_string());
     let bogus = MapEnv {
         vars: bogus_vars,
         uid: 501,
     };
     let err = parse_backend(&bogus).unwrap_err();
-    assert_ne!(err.exit_code, 1, "distinct exit code for bogus SB_MUX");
+    assert_ne!(err.exit_code, 1, "distinct exit code for bogus QD_MUX");
     assert!(err.message.contains("nonsense") && err.message.contains("zmx"));
 }
 

@@ -1,7 +1,7 @@
 //! Codex P2 W7 — LIVE jailed end-to-end of the RESUME (revive) + KILL paths
 //! (codex-p2-spec §7.6; ADD-26(2): resume is a first-class AGENT verb =
 //! thread/resume revive-to-DRIVABLE with NO interactive-attach tail; attach is
-//! SEVERED). Gated on `SB_CODEX_LIVE=1`; a no-op otherwise so the default suite
+//! SEVERED). Gated on `QD_CODEX_LIVE=1`; a no-op otherwise so the default suite
 //! never spawns a real codex daemon or spends API budget.
 //!
 //! What it drives REAL (no fakes), the full lifecycle in ONE jail:
@@ -51,9 +51,9 @@ use dispatch::registry::RegistryEntry;
 use dispatch::resume_daemon::{kill_codex, resume_codex, ResumeOutcome, ResumeParams, ReviveDeps};
 use dispatch::wait::{run_codex_wait_loop, RealCodexWaitDeps, WaitStatusOutcome};
 
-/// The live gate: skip unless `SB_CODEX_LIVE=1`.
+/// The live gate: skip unless `QD_CODEX_LIVE=1`.
 fn live() -> bool {
-    std::env::var("SB_CODEX_LIVE").as_deref() == Ok("1")
+    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
 }
 
 /// A jail Env: only the codex-relevant vars resolve. `env -i` shape via the seam.
@@ -235,7 +235,7 @@ fn codex_root(env: &JailEnv, paths: &dispatch::paths::SbPaths) -> PathBuf {
 #[test]
 fn codex_resume_kill_live_jailed_e2e() {
     if !live() {
-        eprintln!("SB_CODEX_LIVE != 1 — skipping the live codex resume/kill test");
+        eprintln!("QD_CODEX_LIVE != 1 — skipping the live codex resume/kill test");
         return;
     }
 

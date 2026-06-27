@@ -28,7 +28,7 @@ pub fn claude_bin(env: &impl Env) -> String {
 
 /// Resolve the claude flags (HARDENING #4b / spec §7, L9 carrier). Resolution
 /// precedence:
-///   1. `SB_CLAUDE_FLAGS` env (whitespace-split), if set and non-empty.
+///   1. `QD_CLAUDE_FLAGS` env (whitespace-split), if set and non-empty.
 ///   2. `claude_flags` string key in the config toml at `config_toml_path`
 ///      (whitespace-split), if present.
 ///   3. built-in default (`DEFAULT_FLAGS`, TS parity).
@@ -37,7 +37,7 @@ pub fn claude_bin(env: &impl Env) -> String {
 /// read never hard-fails the launch.
 pub fn claude_flags(env: &impl Env, config_toml_path: &Path) -> Vec<String> {
     // 1. env override.
-    if let Some(raw) = env.var("SB_CLAUDE_FLAGS") {
+    if let Some(raw) = env.var("QD_CLAUDE_FLAGS") {
         let flags = split_ws(&raw);
         if !flags.is_empty() {
             return flags;
@@ -100,7 +100,7 @@ fn split_ws(s: &str) -> Vec<String> {
 // Pete-pinned). Mechanism = launch-time BIRTH PROPERTY: the engine injects
 // `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` into the child env via the existing
 // session-env machinery (`launch_env_pairs` → env file → dot-source prefix) —
-// the SB_SESSION_ID pattern, third instance of the birth-property lesson.
+// the QD_SESSION_ID pattern, third instance of the birth-property lesson.
 // NEVER the settings.json env block (live Claude Code sessions hot-apply that
 // file and corrupt — the original freeze reason).
 
@@ -154,7 +154,7 @@ pub fn resolve_render_mode(flag: Option<RenderMode>, config_value: Option<&str>)
 }
 
 /// Read the raw `render-default` value from the config file (the SAME
-/// SB_HOME-honoring path `qd config` writes — `secrets::resolve_config_path`),
+/// QD_HOME-honoring path `qd config` writes — `secrets::resolve_config_path`),
 /// or `None` when the file/key is absent. Permissive (L8): a read failure never
 /// hard-fails a launch.
 pub fn render_default_from_config(env: &dyn Env) -> Option<String> {
@@ -320,8 +320,8 @@ pub fn capture_backend_env(env: &impl Env) -> Vec<(String, String)> {
 
 /// PURE. The full per-session env-file pair set for one launch: the F1/`--via`
 /// backend pairs + the punch-7 render-mode birth property + the wave-2
-/// `SB_SESSION_ID` identity pair (P0 spec-w2-env D1, both sites).
-/// `SB_SESSION_ID` lands LAST and is never part of the capture whitelist — it
+/// `QD_SESSION_ID` identity pair (P0 spec-w2-env D1, both sites).
+/// `QD_SESSION_ID` lands LAST and is never part of the capture whitelist — it
 /// is engine-asserted, never inherited.
 ///
 /// `sb_session_id` is `Some` whenever the verb minted/resolved a stable id:
@@ -340,7 +340,7 @@ pub fn capture_backend_env(env: &impl Env) -> Vec<(String, String)> {
 /// routing, and id state — because the nested-spawn registration skip it defeats
 /// (board STATE 130) has nothing to do with any of those. Ordering is load-
 /// bearing for the goldens: backend pairs FIRST, then the engine birth
-/// properties (FORCE, then alt-screen), then `SB_SESSION_ID` LAST.
+/// properties (FORCE, then alt-screen), then `QD_SESSION_ID` LAST.
 pub fn launch_env_pairs(
     backend_env: Vec<(String, String)>,
     sb_session_id: Option<String>,
@@ -352,7 +352,7 @@ pub fn launch_env_pairs(
         pairs.push((ALT_SCREEN_DISABLE_KEY.to_string(), "1".to_string()));
     }
     if let Some(id) = sb_session_id {
-        pairs.push(("SB_SESSION_ID".to_string(), id));
+        pairs.push(("QD_SESSION_ID".to_string(), id));
     }
     pairs
 }
@@ -520,7 +520,7 @@ mod tests {
         );
 
         // Env override wins, whitespace-split.
-        let e = env(&[("SB_CLAUDE_FLAGS", "--foo  --bar baz")]);
+        let e = env(&[("QD_CLAUDE_FLAGS", "--foo  --bar baz")]);
         assert_eq!(claude_flags(&e, nonexistent), vec!["--foo", "--bar", "baz"]);
     }
 
@@ -539,7 +539,7 @@ mod tests {
             vec!["--alpha", "--beta"]
         );
         // Env still wins over config.
-        let e = env(&[("SB_CLAUDE_FLAGS", "--env-only")]);
+        let e = env(&[("QD_CLAUDE_FLAGS", "--env-only")]);
         assert_eq!(claude_flags(&e, &cfg), vec!["--env-only"]);
     }
 
@@ -853,7 +853,7 @@ mod tests {
 
     /// Default (inline) launches inject CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1
     /// into the env-pair set; the ONLY delta vs the pre-punch-7 set is that one
-    /// var, and SB_SESSION_ID still lands LAST.
+    /// var, and QD_SESSION_ID still lands LAST.
     #[test]
     fn inline_render_injects_alt_screen_disable_var() {
         let pairs = launch_env_pairs(
@@ -867,14 +867,14 @@ mod tests {
                 ("ANTHROPIC_BASE_URL".to_string(), "http://r".to_string()),
                 (FORCE_SESSION_PERSISTENCE_KEY.to_string(), "1".to_string()),
                 (ALT_SCREEN_DISABLE_KEY.to_string(), "1".to_string()),
-                ("SB_SESSION_ID".to_string(), "ab3kx9mq".to_string()),
+                ("QD_SESSION_ID".to_string(), "ab3kx9mq".to_string()),
             ]
         );
     }
 
     /// --alt-screen launches OMIT the alt-screen-disable var entirely (the
     /// opt-out is "not injected", never "=0"). FORCE-persistence still rides
-    /// (it is render-independent) and SB_SESSION_ID still lands last.
+    /// (it is render-independent) and QD_SESSION_ID still lands last.
     #[test]
     fn alt_screen_render_omits_disable_var() {
         let pairs = launch_env_pairs(
@@ -887,7 +887,7 @@ mod tests {
             vec![
                 ("ANTHROPIC_BASE_URL".to_string(), "http://r".to_string()),
                 (FORCE_SESSION_PERSISTENCE_KEY.to_string(), "1".to_string()),
-                ("SB_SESSION_ID".to_string(), "ab3kx9mq".to_string()),
+                ("QD_SESSION_ID".to_string(), "ab3kx9mq".to_string()),
             ]
         );
         assert!(!pairs.iter().any(|(k, _)| k == ALT_SCREEN_DISABLE_KEY));
@@ -969,7 +969,7 @@ mod tests {
     }
 
     /// `render_default_from_config` reads the top-level `render-default` key
-    /// from the SB_HOME-honoring config path (the same file `qd config` writes).
+    /// from the QD_HOME-honoring config path (the same file `qd config` writes).
     #[test]
     fn render_default_from_config_reads_sb_home_config() {
         let dir = tempfile::tempdir().unwrap();
@@ -980,13 +980,13 @@ mod tests {
             "render-default = \"alt-screen\"\n[secrets]\nopenrouter-key = \"sk-x\"\n",
         )
         .unwrap();
-        let e = env(&[("SB_HOME", sb_home.to_str().unwrap())]);
+        let e = env(&[("QD_HOME", sb_home.to_str().unwrap())]);
         assert_eq!(
             render_default_from_config(&e).as_deref(),
             Some("alt-screen")
         );
         // Missing file → None (permissive, L8).
-        let e2 = env(&[("SB_HOME", dir.path().join("nope").to_str().unwrap())]);
+        let e2 = env(&[("QD_HOME", dir.path().join("nope").to_str().unwrap())]);
         assert_eq!(render_default_from_config(&e2), None);
     }
 

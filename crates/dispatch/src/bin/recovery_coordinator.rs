@@ -22,7 +22,7 @@
 //! automatic recovery fires — degraded to manual, never incorrect (fail-safe-down).
 //!
 //! ## Args
-//! - `--state-dir <DIR>`   the qd state dir (default: `$SB_HOME/state` or
+//! - `--state-dir <DIR>`   the qd state dir (default: `$QD_HOME/state` or
 //!   `$HOME/.quorum/dispatch/state`).
 //! - `--once`              run a single pass and exit (testing / cron-style).
 //! - `--tick-ms <N>`       loop cadence (default 2000ms).
@@ -37,7 +37,7 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Resolve the state dir from `--state-dir`, else `SB_HOME`/`HOME` like every other
+/// Resolve the state dir from `--state-dir`, else `QD_HOME`/`HOME` like every other
 /// component (the `paths.rs` resolution).
 fn resolve_state_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
     if let Some(p) = explicit {

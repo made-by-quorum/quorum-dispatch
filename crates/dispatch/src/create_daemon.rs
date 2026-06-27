@@ -12,7 +12,7 @@
 //! THE SEQUENCE (codex-p2-spec §7.2; each step names its failure mode, every
 //! failure kills the spawned daemon + writes NO row + returns a typed error):
 //!   1. version sniff (§3.4) — Breaking verdict → loud named error (found vs pin
-//!      + the re-pin ceremony) unless `SB_CODEX_UNPINNED=1`; PatchDrift → warn.
+//!      + the re-pin ceremony) unless `QD_CODEX_UNPINNED=1`; PatchDrift → warn.
 //!   2. port allocation (§3.2) — bind `127.0.0.1:0`, take the OS port, drop the
 //!      listener; RE-ROLL any port in 8900-9000 (qd's relay probe range — fleet
 //!      lesson); ×N retry ladder if the daemon later fails to bind.
@@ -190,7 +190,7 @@ pub struct DaemonDeps<'a> {
     /// the rpc directly (the trait's boot_waiter/inject are W3's; W4 owns the
     /// create choreography, blast-radius rule §7.1).
     pub provider: &'a dyn Provider,
-    /// Env seam (L9a): version-override read (`SB_CODEX_UNPINNED`), CODEX_HOME
+    /// Env seam (L9a): version-override read (`QD_CODEX_UNPINNED`), CODEX_HOME
     /// passthrough resolution via the provider's launch_plan, and `fx.env`.
     pub env: &'a dyn Env,
     /// Exec seam — the one-shot `codex --version` sniff (§3.4) routes through it.
@@ -217,7 +217,7 @@ pub struct DaemonDeps<'a> {
     pub alloc_port: &'a PortAllocator<'a>,
     /// P0 wave-2 (spec-w2-env D1 site 3): the idstore path (`<state>/ids.jsonl`).
     /// The stable id is minted UNBOUND before the spawn loop, injected as
-    /// `SB_SESSION_ID` in the daemon's process env, and BOUND to the thread id
+    /// `QD_SESSION_ID` in the daemon's process env, and BOUND to the thread id
     /// after `thread/start` (the codex analog of the claude mint-at-start /
     /// bind-at-boot-confirm flow — the thread uuid does not exist at spawn time).
     pub ids_path: PathBuf,
@@ -263,7 +263,7 @@ pub enum DaemonError {
     /// written — this fires BEFORE the spawn loop.
     NameClaimed { name: String, holder: String },
     /// §3.4: the installed codex is a (major,minor) drift from the pin and
-    /// `SB_CODEX_UNPINNED=1` was NOT set. Carries found vs pin for the message.
+    /// `QD_CODEX_UNPINNED=1` was NOT set. Carries found vs pin for the message.
     VersionBreaking { found: Version, pin: Version },
     /// §3.4: `codex --version` could not be sniffed (spawn failed / nonzero /
     /// unparseable). Carries the detail.
@@ -323,7 +323,7 @@ impl std::fmt::Display for DaemonError {
                 f,
                 "qd start: codex {}.{}.{} detected, pinned {}.{} — run the schema \
                  fixture-diff and re-pin (scripts/codex-schema-diff.sh + bump \
-                 VERSION.pin). To proceed at your own risk: SB_CODEX_UNPINNED=1. \
+                 VERSION.pin). To proceed at your own risk: QD_CODEX_UNPINNED=1. \
                  No session was created.",
                 found.major, found.minor, found.patch, pin.major, pin.minor
             ),
@@ -380,7 +380,7 @@ pub fn run_new_daemon<'a>(
     params: &DaemonParams,
 ) -> Result<DaemonOutcome, DaemonError> {
     // --- Step 1: version sniff (§3.4) ----------------------------------------
-    // Breaking → loud named error UNLESS SB_CODEX_UNPINNED=1 (read off the env
+    // Breaking → loud named error UNLESS QD_CODEX_UNPINNED=1 (read off the env
     // SEAM, never raw std::env). PatchDrift → warn-and-go. The verdict itself is
     // a pure function of (found, pin); the override is mapped HERE (version.rs is
     // deliberately override-free).
@@ -502,7 +502,7 @@ fn check_version(deps: &DaemonDeps) -> Result<(), DaemonError> {
             if unpinned_override(deps.env) {
                 eprintln!(
                     "WARNING: codex {}.{}.{} is a BREAKING drift from the pin \
-                     {}.{} but SB_CODEX_UNPINNED=1 is set — proceeding at risk.",
+                     {}.{} but QD_CODEX_UNPINNED=1 is set — proceeding at risk.",
                     found.major, found.minor, found.patch, pin.major, pin.minor
                 );
                 Ok(())
@@ -517,10 +517,10 @@ fn check_version(deps: &DaemonDeps) -> Result<(), DaemonError> {
     }
 }
 
-/// `SB_CODEX_UNPINNED=1` read off the env SEAM (L9a — never raw std::env). Any
+/// `QD_CODEX_UNPINNED=1` read off the env SEAM (L9a — never raw std::env). Any
 /// non-"1" value (including unset) is NOT the override.
 fn unpinned_override(env: &dyn Env) -> bool {
-    env.var("SB_CODEX_UNPINNED").as_deref() == Some("1")
+    env.var("QD_CODEX_UNPINNED").as_deref() == Some("1")
 }
 
 /// One attempt: alloc a port → build the daemon argv (provider launch_plan +
@@ -581,7 +581,7 @@ fn try_spawn_and_connect<'a>(
     // pre-minted stable id — an explicit set layered over the launch plan's env,
     // so it overrides anything inherited through the commissioner's subtree.
     let mut spawn_env = plan.env.clone();
-    spawn_env.push(("SB_SESSION_ID".to_string(), sb_session_id.to_string()));
+    spawn_env.push(("QD_SESSION_ID".to_string(), sb_session_id.to_string()));
 
     let log_path = deps.log_dir.join(format!("codex-{}.log", params.name));
     let spawned = match deps
@@ -658,7 +658,7 @@ fn finish_create(
         eprintln!(
             "WARNING: could not bind stable id {sb_session_id} to codex thread \
              {thread_id}: {e} — `qd ls` may surface a different id than the \
-             daemon's SB_SESSION_ID."
+             daemon's QD_SESSION_ID."
         );
     }
 
@@ -1191,7 +1191,7 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("0.140.0"), "msg: {msg}");
         assert!(msg.contains("0.134"), "msg: {msg}");
-        assert!(msg.contains("SB_CODEX_UNPINNED=1"), "msg: {msg}");
+        assert!(msg.contains("QD_CODEX_UNPINNED=1"), "msg: {msg}");
         // NOTHING was spawned (version gate is BEFORE the spawn loop).
         assert_eq!(spawner.spawn_count(), 0, "version gate blocks before spawn");
         assert!(!h.sessions_dir.join("4242.json").exists(), "no row written");
@@ -1208,7 +1208,7 @@ mod tests {
         };
         // The override read off the env SEAM (fake env) — proceeds at risk.
         env.vars
-            .insert("SB_CODEX_UNPINNED".to_string(), "1".to_string());
+            .insert("QD_CODEX_UNPINNED".to_string(), "1".to_string());
         let rpc = FixtureRpc::happy("T-OVR");
         let connect =
             |_url: &str| -> Result<Box<dyn AppServerRpc>, RpcError> { Ok(Box::new(RpcRef(&rpc))) };
@@ -1259,7 +1259,7 @@ mod tests {
         assert_eq!(out.thread_id, "T-PATCH");
     }
 
-    // === P0 wave-2 (spec-w2-env D1 site 3): SB_SESSION_ID in the daemon env ===
+    // === P0 wave-2 (spec-w2-env D1 site 3): QD_SESSION_ID in the daemon env ===
 
     /// The daemon's spawn env carries a pre-minted stable id, and after
     /// thread/start the id is BOUND to the thread uuid — the id in the daemon's
@@ -1288,13 +1288,13 @@ mod tests {
             ids_path: h.ids_path.clone(),
         };
         run_new_daemon(&deps, &params("cdx", None)).expect("happy create");
-        // The spawn env carries SB_SESSION_ID with a well-formed stable id.
+        // The spawn env carries QD_SESSION_ID with a well-formed stable id.
         let env = spawner.last_env();
         let id = env
             .iter()
-            .find(|(k, _)| k == "SB_SESSION_ID")
+            .find(|(k, _)| k == "QD_SESSION_ID")
             .map(|(_, v)| v.clone())
-            .expect("daemon env carries SB_SESSION_ID");
+            .expect("daemon env carries QD_SESSION_ID");
         assert!(crate::idstore::is_valid_id(&id), "well-formed id: {id}");
         // ...and the store binds that SAME id to the thread uuid.
         let map = crate::idstore::fold(&h.ids_path);

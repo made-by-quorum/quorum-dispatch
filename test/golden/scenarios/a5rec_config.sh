@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scenario: a5rec config — TS qd `config` set/get/reveal/path/unset lifecycle,
-# FILE backend (SB_SECRET_BACKEND=file, NO keychain), fake placeholder key.
+# FILE backend (QD_SECRET_BACKEND=file, NO keychain), fake placeholder key.
 # Records the full config lifecycle transcript as ONE byte-exact fixture.
 # Pin 0d0fa9e. tooling: record.sh@388ccd9 normalize.sh@b581f75.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_a5_lifecycle_lib.sh"
@@ -11,7 +11,7 @@ SCN_CLASS="byte-exact"
 SCN_FIXTURE="fixtures/a5-lifecycle/normalized/config.txt"
 
 scn_run() {
-    export SB_SECRET_BACKEND=file   # FILE backend only — daytime-deferred keychain row.
+    export QD_SECRET_BACKEND=file   # FILE backend only — daytime-deferred keychain row.
     local K="$A5_FAKE_OPENROUTER_KEY"
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=config backend=file (fake key, masked+reveal)"

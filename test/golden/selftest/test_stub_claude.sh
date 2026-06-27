@@ -14,7 +14,7 @@
 #       JSONL after PID/timestamp normalization (the double-record premise).
 #
 # All HTTP is to 127.0.0.1 on an EPHEMERAL high port in a throwaway HOME — no jail
-# needed because the stub touches only its own $HOME and binds only $SB_RELAY_PORT.
+# needed because the stub touches only its own $HOME and binds only $QRM_RELAY_PORT.
 # Bash 3.2 floor. python3>=3.6.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -47,7 +47,7 @@ import os, sys, json, time, subprocess, urllib.request
 stub, home, name, port, prompt = sys.argv[1:6]
 os.environ["HOME"] = home
 if port != "0":
-    os.environ["SB_RELAY_PORT"] = port
+    os.environ["QRM_RELAY_PORT"] = port
 args = [sys.executable, stub, "--name", name]
 if port != "0":
     args.append("server:relay")

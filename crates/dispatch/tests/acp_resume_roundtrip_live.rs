@@ -20,9 +20,9 @@
 //!      AND turn 2 in the SAME file); the model RECALLED the nonce (history truly
 //!      re-loaded); NO fork (exactly one new session file); exactly one adapter+bridge.
 //!
-//! Gated on `SB_ACP_LIVE=1` (real bridge + real CC creds + ~2 model turns). No-op
+//! Gated on `QD_ACP_LIVE=1` (real bridge + real CC creds + ~2 model turns). No-op
 //! otherwise. Run:
-//!   SB_ACP_LIVE=1 ~/cap-cargo.sh test -p dispatch --test acp_resume_roundtrip_live -- --nocapture --test-threads=1
+//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p dispatch --test acp_resume_roundtrip_live -- --nocapture --test-threads=1
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -36,13 +36,13 @@ use dispatch::resume_daemon::kill_acp;
 use tempfile::TempDir;
 
 fn live() -> bool {
-    std::env::var("SB_ACP_LIVE").as_deref() == Ok("1")
+    std::env::var("QD_ACP_LIVE").as_deref() == Ok("1")
 }
 
 /// The bridge `.bin` dir, prepended to PATH so the adapter's default `claude-code-acp`
 /// resolves (the EXACT production argv: no `--bridge-cmd`). Overridable via env.
 fn bridge_bin_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("SB_ACP_BRIDGE_BIN_DIR") {
+    if let Ok(p) = std::env::var("QD_ACP_BRIDGE_BIN_DIR") {
         return PathBuf::from(p);
     }
     let home = std::env::var("HOME").expect("HOME");
@@ -187,14 +187,14 @@ fn spawn_adapter(qd: &str, endpoint: &str, cwd: &Path, load_session: Option<&str
 #[test]
 fn acp_resume_roundtrip_live() {
     if !live() {
-        eprintln!("SB_ACP_LIVE != 1 — skipping the acp resume round-trip live test");
+        eprintln!("QD_ACP_LIVE != 1 — skipping the acp resume round-trip live test");
         return;
     }
     let qd = env!("CARGO_BIN_EXE_qd");
     let bridge_dir = bridge_bin_dir();
     assert!(
         bridge_dir.join("claude-code-acp").exists(),
-        "bridge shim not found at {bridge_dir:?}/claude-code-acp (set SB_ACP_BRIDGE_BIN_DIR)"
+        "bridge shim not found at {bridge_dir:?}/claude-code-acp (set QD_ACP_BRIDGE_BIN_DIR)"
     );
 
     let nonce = format!("QUARTZ{}", std::process::id());
@@ -311,7 +311,7 @@ fn acp_resume_roundtrip_live() {
 #[test]
 fn acp_adapter_self_terminates_when_bridge_child_killed() {
     if !live() {
-        eprintln!("SB_ACP_LIVE != 1 — skipping the (W) wedged-but-alive live repro");
+        eprintln!("QD_ACP_LIVE != 1 — skipping the (W) wedged-but-alive live repro");
         return;
     }
     let qd = env!("CARGO_BIN_EXE_qd");

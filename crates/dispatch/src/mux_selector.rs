@@ -1,6 +1,6 @@
-//! C1 M4 (D3): SB_MUX backend selection.
+//! C1 M4 (D3): QD_MUX backend selection.
 //!
-//! ONE parse of `SB_MUX` ([`parse_backend`]) feeds BOTH the runtime mux selection
+//! ONE parse of `QD_MUX` ([`parse_backend`]) feeds BOTH the runtime mux selection
 //! ([`select_mux`]) AND the gather/`MuxDirs` dir-resolution lane (join.rs) — no
 //! divergent double-read of the env var (spec item 4).
 //!
@@ -23,23 +23,23 @@ use crate::exec::RealExec;
 use crate::mux::Mux;
 use crate::zmx_mux::ZmxMux;
 
-/// The selected mux backend, parsed ONCE from `SB_MUX`. The gather/`MuxDirs`
+/// The selected mux backend, parsed ONCE from `QD_MUX`. The gather/`MuxDirs`
 /// dir-resolution lane keys off this same value (single source of truth).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     /// Default: the embedded qrmux daemon (the C1 flip).
     Embedded,
-    /// The zmx escape hatch (`SB_MUX=zmx`).
+    /// The zmx escape hatch (`QD_MUX=zmx`).
     Zmx,
 }
 
-/// Exit code for an invalid `SB_MUX` value. Distinct from the generic `1` so the
+/// Exit code for an invalid `QD_MUX` value. Distinct from the generic `1` so the
 /// G-SEL/G-NEG negative arm can assert a specific selector-misconfig code (it
 /// reuses the `codes` convention: a config/usage error class). Surfaced by the
 /// call sites that print the error message and return this code.
-pub const SB_MUX_INVALID_EXIT: i32 = 2;
+pub const QD_MUX_INVALID_EXIT: i32 = 2;
 
-/// The error a bogus `SB_MUX` produces: a message + the distinct exit code.
+/// The error a bogus `QD_MUX` produces: a message + the distinct exit code.
 /// `real_mux` returns this so the printer call sites surface it uniformly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectorError {
@@ -47,21 +47,21 @@ pub struct SelectorError {
     pub exit_code: i32,
 }
 
-/// Parse `SB_MUX` into a [`Backend`]. unset/empty/`"embedded"` → Embedded;
+/// Parse `QD_MUX` into a [`Backend`]. unset/empty/`"embedded"` → Embedded;
 /// `"zmx"` → Zmx; anything else → a loud named [`SelectorError`].
 ///
 /// The value is trimmed and compared case-sensitively to the documented tokens
 /// (the env contract is exact-match; a stray `"Zmx"` is a misconfig, not a guess).
 pub fn parse_backend(env: &dyn Env) -> Result<Backend, SelectorError> {
-    match env.var("SB_MUX").as_deref().map(str::trim) {
+    match env.var("QD_MUX").as_deref().map(str::trim) {
         None | Some("") | Some("embedded") => Ok(Backend::Embedded),
         Some("zmx") => Ok(Backend::Zmx),
         Some(other) => Err(SelectorError {
             message: format!(
-                "qd: invalid SB_MUX value {other:?} — valid values are \"embedded\" (default) \
+                "qd: invalid QD_MUX value {other:?} — valid values are \"embedded\" (default) \
                  or \"zmx\""
             ),
-            exit_code: SB_MUX_INVALID_EXIT,
+            exit_code: QD_MUX_INVALID_EXIT,
         }),
     }
 }
@@ -88,12 +88,12 @@ pub fn select_mux(
 
 /// Snapshot the env values the embedded mux needs at construction time. The
 /// adapter resolves its dir lazily on first op (a session-shared daemon), but it
-/// must capture HOME + the SB_HOME/XDG seam values up front because it does not
+/// must capture HOME + the QD_HOME/XDG seam values up front because it does not
 /// hold the `&dyn Env` (which is borrowed). We snapshot the two it consults.
 fn env_snapshot(env: &dyn Env) -> EmbeddedEnv {
     EmbeddedEnv {
         xdg_runtime_dir: env.var("XDG_RUNTIME_DIR"),
-        sb_home: env.var("SB_HOME"),
+        sb_home: env.var("QD_HOME"),
         uid: env.uid(),
     }
 }
@@ -112,7 +112,7 @@ impl Env for EmbeddedEnv {
     fn var(&self, key: &str) -> Option<String> {
         match key {
             "XDG_RUNTIME_DIR" => self.xdg_runtime_dir.clone(),
-            "SB_HOME" => self.sb_home.clone(),
+            "QD_HOME" => self.sb_home.clone(),
             _ => None,
         }
     }
@@ -144,11 +144,11 @@ mod tests {
     #[test]
     fn empty_defaults_to_embedded() {
         assert_eq!(
-            parse_backend(&env(&[("SB_MUX", "")])).unwrap(),
+            parse_backend(&env(&[("QD_MUX", "")])).unwrap(),
             Backend::Embedded
         );
         assert_eq!(
-            parse_backend(&env(&[("SB_MUX", "   ")])).unwrap(),
+            parse_backend(&env(&[("QD_MUX", "   ")])).unwrap(),
             Backend::Embedded
         );
     }
@@ -156,12 +156,12 @@ mod tests {
     #[test]
     fn explicit_embedded() {
         assert_eq!(
-            parse_backend(&env(&[("SB_MUX", "embedded")])).unwrap(),
+            parse_backend(&env(&[("QD_MUX", "embedded")])).unwrap(),
             Backend::Embedded
         );
         // trimmed.
         assert_eq!(
-            parse_backend(&env(&[("SB_MUX", "  embedded  ")])).unwrap(),
+            parse_backend(&env(&[("QD_MUX", "  embedded  ")])).unwrap(),
             Backend::Embedded
         );
     }
@@ -169,15 +169,15 @@ mod tests {
     #[test]
     fn explicit_zmx() {
         assert_eq!(
-            parse_backend(&env(&[("SB_MUX", "zmx")])).unwrap(),
+            parse_backend(&env(&[("QD_MUX", "zmx")])).unwrap(),
             Backend::Zmx
         );
     }
 
     #[test]
     fn bogus_value_is_loud_named_error_with_distinct_code() {
-        let err = parse_backend(&env(&[("SB_MUX", "bogus")])).unwrap_err();
-        assert_eq!(err.exit_code, SB_MUX_INVALID_EXIT);
+        let err = parse_backend(&env(&[("QD_MUX", "bogus")])).unwrap_err();
+        assert_eq!(err.exit_code, QD_MUX_INVALID_EXIT);
         assert_ne!(err.exit_code, 1, "distinct from the generic exit 1");
         // The message names the value AND lists the valid set (G-SEL assertion).
         assert!(
@@ -196,8 +196,8 @@ mod tests {
     #[test]
     fn case_sensitive_no_silent_guess() {
         // "Zmx"/"EMBEDDED" are misconfigs, not silent guesses (exact-match contract).
-        assert!(parse_backend(&env(&[("SB_MUX", "Zmx")])).is_err());
-        assert!(parse_backend(&env(&[("SB_MUX", "EMBEDDED")])).is_err());
+        assert!(parse_backend(&env(&[("QD_MUX", "Zmx")])).is_err());
+        assert!(parse_backend(&env(&[("QD_MUX", "EMBEDDED")])).is_err());
     }
 
     #[test]
@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn embedded_env_snapshot_reuses_resolver() {
         // The snapshot env feeds resolve_qrmux_dir identically to the real Env.
-        let e = env(&[("SB_HOME", "/relocated")]);
+        let e = env(&[("QD_HOME", "/relocated")]);
         let snap = env_snapshot(&e);
         let dir = crate::qrmux_dir::resolve_qrmux_dir(Path::new("/jail/home"), &snap).unwrap();
         assert_eq!(dir, Path::new("/relocated/mux"));

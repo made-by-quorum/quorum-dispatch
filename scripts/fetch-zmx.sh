@@ -24,7 +24,7 @@
 #   Copies vendor/zmx/zmx-0.6.0.tar.gz into <dest-dir>/ and verifies it.
 #
 # ENV:
-#   SB_ZMX_MIRROR_URL  If set, download the tarball from this URL (curl -fsSL)
+#   QD_ZMX_MIRROR_URL  If set, download the tarball from this URL (curl -fsSL)
 #                      instead of copying the in-repo mirror. The SAME sha256
 #                      verification then applies — a remote mirror is trusted no
 #                      more than a local file.
@@ -65,10 +65,10 @@ if [ -z "$expected_hash" ]; then
 fi
 
 # --- materialize the tarball at dest -----------------------------------------
-if [ -n "${SB_ZMX_MIRROR_URL:-}" ]; then
-  echo "fetch-zmx.sh: downloading $TARBALL from \$SB_ZMX_MIRROR_URL" >&2
-  if ! curl -fsSL -o "$DEST_TARBALL" "$SB_ZMX_MIRROR_URL"; then
-    echo "fetch-zmx.sh: download failed from $SB_ZMX_MIRROR_URL" >&2
+if [ -n "${QD_ZMX_MIRROR_URL:-}" ]; then
+  echo "fetch-zmx.sh: downloading $TARBALL from \$QD_ZMX_MIRROR_URL" >&2
+  if ! curl -fsSL -o "$DEST_TARBALL" "$QD_ZMX_MIRROR_URL"; then
+    echo "fetch-zmx.sh: download failed from $QD_ZMX_MIRROR_URL" >&2
     rm -f "$DEST_TARBALL"
     exit 1
   fi

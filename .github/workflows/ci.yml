@@ -71,7 +71,7 @@ jobs:
         run: ./scripts/build-lock.sh cargo test --workspace
 
       - name: build-lock serialization smoke
-        # Spawns concurrent lock-holders (self-bounds at SB_RUST_LOCK_TIMEOUT=60s);
+        # Spawns concurrent lock-holders (self-bounds at QD_RUST_LOCK_TIMEOUT=60s);
         # belt it anyway since concurrent-process steps are the wedge-prone class.
         timeout-minutes: 3
         run: ./scripts/build-lock-smoke.sh
@@ -81,7 +81,7 @@ jobs:
       # standalone step was de-duped away). VERIFIED HERMETIC: the whole runner
       # needs no network and no CI-absent recorded state — every suite reads
       # in-repo fixtures only (test_fetch_zmx uses the vendored zmx mirror +
-      # SB_ZMX_MIRROR_URL file copies; test_stub_claude / test_normalize touch
+      # QD_ZMX_MIRROR_URL file copies; test_stub_claude / test_normalize touch
       # only 127.0.0.1 loopback to their own stubs). A4_RUN_LIVE stays unset, so
       # the ~2min live went-busy scenario is SKIPPED (QA/M6 runs it standalone).
       # Measured locally (TMPDIR=/tmp): ~49s wall. Belt sized ~3x + cold-start.
@@ -127,5 +127,5 @@ jobs:
         shell: bash
         timeout-minutes: 5
         env:
-          SB_BIN: ${{ github.workspace }}/target/debug/qd
+          QD_BIN: ${{ github.workspace }}/target/debug/qd
         run: bash test/golden/scenarios/bootstrap_output_audit.sh

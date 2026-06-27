@@ -5,14 +5,14 @@
 # These scenarios SELF-RECORD the pinned TS engine's output shapes (pin 0d0fa9e)
 # into the golden oracle. record.sh establishes the jail + sets SCN_OUT before
 # sourcing the scenario; each scenario forges its pre-state INSIDE the jail (so
-# every byte is hermetic) and drives the TS qd via scn_sb (SB_UNDER_TEST points
+# every byte is hermetic) and drives the TS qd via scn_sb (QD_UNDER_TEST points
 # at `bun <pinned-clone>/src/index.ts`). Bash 3.2 floor.
 #
 # RECORDING RULES honored here (binding):
 #   - rule 9 + ADD-4: every TS invocation runs under the jail's hermetic
-#     HOME/SB_HOME/ZMX_DIR/XDG_*/TMPDIR (record.sh::jail_establish exports them).
+#     HOME/QD_HOME/ZMX_DIR/XDG_*/TMPDIR (record.sh::jail_establish exports them).
 #   - sbrg- prefixed session names only (JAIL_PREFIX).
-#   - SB_SECRET_BACKEND=file for config rows (NO keychain — daytime-deferred).
+#   - QD_SECRET_BACKEND=file for config rows (NO keychain — daytime-deferred).
 #   - NEVER a real secret: the fake OpenRouter placeholder is BELOW the real-key
 #     length anchor so the L11 secret-scan admit gate passes.
 #   - ADD-12: destructive `qd reconcile` (no --dry-run) is OFF on macOS; the

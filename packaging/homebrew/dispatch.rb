@@ -6,9 +6,9 @@
 #     without auth. Until the D-phase cutover publishes a release asset, install
 #     from a LOCAL source tarball:
 #       cd <repo> && git archive --prefix=qd-rust/ -o /tmp/qd-rust-local.tar.gz HEAD
-#       SB_FORMULA_LOCAL=/tmp/qd-rust-local.tar.gz \
+#       QD_FORMULA_LOCAL=/tmp/qd-rust-local.tar.gz \
 #         brew install --build-from-source --formula packaging/homebrew/dispatch.rb
-#     (the formula prefers $SB_FORMULA_LOCAL when set; the canonical url is the
+#     (the formula prefers $QD_FORMULA_LOCAL when set; the canonical url is the
 #     placeholder the D-phase release will make real).
 #   - zmx 0.6.0 is installed from the IN-REPO pinned mirror (vendor/zmx), sha256
 #     pin-verified — the same fail-closed pin scripts/fetch-zmx.sh enforces
@@ -19,9 +19,9 @@
 class Dispatch < Formula
   desc "Session engine for orchestrating Claude Code sessions (Rust port)"
   homepage "https://github.com/private-org/qd-rust"
-  url ENV.fetch("SB_FORMULA_LOCAL", "https://github.com/private-org/qd-rust/archive/refs/tags/phase-a7.tar.gz")
+  url ENV.fetch("QD_FORMULA_LOCAL", "https://github.com/private-org/qd-rust/archive/refs/tags/phase-a7.tar.gz")
   version "0.0.0-a7"
-  sha256 ENV["SB_FORMULA_LOCAL"] ? :no_check : "PLACEHOLDER_UNTIL_RELEASE_ASSET_PUBLISHED"
+  sha256 ENV["QD_FORMULA_LOCAL"] ? :no_check : "PLACEHOLDER_UNTIL_RELEASE_ASSET_PUBLISHED"
   license :cannot_represent
 
   depends_on "rust" => :build

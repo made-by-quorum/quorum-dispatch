@@ -9,7 +9,7 @@
 # HARD BOUNDARY (spec §0): this is Part 1. It does NOT record golden expectations.
 # Captures here are throwaway evidence of scenario-drives-qd, full stop.
 #
-# Runs entirely inside the jail (HOME/SB_HOME/ZMX_DIR/... sandboxed). The org's
+# Runs entirely inside the jail (HOME/QD_HOME/ZMX_DIR/... sandboxed). The org's
 # real qd on brano is invisible to this run.
 #
 # Usage: run_dryrun.sh [scenario-name ...]   (default: the dry-run-safe set)
@@ -75,7 +75,7 @@ run_one() {
         printf 'exec bun %q "$@"\n' "$TS_ENTRY"
     } > "$shim"
     chmod +x "$shim"
-    export SB_UNDER_TEST="$shim"
+    export QD_UNDER_TEST="$shim"
     export JAIL_SB_CMD="$shim"
 
     local out="$JAIL_ROOT/dryrun-out.raw"

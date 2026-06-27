@@ -46,7 +46,7 @@ i=0
 while [ "$i" -lt "$N" ]; do
     (
         cd "$WORKDIR" || exit 99
-        SB_CLAUDE_FLAGS="--dangerously-skip-permissions" \
+        QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
             "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" \
             > "$RDIR/out-$i.txt" 2> "$RDIR/err-$i.txt"
         echo "$?" > "$RDIR/code-$i.txt"

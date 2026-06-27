@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test/golden/lib/prep_verify.sh — verify an entrypoint lives under a prep'd clone.
 #
-# Closes the red-team scenario-bypass hole: record.sh must REFUSE a SB_UNDER_TEST
+# Closes the red-team scenario-bypass hole: record.sh must REFUSE a QD_UNDER_TEST
 # that does NOT resolve under a clone prep_pinned_ts.sh verified (a clone whose
 # .prep-verified marker pin matches the ratified pin). Without this, a scenario
 # could be pointed at the floating shared ~/work/switchboard checkout (un-pinned)
@@ -20,7 +20,7 @@
 
 _pv_refuse() { printf '[prep-verify] REFUSED: %s\n' "$1" >&2; }
 
-# Extract the first token from SB_UNDER_TEST that looks like a filesystem path
+# Extract the first token from QD_UNDER_TEST that looks like a filesystem path
 # (contains a '/'). Handles "bun /path/index.ts" and a bare "/path/shim".
 _pv_path_token() {
     local s="$1" tok
@@ -39,7 +39,7 @@ prep_verify_entrypoint() {
         return 64
     fi
     local p
-    p="$(_pv_path_token "$sut")" || { _pv_refuse "SB_UNDER_TEST has no path token: '$sut'"; return 1; }
+    p="$(_pv_path_token "$sut")" || { _pv_refuse "QD_UNDER_TEST has no path token: '$sut'"; return 1; }
 
     # Walk up from the directory of that path token looking for .prep-verified.
     local dir
@@ -60,7 +60,7 @@ prep_verify_entrypoint() {
         dir="$(dirname "$dir")"
         guard=$((guard + 1))
     done
-    _pv_refuse "SB_UNDER_TEST '$sut' does not resolve under a prep-verified clone (no .prep-verified marker with pin $expected_pin found above $p)"
-    _pv_refuse "run prep_pinned_ts.sh --pin $expected_pin first, then point SB_UNDER_TEST at <clone>/src/index.ts"
+    _pv_refuse "QD_UNDER_TEST '$sut' does not resolve under a prep-verified clone (no .prep-verified marker with pin $expected_pin found above $p)"
+    _pv_refuse "run prep_pinned_ts.sh --pin $expected_pin first, then point QD_UNDER_TEST at <clone>/src/index.ts"
     return 1
 }

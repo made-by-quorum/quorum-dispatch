@@ -11,19 +11,19 @@
 #   ACCEPT    `qd new <n> -p "<msg>"`  (fakerepl defaults: prompt submits, goes
 #             busy)                                   -> exit 0  + stdout
 #             `Prompt delivered to "<n>"`.  Run TWICE (determinism).
-#   STALL     same, SB_FAKEREPL_ABSORB_ALL_CRS=1 (every CR absorbed; the
+#   STALL     same, QD_FAKEREPL_ABSORB_ALL_CRS=1 (every CR absorbed; the
 #             remediation CR can never submit)        -> exit 10 + stderr WARNING
 #             block; the session STILL EXISTS (turn-start unconfirmed, not a
 #             create failure).  Run TWICE (determinism).
 #   NO-PROMPT `qd new <n>` (no -p)                    -> exit 0 (10 is unreachable
 #             without -p; delivery never runs).
 #   REFUSAL   the fakerepl binary run directly out-of-jail (clean env, AND a
-#             partial-spoof env: HOME jail-shaped but SB_HOME elsewhere) -> exit
+#             partial-spoof env: HOME jail-shaped but QD_HOME elsewhere) -> exit
 #             13.  Re-proves the jail belt (a4-spec §5 R3 coherence check) at the
 #             scenario layer.
 #
 # HOW THE JAIL ENV REACHES fakerepl (the mechanism, verified empirically):
-# `jail_establish` EXPORTS HOME/SB_HOME/ZMX_DIR/TMPDIR (jail.sh:139-146). `qd new`
+# `jail_establish` EXPORTS HOME/QD_HOME/ZMX_DIR/TMPDIR (jail.sh:139-146). `qd new`
 # spawns `zmx run <n> -d bash -lc "command '<CLAUDE_BIN>' <flags...> --name <n>"`
 # via RealExec (exec.rs:109-113) which INHERITS the parent env, overriding only
 # ZMX_DIR (to the canonical socket dir, which under the jail IS $JAIL_ROOT/zmx).
@@ -118,7 +118,7 @@ jail_kill() {
 }
 
 # run_new <name> <env-prefix> [extra-args...] -- runs `qd new` in the jail with an
-# optional single env assignment prefix (e.g. SB_FAKEREPL_ABSORB_ALL_CRS=1), then
+# optional single env assignment prefix (e.g. QD_FAKEREPL_ABSORB_ALL_CRS=1), then
 # sets globals RC / OUT_FILE / ERR_FILE for the caller to assert on.
 RC=0; OUT_FILE=""; ERR_FILE=""
 run_new() {
@@ -153,7 +153,7 @@ ACCEPT_MSG="hello from the went-busy accept row"
 i=1
 while [ "$i" -le 2 ]; do
     name="$(scn_name accept "$i")"
-    run_new "$name" "SB_FAKEREPL_BUSY_MS=900" -p "$ACCEPT_MSG"
+    run_new "$name" "QD_FAKEREPL_BUSY_MS=900" -p "$ACCEPT_MSG"
     rc=$RC
     out="$(cat "$OUT_FILE" 2>/dev/null)"
     echo "  --- ACCEPT run $i (name=$name) ---"
@@ -177,7 +177,7 @@ done
 echo
 
 # ---------------------------------------------------------------------------
-# ROW STALL (run twice). SB_FAKEREPL_ABSORB_ALL_CRS=1: EVERY CR is absorbed as a
+# ROW STALL (run twice). QD_FAKEREPL_ABSORB_ALL_CRS=1: EVERY CR is absorbed as a
 # literal newline -> the composer never submits -> deliver_prompt exhausts its
 # bounded remediation (1 + 3 rounds, ~52s, deterministic) and returns Stalled.
 # Assert exit 10 AND the WARNING block AND that the session STILL EXISTS (the
@@ -188,7 +188,7 @@ i=1
 while [ "$i" -le 2 ]; do
     name="$(scn_name stall "$i")"
     t0=$(date +%s 2>/dev/null || echo 0)
-    run_new "$name" "SB_FAKEREPL_ABSORB_ALL_CRS=1" -p "$STALL_MSG"
+    run_new "$name" "QD_FAKEREPL_ABSORB_ALL_CRS=1" -p "$STALL_MSG"
     rc=$RC
     t1=$(date +%s 2>/dev/null || echo 0)
     out="$(cat "$OUT_FILE" 2>/dev/null)"
@@ -244,7 +244,7 @@ echo
 # ---------------------------------------------------------------------------
 # ROW REFUSAL (out-of-jail). Re-prove the fakerepl jail belt at the scenario
 # layer (a4-spec §5 R3): the binary refuses (exit 13) when run directly with
-# (a) a CLEAN env, and (b) a PARTIAL-SPOOF env (HOME jail-shaped but SB_HOME
+# (a) a CLEAN env, and (b) a PARTIAL-SPOOF env (HOME jail-shaped but QD_HOME
 # pointing elsewhere). (b) proves the belt checks coherence, not just HOME.
 # `env -i` gives a clean slate; we then add exactly the spoof vars.
 # ---------------------------------------------------------------------------
@@ -260,25 +260,25 @@ else
 fi
 
 r2err="$JAIL_ROOT/refuse-spoof.err"
-# HOME jail-shaped (passes marker (a)) but SB_HOME elsewhere (fails coherence (b)).
+# HOME jail-shaped (passes marker (a)) but QD_HOME elsewhere (fails coherence (b)).
 env -i \
     HOME="$JAIL_ROOT/home" \
-    SB_HOME="/tmp/not-the-jail-qd-home" \
+    QD_HOME="/tmp/not-the-jail-qd-home" \
     ZMX_DIR="$JAIL_ROOT/zmx" \
     TMPDIR="$JAIL_ROOT/tmp" \
     "$FAKEREPL_BIN" </dev/null >/dev/null 2>"$r2err"
 rc2=$?
-echo "  --- REFUSAL partial-spoof (HOME jail-shaped, SB_HOME elsewhere) ---"
+echo "  --- REFUSAL partial-spoof (HOME jail-shaped, QD_HOME elsewhere) ---"
 echo "  exit=$rc2 (expect 13)"; sed 's/^/    /' "$r2err" 2>/dev/null
 ok=1; why=""
 [ "$rc2" -eq 13 ] || { ok=0; why="${why} exit=$rc2(want 13);"; }
-# It must refuse on the COHERENCE check (SB_HOME), not merely on HOME shape —
+# It must refuse on the COHERENCE check (QD_HOME), not merely on HOME shape —
 # otherwise the control would be a no-op (proves the belt checks coherence).
-if ! grep -q "SB_HOME" "$r2err" 2>/dev/null; then
-    ok=0; why="${why} refusal did not cite SB_HOME (coherence check not exercised);"
+if ! grep -q "QD_HOME" "$r2err" 2>/dev/null; then
+    ok=0; why="${why} refusal did not cite QD_HOME (coherence check not exercised);"
 fi
 if [ "$ok" -eq 1 ]; then
-    pass "refuse-spoof" "exit 13 on SB_HOME coherence (not just HOME shape)"
+    pass "refuse-spoof" "exit 13 on QD_HOME coherence (not just HOME shape)"
 else
     fail "refuse-spoof" "$why"
 fi
@@ -292,8 +292,8 @@ echo
 # Removing the lifecycle.rs verify call-site turns W8-TRUNC exit-1 into exit-0
 # -> FAIL here (CI-resident anti-regression).
 #
-# Mechanism: fakerepl carries SB_FAKEREPL_SESSION_ID (registry row gains
-# sessionId) + SB_FAKEREPL_CONVO_JSONL placed at the projects-dir path that id
+# Mechanism: fakerepl carries QD_FAKEREPL_SESSION_ID (registry row gains
+# sessionId) + QD_FAKEREPL_CONVO_JSONL placed at the projects-dir path that id
 # resolves to, so the SUT's registry->sessionId->find_jsonl_path verify chain
 # works end-to-end. TRUNC leg arms the reader-stall saturation seam (the D16
 # window model): the chunked payload mid-truncates, fakerepl records the
@@ -325,19 +325,19 @@ run_new_w8() {
     ERR_FILE="$JAIL_ROOT/${name}.err"
     if [ "$stall" = "1" ]; then
         ( cd "$WORKDIR" && env \
-            SB_FAKEREPL_BUSY_MS=900 \
-            SB_FAKEREPL_SESSION_ID="$sid" \
-            SB_FAKEREPL_CONVO_JSONL="$convo" \
-            SB_FAKEREPL_STALL_AFTER_BYTES=1024 \
-            SB_FAKEREPL_STALL_MS=800 \
-            SB_FAKEREPL_STALL_QUEUE_CAP=1024 \
+            QD_FAKEREPL_BUSY_MS=900 \
+            QD_FAKEREPL_SESSION_ID="$sid" \
+            QD_FAKEREPL_CONVO_JSONL="$convo" \
+            QD_FAKEREPL_STALL_AFTER_BYTES=1024 \
+            QD_FAKEREPL_STALL_MS=800 \
+            QD_FAKEREPL_STALL_QUEUE_CAP=1024 \
             "$JAIL_SB_CMD" new "$name" --cwd "$WORKDIR" -p "$W8_MSG" ) \
             > "$OUT_FILE" 2> "$ERR_FILE"
     else
         ( cd "$WORKDIR" && env \
-            SB_FAKEREPL_BUSY_MS=900 \
-            SB_FAKEREPL_SESSION_ID="$sid" \
-            SB_FAKEREPL_CONVO_JSONL="$convo" \
+            QD_FAKEREPL_BUSY_MS=900 \
+            QD_FAKEREPL_SESSION_ID="$sid" \
+            QD_FAKEREPL_CONVO_JSONL="$convo" \
             "$JAIL_SB_CMD" new "$name" --cwd "$WORKDIR" -p "$W8_MSG" ) \
             > "$OUT_FILE" 2> "$ERR_FILE"
     fi

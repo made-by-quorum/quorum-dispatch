@@ -3,8 +3,8 @@
 # byte-UNAFFECTED by the A6 code paths (spec §7 G-A1; ADDITIVE-NOT-PARITY).
 #
 # Two modes:
-#   leg:  SB_BIN=<binary> CAPTURE_DIR=<dir> bash $0 leg
-#         → run the fixed ported-surface row set against SB_BIN in a FRESH jail,
+#   leg:  QD_BIN=<binary> CAPTURE_DIR=<dir> bash $0 leg
+#         → run the fixed ported-surface row set against QD_BIN in a FRESH jail,
 #           capture stdout/stderr/exit per row into CAPTURE_DIR (raw).
 #   diff: bash $0 diff <dirBASE> <dirA6>
 #         → normalize both captures with the EXISTING recorded normalizer set
@@ -73,11 +73,11 @@ if [ "$MODE" = "diff" ]; then
 fi
 
 if [ "$MODE" != "leg" ]; then
-    echo "usage: SB_BIN=<bin> CAPTURE_DIR=<dir> $0 leg | $0 diff <dirBASE> <dirA6>"
+    echo "usage: QD_BIN=<bin> CAPTURE_DIR=<dir> $0 leg | $0 diff <dirBASE> <dirA6>"
     exit 2
 fi
 
-: "${SB_BIN:?leg mode needs SB_BIN}"
+: "${QD_BIN:?leg mode needs QD_BIN}"
 : "${CAPTURE_DIR:?leg mode needs CAPTURE_DIR}"
 mkdir -p "$CAPTURE_DIR"
 
@@ -120,7 +120,7 @@ NAME="${JAIL_PREFIX}negctl"
 
 run_row() {
     local row="$1"; shift
-    ( cd "$WORKDIR" && env SBRG_STUB_NAME="$NAME" "$SB_BIN" "$@" ) \
+    ( cd "$WORKDIR" && env SBRG_STUB_NAME="$NAME" "$QD_BIN" "$@" ) \
         > "$CAPTURE_DIR/$row.out" 2> "$CAPTURE_DIR/$row.err"
     echo "exit=$?" > "$CAPTURE_DIR/$row.exit"
 }
@@ -143,4 +143,4 @@ run_row r3-lsas ls --all --short
 run_row r4-lsj  ls --json
 run_row r5-info info "$NAME"
 
-echo "A6-NEGCONTROL-LEG: captured 5 rows to $CAPTURE_DIR (SB_BIN=$SB_BIN)"
+echo "A6-NEGCONTROL-LEG: captured 5 rows to $CAPTURE_DIR (QD_BIN=$QD_BIN)"

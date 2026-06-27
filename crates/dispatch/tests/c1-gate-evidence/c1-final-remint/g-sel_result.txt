@@ -1,7 +1,7 @@
 G-SEL VERDICT: PASS — bogus→exit2+named; embedded sees own+not other; zmx lane does not leak embedded mux liveness (both sessions provably alive at assert)
 
-bogus SB_MUX: exit=2 (want 2), stderr contains nonsense+zmx: true
-  stderr: qd: invalid SB_MUX value "nonsense" — valid values are "embedded" (default) or "zmx"
+bogus QD_MUX: exit=2 (want 2), stderr contains nonsense+zmx: true
+  stderr: qd: invalid QD_MUX value "nonsense" — valid values are "embedded" (default) or "zmx"
 embedded lane: exit=0, sees own emb-live(mux-live)=true, leaks zmx-live(mux-live)=false
 zmx lane: exit=0, leaks emb-live(mux-live)=false
 liveness at assert: emb-live pid 71541 alive=true, zmx-live pid 71549 alive=true

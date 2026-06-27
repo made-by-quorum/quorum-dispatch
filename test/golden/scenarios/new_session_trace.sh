@@ -74,9 +74,9 @@ EOF
     # widens the observation window the busy edge already exists in. It does NOT touch
     # the pre-PID dismiss path (counted BEFORE any turn) or the decoy match.
     scn_capture_pty "$SCN_OUT.boottrace" 45 -- \
-        env SB_UNDER_TEST="$SB_UNDER_TEST" CLAUDE_BIN="${CLAUDE_BIN:-}" \
+        env QD_UNDER_TEST="$QD_UNDER_TEST" CLAUDE_BIN="${CLAUDE_BIN:-}" \
             STUB_COUNT_PRE_PID_STDIN=1 STUB_BUSY_HOLD_MS=2000 \
-        sh -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1
+        sh -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1
     local newrc=$?
 
     # READINESS EVENT (deterministic outcome). Poll for the NAME-MATCHED PID file

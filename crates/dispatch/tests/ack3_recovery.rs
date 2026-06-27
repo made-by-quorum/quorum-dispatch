@@ -146,10 +146,10 @@ impl Jail {
 
     fn fakerepl_env<'a>(&'a self, name: &'a str) -> Vec<(&'a str, String)> {
         vec![
-            ("SB_FAKEREPL_NAME", name.to_string()),
-            ("SB_FAKEREPL_SESSION_ID", self.uuid.clone()),
+            ("QD_FAKEREPL_NAME", name.to_string()),
+            ("QD_FAKEREPL_SESSION_ID", self.uuid.clone()),
             (
-                "SB_FAKEREPL_CONVO_JSONL",
+                "QD_FAKEREPL_CONVO_JSONL",
                 self.convo.to_string_lossy().into_owned(),
             ),
         ]
@@ -184,7 +184,7 @@ fn build_cmd(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> Command {
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &jail.home)
-        .env("SB_HOME", &jail.sb_home)
+        .env("QD_HOME", &jail.sb_home)
         .env("XDG_RUNTIME_DIR", &jail.xdg)
         .env("TMPDIR", jail.root.join("tmp"))
         .env("ZMX_DIR", jail.root.join("zmx"))
@@ -436,7 +436,7 @@ fn resolve_after_kill(
         now_ms: real_now + 31_000,
     });
     // events_path joins state_dir + "sessions" + "<key>.events.jsonl"; jail.ev_dir
-    // is <SB_HOME>/state/sessions, so the writer/ctx state_dir is <SB_HOME>/state.
+    // is <QD_HOME>/state/sessions, so the writer/ctx state_dir is <QD_HOME>/state.
     let state_dir = jail.sb_home.join("state");
     let writer = dispatch::events::EventWriter::for_key(
         &state_dir,
@@ -477,13 +477,13 @@ fn r_rec_anchored_recovers_via_offset() {
 
     // Attempt with BUSY_MS=10000; retry ONCE with 20000 on a fast-turn race.
     let si = {
-        let extra = vec![("SB_FAKEREPL_BUSY_MS", "10000".to_string())];
+        let extra = vec![("QD_FAKEREPL_BUSY_MS", "10000".to_string())];
         match drive_and_kill(&jail, name, &msg, &extra) {
             Some(si) => si,
             None => {
                 // Race: anchored before kill. Retry once with a wider window.
                 let jail2 = Jail::establish("rra2");
-                let extra2 = vec![("SB_FAKEREPL_BUSY_MS", "20000".to_string())];
+                let extra2 = vec![("QD_FAKEREPL_BUSY_MS", "20000".to_string())];
                 let si = drive_and_kill(&jail2, name, &msg, &extra2).expect(
                     "R-REC-anchored: anchored before kill even at BUSY_MS=20000 — FAIL LOUD",
                 );
@@ -543,8 +543,8 @@ fn r_rec_truncated_recovers_mismatch() {
     assert_eq!(msg.len(), 2100);
 
     let extra = vec![
-        ("SB_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "1500".to_string()),
-        ("SB_FAKEREPL_BUSY_MS", "10000".to_string()),
+        ("QD_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "1500".to_string()),
+        ("QD_FAKEREPL_BUSY_MS", "10000".to_string()),
     ];
     let si = drive_and_kill(&jail, name, &msg, &extra)
         .expect("R-REC-truncated: kill landed after chunks-delivered (no fast-turn race expected with BUSY_MS=10000)");
@@ -592,8 +592,8 @@ fn r_rec_abandoned_recovers_no_candidate() {
     );
 
     let extra = vec![
-        ("SB_FAKEREPL_EAT_INPUT", "1".to_string()),
-        ("SB_FAKEREPL_BUSY_MS", "10000".to_string()),
+        ("QD_FAKEREPL_EAT_INPUT", "1".to_string()),
+        ("QD_FAKEREPL_BUSY_MS", "10000".to_string()),
     ];
     let si = drive_and_kill(&jail, name, &msg, &extra)
         .expect("R-REC-abandoned: kill landed after chunks-delivered");

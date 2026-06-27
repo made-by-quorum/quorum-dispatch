@@ -112,7 +112,7 @@ const MAX_NEST: usize = 8;
 /// BINDING (A14-2 discriminator, carried so the next reader can't relax it):
 /// destructive targets are NEVER sourced from `/tmp` enumeration alone; `/tmp`
 /// scan output is VISIBILITY-ONLY. This override touches the READ surface only.
-pub const TEST_SCAN_ROOTS_ENV: &str = "SB_TEST_SCAN_ROOTS";
+pub const TEST_SCAN_ROOTS_ENV: &str = "QD_TEST_SCAN_ROOTS";
 
 /// Resolve the legacy `/tmp` SCAN ROOT, honoring the test-lane override
 /// ([`TEST_SCAN_ROOTS_ENV`]). Production passes `default` (literal `/tmp`); when

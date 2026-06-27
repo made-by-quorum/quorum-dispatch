@@ -69,7 +69,7 @@ eq "path/zmx-collapse" \
     "<ZMX_DIR>/sock" \
     "$(printf '%s/zmx/sock\n' "$JR" | normalize_paths "$JR" | tr -d '\n')"
 eq "path/sbhome-collapse" \
-    "<SB_HOME>/x" \
+    "<QD_HOME>/x" \
     "$(printf '%s/sb_home/x\n' "$JR" | normalize_paths "$JR" | tr -d '\n')"
 eq "path/xdg-runtime-collapse" \
     "<XDG_RUNTIME>/r" \

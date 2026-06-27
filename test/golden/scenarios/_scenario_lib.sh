@@ -4,20 +4,20 @@
 # Sourced by every scenario AND by verify.sh (which sets SCN_OUT). Scenarios are
 # parameterized on the TS entrypoint + pin so Part-2 recording is a re-run:
 #
-#   SB_UNDER_TEST   — how to invoke the qd-under-test. Default: the TS qd on PATH.
+#   QD_UNDER_TEST   — how to invoke the qd-under-test. Default: the TS qd on PATH.
 #                     For dry-runs this is `bun <TS-entrypoint>` or just `qd`.
 #                     For Part 2 / SBQA swap it points at the Rust binary.
 #   PINNED_TS_COMMIT — set ONLY in Part 2. Part 1 dry-runs run against current TS
 #                      main and stamp DRYRUN-NOT-ORACLE.
 #
 # Every scenario runs INSIDE the jail (verify.sh calls jail_establish before
-# sourcing the scenario, so SB_HOME/ZMX_DIR/XDG_*/TMPDIR/JAIL_PREFIX are set).
+# sourcing the scenario, so QD_HOME/ZMX_DIR/XDG_*/TMPDIR/JAIL_PREFIX are set).
 # Scenarios MUST use jail_sb / jail_zmx / the jail-guarded kill helpers — never a
 # bare qd/zmx invocation.
 # ---------------------------------------------------------------------------
 
 # The qd-under-test command. A space-separated string so it can be `bun entry`.
-SB_UNDER_TEST="${SB_UNDER_TEST:-qd}"
+QD_UNDER_TEST="${QD_UNDER_TEST:-qd}"
 
 # scn_session_name <suffix> — a jail-prefixed, unique session name.
 scn_session_name() {
@@ -25,7 +25,7 @@ scn_session_name() {
 }
 
 # scn_sb <args...> — run the qd-under-test under the hermetic jail env.
-# Honors a multi-word SB_UNDER_TEST (e.g. "bun /path/index.ts").
+# Honors a multi-word QD_UNDER_TEST (e.g. "bun /path/index.ts").
 #
 # NOTE: scn_sb is for NON-session-targeting invocations (ls, info, config, help,
 # --json contract surfaces). For any verb that TARGETS A SESSION BY NAME and could
@@ -34,7 +34,7 @@ scn_session_name() {
 scn_sb() {
     jail_assert_established || return 1
     # shellcheck disable=SC2086
-    $SB_UNDER_TEST "$@"
+    $QD_UNDER_TEST "$@"
 }
 
 # scn_sb_target <verb> <name> [args...] — session-targeting invocation, BELTED.
@@ -51,7 +51,7 @@ scn_sb_target() {
     jail_guard_name "$name" || return 1
     jail_assert_target_resolves_in_jail "$name" || return 1
     # shellcheck disable=SC2086
-    $SB_UNDER_TEST "$verb" "$name" "$@"
+    $QD_UNDER_TEST "$verb" "$name" "$@"
 }
 
 # scn_capture_pty <outfile> <secs> [extra record_pty args...] -- <cmd...>

@@ -15,7 +15,7 @@
 //!
 //! The codex half of the matrix: resume-revive same-id is unit-pinned in
 //! resume_daemon.rs (`revived_daemon_env_carries_the_existing_stable_id`) and
-//! live-pinned in codex_resume_kill_live.rs (ids-fold assertions, SB_CODEX_LIVE
+//! live-pinned in codex_resume_kill_live.rs (ids-fold assertions, QD_CODEX_LIVE
 //! gated); fork ABSENCE is pinned at the provider seam (provider_seam.rs: codex
 //! `resume_args` ignores `fork` — no `--fork-session` shape exists) and at the
 //! verb surface below (`codex_start_refuses_fork_loudly`).
@@ -23,7 +23,7 @@
 //! ## How a launch's ENV is observed (the "env AND ls agree" oracle)
 //!
 //! CLAUDE_BIN points at a generated WRAPPER script that appends one line per
-//! launch — `LAUNCH <tag> argv=<argv> SB_SESSION_ID=<env value>` — to a jail
+//! launch — `LAUNCH <tag> argv=<argv> QD_SESSION_ID=<env value>` — to a jail
 //! log, exports the fakerepl identity knobs (per-launch, NOT daemon-inherited:
 //! the ack3_matrix lesson — a second session in one daemon silently inherits
 //! the FIRST session's fakerepl env), then execs fakerepl. The wrapper sees the
@@ -38,7 +38,7 @@
 //!   `seed_transcript` therefore writes the agent-name + a user record with a
 //!   real cwd, mirroring what claude-code persists for every real session.
 //! - fakerepl reads its registry-row name from `--name` argv (present at
-//!   start) or `SB_FAKEREPL_NAME` (the resume launch carries no `--name`;
+//!   start) or `QD_FAKEREPL_NAME` (the resume launch carries no `--name`;
 //!   claude re-derives the name from its transcript — the wrapper export is
 //!   the fixture's stand-in for that).
 
@@ -61,7 +61,7 @@ fn require_bins() {
 }
 
 // ===========================================================================
-// Jail (ack2_gate shape: fakerepl-belt HOME + own SB_HOME/ZMX_DIR/TMPDIR/XDG)
+// Jail (ack2_gate shape: fakerepl-belt HOME + own QD_HOME/ZMX_DIR/TMPDIR/XDG)
 // ===========================================================================
 
 struct Jail {
@@ -90,7 +90,7 @@ impl Jail {
     }
 
     /// Generate a per-launch CLAUDE_BIN wrapper: logs `LAUNCH <tag> argv=…
-    /// SB_SESSION_ID=…`, exports the fakerepl identity for THIS launch, execs
+    /// QD_SESSION_ID=…`, exports the fakerepl identity for THIS launch, execs
     /// fakerepl. `uuid: None` ⇒ the booted row carries NO sessionId (the
     /// bind-residual arm).
     fn wrapper(&self, tag: &str, name: &str, uuid: Option<&str>) -> PathBuf {
@@ -99,15 +99,15 @@ impl Jail {
         let fr = fakerepl_bin();
         let identity = match uuid {
             Some(u) => format!(
-                "export SB_FAKEREPL_SESSION_ID='{u}'\nexport SB_FAKEREPL_CONVO_JSONL='{}'\n",
+                "export QD_FAKEREPL_SESSION_ID='{u}'\nexport QD_FAKEREPL_CONVO_JSONL='{}'\n",
                 self.convo_path(u).display()
             ),
             None => String::new(),
         };
         let body = format!(
             "#!/bin/sh\n\
-             echo \"LAUNCH {tag} argv=$* SB_SESSION_ID=$SB_SESSION_ID\" >> '{}'\n\
-             {identity}export SB_FAKEREPL_NAME='{name}'\n\
+             echo \"LAUNCH {tag} argv=$* QD_SESSION_ID=$QD_SESSION_ID\" >> '{}'\n\
+             {identity}export QD_FAKEREPL_NAME='{name}'\n\
              exec '{}' \"$@\"\n",
             log.display(),
             fr.display()
@@ -283,9 +283,9 @@ fn resume_arg_of(line: &str) -> Option<String> {
         .and_then(|i| toks.get(i + 1).map(|s| s.to_string()))
 }
 
-/// Parse `SB_SESSION_ID=<v>` off a launch log line.
+/// Parse `QD_SESSION_ID=<v>` off a launch log line.
 fn env_id_of(line: &str) -> String {
-    line.rsplit("SB_SESSION_ID=")
+    line.rsplit("QD_SESSION_ID=")
         .next()
         .unwrap_or_default()
         .trim()
@@ -300,10 +300,10 @@ const U1: &str = "11111111-2222-3333-4444-555555555555";
 
 /// MUTATION EVIDENCE: keying the resume path's `mint_or_get` by anything other
 /// than the provider UUID (or minting fresh on resume) reds the same-id
-/// asserts; dropping SB_SESSION_ID from the resume env file reds the env-line
+/// asserts; dropping QD_SESSION_ID from the resume env file reds the env-line
 /// assert (the wrapper logs the POST-dot-source environment).
 // WP-B5-ii-b (PROOF 3) RE-ENABLED: the B-CS-1 D3 deferral is closed. B5-i landed
-// the child-pid identity row, and the supervisor-10 ruling wired SB_SESSION_ID into
+// the child-pid identity row, and the supervisor-10 ruling wired QD_SESSION_ID into
 // the headless resume launch env (daemon_headless.rs, via launch_env_pairs) — the
 // PARITY fix the interactive path always had. Resume now carries the SAME recorded
 // sbId in the child env AND on the ls surface (the row↔env consistency invariant),
@@ -393,7 +393,7 @@ fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
 /// mechanism, not a terminal state). Three consecutive cycles; after each, the
 /// (UUID, name, qb id) triple is unchanged on BOTH the env and ls surfaces.
 // WP-B5-ii-b (PROOF 3) RE-ENABLED: see a1. The headless resume launch now injects
-// the child's OWN recorded sbId as SB_SESSION_ID (daemon_headless.rs), so the
+// the child's OWN recorded sbId as QD_SESSION_ID (daemon_headless.rs), so the
 // (UUID, name, sbId) triple is preserved across every stop/resume cycle on BOTH the
 // env and ls surfaces — the real D3 behaviour, not re-oracled.
 #[test]
@@ -737,7 +737,7 @@ fn codex_start_refuses_fork_loudly() {
 fn b_bind_residual_unbound_mint_warns_loud() {
     require_bins();
     let jail = Jail::establish("bres");
-    let wrap = jail.wrapper("wk", "wk", None); // no SB_FAKEREPL_SESSION_ID
+    let wrap = jail.wrapper("wk", "wk", None); // no QD_FAKEREPL_SESSION_ID
 
     let (code, out, err) = run_sb(&jail, &wrap, &["start", "wk"]);
     assert_eq!(code, 0, "the session is up — exit 0; stderr: {err}");
@@ -879,7 +879,7 @@ fn b_ls_lazy_mint_failure_degrades_warned_exit_0() {
 // B — whoami: env id pointing at a TOMBSTONED row's UUID
 // ===========================================================================
 
-/// SB_SESSION_ID resolves through the idstore to a UUID whose only registry
+/// QD_SESSION_ID resolves through the idstore to a UUID whose only registry
 /// presence is a TOMBSTONE. PINNED ANSWER: the env path still answers (exit 0,
 /// identitySource "env", sessionId + sbId known) but the tombstoned row
 /// contributes NOTHING — name/pid are absent (whoami's row lookup excludes
@@ -909,8 +909,8 @@ fn b_whoami_env_id_of_tombstoned_row_answers_without_the_dead_name() {
             .args(args)
             .env_clear()
             .env("HOME", &jail.dirs.home)
-            .env("SB_HOME", &jail.dirs.sb_home)
-            .env("SB_SESSION_ID", "ab3kx9mq")
+            .env("QD_HOME", &jail.dirs.sb_home)
+            .env("QD_SESSION_ID", "ab3kx9mq")
             .env("PATH", "/usr/bin:/bin")
             .output()
             .expect("spawn qd");
@@ -1068,8 +1068,8 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
         .args(["whoami", "--json"])
         .env_clear()
         .env("HOME", &jail.dirs.home)
-        .env("SB_HOME", &jail.dirs.sb_home)
-        .env("SB_SESSION_ID", "AB3KX9MQ") // case-insensitive resolution
+        .env("QD_HOME", &jail.dirs.sb_home)
+        .env("QD_SESSION_ID", "AB3KX9MQ") // case-insensitive resolution
         .env("PATH", "/usr/bin:/bin")
         .output()
         .expect("spawn qd");
@@ -1087,7 +1087,7 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
         .args(["whoami", "--json"])
         .env_clear()
         .env("HOME", &jail.dirs.home)
-        .env("SB_HOME", &jail.dirs.sb_home)
+        .env("QD_HOME", &jail.dirs.sb_home)
         .env("PATH", "/usr/bin:/bin")
         .output()
         .expect("spawn qd");

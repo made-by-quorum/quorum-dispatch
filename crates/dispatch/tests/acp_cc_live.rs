@@ -14,15 +14,15 @@
 //!    drop the `inflight.insert`/`remove`, or release the wrong turn — makes the
 //!    response uncorrelated, so no `Terminal` is ever emitted and the test reds.**
 //!
-//! 2. **`acp_cc_live_full_lifecycle`** (gated on `SB_ACP_LIVE=1`): drives a REAL
+//! 2. **`acp_cc_live_full_lifecycle`** (gated on `QD_ACP_LIVE=1`): drives a REAL
 //!    Claude Code session over the official `claude-code-acp` bridge through the
 //!    `AcpProvider` seam: boot (`initialize`) → `session/new` → send-turn (the
 //!    production `Provider::inject` ladder) → `session/update` STREAM → terminal
 //!    `StopReason` → CONF-EVENT live (the real host bus driving `AcpTurnCompletion`)
 //!    → interrupt (`session/cancel`) → resume (`session/load` on a fresh bridge).
 //!    Primary evidence: the captured transcript tee (Pete's-view feed) + the live
-//!    stop reasons, written to `$SB_ACP_EVIDENCE` (default under
-//!    `~/work/acp-cc-coord/`). A no-op unless `SB_ACP_LIVE=1` so the default suite
+//!    stop reasons, written to `$QD_ACP_EVIDENCE` (default under
+//!    `~/work/acp-cc-coord/`). A no-op unless `QD_ACP_LIVE=1` so the default suite
 //!    never spawns a real CC session or spends API budget.
 
 use std::io::Write;
@@ -52,15 +52,15 @@ fn node_program() -> Option<String> {
     None
 }
 
-/// The live gate: skip unless `SB_ACP_LIVE=1`.
+/// The live gate: skip unless `QD_ACP_LIVE=1`.
 fn live() -> bool {
-    std::env::var("SB_ACP_LIVE").as_deref() == Ok("1")
+    std::env::var("QD_ACP_LIVE").as_deref() == Ok("1")
 }
 
-/// The real `claude-code-acp` bridge entry script (`$SB_ACP_BRIDGE` overrides the
+/// The real `claude-code-acp` bridge entry script (`$QD_ACP_BRIDGE` overrides the
 /// STEP-0 install default).
 fn real_bridge_script() -> PathBuf {
-    if let Ok(p) = std::env::var("SB_ACP_BRIDGE") {
+    if let Ok(p) = std::env::var("QD_ACP_BRIDGE") {
         return PathBuf::from(p);
     }
     let home = std::env::var("HOME").expect("HOME");
@@ -260,18 +260,18 @@ fn bridge_confirmed_dead_flips_only_when_child_exits() {
 }
 
 // ===========================================================================
-// 2. LIVE Claude Code lane (SB_ACP_LIVE=1): the real bridge, the real engine.
+// 2. LIVE Claude Code lane (QD_ACP_LIVE=1): the real bridge, the real engine.
 // ===========================================================================
 
 #[test]
 fn acp_cc_live_full_lifecycle() {
     if !live() {
-        eprintln!("SB_ACP_LIVE != 1 — skipping the live Claude-Code-over-ACP lifecycle");
+        eprintln!("QD_ACP_LIVE != 1 — skipping the live Claude-Code-over-ACP lifecycle");
         return;
     }
     let node = node_program().expect("node required for the live bridge");
     let bridge = real_bridge_script();
-    assert!(bridge.exists(), "bridge script not found at {bridge:?} (set SB_ACP_BRIDGE)");
+    assert!(bridge.exists(), "bridge script not found at {bridge:?} (set QD_ACP_BRIDGE)");
 
     let mut log = EvidenceLog::open();
     log.line("=== scoped-ACP-CC pillar 2 LIVE lane ===");
@@ -399,14 +399,14 @@ fn acp_cc_live_full_lifecycle() {
 }
 
 /// A primary-evidence sink: tees the live lane's narration to stderr (visible under
-/// `--nocapture`) AND to `$SB_ACP_EVIDENCE` (default under `~/work/acp-cc-coord/`).
+/// `--nocapture`) AND to `$QD_ACP_EVIDENCE` (default under `~/work/acp-cc-coord/`).
 struct EvidenceLog {
     path: PathBuf,
     buf: String,
 }
 impl EvidenceLog {
     fn open() -> Self {
-        let path = std::env::var("SB_ACP_EVIDENCE").map(PathBuf::from).unwrap_or_else(|_| {
+        let path = std::env::var("QD_ACP_EVIDENCE").map(PathBuf::from).unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             PathBuf::from(home).join("work/acp-cc-coord/acp-cc-live-evidence.log")
         });

@@ -32,7 +32,7 @@ real-home belt must show this set UNTOUCHED after every live boot.
 ## Row 1 — Workspace green (re-attest on branch tip)
 
 ```
-$ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test --workspace
+$ QD_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test --workspace
   golden lib            4 passed
   golden dirty_state    5 passed
   qd lib              222 passed   <- A2 create/boot/preflight/launch/zmx_mux units
@@ -63,7 +63,7 @@ no blob. Pin = zmx 0.6.0.
 ## Row 7 — Preflight unit matrix (L3)
 
 ```
-$ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p qd preflight
+$ QD_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p qd preflight
   real_060_help_advertises_send ........... ok
   old_05x_shaped_help_lacks_send_is_no .... ok
   garbage_output_is_unknown ............... ok
@@ -95,7 +95,7 @@ Workspace suite (covers 0a normalize + A1 registry/jsonl/zmx_dir) = 241/241 (row
 ## Row 10a — Mutation evidence: zero-keystroke assert has TEETH (offline)
 
 ```
-$ SB_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p qd boot::
+$ QD_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p qd boot::
   boot::tests::stock_boot_zero_keystrokes ............................. ok
   boot::tests::mutation_evidence_injected_enter_fails_zero_keystroke_assert ok
   boot::tests::unmatched_dialog_fails_immediately_zero_keystrokes ..... ok
@@ -114,7 +114,7 @@ FAILS — proving the assert in `stock_boot_zero_keystrokes` is not vacuous.
 
 Driver: `test/golden/dryrun/a2-live-row2.sh` (built `target/debug/qd` + real zmx
 0.6.0, in-jail, seeded claude state via probe method, STOCK flags
-`SB_CLAUDE_FLAGS=--dangerously-skip-permissions` → no dev-channels → dialog-free).
+`QD_CLAUDE_FLAGS=--dangerously-skip-permissions` → no dev-channels → dialog-free).
 
 ### Row 4 — concurrent create race (N=4, same name)
 ```
@@ -187,7 +187,7 @@ boot a generic session; Rust refuses).
 
 ### Positive control — resolvable agent boots
 ```
-$ printf ... > <agents_dir>/real-helper.md ; export SB_SPAWN_AGENTS_DIR=<agents_dir>
+$ printf ... > <agents_dir>/real-helper.md ; export QD_SPAWN_AGENTS_DIR=<agents_dir>
 $ qd new <NAME2> --cwd <work> --agent real-helper
 exit=0 ; stdout: Started detached session "<NAME2>"
 zmx list: name=<NAME2> pid=46634 (one task)
@@ -199,7 +199,7 @@ REAL-HOME BELT: 723→723. HOLDS. Boots spent: 2/3.
 
 ## Row 4 — configured-flag boot + answerer (LIVE, boot B = real-claude #3 of 3)
 
-Driver: `test/golden/dryrun/a2-live-row4.sh`. DEFAULT flags (no SB_CLAUDE_FLAGS
+Driver: `test/golden/dryrun/a2-live-row4.sh`. DEFAULT flags (no QD_CLAUDE_FLAGS
 override → built-in `--dangerously-skip-permissions
 --dangerously-load-development-channels server:relay`). Seeded
 cachedGrowthBookFeatures from real home (287 keys, probe-3) + channels symlink to

@@ -55,7 +55,7 @@ use crate::{codes, resolve, zmx_dir};
 /// (the embedded daemon binds one dir; there is no TMPDIR-scatter to recover from).
 ///
 /// The backend is parsed ONCE (mux_selector) and feeds BOTH this resolver AND the
-/// runtime mux selection — no divergent double-read of SB_MUX (spec item 4).
+/// runtime mux selection — no divergent double-read of QD_MUX (spec item 4).
 #[derive(Debug, Clone)]
 pub enum MuxDirs {
     /// canonical first, then legacy (the cross-dir Bug-D scan order).

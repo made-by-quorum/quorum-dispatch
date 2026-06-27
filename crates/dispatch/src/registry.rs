@@ -53,7 +53,7 @@
 //!      ([`ScannedEntry::degraded`], [`TombstonedEntry::degraded`]) so a future
 //!      `qd doctor` verb (later phase) can report it as the user-facing surface;
 //!   2. one stderr warning line per degraded (or genuinely-skipped) file, gated
-//!      behind `SB_DEBUG=1` and SILENT by default — stdout byte-parity surfaces
+//!      behind `QD_DEBUG=1` and SILENT by default — stdout byte-parity surfaces
 //!      (`ls --json`, etc.) MUST NOT change for well-typed fixtures, and the
 //!      default-silent gate guarantees that. See [`debug_warn`].
 //!
@@ -418,7 +418,7 @@ pub fn get_tombstoned_entries(sessions_dir: &Path) -> Vec<TombstonedEntry> {
 /// per-file `catch {}` / `catch { undefined }`). NEVER panics (L8).
 ///
 /// Observability: a degraded OR genuinely-skipped file emits ONE stderr line
-/// gated behind `SB_DEBUG=1` (silent by default — see [`debug_warn`]).
+/// gated behind `QD_DEBUG=1` (silent by default — see [`debug_warn`]).
 fn parse_file(path: &Path) -> Option<(RegistryEntry, Vec<&'static str>)> {
     let bytes = match fs::read(path) {
         Ok(b) => b,
@@ -460,7 +460,7 @@ fn parse_file(path: &Path) -> Option<(RegistryEntry, Vec<&'static str>)> {
     }
 }
 
-/// Emit ONE diagnostic line to stderr, gated behind `SB_DEBUG=1`. SILENT by
+/// Emit ONE diagnostic line to stderr, gated behind `QD_DEBUG=1`. SILENT by
 /// default so stdout byte-parity surfaces (`ls --json`, ...) never change. WHY a
 /// decision function: a future `qd doctor` verb (later phase) is the user-facing
 /// surface for degraded/skipped rows; until then this debug gate is the only
@@ -468,7 +468,7 @@ fn parse_file(path: &Path) -> Option<(RegistryEntry, Vec<&'static str>)> {
 /// capturing process stderr. Returns the formatted line (for testability) and
 /// writes it only when the gate is on.
 fn debug_warn(msg: &str) -> Option<String> {
-    if std::env::var_os("SB_DEBUG").is_some_and(|v| v == "1") {
+    if std::env::var_os("QD_DEBUG").is_some_and(|v| v == "1") {
         let line = format!("qd[registry]: {msg}");
         eprintln!("{line}");
         Some(line)
@@ -1786,12 +1786,12 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    // --- SB_DEBUG observability gate ---
+    // --- QD_DEBUG observability gate ---
     //
     // The stderr WRITE is a process-global side effect; rather than capture
     // process stderr (awkward + racy under parallel tests), we assert the DECISION
     // FUNCTION `debug_warn` that produces the warning string. It returns `Some`
-    // (and writes) only when SB_DEBUG=1, `None` (silent) otherwise. We serialize
+    // (and writes) only when QD_DEBUG=1, `None` (silent) otherwise. We serialize
     // the env-var mutation behind a mutex so parallel tests don't race on it.
 
     #[test]
@@ -1801,20 +1801,20 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
 
         // Default (unset): silent — returns None, writes nothing.
-        std::env::remove_var("SB_DEBUG");
+        std::env::remove_var("QD_DEBUG");
         assert_eq!(debug_warn("hello"), None, "silent by default");
 
-        // SB_DEBUG=1: emits a formatted line.
-        std::env::set_var("SB_DEBUG", "1");
+        // QD_DEBUG=1: emits a formatted line.
+        std::env::set_var("QD_DEBUG", "1");
         let line = debug_warn("degraded [\"startedAt\"]").expect("gate on → Some");
         assert!(line.starts_with("qd[registry]: "), "line: {line}");
         assert!(line.contains("startedAt"), "line: {line}");
 
         // Any other value is NOT the gate (only exact "1").
-        std::env::set_var("SB_DEBUG", "0");
-        assert_eq!(debug_warn("x"), None, "only SB_DEBUG=1 opens the gate");
+        std::env::set_var("QD_DEBUG", "0");
+        assert_eq!(debug_warn("x"), None, "only QD_DEBUG=1 opens the gate");
 
-        std::env::remove_var("SB_DEBUG");
+        std::env::remove_var("QD_DEBUG");
     }
 
     /// W4 corpus row: the on-disk wrong-typed fixture (string startedAt + string

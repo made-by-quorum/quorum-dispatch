@@ -44,7 +44,7 @@ scn_run() {
     name="$(scn_session_name nru)"
     # Boot WITH relay + STUB_DEAD_HEALTH=1 INLINE (the stub binds the relay, writes
     # the sidecar, but answers /health 503 status=dead).
-    STUB_DEAD_HEALTH=1 bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    STUB_DEAD_HEALTH=1 bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     local i=0 pidfile=""
     while [ "$i" -lt 30 ]; do
@@ -69,7 +69,7 @@ except urllib.error.HTTPError as e:
     print(1 if (e.code == 503 and st == "dead") else 0)
 except Exception:
     print(0)
-' "${SB_RELAY_PORT:-0}")"
+' "${QRM_RELAY_PORT:-0}")"
 
     # (2) The ENGINE surface: qd ls --json STILL joins the relay (sidecar-driven,
     # health-independent). A health-gating regression would drop the join.

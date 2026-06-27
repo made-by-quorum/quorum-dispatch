@@ -39,8 +39,8 @@ const SID: &str = "fa4ec110-0000-4000-8000-0000000000c2";
 const SECRET: &str = "SECRET_ASSISTANT_SCROLLBACK_must_never_render";
 
 /// A fake `claude -p` that: mints a busy row, emits an assistant text frame, HOLDS
-/// busy for `SBX_FAKE_BUSY_SECS`, emits `result` (→ the turn boundary), and — unless
-/// `SBX_FAKE_EXIT_AFTER_RESULT=1` — STAYS ALIVE (so a dead child after a cutover
+/// busy for `QD_FAKE_BUSY_SECS`, emits `result` (→ the turn boundary), and — unless
+/// `QD_FAKE_EXIT_AFTER_RESULT=1` — STAYS ALIVE (so a dead child after a cutover
 /// proves the TEARDOWN reaped it, not a natural exit).
 fn write_fixture(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -50,9 +50,9 @@ fn write_fixture(dir: &Path) -> PathBuf {
          sleep 0.3\n\
          echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"{SID}\"}}'\n\
          echo '{{\"type\":\"assistant\",\"session_id\":\"{SID}\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{SECRET}\"}}]}}}}'\n\
-         sleep \"${{SBX_FAKE_BUSY_SECS:-4}}\"\n\
+         sleep \"${{QD_FAKE_BUSY_SECS:-4}}\"\n\
          echo '{{\"type\":\"result\",\"session_id\":\"{SID}\",\"is_error\":false,\"stop_reason\":\"end_turn\"}}'\n\
-         if [ \"${{SBX_FAKE_EXIT_AFTER_RESULT:-0}}\" = \"1\" ]; then exit 0; fi\n\
+         if [ \"${{QD_FAKE_EXIT_AFTER_RESULT:-0}}\" = \"1\" ]; then exit 0; fi\n\
          sleep 3600\n"
     );
     std::fs::write(&p, body).unwrap();
@@ -101,13 +101,13 @@ impl Jail {
             .env("HOME", &self.home)
             .env("XDG_RUNTIME_DIR", &self.xdg)
             .env("CLAUDE_BIN", &self.fixture)
-            .env("SBX_FAKE_BUSY_SECS", self.busy_secs.to_string())
+            .env("QD_FAKE_BUSY_SECS", self.busy_secs.to_string())
             .env(
-                "SBX_FAKE_EXIT_AFTER_RESULT",
+                "QD_FAKE_EXIT_AFTER_RESULT",
                 if exit_after_result { "1" } else { "0" },
             )
-            .env_remove("SB_HOME")
-            .env_remove("SB_MUX")
+            .env_remove("QD_HOME")
+            .env_remove("QD_MUX")
             .env_remove("CLAUDE_CODE_SESSION_ID");
         c
     }

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # test/golden/selftest/test_record_host_lock.sh — prove recording is gated by the
-# HOST-wide build-lock captured BEFORE the jail overrides SB_RUST_LOCK_DIR
+# HOST-wide build-lock captured BEFORE the jail overrides QD_RUST_LOCK_DIR
 # (red-team M5).
 #
-# The hole: jail_establish sets SB_RUST_LOCK_DIR to a jail-internal dir, so a
+# The hole: jail_establish sets QD_RUST_LOCK_DIR to a jail-internal dir, so a
 # naive build-lock around recording would lock against the JAIL's dir and never
 # contend with the host's real build mutex — defeating it. record.sh captures the
 # HOST lock dir pre-jail (JAIL_HOST_LOCK_DIR) and wraps the scenario run in
@@ -52,7 +52,7 @@ SCN_FIXTURE="fixtures/hostlock-corpus/normalized/out.txt"
 scn_run() { printf 'deterministic\n' > "$SCN_OUT"; printf '0\n' > "$SCN_OUT.exit"; }
 EOS
 
-# --- The HOST lock dir record.sh will use. We force SB_RUST_LOCK_DIR to this so
+# --- The HOST lock dir record.sh will use. We force QD_RUST_LOCK_DIR to this so
 # record.sh's pre-jail snapshot (JAIL_HOST_LOCK_DIR) captures THIS dir. ---------
 HOSTLOCK="$SCRATCH/hostlock"
 mkdir -p "$HOSTLOCK"
@@ -60,7 +60,7 @@ mkdir -p "$HOSTLOCK"
 # --- Dummy holder: takes the host lock and holds it for a while (live PID). ---
 # We launch build-lock.sh against the SAME host lock dir, running a long sleep, so
 # the lock is genuinely HELD by a live process during the recording attempt.
-SB_RUST_LOCK_DIR="$HOSTLOCK" "$BUILD_LOCK" sleep 30 >/dev/null 2>&1 &
+QD_RUST_LOCK_DIR="$HOSTLOCK" "$BUILD_LOCK" sleep 30 >/dev/null 2>&1 &
 HOLDER_PID=$!
 
 # Wait (bounded) until the holder has actually acquired the lock dir.
@@ -78,17 +78,17 @@ fi
 PASS=$((PASS + 1)); printf 'ok   setup/holder-acquired (host lock held by live dummy)\n'
 
 # --- Recording attempt against the held host lock, SHORT bounded timeout. -----
-# SB_RUST_LOCK_DIR=$HOSTLOCK makes record.sh snapshot it as JAIL_HOST_LOCK_DIR
-# BEFORE the jail overrides it. SB_RUST_LOCK_TIMEOUT keeps the wait bounded so the
+# QD_RUST_LOCK_DIR=$HOSTLOCK makes record.sh snapshot it as JAIL_HOST_LOCK_DIR
+# BEFORE the jail overrides it. QD_RUST_LOCK_TIMEOUT keeps the wait bounded so the
 # suite never hangs. Expect exit 73 (host build-lock unavailable), NOT 0.
 start=$(date +%s)
 PINNED_TS_COMMIT="$FAKEPIN" \
-SB_UNDER_TEST="$SUT" \
+QD_UNDER_TEST="$SUT" \
 RECORD_FIXTURES_ROOT="$FXROOT" \
 JAIL_SB_CMD="/bin/true" \
-SB_RUST_LOCK_DIR="$HOSTLOCK" \
-SB_RUST_LOCK_TIMEOUT=2 \
-SB_RUST_LOCK_POLL=0.2 \
+QD_RUST_LOCK_DIR="$HOSTLOCK" \
+QD_RUST_LOCK_TIMEOUT=2 \
+QD_RUST_LOCK_POLL=0.2 \
     bash "$RECORD" --scenario "$DET" >/dev/null 2>&1
 rc=$?
 end=$(date +%s)

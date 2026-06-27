@@ -26,7 +26,7 @@
 //!
 //!   1. [`mint_unbound`] BEFORE launch: appends a `mint` event whose
 //!      `session_id` is `null` (carries the `name` for legibility). The id is
-//!      injected as `SB_SESSION_ID` in the launch env.
+//!      injected as `QD_SESSION_ID` in the launch env.
 //!   2. After the boot waiter confirms the registry row (boot.rs finds the row
 //!      by name; the row carries the provider UUID), [`bind`] appends a
 //!      `{"event":"bind","id":…,"session_id":…}` line under the same flock.

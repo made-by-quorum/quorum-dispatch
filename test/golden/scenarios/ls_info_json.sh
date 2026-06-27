@@ -5,7 +5,7 @@
 # comparator class = byte-exact. Drives qd-under-test in the jail with an empty
 # registry (and, for a non-empty case, would create a jailed session — Part 2).
 #
-# Parameterized on SB_UNDER_TEST so Part-2 recording is a re-run. verify.sh has
+# Parameterized on QD_UNDER_TEST so Part-2 recording is a re-run. verify.sh has
 # already established the jail and set SCN_OUT before sourcing this file.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_scenario_lib.sh"
 

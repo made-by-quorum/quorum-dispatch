@@ -1,7 +1,7 @@
 //! ACK-3 e2e INJECTION MATRIX (ack3-spec §2-§4) — five fault-injection rows
 //! (M1-M5) + negative twins driving the REAL `qd` binary over the embedded
 //! `qrmux` daemon with `fakerepl` as Claude, asserting BOTH event streams (the
-//! engine file at `<SB_HOME>/state/sessions/<key>.events.jsonl` and the daemon
+//! engine file at `<QD_HOME>/state/sessions/<key>.events.jsonl` and the daemon
 //! file at `<XDG_RUNTIME_DIR>/qrmux/events/<session>.daemon.<epoch>.jsonl`),
 //! joined by content sha (unique-by-construction contents). Plus the R-REC
 //! recovery-read rows (§4) and the coverage assertion (§3.3).
@@ -166,10 +166,10 @@ impl Jail {
     /// Base fakerepl env knobs.
     fn fakerepl_env<'a>(&'a self, name: &'a str) -> Vec<(&'a str, String)> {
         vec![
-            ("SB_FAKEREPL_NAME", name.to_string()),
-            ("SB_FAKEREPL_SESSION_ID", self.uuid.clone()),
+            ("QD_FAKEREPL_NAME", name.to_string()),
+            ("QD_FAKEREPL_SESSION_ID", self.uuid.clone()),
             (
-                "SB_FAKEREPL_CONVO_JSONL",
+                "QD_FAKEREPL_CONVO_JSONL",
                 self.convo.to_string_lossy().into_owned(),
             ),
         ]
@@ -299,7 +299,7 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &jail.home)
-        .env("SB_HOME", &jail.sb_home)
+        .env("QD_HOME", &jail.sb_home)
         .env("XDG_RUNTIME_DIR", &jail.xdg)
         .env("TMPDIR", jail.root.join("tmp"))
         .env("ZMX_DIR", jail.root.join("zmx"))
@@ -500,7 +500,7 @@ fn drive_m1(jail: &Jail, name: &str) -> (String, String, i32, String, String) {
     env.push(("QRMUX_FAULT_DROP_FRAMES", "send-input".to_string()));
     env.push(("QRMUX_FAULT_SESSION", name.to_string()));
     env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     // Boot (the arming call). The boot "\r" passes the sha AND-filter.
     let (cb, _o, _e, _) = run_sb(jail, &["start", name], &env);
@@ -568,7 +568,7 @@ fn m1_negative_twin_clean() {
     let (msg, canary) = row_message(1, 0);
     let sha = sha256_hex(msg.as_bytes());
     let mut env = jail.fakerepl_env(name);
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     let (cb, _o, _e, _) = run_sb(&jail, &["start", name], &env);
     assert_eq!(cb, 0);
@@ -606,7 +606,7 @@ fn drive_m2(jail: &Jail, name: &str) -> (String, String, i32, String, String) {
     env.push(("QRMUX_FAULT_PTY_WRITE", "error".to_string()));
     env.push(("QRMUX_FAULT_SESSION", name.to_string()));
     env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     let (cb, _o, _e, _) = run_sb(jail, &["start", name], &env);
     assert_eq!(cb, 0, "M2 boot succeeds (boot Enter passes the sha filter)");
@@ -669,7 +669,7 @@ fn m2_negative_twin_clean() {
     let (msg, canary) = row_message(2, 0);
     let sha = sha256_hex(msg.as_bytes());
     let mut env = jail.fakerepl_env(name);
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     let (cb, _o, _e, _) = run_sb(&jail, &["start", name], &env);
     assert_eq!(cb, 0);
@@ -694,7 +694,7 @@ fn m2_negative_twin_clean() {
 /// in ONE daemon — IMPOSSIBLE, discovered here): the engine create path
 /// captures ONLY the ANTHROPIC_* backend keys per session (launch.rs
 /// BACKEND_ENV_KEYS / write_session_env_file_with_unsets); every other var —
-/// including SB_FAKEREPL_SESSION_ID / _CONVO_JSONL — is inherited from the
+/// including QD_FAKEREPL_SESSION_ID / _CONVO_JSONL — is inherited from the
 /// DAEMON's spawn env. So a second session in the same daemon silently got
 /// the FIRST session's fakerepl identity, the two registry rows collided on
 /// sessionId, and name-resolution became scan-order-dependent (a ~1-in-3
@@ -721,7 +721,7 @@ fn m2_filter_precision_other_session_clean() {
     env.push(("QRMUX_FAULT_PTY_WRITE", "error".to_string()));
     env.push(("QRMUX_FAULT_SESSION", armed_for.to_string()));
     env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
     let (c1, _o, _e, _) = run_sb(&jail, &["start", other], &env);
     assert_eq!(c1, 0, "non-matching session boots in the ARMED daemon");
 
@@ -766,8 +766,8 @@ fn m3_silent_swallow_event_streams() {
     let mut env = jail.fakerepl_env(name);
     env.push(("QRMUX_FAULT_PTY_WRITE", "swallow".to_string()));
     env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
-    env.push(("SB_FAKEREPL_REPORT", report.to_string_lossy().into_owned()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_REPORT", report.to_string_lossy().into_owned()));
 
     // Seed the convo (so --wait resolves the jsonl) + settle to idle. The seed's
     // sha differs from the injected content sha → it passes the AND-filter clean.
@@ -845,7 +845,7 @@ fn m3_negative_twin_clean() {
     let name = "m3n";
     let (msg, canary) = row_message(3, 0);
     let mut env = jail.fakerepl_env(name);
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     // Seed convo so --wait resolves the jsonl, settle to idle.
     let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
@@ -885,9 +885,9 @@ fn m4_eat_input_event_streams() {
     let report = jail.root.join("m4-report.jsonl");
     let mut env = jail.fakerepl_env(name);
     // NO daemon fault. fakerepl eats the input.
-    env.push(("SB_FAKEREPL_EAT_INPUT", "1".to_string()));
-    env.push(("SB_FAKEREPL_REPORT", report.to_string_lossy().into_owned()));
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_EAT_INPUT", "1".to_string()));
+    env.push(("QD_FAKEREPL_REPORT", report.to_string_lossy().into_owned()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     // NOTE: EAT_INPUT eats EVERY burst, so `new -p seed` cannot anchor and the
     // convo file is never written by a seed. We therefore PRE-CREATE the convo
@@ -965,7 +965,7 @@ fn m4_negative_twin_clean() {
     let name = "m4n";
     let (msg, canary) = row_message(4, 0);
     let mut env = jail.fakerepl_env(name);
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);
@@ -1007,8 +1007,8 @@ fn m5_truncation_event_streams() {
     let (msg, canary) = row_message(5, 2100);
     assert_eq!(msg.len(), 2100, "M5 message is exactly 2100 bytes");
     let mut env = jail.fakerepl_env(name);
-    env.push(("SB_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "1500".to_string()));
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_TRUNCATE_USER_RECORD_BYTES", "1500".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     // Seed convo + settle to idle so the idle chunked path (W8 verify) engages.
     let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
@@ -1078,7 +1078,7 @@ fn m5_negative_twin_clean() {
     let name = "m5n";
     let (msg, canary) = row_message(5, 2100);
     let mut env = jail.fakerepl_env(name);
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);
@@ -1123,7 +1123,7 @@ fn i2_async_pty_short_send_ungated_to_message_seen_exit0() {
     let mut env = jail.fakerepl_env(name);
     // A busy window so the idle delivery goes busy → verify_eligible stays true
     // (the ungate then fires on the !wait path).
-    env.push(("SB_FAKEREPL_BUSY_MS", "800".to_string()));
+    env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);

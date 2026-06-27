@@ -1,7 +1,7 @@
-G-NEG VERDICT: PASS — (i) breaker bites (broken<healthy intact markers); (ii) bogus SB_MUX exit2+named; (iii) zmx-absent CREATE arm reds with ZmxMissing guidance (list BANNED for this arm)
+G-NEG VERDICT: PASS — (i) breaker bites (broken<healthy intact markers); (ii) bogus QD_MUX exit2+named; (iii) zmx-absent CREATE arm reds with ZmxMissing guidance (list BANNED for this arm)
 
 (ii) selector bogus arm: exit=2 (want 2), named error present=true
-  stderr: qd: invalid SB_MUX value "garbage-value" — valid values are "embedded" (default) or "zmx"
+  stderr: qd: invalid QD_MUX value "garbage-value" — valid values are "embedded" (default) or "zmx"
 (i) breaker arm: healthy intact markers=3000, broken intact markers=2953, breaker BITES (broken<healthy)=true
 (iii) zmx-absent CREATE arm: exit=1 (want nonzero), ZmxMissing guidance present=true
   stdout: 

@@ -606,11 +606,11 @@ fn build_record_line(env: &Envelope, payload: &Payload, sha_cap: usize) -> Strin
 }
 
 // ===========================================================================
-// §4.1 — path + key (state tier, SB_HOME-honoring, ADD-14-clean)
+// §4.1 — path + key (state tier, QD_HOME-honoring, ADD-14-clean)
 // ===========================================================================
 
 /// Resolve the engine events file for a session (§4.1). `state_dir` is the
-/// caller-resolved `SbPaths.state_dir` (SB_HOME-honoring via the injected Env
+/// caller-resolved `SbPaths.state_dir` (QD_HOME-honoring via the injected Env
 /// upstream — never literal /tmp, ADD-14). `key` is the sessionId when known,
 /// else `byname-<name>` (the §10 D5 fallback the caller composes via
 /// [`byname_key`]). `byname-` cannot collide with a sessionId (uuid alphabet).
@@ -2627,14 +2627,14 @@ mod tests {
     // G2: multi-process writer + torn-tail + interior-corrupt
     //
     // The re-exec trick (G2 §11): the parent spawns two children of the test
-    // binary with SB_EVENTS_TEST_CHILD=<pidtag> set; each child appends N=200
+    // binary with QD_EVENTS_TEST_CHILD=<pidtag> set; each child appends N=200
     // records to the SAME tempdir file, then the parent asserts all 400 parse and
     // each pid's seq is 0..N-1 gapless monotonic. The child entrypoint is the
     // `events_test_child` test below, gated on the env var.
     // ---------------------------------------------------------------------
 
-    const G2_CHILD_VAR: &str = "SB_EVENTS_TEST_CHILD";
-    const G2_FILE_VAR: &str = "SB_EVENTS_TEST_FILE";
+    const G2_CHILD_VAR: &str = "QD_EVENTS_TEST_CHILD";
+    const G2_FILE_VAR: &str = "QD_EVENTS_TEST_FILE";
     const G2_N: u64 = 200;
 
     #[test]

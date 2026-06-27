@@ -304,7 +304,7 @@ pub fn run(m: &ArgMatches) -> i32 {
 /// here, so `mint_or_get` keys it directly — lazy-mints for pre-stable-id
 /// sessions; fail-closed: never relaunch a session whose env would silently
 /// miss its identity); write the UNCONDITIONAL self-deleting env file
-/// (lifecycle.ts:483-485) carrying `export SB_SESSION_ID='<id>'` (an explicit
+/// (lifecycle.ts:483-485) carrying `export QD_SESSION_ID='<id>'` (an explicit
 /// set, overriding anything inherited through the caller's subtree) plus the
 /// captured backend pairs — so the env file + dot-source prefix are
 /// unconditional on every resume/revive branch (`--no-zmx` bare, `--no-attach`
@@ -627,7 +627,7 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
     // one pid's cmdline via the existing `ps` seam.
     let probe = real_cmdline_probe;
 
-    // P0 wave-2: the ids store for the revived daemon's SB_SESSION_ID injection.
+    // P0 wave-2: the ids store for the revived daemon's QD_SESSION_ID injection.
     let ids_path = match common::ids_store_path(&env) {
         Ok(p) => p,
         Err(code) => return code,
@@ -1002,7 +1002,7 @@ mod tests {
     }
 
     /// P0 wave-2 (spec-w2-env D1 site 2): the resume env-pair set ALWAYS
-    /// carries SB_SESSION_ID (last, after the backend pairs) — with and without
+    /// carries QD_SESSION_ID (last, after the backend pairs) — with and without
     /// a backend capture — so the env file + dot-source prefix are
     /// unconditional on every resume/revive branch. (The pair-set builder is
     /// the hoisted `dispatch::launch::launch_env_pairs`; resume always passes `Some`.)
@@ -1043,7 +1043,7 @@ mod tests {
             .find("unset -v CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
             .unwrap_or_else(|| panic!("explicit unset must ride the revive file: {body}"));
         let id_pos = body
-            .find("export SB_SESSION_ID=")
+            .find("export QD_SESSION_ID=")
             .unwrap_or_else(|| panic!("identity export must still ride: {body}"));
         assert!(unset_pos < id_pos, "unset precedes the exports: {body}");
         assert!(
@@ -1100,7 +1100,7 @@ mod tests {
                     dispatch::launch::ALT_SCREEN_DISABLE_KEY.to_string(),
                     "1".to_string()
                 ),
-                ("SB_SESSION_ID".to_string(), "ab3kx9mq".to_string())
+                ("QD_SESSION_ID".to_string(), "ab3kx9mq".to_string())
             ]
         );
         // The dot-source prefix is non-empty for this set (unconditional).
@@ -1126,7 +1126,7 @@ mod tests {
         assert_eq!(composed[1].0, "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE");
         assert_eq!(
             composed[2],
-            ("SB_SESSION_ID".to_string(), "ab3kx9mq".to_string())
+            ("QD_SESSION_ID".to_string(), "ab3kx9mq".to_string())
         );
     }
 

@@ -16,7 +16,7 @@ stub_install || { echo "STUB INSTALL FAILED" >&2; exit 3; }
 
 name="${JAIL_PREFIX}diagboot"
 echo "=== env relevant bits ==="
-echo "HOME=$HOME"; echo "SB_HOME=${SB_HOME:-}"; echo "ZMX_DIR=${ZMX_DIR:-}"
+echo "HOME=$HOME"; echo "QD_HOME=${QD_HOME:-}"; echo "ZMX_DIR=${ZMX_DIR:-}"
 echo "CLAUDE_BIN=${CLAUDE_BIN:-<unset>}"; command -v claude || echo "no claude on PATH"
 echo "=== qd new (full stderr/stdout) ==="
 STUB_BUSY_HOLD_MS=6000 "$SUT" new "$name" > "$DIAG/boot-stdout.txt" 2> "$DIAG/boot-stderr.txt" &

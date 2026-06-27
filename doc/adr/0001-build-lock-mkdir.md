@@ -24,15 +24,15 @@ Options considered:
 ## Decision
 
 Implement the lock as an atomic `mkdir` of a lock **directory**
-(`$SB_RUST_LOCK_DIR/build.lock`, default base `~/.quorum/dispatch-rust`). Inside it, write an
+(`$QD_RUST_LOCK_DIR/build.lock`, default base `~/.quorum/dispatch-rust`). Inside it, write an
 `owner` metadata file with `owner`, `pid`, `timestamp`. Acquisition loops on
 `mkdir`; on contention it reads the holder PID and, if that PID is dead, reclaims
-the stale lock; otherwise it waits up to a 300s timeout (`SB_RUST_LOCK_TIMEOUT`).
+the stale lock; otherwise it waits up to a 300s timeout (`QD_RUST_LOCK_TIMEOUT`).
 Release is a `trap`-driven `rm -rf` guarded so only the owner deletes.
 
 The semantics the brief required are preserved: mutual exclusion, bounded 300s
 wait, owner+PID+timestamp metadata, and stale-lock recovery for dead holders. The
-lock base is overridable via `SB_RUST_LOCK_DIR` so tests are hermetic and never
+lock base is overridable via `QD_RUST_LOCK_DIR` so tests are hermetic and never
 touch a real `~/.quorum/dispatch-rust`.
 
 ## Consequences

@@ -528,7 +528,7 @@ pub struct ReviveDeps<'a> {
     /// minus `--listen`) — the revive sequence appends `--listen` + drives the rpc
     /// directly, exactly like the create path.
     pub provider: &'a dyn Provider,
-    /// Env seam (L9a): the `SB_CODEX_UNPINNED` override read + CODEX_HOME
+    /// Env seam (L9a): the `QD_CODEX_UNPINNED` override read + CODEX_HOME
     /// passthrough via the provider's launch_plan.
     pub env: &'a dyn Env,
     /// Exec seam — the one-shot `codex --version` sniff (§3.4).
@@ -556,7 +556,7 @@ pub struct ReviveDeps<'a> {
     pub cmdline_probe: &'a CmdlineProbe<'a>,
     /// P0 wave-2 (spec-w2-env D1 site 3): the idstore path. The revive KNOWS the
     /// thread uuid up front, so the stable id is `mint_or_get`-keyed directly
-    /// (lazy-mints for pre-stable-id sessions) and injected as `SB_SESSION_ID`
+    /// (lazy-mints for pre-stable-id sessions) and injected as `QD_SESSION_ID`
     /// in the revived daemon's process env — the id rides through every resume
     /// unchanged.
     pub ids_path: PathBuf,
@@ -703,7 +703,7 @@ fn check_version(deps: &ReviveDeps) -> Result<(), ResumeError> {
             if unpinned_override(deps.env) {
                 eprintln!(
                     "WARNING: codex {}.{}.{} is a BREAKING drift from the pin \
-                     {}.{} but SB_CODEX_UNPINNED=1 is set — proceeding at risk.",
+                     {}.{} but QD_CODEX_UNPINNED=1 is set — proceeding at risk.",
                     found.major, found.minor, found.patch, pin.major, pin.minor
                 );
                 Ok(())
@@ -725,10 +725,10 @@ fn check_version(deps: &ReviveDeps) -> Result<(), ResumeError> {
     }
 }
 
-/// `SB_CODEX_UNPINNED=1` read off the env SEAM (L9a). Any non-"1" (incl. unset) is
+/// `QD_CODEX_UNPINNED=1` read off the env SEAM (L9a). Any non-"1" (incl. unset) is
 /// NOT the override.
 fn unpinned_override(env: &dyn Env) -> bool {
-    env.var("SB_CODEX_UNPINNED").as_deref() == Some("1")
+    env.var("QD_CODEX_UNPINNED").as_deref() == Some("1")
 }
 
 /// One revive attempt: alloc port → build daemon argv (launch_plan + `--listen`) →
@@ -795,7 +795,7 @@ fn try_spawn_and_connect<'a>(
     // P0 wave-2 (spec-w2-env D1 site 3): the revived daemon's process env
     // carries the stable id — an explicit set layered over the plan's env.
     let mut spawn_env = plan.env.clone();
-    spawn_env.push(("SB_SESSION_ID".to_string(), sb_session_id.to_string()));
+    spawn_env.push(("QD_SESSION_ID".to_string(), sb_session_id.to_string()));
 
     let log_path = deps.log_dir.join(format!("codex-{}.log", params.name));
     let spawned =
@@ -1527,7 +1527,7 @@ mod tests {
             let env = spawner.last_env();
             assert!(
                 env.iter()
-                    .any(|(k, v)| k == "SB_SESSION_ID" && v == "cd47qrst"),
+                    .any(|(k, v)| k == "QD_SESSION_ID" && v == "cd47qrst"),
                 "cycle {cycle}: the revived env carries the SAME id: {env:?}"
             );
         }
@@ -1619,7 +1619,7 @@ mod tests {
         let env = spawner.last_env();
         assert!(
             env.iter()
-                .any(|(k, v)| k == "SB_SESSION_ID" && v == "cd47qrst"),
+                .any(|(k, v)| k == "QD_SESSION_ID" && v == "cd47qrst"),
             "the revived env carries the EXISTING id unchanged: {env:?}"
         );
     }

@@ -24,7 +24,7 @@ export CLAUDE_BIN="$FAKE"
 mkdir -p "$HOME/.claude/sessions"
 WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"
 NAME="${JAIL_PREFIX}fake"
-( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) > "$JAIL_ROOT/o.txt" 2> "$JAIL_ROOT/e.txt"
+( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) > "$JAIL_ROOT/o.txt" 2> "$JAIL_ROOT/e.txt"
 code=$?
 echo "create exit=$code : $(cat "$JAIL_ROOT/o.txt")"
 [ -s "$JAIL_ROOT/e.txt" ] && { echo "stderr:"; sed 's/^/  /' "$JAIL_ROOT/e.txt"; }

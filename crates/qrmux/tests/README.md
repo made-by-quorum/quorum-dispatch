@@ -58,10 +58,10 @@ Every test runs under a hermetic per-run jail:
 
 **Environment variables set:**
 - `HOME` — load-bearing for qd registry (captured @ `$JAIL_ROOT/home`)
-- `SB_HOME`, `ZMX_DIR` — qd-specific state
+- `QD_HOME`, `ZMX_DIR` — qd-specific state
 - `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` — XDG dirs
 - `TMPDIR` — per-run temp
-- `SB_RUST_LOCK_DIR` — build lock (scoped to jail)
+- `QD_RUST_LOCK_DIR` — build lock (scoped to jail)
 
 **Socket layout (qrmux-specific):**
 - Daemon sockets live at `$XDG_RUNTIME_DIR/qrmux/<session-name>.sock`

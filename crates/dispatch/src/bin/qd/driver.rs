@@ -3,7 +3,7 @@
 //! The organizing principle (S-B-COMMAND-SURFACE-RULINGS, Pete-directed): **I/O
 //! mode follows who DRIVES.** The surface auto-detects the caller from execution
 //! context — `isatty(stdin AND stdout)` (a human at a terminal) plus the agent
-//! env markers a live Claude Code session exports (`SB_SESSION_ID` / `CLAUDECODE`)
+//! env markers a live Claude Code session exports (`QD_SESSION_ID` / `CLAUDECODE`)
 //! — and an explicit flag (`--headless` / `--interactive`) always overrides. No
 //! second binary, no hidden mode.
 //!
@@ -54,7 +54,7 @@ impl DriverOverride {
 /// The agent env markers (S-B rulings §"Detection signals"): a `qd` invocation
 /// from INSIDE a live Claude Code session carries one of these. Either present
 /// (and non-empty) ⇒ the caller is an agent, even at a TTY.
-const AGENT_ENV_MARKERS: [&str; 2] = ["SB_SESSION_ID", "CLAUDECODE"];
+const AGENT_ENV_MARKERS: [&str; 2] = ["QD_SESSION_ID", "CLAUDECODE"];
 
 /// Is an agent env marker present + non-empty? (An exported-but-empty marker is
 /// treated as absent — a blanked var is not an agent claim.)
@@ -210,7 +210,7 @@ mod tests {
             resolve_driver(
                 DriverOverride::Interactive,
                 false,
-                &agent_env("SB_SESSION_ID")
+                &agent_env("QD_SESSION_ID")
             ),
             Driver::Human
         );
@@ -220,9 +220,9 @@ mod tests {
 
     #[test]
     fn agent_marker_beats_tty_sb_session_id() {
-        // At a TTY, but inside a Claude session (SB_SESSION_ID) → Agent.
+        // At a TTY, but inside a Claude session (QD_SESSION_ID) → Agent.
         assert_eq!(
-            resolve_driver(DriverOverride::None, true, &agent_env("SB_SESSION_ID")),
+            resolve_driver(DriverOverride::None, true, &agent_env("QD_SESSION_ID")),
             Driver::Agent
         );
     }
@@ -241,7 +241,7 @@ mod tests {
         // An exported-but-EMPTY marker is treated as absent: a blanked var is no
         // agent claim, so at a TTY this is the human default.
         let mut vars = HashMap::new();
-        vars.insert("SB_SESSION_ID".to_string(), String::new());
+        vars.insert("QD_SESSION_ID".to_string(), String::new());
         let env = MapEnv { vars, uid: 501 };
         assert_eq!(
             resolve_driver(DriverOverride::None, true, &env),
@@ -324,7 +324,7 @@ mod tests {
     /// `Headless` (dropping Fork B) this flips to `Headless` and REDs.
     #[test]
     fn agent_marker_at_tty_no_prompt_routes_to_refuse() {
-        let driver = resolve_driver(DriverOverride::None, true, &agent_env("SB_SESSION_ID"));
+        let driver = resolve_driver(DriverOverride::None, true, &agent_env("QD_SESSION_ID"));
         assert_eq!(start_route(driver, false), StartRoute::RefuseNoPrompt);
     }
 

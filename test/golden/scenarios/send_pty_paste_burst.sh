@@ -89,7 +89,7 @@ scn_run() {
     # STUB_BUSY_HOLD_MS is set at BOOT so it reaches the long-running stub process
     # (a send-time env would NOT reach the already-running stub). Every turn then
     # holds busy ~6s — long enough for turn 2 to observe BUSY and queue.
-    STUB_BUSY_HOLD_MS=6000 bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    STUB_BUSY_HOLD_MS=6000 bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     local i=0 pidfile=""
     while [ "$i" -lt 30 ]; do

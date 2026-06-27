@@ -67,7 +67,7 @@ EOS
 run_record() {
     local scn="$1"
     PINNED_TS_COMMIT="$FAKEPIN" \
-    SB_UNDER_TEST="$SUT" \
+    QD_UNDER_TEST="$SUT" \
     RECORD_FIXTURES_ROOT="$FXROOT" \
     JAIL_SB_CMD="/bin/true" \
         bash "$RECORD" --scenario "$scn"

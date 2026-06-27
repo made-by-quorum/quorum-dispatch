@@ -1,12 +1,12 @@
-# ADR 0013: Embedded-mux state-dir compatibility + migration (SB_MUX flip)
+# ADR 0013: Embedded-mux state-dir compatibility + migration (QD_MUX flip)
 
 **Status:** Accepted (C1; orc-6 checkpoint riders R-A/R-B/R-D folded; Pete gate at C1 close)
 **Date:** 2026-06-05
 
 ## Context
 
-C1 flips the engine's `Mux` backend to embedded qrmux behind `SB_MUX` (default `embedded`;
-`SB_MUX=zmx` = the escape hatch, test-carried). Pre-flip sessions live in the zmx world
+C1 flips the engine's `Mux` backend to embedded qrmux behind `QD_MUX` (default `embedded`;
+`QD_MUX=zmx` = the escape hatch, test-carried). Pre-flip sessions live in the zmx world
 (sockets under zmx dirs; registry rows written by Claude Code). ADD-14 (Pete): the engine
 never WRITES literal /tmp. Rule 9: Rust qd never touches real state until C2 — this ADR
 RULES the migration story; C2 executes it.
@@ -15,7 +15,7 @@ RULES the migration story; C2 executes it.
 
 ### 1. Whole-world backend rule (no hybrid in C1)
 
-`SB_MUX` selects the WHOLE universe: the zmx lane sees/operates all zmx sessions (incl.
+`QD_MUX` selects the WHOLE universe: the zmx lane sees/operates all zmx sessions (incl.
 every pre-flip session); the embedded lane sees/operates embedded sessions. There is NO
 cross-backend listing, rendering, or proxying in C1 — under embedded, registry rows whose
 sessions live in the zmx world surface exactly as cold/non-mux-live rows do today (zero
@@ -25,18 +25,18 @@ visibility feature is a C2 decision WITH Pete (a `--json` contract surface, ADD-
 ### 2. Embedded state dir (ADD-14-compliant)
 
 Engine resolution `resolve_qrmux_dir`: `$XDG_RUNTIME_DIR/qrmux` else `<sbHome>/mux` where
-`sbHome = SB_HOME || $HOME/.quorum/dispatch` (the engine's `SbPaths::from_home_env` seam). NO /tmp tier.
+`sbHome = QD_HOME || $HOME/.quorum/dispatch` (the engine's `SbPaths::from_home_env` seam). NO /tmp tier.
 sun_path-length guard at resolve with a named remedy (set XDG_RUNTIME_DIR or shorten
-SB_HOME). The engine-resolved dir is the single source of truth: passed per-call into the
+QD_HOME). The engine-resolved dir is the single source of truth: passed per-call into the
 qrmux client ops AND propagated to the daemon via `server --socket-dir` argv — daemon binds
 exactly where the engine reads (Bug-D keystone, asserted in `embedded_mux_live` +
 gate row G-CRUD).
 
 **Standalone qrmux CLI fallback (checkpoint rider R-B, ruled):** ADD-14 extends to every
 shipped binary — qrmux's own `socket.rs` fallback changed from `/tmp/qrmux-{uid}` to
-`$XDG_RUNTIME_DIR/qrmux` else `<sbHome>/mux`, **honoring SB_HOME** (implementer choice,
-ratified here): engine and standalone agree fully; a relocated SB_HOME moves the mux dir
-with it; SB_HOME-only jails stay hermetic. D-SOCKDIR is therefore a NON-divergence record.
+`$XDG_RUNTIME_DIR/qrmux` else `<sbHome>/mux`, **honoring QD_HOME** (implementer choice,
+ratified here): engine and standalone agree fully; a relocated QD_HOME moves the mux dir
+with it; QD_HOME-only jails stay hermetic. D-SOCKDIR is therefore a NON-divergence record.
 
 ### 3. Backend stamping deferred to C2/A6
 
@@ -49,7 +49,7 @@ backend-scoped by decision 1). **C2 carry:** stamp `backend` when the marks/line
 
 ### 4. Migration story (C2 executes)
 
-At cutover: pre-existing zmx sessions remain fully operable via `SB_MUX=zmx` for the
+At cutover: pre-existing zmx sessions remain fully operable via `QD_MUX=zmx` for the
 TS-compat window; new sessions default embedded. The engine's literal-/tmp surface is
 READ-ONLY from C1 on (A14-2, orc-6-ruled): legacy /tmp scan survives for zmx-lane
 visibility + migration discovery, but **destructive targets are never sourced from /tmp
@@ -81,7 +81,7 @@ unchanged.
 
 ## Consequences
 
-- Pete's escape hatch is a one-variable rollback (`SB_MUX=zmx`) proven by gate row G-E
+- Pete's escape hatch is a one-variable rollback (`QD_MUX=zmx`) proven by gate row G-E
   against the real zmx binary.
 - No real-state migration risk in C1 (rule 9 intact); C2 inherits decisions 3+4 as named
   carries.
@@ -93,6 +93,6 @@ unchanged.
 
 The per-session daemon split (ADR-0014) changes the TOPOLOGY (one daemon per session,
 `<dir>/<name>.sock`) but NOT this ADR's dir-resolution contract: the two-tier
-XDG/sbHome resolution, SB_HOME honoring, ADD-14 no-/tmp-writes, and the whole-world
+XDG/sbHome resolution, QD_HOME honoring, ADD-14 no-/tmp-writes, and the whole-world
 backend rule are all unmodified. The v2 skew-window note above generalizes per-session
 ("stale qrmux daemon for session '<name>' at <dir>; kill or restart THAT session").

@@ -44,7 +44,7 @@ log "  qd: $("$JAIL_SB_CMD" --version 2>&1 | head -1)"
 # Prove the driver has NO timeout(1) anywhere (brief: grep it to prove).
 log ""
 log "--- GREP PROOF: no timeout(1) in this driver ---"
-if grep -nE '(^|[^_[:alnum:]])timeout[[:space:]]' "$0" | grep -v 'SB_RUST_LOCK_TIMEOUT\|--timeout\|timeout_s\|timeout wrapper\|missing macOS timeout\|NO timeout\|no timeout\|class\|burns'; then
+if grep -nE '(^|[^_[:alnum:]])timeout[[:space:]]' "$0" | grep -v 'QD_RUST_LOCK_TIMEOUT\|--timeout\|timeout_s\|timeout wrapper\|missing macOS timeout\|NO timeout\|no timeout\|class\|burns'; then
     log "  !!! timeout(1) token found above — INVESTIGATE"
 else
     log "  OK: no bare timeout(1) invocation in the driver (only --timeout flag / wrapper prose)"
@@ -105,8 +105,8 @@ log ""
 log "=== CHECK 2: fakerepl boot + qd wait rows (status-keyed) ==="
 NAME="${JAIL_PREFIX}fr"
 # Long busy hold so a kept-busy --timeout row can observe 'busy' across a 5s wait.
-export SB_FAKEREPL_BUSY_MS=6000
-( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
+export QD_FAKEREPL_BUSY_MS=6000
+( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 code=$?
 log "  qd new exit=$code : $(cat "$JAIL_ROOT/o")"
 [ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; sed 's/^/    /' "$JAIL_ROOT/e" | tee -a "$EV"; }

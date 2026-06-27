@@ -3,7 +3,7 @@
 # consent dialog appears, the BUILT qd's EventBootWaiter answers it (≤2 sends),
 # session reaches ready. boot B = real-claude #3 of 3.
 #
-# DEFAULT flags (NO SB_CLAUDE_FLAGS override) → built-in default carries
+# DEFAULT flags (NO QD_CLAUDE_FLAGS override) → built-in default carries
 # --dangerously-load-development-channels server:relay → dev-channels ON.
 # Seed cachedGrowthBookFeatures from real home (probe-3) + channels symlink so
 # the GrowthBook gate opens and the consent dialog actually renders.
@@ -36,7 +36,7 @@ printf '{"hasCompletedOnboarding": true, "bypassPermissionsModeAccepted": true, 
 
 NAME="${JAIL_PREFIX}cfg"
 echo "=== qd new with DEFAULT flags (dev-channels ON → consent dialog expected) ==="
-echo "    (NO SB_CLAUDE_FLAGS override → built-in default flags)"
+echo "    (NO QD_CLAUDE_FLAGS override → built-in default flags)"
 ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/cfg-out.txt" 2> "$JAIL_ROOT/cfg-err.txt"
 code=$?

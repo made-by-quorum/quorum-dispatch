@@ -38,8 +38,8 @@ pub fn run(m: &ArgMatches) -> i32 {
         }
     };
     let paths = SbPaths::from_home(&home);
-    // Backend-selected mux (C1 D3). ONE SB_MUX parse drives the mux AND the dir
-    // sweep below. A bogus SB_MUX exits loudly here.
+    // Backend-selected mux (C1 D3). ONE QD_MUX parse drives the mux AND the dir
+    // sweep below. A bogus QD_MUX exits loudly here.
     let backend = match common::select_backend(&env) {
         Ok(b) => b,
         Err(code) => return code,
@@ -63,7 +63,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // Backend-keyed (C1 D2): zmx = FULL Bug-D tier sweep (canonical + legacy,
     // `/tmp` + the env-derived XDG family); embedded = the single qrmux dir
     // (legacy EMPTY — D-LISTRAW: embedded list_raw never surfaces ended sessions).
-    // A14-2(c): the surviving zmx READ scan honors SB_TEST_SCAN_ROOTS (test lanes
+    // A14-2(c): the surviving zmx READ scan honors QD_TEST_SCAN_ROOTS (test lanes
     // only; production = literal /tmp). A14-2(d): the dry-run gate + negative-control
     // belts stand for the destructive surface below.
     let canonical = match backend {

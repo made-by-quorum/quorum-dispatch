@@ -22,7 +22,7 @@
 // The daemons — the processes under measurement (RSS, runtime, RTT) — are thus
 // release. The in-process EmbeddedMux client used for the RTT/history/list
 // measurement is just the WIRE caller; its profile does not change what the
-// daemon does. We belt-and-suspenders SB_EMBEDDED_DAEMON_PROGRAM = the release qd
+// daemon does. We belt-and-suspenders QD_EMBEDDED_DAEMON_PROGRAM = the release qd
 // on the in-process client env too, so any in-process launch is release as well
 // (in practice the daemons are already up from `qd start`, so the client only
 // connects).
@@ -88,24 +88,24 @@ fn release_bin(name: &str) -> PathBuf {
 
 /// Build environment for driving the RELEASE `qd` binary in a jail. Mirrors
 /// Jail::apply_embedded but as a (k, String) vec for Command construction in
-/// threads, AND points SB_EMBEDDED_DAEMON_PROGRAM at the release qd so any
+/// threads, AND points QD_EMBEDDED_DAEMON_PROGRAM at the release qd so any
 /// daemon launch (engine or in-process client) is release.
 fn release_jail_env(jail: &Jail) -> Vec<(String, String)> {
     let rel = release_sb_bin().to_string_lossy().into_owned();
     vec![
         ("HOME".into(), jail.home.to_string_lossy().into_owned()),
-        ("SB_HOME".into(), jail.root.join("sbhome").to_string_lossy().into_owned()),
+        ("QD_HOME".into(), jail.root.join("sbhome").to_string_lossy().into_owned()),
         ("XDG_RUNTIME_DIR".into(), jail.xdg_runtime.to_string_lossy().into_owned()),
         ("TMPDIR".into(), jail.root.join("tmp").to_string_lossy().into_owned()),
         ("ZMX_DIR".into(), jail.root.join("zmx").to_string_lossy().into_owned()),
         ("PATH".into(), "/usr/bin:/bin".into()),
         ("TERM".into(), "xterm-256color".into()),
-        ("SB_EMBEDDED_DAEMON_PROGRAM".into(), rel),
+        ("QD_EMBEDDED_DAEMON_PROGRAM".into(), rel),
     ]
 }
 
 /// `qd start <name>` through the RELEASE binary with the claude-shaped fake-claude
-/// shim execing `app`. `extra` adds env (SB_FAKE_NAME, QRMUX_TEST_SHARED, …).
+/// shim execing `app`. `extra` adds env (QD_FAKE_NAME, QRMUX_TEST_SHARED, …).
 /// Returns the exit code. The daemon auto-launched is the release `qd qrmux-server`.
 fn release_sb_new(
     jail: &Jail,
@@ -122,7 +122,7 @@ fn release_sb_new(
         cmd.env(k, v);
     }
     cmd.env("CLAUDE_BIN", fake.to_string_lossy().into_owned());
-    cmd.env("SB_FAKE_NAME", name);
+    cmd.env("QD_FAKE_NAME", name);
     for (k, v) in extra {
         cmd.env(k, v);
     }
@@ -218,7 +218,7 @@ fn write_flood_fake_claude(jail: &Jail) -> PathBuf {
     let script = format!(
         r#"#!/bin/bash
 PID=$$
-NAME="${{SB_FAKE_NAME:-flood}}"
+NAME="${{QD_FAKE_NAME:-flood}}"
 SESS="{sessions}"
 mkdir -p "$SESS"
 printf '{{"pid":%s,"sessionId":"sid-%s","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","name":"%s","version":"0.1.0","kind":"claude-code","entrypoint":"claude"}}' "$PID" "$NAME" "$NAME" > "$SESS/$PID.json"

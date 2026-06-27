@@ -22,16 +22,16 @@ const SOCK_SUFFIX_LEN: usize = 5; // ".sock"
 ///
 /// Two tiers, NO literal `/tmp` (ADD-14; checkpoint rider R-B):
 /// 1. `$XDG_RUNTIME_DIR/qrmux` (per-user, mode 0700, systemd-managed), else
-/// 2. `<sbHome>/mux` where `sbHome = $SB_HOME || $HOME/.quorum/dispatch`.
+/// 2. `<sbHome>/mux` where `sbHome = $QD_HOME || $HOME/.quorum/dispatch`.
 ///
-/// **SB_HOME is honored** (implementer choice, recommended by the spec and named
+/// **QD_HOME is honored** (implementer choice, recommended by the spec and named
 /// in ADR 0008): the standalone fallback mirrors the engine's `resolve_qrmux_dir`
-/// so a relocated engine state dir or an SB_HOME-only jail moves the mux dir too,
+/// so a relocated engine state dir or an QD_HOME-only jail moves the mux dir too,
 /// and engine + standalone agree fully. Falls back to `$HOME/.quorum/dispatch` only when
-/// SB_HOME is unset, and to the user's home dir when HOME is unset as well.
+/// QD_HOME is unset, and to the user's home dir when HOME is unset as well.
 pub fn socket_dir() -> anyhow::Result<PathBuf> {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok().map(PathBuf::from);
-    let sb_home = std::env::var("SB_HOME").ok().map(PathBuf::from);
+    let sb_home = std::env::var("QD_HOME").ok().map(PathBuf::from);
     let home = std::env::var("HOME").ok().map(PathBuf::from);
     socket_dir_impl_env(runtime_dir.as_deref(), sb_home.as_deref(), home.as_deref())
 }
@@ -47,14 +47,14 @@ fn resolve_socket_dir(
     let dir = if let Some(xdg) = runtime_dir {
         xdg.join("qrmux")
     } else {
-        // Tier 2: <sbHome>/mux, sbHome = SB_HOME || HOME/.quorum/dispatch.
+        // Tier 2: <sbHome>/mux, sbHome = QD_HOME || HOME/.quorum/dispatch.
         let sb_home: PathBuf = if let Some(sh) = sb_home {
             sh.to_path_buf()
         } else if let Some(h) = home {
             h.join(".quorum").join("dispatch")
         } else {
             anyhow::bail!(
-                "cannot resolve qrmux socket dir: neither XDG_RUNTIME_DIR, SB_HOME, nor HOME is set"
+                "cannot resolve qrmux socket dir: neither XDG_RUNTIME_DIR, QD_HOME, nor HOME is set"
             );
         };
         sb_home.join("mux")
@@ -66,7 +66,7 @@ fn resolve_socket_dir(
     if projected > SUN_PATH_MAX {
         anyhow::bail!(
             "qrmux socket dir {:?} is too long ({} bytes; the Unix socket path must fit {} bytes): \
-             set XDG_RUNTIME_DIR to a short per-user runtime dir, or shorten SB_HOME/HOME",
+             set XDG_RUNTIME_DIR to a short per-user runtime dir, or shorten QD_HOME/HOME",
             dir,
             projected,
             SUN_PATH_MAX,
@@ -88,11 +88,11 @@ fn socket_dir_impl_env(
 }
 
 /// Test/back-compat shim: resolve+create using only an XDG override, deriving
-/// SB_HOME/HOME from the process env for tier 2. Used by the symlink/permission
+/// QD_HOME/HOME from the process env for tier 2. Used by the symlink/permission
 /// tests, which exercise tier 1 with an explicit override.
 #[cfg(test)]
 fn socket_dir_impl(runtime_dir: Option<&Path>) -> anyhow::Result<PathBuf> {
-    let sb_home = std::env::var("SB_HOME").ok().map(PathBuf::from);
+    let sb_home = std::env::var("QD_HOME").ok().map(PathBuf::from);
     let home = std::env::var("HOME").ok().map(PathBuf::from);
     socket_dir_impl_env(runtime_dir, sb_home.as_deref(), home.as_deref())
 }
@@ -166,7 +166,7 @@ pub fn socket_dir_for(dir: Option<&Path>) -> anyhow::Result<PathBuf> {
                 anyhow::bail!(
                     "qrmux socket dir {:?} is too long ({} bytes; the Unix socket path must fit \
                      {} bytes): set XDG_RUNTIME_DIR to a short per-user runtime dir, or shorten \
-                     SB_HOME/HOME",
+                     QD_HOME/HOME",
                     d,
                     projected,
                     SUN_PATH_MAX,
@@ -270,7 +270,7 @@ fn max_session_name_len_for(dir: &Path) -> usize {
 /// Resolve the per-session socket path `<dir>/<name>.sock`, honoring the socket-dir
 /// override (`None` → env tiers) and enforcing the DYNAMIC sun_path budget (§2):
 /// `len(dir) + 1 + len(name) + 5 ≤ 104`. The remedy-naming error states the max name
-/// length FOR THIS DIR and the XDG/SB_HOME remedy (zmx printSessionNameTooLong
+/// length FOR THIS DIR and the XDG/QD_HOME remedy (zmx printSessionNameTooLong
 /// precedent). The caller is expected to have already run [`validate_session_identity`].
 pub fn session_socket_path_for(dir: Option<&Path>, name: &str) -> anyhow::Result<PathBuf> {
     let resolved = socket_dir_for(dir)?;
@@ -284,7 +284,7 @@ pub fn session_socket_path_for(dir: Option<&Path>, name: &str) -> anyhow::Result
     if name.len() > max {
         anyhow::bail!(
             "session name too long ({} bytes, max {} for socket dir {:?}); \
-             set XDG_RUNTIME_DIR to a short runtime dir or shorten SB_HOME",
+             set XDG_RUNTIME_DIR to a short runtime dir or shorten QD_HOME",
             name.len(),
             max,
             resolved,
@@ -311,7 +311,7 @@ mod tests {
     use super::*;
 
     /// De-/tmp'd fallback (checkpoint rider R-B): tier 1 = `$XDG_RUNTIME_DIR/qrmux`,
-    /// tier 2 = `<sbHome>/mux` (`sbHome = SB_HOME || $HOME/.quorum/dispatch`). The literal
+    /// tier 2 = `<sbHome>/mux` (`sbHome = QD_HOME || $HOME/.quorum/dispatch`). The literal
     /// `/tmp/qrmux-{uid}` fallback is GONE (ADD-14). Asserted via the pure
     /// resolver so it doesn't depend on the runner's process env.
     #[test]
@@ -321,12 +321,12 @@ mod tests {
         let dir = resolve_socket_dir(Some(xdg), None, None).unwrap();
         assert_eq!(dir, xdg.join("qrmux"));
 
-        // Tier 2a: no XDG, SB_HOME present → <SB_HOME>/mux.
+        // Tier 2a: no XDG, QD_HOME present → <QD_HOME>/mux.
         let sb_home = Path::new("/home/u/.quorum/dispatch");
         let dir = resolve_socket_dir(None, Some(sb_home), Some(Path::new("/home/u"))).unwrap();
         assert_eq!(dir, sb_home.join("mux"));
 
-        // Tier 2b: no XDG, no SB_HOME, HOME present → <HOME>/.quorum/dispatch/mux.
+        // Tier 2b: no XDG, no QD_HOME, HOME present → <HOME>/.quorum/dispatch/mux.
         let dir = resolve_socket_dir(None, None, Some(Path::new("/home/u"))).unwrap();
         assert_eq!(dir, Path::new("/home/u/.quorum/dispatch/mux"));
 
@@ -343,7 +343,7 @@ mod tests {
         }
     }
 
-    /// SB_HOME wins over HOME for tier 2 (engine-mirroring choice, ADR 0008).
+    /// QD_HOME wins over HOME for tier 2 (engine-mirroring choice, ADR 0008).
     #[test]
     fn socket_dir_honors_sb_home_over_home() {
         let dir = resolve_socket_dir(
@@ -355,14 +355,14 @@ mod tests {
         assert_eq!(dir, Path::new("/relocated/state/mux"));
     }
 
-    /// Neither XDG, SB_HOME, nor HOME → a named error, never a panic.
+    /// Neither XDG, QD_HOME, nor HOME → a named error, never a panic.
     #[test]
     fn socket_dir_errors_when_nothing_resolves() {
         let err = resolve_socket_dir(None, None, None)
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("XDG_RUNTIME_DIR") && err.contains("SB_HOME") && err.contains("HOME"),
+            err.contains("XDG_RUNTIME_DIR") && err.contains("QD_HOME") && err.contains("HOME"),
             "error should name the env remedies, got: {err}"
         );
     }
@@ -376,7 +376,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("too long") && err.contains("XDG_RUNTIME_DIR") && err.contains("SB_HOME"),
+            err.contains("too long") && err.contains("XDG_RUNTIME_DIR") && err.contains("QD_HOME"),
             "guard error should name the remedy, got: {err}"
         );
     }
@@ -515,7 +515,7 @@ mod tests {
     }
 
     /// The dynamic per-session budget error names the COMPUTED max length for
-    /// this dir AND the XDG/SB_HOME remedy (exact prefix + computed max — house
+    /// this dir AND the XDG/QD_HOME remedy (exact prefix + computed max — house
     /// exact-equality lesson on the contractual fragments).
     #[test]
     fn session_socket_budget_violation_remedy_naming() {
@@ -537,7 +537,7 @@ mod tests {
             "exact remedy-naming prefix with computed max, got: {err}"
         );
         assert!(
-            err.contains("set XDG_RUNTIME_DIR to a short runtime dir or shorten SB_HOME"),
+            err.contains("set XDG_RUNTIME_DIR to a short runtime dir or shorten QD_HOME"),
             "remedy clause, got: {err}"
         );
     }

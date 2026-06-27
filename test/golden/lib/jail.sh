@@ -35,11 +35,11 @@
 # else is rejected.
 #
 # redteam-retro finding #2 (latent hermeticity hole, now closed): the binary reads
-# four env vars the jail did NOT set OR clear — SB_PLUGINS_ROOT, SB_SPAWN_AGENTS_DIR,
-# CLAUDE_BIN, SB_CLAUDE_FLAGS — so an inherited shell value would reach qd inside the
+# four env vars the jail did NOT set OR clear — QD_PLUGINS_ROOT, QD_SPAWN_AGENTS_DIR,
+# CLAUDE_BIN, QD_CLAUDE_FLAGS — so an inherited shell value would reach qd inside the
 # jail and escape isolation. jail_establish now UNSETS all four (fail-closed), and the
 # positive belt re-checks them: the three path-typed vars, if re-set to a jail-rooted
-# override by a live capture, must live under JAIL_ROOT; SB_CLAUDE_FLAGS (a flags
+# override by a live capture, must live under JAIL_ROOT; QD_CLAUDE_FLAGS (a flags
 # string) must stay unset.
 # ---------------------------------------------------------------------------
 
@@ -140,49 +140,49 @@ jail_establish() {
     # jail_zmx. Exported here so scenarios run under them.
     #
     # HOME is LOAD-BEARING: the TS qd derives its registry (~/.claude/sessions),
-    # relay dir (~/.claude/relay), and projects from homedir(), NOT from SB_HOME.
+    # relay dir (~/.claude/relay), and projects from homedir(), NOT from QD_HOME.
     # Without overriding HOME the harness would READ AND MODIFY the org's real
     # session registry on brano — exactly the invisibility violation rule 9 bans.
     # (Empirically confirmed 2026-06-04: `qd ls --json` returned real org sessions
-    # until HOME was jailed.) SB_HOME is kept too in case the Rust port honors it.
+    # until HOME was jailed.) QD_HOME is kept too in case the Rust port honors it.
     export HOME="$JAIL_ROOT/home"
-    export SB_HOME="$JAIL_ROOT/sb_home"
+    export QD_HOME="$JAIL_ROOT/sb_home"
     export ZMX_DIR="$JAIL_ROOT/zmx"
     export XDG_CONFIG_HOME="$JAIL_ROOT/xdg_config"
     export XDG_DATA_HOME="$JAIL_ROOT/xdg_data"
     export XDG_STATE_HOME="$JAIL_ROOT/xdg_state"
     export XDG_RUNTIME_DIR="$JAIL_ROOT/xdg_runtime"
     export TMPDIR="$JAIL_ROOT/tmp"
-    # Build lock stays inside the jail too (spec: SB_RUST_LOCK_DIR override).
-    export SB_RUST_LOCK_DIR="$JAIL_ROOT/lock"
+    # Build lock stays inside the jail too (spec: QD_RUST_LOCK_DIR override).
+    export QD_RUST_LOCK_DIR="$JAIL_ROOT/lock"
 
     # A unique relay port + socket prefix per run.
     JAIL_RELAY_PORT="$(jail__derive_port "$runid")"
-    export SB_RELAY_PORT="$JAIL_RELAY_PORT"
-    export SB_RELAY_SOCKET_PREFIX="$JAIL_ROOT/relay-${runid}"
+    export QRM_RELAY_PORT="$JAIL_RELAY_PORT"
+    export QRM_RELAY_SOCKET_PREFIX="$JAIL_ROOT/relay-${runid}"
 
     # Clear the four env vars the binary-under-test reads but the jail does NOT
     # itself need to set (redteam-retro finding #2 — latent hermeticity hole). The
     # jail formerly neither set nor unset these, so a value inherited from the real
     # brano shell would reach qd inside the jail and escape isolation — e.g. an
-    # inherited SB_SPAWN_AGENTS_DIR makes `--agent` resolve agent defs from a REAL,
+    # inherited QD_SPAWN_AGENTS_DIR makes `--agent` resolve agent defs from a REAL,
     # out-of-jail dir (create.rs resolve_agents_dir), and an inherited CLAUDE_BIN
     # substitutes a real out-of-jail binary (launch.rs claude_bin). We FAIL CLOSED
     # by unsetting all four; the positive belt re-checks them. Live A2 captures that
-    # legitimately need a jail-rooted CLAUDE_BIN / SB_SPAWN_AGENTS_DIR re-export them
+    # legitimately need a jail-rooted CLAUDE_BIN / QD_SPAWN_AGENTS_DIR re-export them
     # AFTER jail_establish, pointing UNDER JAIL_ROOT — the belt allows that. They
-    # pass SB_CLAUDE_FLAGS as a per-command prefix (a flags string, not a path), so
+    # pass QD_CLAUDE_FLAGS as a per-command prefix (a flags string, not a path), so
     # it is never left exported in the asserted env.
-    #   SB_PLUGINS_ROOT     — path; NOT read by the Rust binary (PR #6 removed the
+    #   QD_PLUGINS_ROOT     — path; NOT read by the Rust binary (PR #6 removed the
     #                         plugins-root tier) but cleared for defense in depth
     #                         (TS qd + live-TS captures still honor it).
-    #   SB_SPAWN_AGENTS_DIR — path; read by create.rs (the --agent escape vector).
+    #   QD_SPAWN_AGENTS_DIR — path; read by create.rs (the --agent escape vector).
     #   CLAUDE_BIN          — path; read by launch.rs (the binary-substitution vector).
-    #   SB_CLAUDE_FLAGS     — flags STRING (not a path); read by launch.rs.
-    unset SB_PLUGINS_ROOT
-    unset SB_SPAWN_AGENTS_DIR
+    #   QD_CLAUDE_FLAGS     — flags STRING (not a path); read by launch.rs.
+    unset QD_PLUGINS_ROOT
+    unset QD_SPAWN_AGENTS_DIR
     unset CLAUDE_BIN
-    unset SB_CLAUDE_FLAGS
+    unset QD_CLAUDE_FLAGS
 
     # PID whitelist registry lives inside the jail.
     _JAIL_PID_REGISTRY="$JAIL_ROOT/pid-registry"
@@ -245,15 +245,15 @@ jail_assert_established() {
     local real_home="${JAIL_REAL_HOME:-$HOME}"
     for v in \
         "HOME=$HOME" \
-        "SB_HOME=$SB_HOME" \
+        "QD_HOME=$QD_HOME" \
         "ZMX_DIR=$ZMX_DIR" \
         "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
         "XDG_DATA_HOME=$XDG_DATA_HOME" \
         "XDG_STATE_HOME=$XDG_STATE_HOME" \
         "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" \
         "TMPDIR=$TMPDIR" \
-        "SB_RUST_LOCK_DIR=$SB_RUST_LOCK_DIR" \
-        "SB_RELAY_SOCKET_PREFIX=$SB_RELAY_SOCKET_PREFIX"
+        "QD_RUST_LOCK_DIR=$QD_RUST_LOCK_DIR" \
+        "QRM_RELAY_SOCKET_PREFIX=$QRM_RELAY_SOCKET_PREFIX"
     do
         name="${v%%=*}"
         val="${v#*=}"
@@ -283,11 +283,11 @@ jail_assert_established() {
     # a live A2 capture deliberately re-exports a jail-rooted override after establish.
     # Fail-closed rule for the three PATH-typed vars: if set, the value MUST resolve
     # under JAIL_ROOT (a leaked real-shell value would not) AND must not match a
-    # production-path pattern. An inherited SB_SPAWN_AGENTS_DIR or CLAUDE_BIN is the
+    # production-path pattern. An inherited QD_SPAWN_AGENTS_DIR or CLAUDE_BIN is the
     # exact hermeticity escape this finding closes.
     for v in \
-        "SB_PLUGINS_ROOT=${SB_PLUGINS_ROOT:-}" \
-        "SB_SPAWN_AGENTS_DIR=${SB_SPAWN_AGENTS_DIR:-}" \
+        "QD_PLUGINS_ROOT=${QD_PLUGINS_ROOT:-}" \
+        "QD_SPAWN_AGENTS_DIR=${QD_SPAWN_AGENTS_DIR:-}" \
         "CLAUDE_BIN=${CLAUDE_BIN:-}"
     do
         name="${v%%=*}"
@@ -304,12 +304,12 @@ jail_assert_established() {
                 ;;
         esac
     done
-    # SB_CLAUDE_FLAGS is a flags STRING, not a path, so the under-JAIL_ROOT rule
+    # QD_CLAUDE_FLAGS is a flags STRING, not a path, so the under-JAIL_ROOT rule
     # cannot apply. The jail never leaves it exported (captures pass it per-command);
     # any value visible here is an inherited shell leak. Fail closed: it must be unset.
-    if [ -n "${SB_CLAUDE_FLAGS:-}" ]; then
+    if [ -n "${QD_CLAUDE_FLAGS:-}" ]; then
         ok=0
-        reasons="${reasons}  SB_CLAUDE_FLAGS='${SB_CLAUDE_FLAGS}' is set (inherited leak — the jail clears it; pass flags per-command)\n"
+        reasons="${reasons}  QD_CLAUDE_FLAGS='${QD_CLAUDE_FLAGS}' is set (inherited leak — the jail clears it; pass flags per-command)\n"
     fi
 
     # Relay port must be in our reserved range.
@@ -709,7 +709,7 @@ jail_teardown() {
 #
 # A destructive op may run ONLY if ALL THREE hold (POSITIVE "I am the disposable
 # Lima sandbox"): (a) sentinel /etc/qd-rust-lima, (b) hostname!=brano,
-# (c) SB_RUST_DESTRUCTIVE_OK=1. On brano this ALWAYS fails closed.
+# (c) QD_RUST_DESTRUCTIVE_OK=1. On brano this ALWAYS fails closed.
 jail_require_destructive_ok() {
     local ok=1 reasons=""
     if [ ! -f /etc/qd-rust-lima ]; then
@@ -724,13 +724,13 @@ jail_require_destructive_ok() {
             reasons="${reasons}  (b) hostname '${hn}' contains 'brano' — production machine\n"
             ;;
     esac
-    if [ "${SB_RUST_DESTRUCTIVE_OK:-}" != "1" ]; then
+    if [ "${QD_RUST_DESTRUCTIVE_OK:-}" != "1" ]; then
         ok=0
-        reasons="${reasons}  (c) SB_RUST_DESTRUCTIVE_OK is not '1'\n"
+        reasons="${reasons}  (c) QD_RUST_DESTRUCTIVE_OK is not '1'\n"
     fi
     if [ "$ok" -ne 1 ]; then
         printf '[jail] REFUSED: destructive op cannot run here (fail-closed).\n' >&2
-        printf '[jail] Requires ALL of: (a) /etc/qd-rust-lima, (b) hostname!=brano, (c) SB_RUST_DESTRUCTIVE_OK=1\n' >&2
+        printf '[jail] Requires ALL of: (a) /etc/qd-rust-lima, (b) hostname!=brano, (c) QD_RUST_DESTRUCTIVE_OK=1\n' >&2
         printf '[jail] Unmet:\n' >&2
         printf '%b' "$reasons" >&2
         return 1

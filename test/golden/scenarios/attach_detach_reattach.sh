@@ -36,7 +36,7 @@ SCN_ADR_N=20
 scn_run() {
     local name
     name="$(scn_session_name adr)"
-    bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     local i=0 pidfile=""
     while [ "$i" -lt 30 ]; do

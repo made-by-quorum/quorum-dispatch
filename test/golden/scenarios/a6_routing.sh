@@ -15,7 +15,7 @@
 # sbrg- names only, PASS/FAIL + SUMMARY, jail_teardown on EXIT. Bash 3.2 floor.
 #
 # Usage:  bash test/golden/scenarios/a6_routing.sh
-# Env override: SB_BIN (qd-under-test), ZMX_BIN (zmx). Defaults autodetect.
+# Env override: QD_BIN (qd-under-test), ZMX_BIN (zmx). Defaults autodetect.
 set -u
 
 # --- locate the worktree + binaries -----------------------------------------
@@ -23,12 +23,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WT="$(cd "$HERE/../../.." && pwd)"            # scenarios -> golden -> test -> repo root
 cd "$WT" || { echo "FATAL: cannot cd to worktree root"; exit 1; }
 
-SB_BIN="${SB_BIN:-$WT/target/debug/qd}"
+QD_BIN="${QD_BIN:-$WT/target/debug/qd}"
 ZMX_BIN="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}"
-[ -x "$SB_BIN" ]  || { echo "FATAL: qd binary not found/executable: $SB_BIN"; exit 1; }
+[ -x "$QD_BIN" ]  || { echo "FATAL: qd binary not found/executable: $QD_BIN"; exit 1; }
 [ -x "$ZMX_BIN" ] || { echo "FATAL: zmx binary not found/executable: $ZMX_BIN"; exit 1; }
 
-export JAIL_SB_CMD="$SB_BIN"
+export JAIL_SB_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$ZMX_BIN"
 . test/golden/lib/jail.sh
 # Short runid so prefix `sbrg-XXXX-` (10 chars) leaves room under zmx's 20-byte
@@ -104,7 +104,7 @@ new_session() {
   [ -n "$via" ] && args="$args --via $via"
   # The stub must report the same name qd passes as --name (== the session name).
   ( cd "$WORKDIR" \
-    && env SBRG_STUB_NAME="$name" $exports "$SB_BIN" $args ) \
+    && env SBRG_STUB_NAME="$name" $exports "$QD_BIN" $args ) \
     > "$JAIL_ROOT/$name.out" 2> "$JAIL_ROOT/$name.err"
 }
 
@@ -149,7 +149,7 @@ cleanup_session "$GA1"
 # ===========================================================================
 echo "--- G-A8: telemetry append-failure leg (marks.jsonl as dir) ---"
 GA8="${JAIL_PREFIX}a8"
-MARKS_PATH="$SB_HOME/state/marks.jsonl"
+MARKS_PATH="$QD_HOME/state/marks.jsonl"
 rm -f "$MARKS_PATH"; mkdir -p "$MARKS_PATH"   # a DIRECTORY at the file path
 new_session "$GA8"; code=$?
 echo "    new exit=$code"
@@ -224,12 +224,12 @@ echo "--- G-A3: --via routing (two ccr profiles) + loud failures ---"
 # resolves it. Force the file backend so the jail never touches the keychain.
 # The value is passed as an ARGUMENT (non-TTY stdin is rejected by config set).
 # Obviously-FAKE value (credential hard line: never a real-looking key).
-export SB_SECRET_BACKEND=file
+export QD_SECRET_BACKEND=file
 jail_sb config set openrouter-key "sk-FAKE-ccr-token" >/dev/null 2>&1 \
   || note_fail "G-A3 could not seed file-backend secret"
 
-# backends.json under <sbHome>/state (SB_HOME-honored; the jail sets SB_HOME).
-STATE_DIR="$SB_HOME/state"; mkdir -p "$STATE_DIR"
+# backends.json under <sbHome>/state (QD_HOME-honored; the jail sets QD_HOME).
+STATE_DIR="$QD_HOME/state"; mkdir -p "$STATE_DIR"
 BACKENDS="$STATE_DIR/backends.json"
 cat > "$BACKENDS" <<EOS
 {

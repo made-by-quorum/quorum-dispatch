@@ -51,11 +51,11 @@ refuses "unestablished/jail_sb" jail_sb ls
 _REAL_HOME="$HOME"
 jail_establish >/dev/null 2>&1
 allows "established/assert-clean" jail_assert_established
-# Corrupt SB_HOME to the REAL production registry path.
-_saved_sbhome="$SB_HOME"
-export SB_HOME="$_REAL_HOME/.quorum/dispatch"
+# Corrupt QD_HOME to the REAL production registry path.
+_saved_sbhome="$QD_HOME"
+export QD_HOME="$_REAL_HOME/.quorum/dispatch"
 refuses "corrupt/sbhome-prod-path" jail_assert_established
-export SB_HOME="$_saved_sbhome"
+export QD_HOME="$_saved_sbhome"
 # Corrupt HOME itself back to the real home — the most dangerous case, since TS
 # qd keys its registry on HOME. Must be refused.
 _saved_home="$HOME"
@@ -71,10 +71,10 @@ export ZMX_DIR="$_saved_zmx"
 allows "established/assert-restored" jail_assert_established
 
 # --- 2b. Binary-read env vars: jail must CLEAR inherited leaks (finding #2) -
-# The Rust binary reads SB_PLUGINS_ROOT / SB_SPAWN_AGENTS_DIR / CLAUDE_BIN /
-# SB_CLAUDE_FLAGS. Before this fix the jail neither set nor cleared them, so a
+# The Rust binary reads QD_PLUGINS_ROOT / QD_SPAWN_AGENTS_DIR / CLAUDE_BIN /
+# QD_CLAUDE_FLAGS. Before this fix the jail neither set nor cleared them, so a
 # value inherited from the real shell reached qd inside the jail and escaped
-# isolation (the --agent escape via SB_SPAWN_AGENTS_DIR; the binary-substitution
+# isolation (the --agent escape via QD_SPAWN_AGENTS_DIR; the binary-substitution
 # via CLAUDE_BIN). Two-part proof per var:
 #   (i)  pre-export a real-home-looking value BEFORE jail_establish, then assert
 #        jail_establish UNSET it (so the clean belt passes — the leak is gone).
@@ -84,41 +84,41 @@ jail_teardown >/dev/null 2>&1
 
 # (i) Pre-export the --agent escape vector + the binary-substitution vector to
 # real-home-looking paths, plus the flags-string leak, then establish.
-export SB_PLUGINS_ROOT="$_REAL_HOME/.quorum/dispatch/plugins"
-export SB_SPAWN_AGENTS_DIR="$_REAL_HOME/.quorum/dispatch/plugins/core/agents"
+export QD_PLUGINS_ROOT="$_REAL_HOME/.quorum/dispatch/plugins"
+export QD_SPAWN_AGENTS_DIR="$_REAL_HOME/.quorum/dispatch/plugins/core/agents"
 export CLAUDE_BIN="$_REAL_HOME/.local/bin/claude"
-export SB_CLAUDE_FLAGS="--dangerously-skip-permissions"
+export QD_CLAUDE_FLAGS="--dangerously-skip-permissions"
 jail_establish >/dev/null 2>&1
 allows "established/clears-inherited-envvars" jail_assert_established
 # The clean belt passing above already implies the vars were cleared; assert the
 # unset directly too so the row names the property.
-refuses "cleared/qd-plugins-root-unset"   sh -c '[ -n "${SB_PLUGINS_ROOT:-}" ]'
-refuses "cleared/qd-spawn-agents-dir-unset" sh -c '[ -n "${SB_SPAWN_AGENTS_DIR:-}" ]'
+refuses "cleared/qd-plugins-root-unset"   sh -c '[ -n "${QD_PLUGINS_ROOT:-}" ]'
+refuses "cleared/qd-spawn-agents-dir-unset" sh -c '[ -n "${QD_SPAWN_AGENTS_DIR:-}" ]'
 refuses "cleared/claude-bin-unset"        sh -c '[ -n "${CLAUDE_BIN:-}" ]'
-refuses "cleared/qd-claude-flags-unset"   sh -c '[ -n "${SB_CLAUDE_FLAGS:-}" ]'
+refuses "cleared/qd-claude-flags-unset"   sh -c '[ -n "${QD_CLAUDE_FLAGS:-}" ]'
 
 # (ii) Belt refuses each leaked value (fail-closed). The --agent escape vector:
-export SB_SPAWN_AGENTS_DIR="$_REAL_HOME/.quorum/dispatch/plugins/core/agents"
+export QD_SPAWN_AGENTS_DIR="$_REAL_HOME/.quorum/dispatch/plugins/core/agents"
 refuses "leak/qd-spawn-agents-dir-real-home" jail_assert_established
-unset SB_SPAWN_AGENTS_DIR
+unset QD_SPAWN_AGENTS_DIR
 # The binary-substitution vector:
 export CLAUDE_BIN="$_REAL_HOME/.local/bin/claude"
 refuses "leak/claude-bin-real-home" jail_assert_established
 unset CLAUDE_BIN
 # The (NOT-Rust-read but defense-in-depth) plugins root:
-export SB_PLUGINS_ROOT="$_REAL_HOME/.quorum/dispatch/plugins"
+export QD_PLUGINS_ROOT="$_REAL_HOME/.quorum/dispatch/plugins"
 refuses "leak/qd-plugins-root-real-home" jail_assert_established
-unset SB_PLUGINS_ROOT
+unset QD_PLUGINS_ROOT
 # The flags-string leak (path rule can't apply — must be unset):
-export SB_CLAUDE_FLAGS="--dangerously-skip-permissions"
+export QD_CLAUDE_FLAGS="--dangerously-skip-permissions"
 refuses "leak/qd-claude-flags-set" jail_assert_established
-unset SB_CLAUDE_FLAGS
+unset QD_CLAUDE_FLAGS
 # A jail-ROOTED override IS allowed (the live A2 captures' contract): re-export
-# CLAUDE_BIN + SB_SPAWN_AGENTS_DIR under JAIL_ROOT and assert the belt passes.
+# CLAUDE_BIN + QD_SPAWN_AGENTS_DIR under JAIL_ROOT and assert the belt passes.
 export CLAUDE_BIN="$JAIL_ROOT/fake-claude"
-export SB_SPAWN_AGENTS_DIR="$JAIL_ROOT/agents"
+export QD_SPAWN_AGENTS_DIR="$JAIL_ROOT/agents"
 allows "rooted/jail-rooted-override-ok" jail_assert_established
-unset CLAUDE_BIN SB_SPAWN_AGENTS_DIR
+unset CLAUDE_BIN QD_SPAWN_AGENTS_DIR
 jail_teardown >/dev/null 2>&1
 
 # --- 3. Name-prefix kill guard: refuse bare/foreign names ------------------
@@ -140,7 +140,7 @@ refuses "pid/register-bad-name" jail_register_pid 12345 "bare-name"
 
 # --- 5. Lima destructive gate: must fail closed on brano -------------------
 # On brano (the production machine) this must ALWAYS refuse, regardless of env.
-SB_RUST_DESTRUCTIVE_OK=1 refuses "lima/brano-fail-closed" jail_require_destructive_ok
+QD_RUST_DESTRUCTIVE_OK=1 refuses "lima/brano-fail-closed" jail_require_destructive_ok
 
 # --- 6. kill_session refuses a bare name even when jail established ---------
 refuses "killsession/bare-name" jail_kill_session "work"

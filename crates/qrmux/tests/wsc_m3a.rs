@@ -34,7 +34,7 @@ fn test_launch_spec() -> ServerLaunchSpec {
 
 /// Run an async body on a fresh single-thread runtime with the jail env applied
 /// to THIS process for the duration. The library reads `XDG_RUNTIME_DIR` /
-/// `SB_HOME` from the env when `socket_dir = None`, but we always pass an
+/// `QD_HOME` from the env when `socket_dir = None`, but we always pass an
 /// explicit `Some(socket_dir)` so the launcher/probe/scan resolve the jail dir
 /// directly without env mutation (sound under the multi-threaded test runner).
 fn block_on<F, T>(fut: F) -> T
@@ -80,7 +80,7 @@ impl Drop for EnvGuard {
 }
 
 /// Apply the jail env to the current process (so launched daemons inherit HOME,
-/// XDG_*, SB_HOME, TMPDIR, lock dir). Returns a guard that restores on drop.
+/// XDG_*, QD_HOME, TMPDIR, lock dir). Returns a guard that restores on drop.
 fn apply_jail_env(jail: &libmod::jail::Jail) -> EnvGuard {
     let pairs = jail_env(jail);
     let refs: Vec<(&str, &str)> = pairs
@@ -167,7 +167,7 @@ fn count_session_sockets(dir: &Path) -> usize {
         .unwrap_or(0)
 }
 
-// These tests mutate process env (HOME/XDG_*/SB_HOME via apply_jail_env and the
+// These tests mutate process env (HOME/XDG_*/QD_HOME via apply_jail_env and the
 // claim/budget knobs) and spawn daemons that inherit it; they must NOT run
 // concurrently with each other. The shared build-lock serializes whole `cargo
 // test` invocations across the host, but WITHIN this binary tests run in

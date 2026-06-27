@@ -4,7 +4,7 @@
 //! HOME and NO relay listening, asserting the exact stderr wording + exit 1
 //! (send.ts:407-408: `Session "<name>" has no relay.`).
 //!
-//! Hermetic discipline (rule 9 / ADD-4): HOME, SB_HOME, ZMX_DIR, TMPDIR,
+//! Hermetic discipline (rule 9 / ADD-4): HOME, QD_HOME, ZMX_DIR, TMPDIR,
 //! XDG_RUNTIME_DIR all point into the tempdir; the test NEVER touches the real
 //! `~/.claude` or a real relay. A dummy relay sidecar is written so the engine
 //! takes the sidecar path and NEVER runs the live HTTP port-scan probe (which
@@ -35,7 +35,7 @@ fn hermetic_env(cmd: &mut Command, home: &Path) {
     .unwrap();
 
     cmd.env("HOME", home)
-        .env("SB_HOME", home.join(".quorum").join("dispatch"))
+        .env("QD_HOME", home.join(".quorum").join("dispatch"))
         .env("ZMX_DIR", &zmx)
         .env("TMPDIR", &tmp)
         .env("XDG_RUNTIME_DIR", &tmp)

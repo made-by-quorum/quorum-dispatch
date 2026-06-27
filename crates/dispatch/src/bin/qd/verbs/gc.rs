@@ -70,8 +70,8 @@ pub fn run(m: &ArgMatches) -> i32 {
 
 /// The default GC scan + (print | move) (gc.ts:506-580).
 fn gc_run(home: &Path, env: &RealEnv, clock: &RealClock, dry_run: bool) -> i32 {
-    // from_home_env so the presence `state_dir` honors SB_HOME (the recovery rows +
-    // liveness locks live under `<SB_HOME>/state`, not the HOME default). The
+    // from_home_env so the presence `state_dir` honors QD_HOME (the recovery rows +
+    // liveness locks live under `<QD_HOME>/state`, not the HOME default). The
     // `.claude` dirs (sessions/projects/relay/inbox) stay HOME-derived regardless.
     let paths = SbPaths::from_home_env(home, env);
     let now = clock.now_ms();

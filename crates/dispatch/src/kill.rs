@@ -274,7 +274,7 @@ pub const START_TIME_SLACK_MS: i64 = 120_000;
 ///   A reused pid's occupant necessarily started AFTER the original died,
 ///   hence after `startedAt`.
 ///
-/// NOTE (r8, investigated and rejected): an `SB_SESSION_ID` env arm — the
+/// NOTE (r8, investigated and rejected): an `QD_SESSION_ID` env arm — the
 /// spec-§3 identity — would be exact, but macOS exposes another process's
 /// environment only within the caller's own subtree (`ps -E` returns just
 /// the command for arbitrary same-uid pids), so it is unreadable exactly

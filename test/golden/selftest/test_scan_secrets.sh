@@ -56,7 +56,7 @@ detects "jwt"        "Authorization: Bearer eyJhbGciOiJIUzI1NiI.eyJzdWIiOiIxMjM0
 detects "high-entropy" "blob=Zk9Qm2Xa7Bd4Lp1Rn8Vc3Tg6Wj5Yh0Fs2Du4Ie7Ko9Mq1"
 
 # --- 2. FALSE-POSITIVE: tokenized fixture content ----------------------------
-clean "tokens" "session sbrg-<RUNID>-sess pid=<PID> port <RELAY_PORT> at <TS> under <SB_HOME>/x"
+clean "tokens" "session sbrg-<RUNID>-sess pid=<PID> port <RELAY_PORT> at <TS> under <QD_HOME>/x"
 clean "json-empty" '{"sessions":[],"version":1}'
 clean "help-text" "Usage: qd ls [--json] [--short]   list sessions in the registry"
 clean "hex-sha"   "commit 0d0fa9ed4800efb1309eca2311345c48af2c4932 (lowercase hex, no mix)"

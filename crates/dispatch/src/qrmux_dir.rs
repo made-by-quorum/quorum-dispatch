@@ -4,9 +4,9 @@
 //! Two tiers, NO literal `/tmp` (ADD-14: the engine never WRITES under literal
 //! `/tmp`):
 //!   1. `$XDG_RUNTIME_DIR/qrmux` (per-user, systemd-managed), else
-//!   2. `<sbHome>/mux` where `sbHome = SB_HOME || <home>/.quorum/dispatch`, resolved through
+//!   2. `<sbHome>/mux` where `sbHome = QD_HOME || <home>/.quorum/dispatch`, resolved through
 //!      the existing [`SbPaths::from_home_env`] seam (paths.rs:53-58) so the mux
-//!      dir MOVES with a relocated engine state dir and with SB_HOME-only jails
+//!      dir MOVES with a relocated engine state dir and with QD_HOME-only jails
 //!      (spec D2/R32: NOT literal `$HOME/.quorum/dispatch`).
 //!
 //! This mirrors qrmux's own standalone fallback (`server/socket.rs::resolve_socket_dir`)
@@ -18,10 +18,10 @@
 //! sun_path-length guard at resolve time (D2/R34): a Unix-domain socket path must
 //! fit the platform `sockaddr_un.sun_path`; an over-long dir would make `bind()`
 //! fail opaquely. We guard here with a remedy-naming error (set XDG_RUNTIME_DIR
-//! or shorten SB_HOME). Gate jails set XDG_RUNTIME_DIR, so tier 1 governs jailed
+//! or shorten QD_HOME). Gate jails set XDG_RUNTIME_DIR, so tier 1 governs jailed
 //! runs and no row trips the guard.
 //!
-//! L9a discipline (paths.rs): the home + SB_HOME come through the injected `Env`
+//! L9a discipline (paths.rs): the home + QD_HOME come through the injected `Env`
 //! seam + an injected home, NEVER raw `std::env` — tests inject temp dirs.
 
 use std::path::{Path, PathBuf};
@@ -56,7 +56,7 @@ pub fn resolve_qrmux_dir(home: &Path, env: &dyn Env) -> Result<PathBuf, String> 
         Some(xdg) => PathBuf::from(xdg.trim()).join("qrmux"),
         // Tier 2: <sbHome>/mux. SbPaths.state_dir == <sbHome>/state, so the mux
         // dir is its sibling `<sbHome>/mux`. Derive sbHome from state_dir's parent
-        // so the ONE SB_HOME-resolution seam (paths.rs) governs both.
+        // so the ONE QD_HOME-resolution seam (paths.rs) governs both.
         None => {
             let paths = SbPaths::from_home_env(home, env);
             let sb_home = paths
@@ -79,7 +79,7 @@ pub fn resolve_qrmux_dir(home: &Path, env: &dyn Env) -> Result<PathBuf, String> 
     if projected > SUN_PATH_MAX {
         return Err(format!(
             "qrmux socket dir {:?} is too long ({} bytes; the Unix socket path must fit {} \
-             bytes): set XDG_RUNTIME_DIR to a short per-user runtime dir, or shorten SB_HOME",
+             bytes): set XDG_RUNTIME_DIR to a short per-user runtime dir, or shorten QD_HOME",
             dir, projected, SUN_PATH_MAX,
         ));
     }
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn tier2_sb_home_default_under_home() {
-        // No XDG, no SB_HOME → <home>/.quorum/dispatch/mux.
+        // No XDG, no QD_HOME → <home>/.quorum/dispatch/mux.
         let e = env(501, &[]);
         let dir = resolve_qrmux_dir(Path::new("/jail/home"), &e).unwrap();
         assert_eq!(dir, PathBuf::from("/jail/home/.quorum/dispatch/mux"));
@@ -134,18 +134,18 @@ mod tests {
 
     #[test]
     fn tier2_relocates_with_sb_home() {
-        // SB_HOME-relocation (R32): the mux dir MOVES with the relocated engine
+        // QD_HOME-relocation (R32): the mux dir MOVES with the relocated engine
         // state dir, NOT pinned to literal $HOME/.quorum/dispatch.
-        let e = env(501, &[("SB_HOME", "/elsewhere/sbdata")]);
+        let e = env(501, &[("QD_HOME", "/elsewhere/sbdata")]);
         let dir = resolve_qrmux_dir(Path::new("/jail/home"), &e).unwrap();
         assert_eq!(dir, PathBuf::from("/elsewhere/sbdata/mux"));
     }
 
     #[test]
     fn tier2_sb_home_only_jail() {
-        // An SB_HOME-only jail (HOME points at a real-ish home, but SB_HOME
-        // relocates state) still moves the mux dir under SB_HOME.
-        let e = env(501, &[("SB_HOME", "/jail/qd")]);
+        // An QD_HOME-only jail (HOME points at a real-ish home, but QD_HOME
+        // relocates state) still moves the mux dir under QD_HOME.
+        let e = env(501, &[("QD_HOME", "/jail/qd")]);
         let dir = resolve_qrmux_dir(Path::new("/real/home"), &e).unwrap();
         assert_eq!(dir, PathBuf::from("/jail/qd/mux"));
     }
@@ -160,8 +160,8 @@ mod tests {
 
     #[test]
     fn empty_sb_home_falls_back_to_default() {
-        // SB_HOME="" is falsy (JS `||`) → default <home>/.quorum/dispatch/mux (paths.rs seam).
-        let e = env(501, &[("SB_HOME", "")]);
+        // QD_HOME="" is falsy (JS `||`) → default <home>/.quorum/dispatch/mux (paths.rs seam).
+        let e = env(501, &[("QD_HOME", "")]);
         let dir = resolve_qrmux_dir(Path::new("/jail/home"), &e).unwrap();
         assert_eq!(dir, PathBuf::from("/jail/home/.quorum/dispatch/mux"));
     }
@@ -187,7 +187,7 @@ mod tests {
         let e = env(501, &[]);
         let err = resolve_qrmux_dir(Path::new(&long_home), &e).unwrap_err();
         assert!(
-            err.contains("too long") && err.contains("XDG_RUNTIME_DIR") && err.contains("SB_HOME"),
+            err.contains("too long") && err.contains("XDG_RUNTIME_DIR") && err.contains("QD_HOME"),
             "guard error must name the remedy, got: {err}"
         );
     }

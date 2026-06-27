@@ -193,7 +193,7 @@ pub struct NewParams {
     /// fresh or forked, boots a session whose provider UUID does not exist yet;
     /// the STATE-21 rework removed the old `--resume` pre-bound `mint_or_get`
     /// arm with the flag). When `Some`, the per-session env file is written
-    /// UNCONDITIONALLY and carries `export SB_SESSION_ID='<id>'` — an explicit
+    /// UNCONDITIONALLY and carries `export QD_SESSION_ID='<id>'` — an explicit
     /// set at every launch, overriding anything inherited through the
     /// commissioner's process subtree. `None` ⇒ legacy behavior (no injection;
     /// unit fixtures that don't exercise identity pass None).
@@ -646,7 +646,7 @@ fn live_registry_name_holder(deps: &NewDeps, name: &str) -> Option<String> {
                     .pid
                     .is_some_and(|p| p != 0 && crate::effects::is_pid_alive(p as i32))
         })?;
-    // SB_HOME-honoring state dir (the same resolution the verb layer uses).
+    // QD_HOME-honoring state dir (the same resolution the verb layer uses).
     let state_dir = crate::paths::SbPaths::from_home_env(&deps.paths.home, deps.env).state_dir;
     Some(crate::idstore::holder_display_id(
         &crate::idstore::ids_path(&state_dir),
@@ -671,7 +671,7 @@ fn run_to_boot(deps: &NewDeps, params: &NewParams) -> Result<NewOutcome, NewErro
     // prefix cannot be broken.
     //
     // P0 wave-2 (spec-w2-env D1): the env file is now UNCONDITIONAL whenever the
-    // verb minted a stable id — it always carries `export SB_SESSION_ID='<id>'`
+    // verb minted a stable id — it always carries `export QD_SESSION_ID='<id>'`
     // (an explicit set, clobbering anything inherited through the commissioner's
     // subtree) in addition to the F1 backend pairs. punch item 7: an INLINE
     // launch (the default) additionally carries the alt-screen-disable birth
@@ -1344,7 +1344,7 @@ Commands:
         let mux = StagedMux::new(fix.canonical.clone(), "wk");
         // A is LIVE: an alive pid (this test process) + a registry row.
         registry_row(&fix, std::process::id() as i64, "wk", "uuid-holder");
-        // A's stable id is mapped in the idstore (SB_HOME unset → <home>/.quorum/dispatch/state).
+        // A's stable id is mapped in the idstore (QD_HOME unset → <home>/.quorum/dispatch/state).
         let ids_path = crate::idstore::ids_path(
             &fix.paths
                 .home
@@ -1470,11 +1470,11 @@ Commands:
         assert_eq!(out2.name, "wk", "tombstoned holder must not block the name");
     }
 
-    // === P0 wave-2 (spec-w2-env D1): SB_SESSION_ID injection at create =======
+    // === P0 wave-2 (spec-w2-env D1): QD_SESSION_ID injection at create =======
 
     /// With a minted id and NO backend env, the env file + dot-source prefix
     /// are now UNCONDITIONAL: the launch cmd carries the prefix and the file
-    /// carries the explicit `export SB_SESSION_ID='<id>'`.
+    /// carries the explicit `export QD_SESSION_ID='<id>'`.
     #[test]
     fn sb_session_id_injected_unconditionally() {
         let fix = fixture();
@@ -1509,27 +1509,27 @@ Commands:
         assert_eq!(
             body,
             "export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE='1'\n\
-             export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'\nexport SB_SESSION_ID='ab3kx9mq'\n"
+             export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'\nexport QD_SESSION_ID='ab3kx9mq'\n"
         );
     }
 
     /// D1 site 4 — override, never inherit: a child launched from INSIDE a
-    /// parent session (parent env carries SB_SESSION_ID=parent-id) boots with
+    /// parent session (parent env carries QD_SESSION_ID=parent-id) boots with
     /// ITS OWN id. The dot-sourced `export` is an explicit set in the child's
     /// shell; the parent's value is never captured into the file (the F1
-    /// whitelist does not include SB_SESSION_ID) and never reaches the cmd.
+    /// whitelist does not include QD_SESSION_ID) and never reaches the cmd.
     #[test]
     fn child_env_overrides_inherited_parent_id() {
         let mut fix = fixture();
         // The COMMISSIONER's environment carries its own identity.
         fix.env
             .vars
-            .insert("SB_SESSION_ID".to_string(), "parentid".to_string());
+            .insert("QD_SESSION_ID".to_string(), "parentid".to_string());
         // The F1 capture (verb layer) ignores it — whitelist-pinned here too.
         let captured = crate::launch::capture_backend_env(&fix.env);
         assert!(
-            captured.iter().all(|(k, _)| k != "SB_SESSION_ID"),
-            "SB_SESSION_ID must never be captured/inherited: {captured:?}"
+            captured.iter().all(|(k, _)| k != "QD_SESSION_ID"),
+            "QD_SESSION_ID must never be captured/inherited: {captured:?}"
         );
 
         let exec = ok_exec();
@@ -1543,7 +1543,7 @@ Commands:
         assert_eq!(
             body,
             "export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE='1'\n\
-             export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'\nexport SB_SESSION_ID='childid2'\n",
+             export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'\nexport QD_SESSION_ID='childid2'\n",
             "the explicit set carries the CHILD's id"
         );
         assert!(
@@ -1557,7 +1557,7 @@ Commands:
     }
 
     /// Backend env + the id compose: exports for both land in the one file
-    /// (backend pairs first, SB_SESSION_ID last).
+    /// (backend pairs first, QD_SESSION_ID last).
     #[test]
     fn sb_session_id_composes_with_backend_env() {
         let fix = fixture();
@@ -1573,7 +1573,7 @@ Commands:
             body,
             "export ANTHROPIC_BASE_URL='http://r'\n\
              export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE='1'\n\
-             export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'\nexport SB_SESSION_ID='ab3kx9mq'\n"
+             export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'\nexport QD_SESSION_ID='ab3kx9mq'\n"
         );
     }
 
@@ -1581,7 +1581,7 @@ Commands:
     /// identity pair WITHOUT stripping it. Even when the unset list names every
     /// backend whitelist key, the file is `unset -v` lines FIRST (A7 F12: an
     /// unset after an export would clobber it), then the composed exports, then
-    /// `SB_SESSION_ID` LAST — and no `unset -v SB_SESSION_ID` ever appears.
+    /// `QD_SESSION_ID` LAST — and no `unset -v QD_SESSION_ID` ever appears.
     #[test]
     fn via_unsets_compose_with_identity_pair_without_stripping_it() {
         let fix = fixture();
@@ -1603,11 +1603,11 @@ Commands:
             "unset -v ANTHROPIC_API_KEY\nunset -v ANTHROPIC_BASE_URL\nunset -v ANTHROPIC_MODEL\n\
              export ANTHROPIC_BASE_URL='http://r'\n\
              export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE='1'\n\
-             export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'\nexport SB_SESSION_ID='ab3kx9mq'\n",
+             export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'\nexport QD_SESSION_ID='ab3kx9mq'\n",
             "unsets first, exports after, identity LAST and never unset"
         );
         assert!(
-            !body.contains("unset -v SB_SESSION_ID"),
+            !body.contains("unset -v QD_SESSION_ID"),
             "the unset-clobber list must never strip the identity pair: {body}"
         );
     }

@@ -37,7 +37,7 @@ fn sb_bin() -> &'static str {
 const SESSION: &str = "hldk";
 const SID: &str = "fa4ec110-0000-4000-8000-0000000000d1";
 
-/// A fake `claude -p` that mints a busy row, HOLDS busy for `SBX_FAKE_BUSY_SECS`
+/// A fake `claude -p` that mints a busy row, HOLDS busy for `QD_FAKE_BUSY_SECS`
 /// (long — the assertions run while it is still sleeping = the live orphan), then
 /// would emit `result` and EOF. After the daemon dies its stdout pipe is gone, so
 /// the trailing `echo`/`result` simply never reaches a transcript (SIGPIPE) — the
@@ -50,7 +50,7 @@ fn write_fixture(dir: &Path) -> PathBuf {
          sleep 0.3\n\
          echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"{SID}\"}}'\n\
          echo '{{\"type\":\"assistant\",\"session_id\":\"{SID}\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"hi\"}}]}}}}'\n\
-         sleep \"${{SBX_FAKE_BUSY_SECS:-60}}\"\n\
+         sleep \"${{QD_FAKE_BUSY_SECS:-60}}\"\n\
          echo '{{\"type\":\"result\",\"session_id\":\"{SID}\",\"is_error\":false,\"stop_reason\":\"end_turn\"}}'\n"
     );
     std::fs::write(&p, body).unwrap();
@@ -98,9 +98,9 @@ impl Jail {
             .env("HOME", &self.home)
             .env("XDG_RUNTIME_DIR", &self.xdg)
             .env("CLAUDE_BIN", &self.fixture)
-            .env("SBX_FAKE_BUSY_SECS", self.busy_secs.to_string())
-            .env_remove("SB_HOME")
-            .env_remove("SB_MUX")
+            .env("QD_FAKE_BUSY_SECS", self.busy_secs.to_string())
+            .env_remove("QD_HOME")
+            .env_remove("QD_MUX")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .output()
             .expect("spawn qd")

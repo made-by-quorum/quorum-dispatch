@@ -76,9 +76,9 @@ named error"). ADR-0008 carries a pointer note.
   `w8_negctl_foreign_record_*` (degrade, not truncation), `w8_mutation_*`
   (unverified entry stays silent — the read-back is the belt),
   `w8_single_chunk_scope_guard_*` (zero reads under the seam). Harness seams:
-  fakerepl `SB_FAKEREPL_STALL_AFTER_BYTES/_MS/_QUEUE_CAP` (saturation injected
+  fakerepl `QD_FAKEREPL_STALL_AFTER_BYTES/_MS/_QUEUE_CAP` (saturation injected
   at the model-admission boundary — named simplification, fakerepl README) +
-  `SB_FAKEREPL_CONVO_JSONL` + `SB_FAKEREPL_SESSION_ID`.
+  `QD_FAKEREPL_CONVO_JSONL` + `QD_FAKEREPL_SESSION_ID`.
 - End-to-end (the CALL-SITE wiring teeth, QA-lane live row — A4_RUN_LIVE gate,
   like all live rows): `new_went_busy_exit.sh` W8-TRUNC (exit 1 + named error
   after went-busy) + W8-ACCEPT-CHUNKED (intact chunked delivery NOT punished).

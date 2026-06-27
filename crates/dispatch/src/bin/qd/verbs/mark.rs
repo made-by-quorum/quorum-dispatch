@@ -3,10 +3,10 @@
 //! `marks.jsonl`: `{"ts": <iso8601>, "sessionId": "<id>", "payload": <object>}`.
 //!
 //! The marks file lives at `<sbHome>/state/marks.jsonl` where
-//! `sbHome = SB_HOME || <home>/.quorum/dispatch` (commands/bootstrap.ts:88-96
-//! `resolveBootstrapPaths`). SB_HOME is read ONLY through the injected `Env` seam
+//! `sbHome = QD_HOME || <home>/.quorum/dispatch` (commands/bootstrap.ts:88-96
+//! `resolveBootstrapPaths`). QD_HOME is read ONLY through the injected `Env` seam
 //! via [`SbPaths::from_home_env`] (L9a — never raw `std::env`), so a jailed
-//! SB_HOME relocates the marks file correctly (H4).
+//! QD_HOME relocates the marks file correctly (H4).
 //!
 //! Discipline (spec §4):
 //! - `<payload>` MUST parse as a JSON **object**; the engine NEVER inspects keys.
@@ -63,7 +63,7 @@ pub fn run(m: &ArgMatches) -> i32 {
         }
     };
 
-    // Resolve the marks path via SbPaths.state_dir, which honors SB_HOME through
+    // Resolve the marks path via SbPaths.state_dir, which honors QD_HOME through
     // the injected Env seam (H4 / L9a): <sbHome>/state/marks.jsonl.
     let env = RealEnv;
     let marks_path = match marks_path(&env) {
@@ -101,7 +101,7 @@ pub fn run(m: &ArgMatches) -> i32 {
 }
 
 /// Resolve `<sbHome>/state/marks.jsonl` via `SbPaths::from_home_env` (honors
-/// SB_HOME through the injected `Env` seam; L9a). `None` if HOME is unset.
+/// QD_HOME through the injected `Env` seam; L9a). `None` if HOME is unset.
 pub fn marks_path(env: &dyn Env) -> Option<std::path::PathBuf> {
     let home = env.var("HOME").filter(|s| !s.is_empty())?;
     let paths = SbPaths::from_home_env(Path::new(&home), env);
@@ -241,13 +241,13 @@ mod tests {
         assert_eq!(contents.lines().count(), 2, "append-only stream grows");
     }
 
-    // --- H4: marks path honors SB_HOME via the injected Env seam ---
+    // --- H4: marks path honors QD_HOME via the injected Env seam ---
 
     use dispatch::effects::MapEnv;
 
     #[test]
     fn marks_path_default_under_home_dot_sb_state() {
-        // SB_HOME unset → <HOME>/.quorum/dispatch/state/marks.jsonl (commands/bootstrap.ts:88-96 default).
+        // QD_HOME unset → <HOME>/.quorum/dispatch/state/marks.jsonl (commands/bootstrap.ts:88-96 default).
         let mut env = MapEnv::default();
         env.vars
             .insert("HOME".to_string(), "/jail/home".to_string());
@@ -259,12 +259,12 @@ mod tests {
 
     #[test]
     fn marks_path_honors_sb_home_override() {
-        // SB_HOME set → <SB_HOME>/state/marks.jsonl, NOT <HOME>/.quorum/dispatch/state.
+        // QD_HOME set → <QD_HOME>/state/marks.jsonl, NOT <HOME>/.quorum/dispatch/state.
         let mut env = MapEnv::default();
         env.vars
             .insert("HOME".to_string(), "/jail/home".to_string());
         env.vars
-            .insert("SB_HOME".to_string(), "/jail/sbdata".to_string());
+            .insert("QD_HOME".to_string(), "/jail/sbdata".to_string());
         assert_eq!(
             marks_path(&env).unwrap(),
             std::path::Path::new("/jail/sbdata/state/marks.jsonl")
@@ -277,13 +277,13 @@ mod tests {
         assert!(marks_path(&env).is_none());
     }
 
-    /// H4 end-to-end against the real filesystem (tempdirs): a SET SB_HOME lands
-    /// the marks file under `<SB_HOME>/state/`, and an UNSET SB_HOME lands it
+    /// H4 end-to-end against the real filesystem (tempdirs): a SET QD_HOME lands
+    /// the marks file under `<QD_HOME>/state/`, and an UNSET QD_HOME lands it
     /// under `<HOME>/.quorum/dispatch/state/` — using the SAME resolve→build→append path the
     /// `run()` backend uses (minus the session resolver, which needs live state).
     #[test]
     fn marks_land_under_sb_home_when_set_else_home_dot_sb() {
-        // (a) SB_HOME set.
+        // (a) QD_HOME set.
         let home = tempdir().unwrap();
         let sbhome = tempdir().unwrap();
         let mut env = MapEnv::default();
@@ -292,20 +292,20 @@ mod tests {
             home.path().to_string_lossy().into_owned(),
         );
         env.vars.insert(
-            "SB_HOME".to_string(),
+            "QD_HOME".to_string(),
             sbhome.path().to_string_lossy().into_owned(),
         );
         let p = marks_path(&env).unwrap();
         append_mark(&p, &build_mark_line("t", "s", json!({"k": 1}))).unwrap();
         let expected = sbhome.path().join("state").join("marks.jsonl");
-        assert!(expected.exists(), "marks.jsonl must be under SB_HOME/state");
+        assert!(expected.exists(), "marks.jsonl must be under QD_HOME/state");
         // And NOT under HOME/.quorum/dispatch/state.
         assert!(!home
             .path()
             .join(".quorum/dispatch/state/marks.jsonl")
             .exists());
 
-        // (b) SB_HOME unset.
+        // (b) QD_HOME unset.
         let home2 = tempdir().unwrap();
         let mut env2 = MapEnv::default();
         env2.vars.insert(

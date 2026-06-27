@@ -249,7 +249,7 @@ fn emit_relay_send_events_with_env(
 /// reply routing keys on it, so step 1 RESOLVES to a uuid, never emits the
 /// stable id itself):
 ///
-///   1. ENGINE-ASSERTED: `SB_SESSION_ID` — the engine birth property,
+///   1. ENGINE-ASSERTED: `QD_SESSION_ID` — the engine birth property,
 ///      explicitly set at every launch (override-never-inherit, the D1 site-4
 ///      lesson) — resolved through the idstore to the claude uuid.
 ///   2. `CLAUDE_CODE_SESSION_ID` — only when NO engine identity resolves
@@ -259,12 +259,12 @@ fn emit_relay_send_events_with_env(
 ///      sends — the punch_b2_item5_repro pin).
 ///   3. `"cli"` — bare operator shell.
 ///
-/// An SB_SESSION_ID that is malformed, unknown to the store, or still UNBOUND
+/// An QD_SESSION_ID that is malformed, unknown to the store, or still UNBOUND
 /// (mint without a session uuid yet) falls through to (2) — the derivation
 /// never invents an identity. Cost: one `ids.jsonl` read per send (accepted
 /// at the phase-2 checkpoint; `whoami` pays the same read).
 fn derive_from_session(env: &dyn Env) -> String {
-    if let Some(stable) = env.var("SB_SESSION_ID").filter(|s| !s.is_empty()) {
+    if let Some(stable) = env.var("QD_SESSION_ID").filter(|s| !s.is_empty()) {
         if let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) {
             let paths = dispatch::paths::SbPaths::from_home_env(std::path::Path::new(&home), env);
             let ids = dispatch::idstore::fold(&dispatch::idstore::ids_path(&paths.state_dir));
@@ -1014,7 +1014,7 @@ mod tests {
             home.path().to_string_lossy().to_string(),
         );
         if let Some(v) = sb_session_id {
-            vars.insert("SB_SESSION_ID".to_string(), v.to_string());
+            vars.insert("QD_SESSION_ID".to_string(), v.to_string());
         }
         if let Some(v) = claude_session_id {
             vars.insert("CLAUDE_CODE_SESSION_ID".to_string(), v.to_string());
@@ -1051,7 +1051,7 @@ mod tests {
         // ruling pins as must-not-break).
         let (_h, env) = identity_env(None, None, MINT);
         assert_eq!(derive_from_session(&env), "cli");
-        // SB_SESSION_ID unresolvable and no claude env → still "cli".
+        // QD_SESSION_ID unresolvable and no claude env → still "cli".
         let (_h2, env2) = identity_env(Some("zzzzzzzz"), None, MINT);
         assert_eq!(derive_from_session(&env2), "cli");
     }

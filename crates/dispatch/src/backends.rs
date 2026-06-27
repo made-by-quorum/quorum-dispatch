@@ -195,7 +195,7 @@ impl BackendsFile {
 }
 
 /// The path to the backends file: `<state_dir>/backends.json` (spec §3.1,
-/// SB_HOME-honored via the caller's already-resolved `SbPaths::state_dir`).
+/// QD_HOME-honored via the caller's already-resolved `SbPaths::state_dir`).
 pub fn backends_file_path(state_dir: &Path) -> PathBuf {
     state_dir.join("backends.json")
 }

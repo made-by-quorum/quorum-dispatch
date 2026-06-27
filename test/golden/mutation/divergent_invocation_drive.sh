@@ -19,11 +19,11 @@ export JAIL_SB_CMD=qd JAIL_ZMX_CMD=zmx
 . scenarios/_scenario_lib.sh
 name="$(scn_session_name divx)"
 python3 recorder/record_pty.py --out "$JAIL_ROOT/boot.raw" --secs 25 -- \
-  env SB_UNDER_TEST="$SB_UNDER_TEST" CLAUDE_BIN="$CLAUDE_BIN" \
-  sh -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1
+  env QD_UNDER_TEST="$QD_UNDER_TEST" CLAUDE_BIN="$CLAUDE_BIN" \
+  sh -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1
 sleep 2
-out="$($SB_UNDER_TEST info "$name" 2>&1)"; rc=$?
-out2="$($SB_UNDER_TEST config nosuchsub 2>&1)"; rc2=$?
+out="$($QD_UNDER_TEST info "$name" 2>&1)"; rc=$?
+out2="$($QD_UNDER_TEST config nosuchsub 2>&1)"; rc2=$?
 {
   printf 'cmd=info-missing-session expect_exit=1 got_exit=%s\n' "$rc"
   printf 'stderr_present=%s\n' "$( [ -n "$out" ] && echo 1 || echo 0 )"

@@ -11,7 +11,7 @@ control GREEN.
 
 ### (b) refuted by audit
 `qd ls` and `qd send:pty` share the SAME backend-aware session-resolution path:
-`common::all_sessions` (crates/qd/src/bin/qd/verbs/common.rs:100) parses SB_MUX
+`common::all_sessions` (crates/qd/src/bin/qd/verbs/common.rs:100) parses QD_MUX
 ONCE, builds the embedded mux AND `MuxDirs::embedded(qrmux_dir)`, and scans that
 dir via `join::gather_with_dirs`. There is NO unconditional `resolve_zmx_dir` in
 the resolution path (send.rs:141 `resolve_zmx_dir` is only the `op_dir` fallback,
@@ -22,7 +22,7 @@ reached only AFTER `zmx_name` is Some). The path is fully backend-aware; `ls` an
 Reproduced locally: 15/30 fail single-threaded; ~50% under CPU load (3x `yes`).
 Identical stderr to CI.
 
-Engine instrumentation (SB_DIAG_JOIN) printed, at the FAILING `send`'s gather:
+Engine instrumentation (QD_DIAG_JOIN) printed, at the FAILING `send`'s gather:
 
     [DIAG gather] mux pids = [("cold-sess", 7176)]      <- mux session IS listed
     [DIAG gather] reg pid 7180 ppid-chain = [7180]      <- ppid walk STOPS at 7180

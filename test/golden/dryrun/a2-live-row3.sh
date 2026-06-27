@@ -3,7 +3,7 @@
 #
 # Negative: `qd new <name> --agent bogus-agent-xyz` → nonzero exit, stderr names
 # the agent + path tried, zmx list UNCHANGED (NO task created, NO boot).
-# Positive control: create <agents_dir>/real-helper.md, point SB_SPAWN_AGENTS_DIR
+# Positive control: create <agents_dir>/real-helper.md, point QD_SPAWN_AGENTS_DIR
 # at it, `qd new <name2> --agent real-helper` → resolves PAST the agent gate
 # (reaches the live create path). To avoid spending a real-claude boot for the
 # positive, we assert resolvability by confirming the run gets past the agent
@@ -31,7 +31,7 @@ printf '{"hasCompletedOnboarding": true, "bypassPermissionsModeAccepted": true, 
     "$WORKDIR" "$RESOLVED_WORKDIR" > "$HOME/.claude.json"
 
 AGENTS_DIR="$JAIL_ROOT/agents"; mkdir -p "$AGENTS_DIR"
-export SB_SPAWN_AGENTS_DIR="$AGENTS_DIR"
+export QD_SPAWN_AGENTS_DIR="$AGENTS_DIR"
 
 echo "=== zmx list BEFORE (should be empty) ==="
 jail_zmx list 2>&1 | sed 's/^/  /'
@@ -40,7 +40,7 @@ before_count="$(jail_zmx list 2>/dev/null | grep -c "$JAIL_PREFIX" || true)"
 echo
 echo "=== NEGATIVE: qd new --agent bogus-agent-xyz (NO boot expected) ==="
 NAME1="${JAIL_PREFIX}bogus"
-( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" \
+( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
     "$JAIL_SB_CMD" new "$NAME1" --cwd "$WORKDIR" --agent bogus-agent-xyz ) \
     > "$JAIL_ROOT/neg-out.txt" 2> "$JAIL_ROOT/neg-err.txt"
 neg_code=$?
@@ -65,7 +65,7 @@ echo "  created $AGENTS_DIR/real-helper.md"
 NAME2="${JAIL_PREFIX}helper"
 # This WILL boot real claude (boot C). We let it reach idle, then assert it got
 # past the agent gate (a session exists) and tear down.
-( cd "$WORKDIR" && SB_CLAUDE_FLAGS="--dangerously-skip-permissions" \
+( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
     "$JAIL_SB_CMD" new "$NAME2" --cwd "$WORKDIR" --agent real-helper ) \
     > "$JAIL_ROOT/pos-out.txt" 2> "$JAIL_ROOT/pos-err.txt"
 pos_code=$?

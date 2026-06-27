@@ -117,7 +117,7 @@ scn_run() {
     # CR; submit.ts:298-301 @ 8c59ec4). The seam is documentary in RECORDED-FROM
     # (recording_mode=STUB_RAW_STDIN=1); the load-bearing defence is the scenario sha
     # in the MATCH-PROOF (a seam-dropping edit invalidates the proof -> re-record).
-    STUB_RAW_STDIN=1 bash -c "exec $SB_UNDER_TEST new $name" >/dev/null 2>&1 &
+    STUB_RAW_STDIN=1 bash -c "exec $QD_UNDER_TEST new $name" >/dev/null 2>&1 &
     local bootpid=$!
     local i=0 pidfile=""
     while [ "$i" -lt 30 ]; do

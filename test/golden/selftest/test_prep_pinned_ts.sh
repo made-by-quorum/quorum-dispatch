@@ -9,9 +9,9 @@
 #   (2) prep with a WRONG pin -> REFUSES (pin not reachable / HEAD mismatch), and
 #       leaves NO clone behind.
 #   (3) prep dest UNDER the qd-rust repo tree -> REFUSED (containment guard).
-#   (4) record.sh G2: SB_UNDER_TEST NOT under a prep-verified clone -> REFUSED
+#   (4) record.sh G2: QD_UNDER_TEST NOT under a prep-verified clone -> REFUSED
 #       (exit 71), no fixture written.
-#   (5) record.sh G2: SB_UNDER_TEST under a clone whose marker pin MISMATCHES the
+#   (5) record.sh G2: QD_UNDER_TEST under a clone whose marker pin MISMATCHES the
 #       supplied pin -> REFUSED (exit 71).
 #
 # Bash 3.2 floor. Run directly.
@@ -90,7 +90,7 @@ else
 fi
 [ -e "$DEST3B" ] && { FAIL=$((FAIL + 1)); printf 'FAIL prep/dest-in-org-no-leak\n'; rm -rf "$DEST3B"; } || { PASS=$((PASS + 1)); printf 'ok   prep/dest-in-org-no-leak\n'; }
 
-# --- 4. record.sh G2: SB_UNDER_TEST NOT under a prep clone -> exit 71 --------
+# --- 4. record.sh G2: QD_UNDER_TEST NOT under a prep clone -> exit 71 --------
 FXROOT="$SCRATCH/fixtures"
 DET="$SCRATCH/det.sh"
 cat > "$DET" <<'EOS'
@@ -98,9 +98,9 @@ SCN_NAME="det"; SCN_BUDGET_MS=4000; SCN_CLASS="byte-exact"
 SCN_FIXTURE="fixtures/g2-corpus/normalized/out.txt"
 scn_run() { printf 'x\n' > "$SCN_OUT"; printf '0\n' > "$SCN_OUT.exit"; }
 EOS
-# Point SB_UNDER_TEST at a bare path with NO .prep-verified above it.
+# Point QD_UNDER_TEST at a bare path with NO .prep-verified above it.
 PINNED_TS_COMMIT="$GOOD_PIN" \
-SB_UNDER_TEST="bun $SCRATCH/not-a-clone/index.ts" \
+QD_UNDER_TEST="bun $SCRATCH/not-a-clone/index.ts" \
 RECORD_FIXTURES_ROOT="$FXROOT" \
 JAIL_SB_CMD="/bin/true" \
     bash "$RECORD" --scenario "$DET" >/dev/null 2>&1
@@ -118,7 +118,7 @@ fi
 # DIFFERENT pin to record.sh. prep_verify must refuse on the pin mismatch.
 OTHER_PIN="abcabcabcabcabcabcabcabcabcabcabcabcabca"
 PINNED_TS_COMMIT="$OTHER_PIN" \
-SB_UNDER_TEST="bun $DEST1/src/index.ts" \
+QD_UNDER_TEST="bun $DEST1/src/index.ts" \
 RECORD_FIXTURES_ROOT="$FXROOT" \
 JAIL_SB_CMD="/bin/true" \
     bash "$RECORD" --scenario "$DET" >/dev/null 2>&1

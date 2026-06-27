@@ -11,7 +11,7 @@
 #   doc/log diagnosis file is NOT present at the pin, so the harness comments are
 #   the authority, as the A7 plan directs). It drove the TS DEV build
 #   (`bun <repo>/src/index.ts`). This port drives the REAL Rust `qd` binary via
-#   $SB_BIN and NEVER `bun`.
+#   $QD_BIN and NEVER `bun`.
 #
 # INVARIANT MAP  (TS step @pin  ->  Rust step  ->  delta)
 #   I6  born attachable + registered
@@ -81,7 +81,7 @@
 #
 # JAIL COMPOSITION (belt on belt)
 #   This harness runs INSIDE the repo jail (test/golden/lib/jail.sh, rule 9 +
-#   ADD-4). jail_establish is called FIRST and exports the jailed HOME/SB_HOME/
+#   ADD-4). jail_establish is called FIRST and exports the jailed HOME/QD_HOME/
 #   ZMX_DIR/XDG_*/TMPDIR BEFORE any EXIT trap is installed (hard ordering req —
 #   A6 set-u incident class). The jail's sbrg- prefix + PID-whitelist + production-
 #   path refusal COMPOSE with the TS harness's own safety rules, which are KEPT:
@@ -114,7 +114,7 @@
 #
 # Bash 3.2 floor (macOS). No GNU timeout (deadline loops, verify.sh pattern).
 # Usage:  bash test/reliability/reliability_harness.sh
-# Env:    SB_BIN (qd-under-test, default $WT/target/debug/qd), ZMX_BIN,
+# Env:    QD_BIN (qd-under-test, default $WT/target/debug/qd), ZMX_BIN,
 #         RELIABILITY_LIVE=1 (real claude), CLAUDE_BIN_OVERRIDE (mutation seam:
 #         point at a mutated stub — used by mutation_hang.sh).
 # ---------------------------------------------------------------------------
@@ -125,9 +125,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WT="$(cd "$HERE/../.." && pwd)"               # reliability -> test -> repo root
 cd "$WT" || { echo "FATAL: cannot cd to worktree root"; exit 1; }
 
-SB_BIN="${SB_BIN:-$WT/target/debug/qd}"
+QD_BIN="${QD_BIN:-$WT/target/debug/qd}"
 ZMX_BIN="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}"
-[ -x "$SB_BIN" ]  || { echo "FATAL: qd binary not found/executable: $SB_BIN"; exit 1; }
+[ -x "$QD_BIN" ]  || { echo "FATAL: qd binary not found/executable: $QD_BIN"; exit 1; }
 [ -x "$ZMX_BIN" ] || { echo "FATAL: zmx binary not found/executable: $ZMX_BIN"; exit 1; }
 
 # --- normalize TMPDIR to /tmp (A4 F2: long /var/folders socket path => zmx exits
@@ -138,7 +138,7 @@ if [ "${SBRL_KEEP_TMPDIR:-}" != "1" ]; then
 fi
 
 # --- establish the jail FIRST (before any trap; ordering is load-bearing) ----
-export JAIL_SB_CMD="$SB_BIN"
+export JAIL_SB_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$ZMX_BIN"
 . test/golden/lib/jail.sh
 # Short runid so the prefix `sbrg-XXXX-` (10 chars) leaves room under zmx's
@@ -323,7 +323,7 @@ export CLAUDE_BIN="$CLAUDE_BIN_RESOLVED"
 WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"
 mkdir -p "$SESS_DIR"
 
-echo "=== run jail=$JAIL_PREFIX root=$JAIL_ROOT  qd=$SB_BIN ==="
+echo "=== run jail=$JAIL_PREFIX root=$JAIL_ROOT  qd=$QD_BIN ==="
 echo
 
 # rl_new <name> — drive `qd new` in the jail with the resolved claude binary.
@@ -331,7 +331,7 @@ echo
 # stdout/err -> $JAIL_ROOT/<name>.{out,err}. Returns qd's exit code.
 rl_new() {
   local name="$1"
-  ( cd "$WORKDIR" && env SBRL_STUB_NAME="$name" "$SB_BIN" new "$name" --cwd "$WORKDIR" ) \
+  ( cd "$WORKDIR" && env SBRL_STUB_NAME="$name" "$QD_BIN" new "$name" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/$name.out" 2> "$JAIL_ROOT/$name.err"
 }
 

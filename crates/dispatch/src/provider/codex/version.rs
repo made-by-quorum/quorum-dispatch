@@ -7,7 +7,7 @@
 //!
 //! This module is PURE: it sniffs `codex --version`, parses the version, and
 //! computes a [`VersionVerdict`]. It owns NO env-override logic — the launch
-//! path (W4) maps `SB_CODEX_UNPINNED=1` onto a verdict; keeping that out of here
+//! path (W4) maps `QD_CODEX_UNPINNED=1` onto a verdict; keeping that out of here
 //! keeps the verdict a deterministic function of (found, pin).
 //!
 //! 0.x semver (codex is pre-1.0): a MINOR bump is breaking, so a (major,minor)
@@ -86,7 +86,7 @@ pub enum VersionVerdict {
     PatchDrift { found: Version },
     /// (major, minor) mismatch — breaking under 0.x semver (minor counts as
     /// major). The launch path raises a named error (re-pin via the W1 harness)
-    /// unless `SB_CODEX_UNPINNED=1`.
+    /// unless `QD_CODEX_UNPINNED=1`.
     Breaking { found: Version, pin: Version },
 }
 

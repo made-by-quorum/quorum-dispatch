@@ -33,7 +33,7 @@ use crate::relay;
 //
 // The TS struct carried five qb-deploy-owned dirs + a provenance stamp — ALL
 // DROPPED here (engine is content-free; the dropped field names live in the A5
-// spec). The engine owns ONLY its state home: `~/.quorum/dispatch` and `~/.quorum/dispatch/state`. SB_HOME
+// spec). The engine owns ONLY its state home: `~/.quorum/dispatch` and `~/.quorum/dispatch/state`. QD_HOME
 // comes through the injected `Env` seam (L9a — nothing resolves the real home),
 // never raw `std::env`.
 // ----------------------------------------------------------------------------
@@ -41,19 +41,19 @@ use crate::relay;
 /// The engine's state-dir layout (shrunk `BootstrapPaths`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapPaths {
-    /// The qd data root, `SB_HOME` or `<home>/.quorum/dispatch` (bootstrap.ts:88-96).
+    /// The qd data root, `QD_HOME` or `<home>/.quorum/dispatch` (bootstrap.ts:88-96).
     pub sb_home: PathBuf,
     /// Reserved hot-state dir, `<sbHome>/state` (bootstrap.ts:90 stateDir).
     pub state_dir: PathBuf,
 }
 
 /// Resolve the engine's bootstrap paths from the injected home + env
-/// (`sbHome = SB_HOME || <home>/.quorum/dispatch`, bootstrap.ts:88-96). The home is injected
-/// (never resolved from the real environment here, L9a); SB_HOME is read ONLY
+/// (`sbHome = QD_HOME || <home>/.quorum/dispatch`, bootstrap.ts:88-96). The home is injected
+/// (never resolved from the real environment here, L9a); QD_HOME is read ONLY
 /// through `env`.
 pub fn resolve_bootstrap_paths(home: &Path, env: &dyn Env) -> BootstrapPaths {
     let sb_home = env
-        .var("SB_HOME")
+        .var("QD_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".quorum").join("dispatch"));
@@ -914,7 +914,7 @@ mod tests {
 
     #[test]
     fn paths_honor_sb_home_override() {
-        let env = map_env(&[("SB_HOME", "/jail/sbhome")]);
+        let env = map_env(&[("QD_HOME", "/jail/sbhome")]);
         let p = resolve_bootstrap_paths(Path::new("/jail/home"), &env);
         assert_eq!(p.sb_home, PathBuf::from("/jail/sbhome"));
         assert_eq!(p.state_dir, PathBuf::from("/jail/sbhome/state"));
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn paths_ignore_empty_sb_home() {
-        let env = map_env(&[("SB_HOME", "")]);
+        let env = map_env(&[("QD_HOME", "")]);
         let p = resolve_bootstrap_paths(Path::new("/jail/home"), &env);
         assert_eq!(p.sb_home, PathBuf::from("/jail/home/.quorum/dispatch"));
     }
