@@ -69,7 +69,7 @@ fn run(argv: &[String]) -> i32 {
         // Dispatched pre-clap so they are never advertised in help and cannot be
         // commander-error-mangled. They drive Claude Code's own `claude mcp` CLI
         // (ADR 0017) — CC owns its MCP config location/format; we register
-        // `dispatch relay:serve` at user scope as the BARE command (resolved via PATH).
+        // `qd relay:serve` at user scope as the BARE command (resolved via PATH).
         Some("relay:register") | Some("relay:repoint") => {
             return run_relay_register();
         }
@@ -87,8 +87,8 @@ fn run(argv: &[String]) -> i32 {
     }
 }
 
-/// `dispatch relay:register` (alias `relay:repoint`): register `dispatch relay:serve` with
-/// Claude Code at user scope, as the BARE `dispatch` command (resolved via PATH — so
+/// `qd relay:register` (alias `relay:repoint`): register `qd relay:serve` with
+/// Claude Code at user scope, as the BARE `qd` command (resolved via PATH — so
 /// the entry never goes stale when the binary moves/upgrades). Idempotent
 /// (re-running re-points to the bare command). Requires `claude` on PATH.
 fn run_relay_register() -> i32 {
@@ -119,7 +119,7 @@ fn run_relay_register() -> i32 {
     }
 }
 
-/// `dispatch relay:rollback`: remove the relay MCP server from Claude Code (user
+/// `qd relay:rollback`: remove the relay MCP server from Claude Code (user
 /// scope). Idempotent. Requires `claude` on PATH.
 fn run_relay_rollback() -> i32 {
     use dispatch::exec::RealExec;

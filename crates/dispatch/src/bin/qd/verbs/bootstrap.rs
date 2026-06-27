@@ -6,7 +6,7 @@
 //! consent-gated notices and never fail bootstrap.
 //!
 //! 2026-06-10 ruling (ADR 0017): the relay step REGISTERS the native
-//! `dispatch relay:serve` with Claude Code via `claude mcp add -s user` (consent-
+//! `qd relay:serve` with Claude Code via `claude mcp add -s user` (consent-
 //! gated, as the bare command (resolved via PATH)), detecting via `claude mcp get` — Claude
 //! Code owns its own MCP config location/format (the hand-written
 //! `~/.claude/.mcp.json` of ADR 0016 is NOT read by CC 2.1.x). The shell step

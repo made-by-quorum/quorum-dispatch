@@ -1,17 +1,19 @@
-# qd-rust
+# dispatch
 
-A Rust rewrite of **qd**. This repository hosts two crates:
+**dispatch** is the session/engine of the Quorum suite — it launches and
+multiplexes agent sessions, hosts the relay channel, and loads plugins. It is
+installed as the **`qd`** binary (state under `~/.quorum/dispatch`, overridable
+via `QD_HOME`). This repository hosts the engine workspace:
 
-- **`qd`** — the engine crate (`crates/qd`). The core qd engine.
-- **`qrmux`** — the mux crate (`crates/qrmux`).
-
-At this stage the crates are **content-free scaffolding**: they exist to anchor the
-Cargo workspace and a green two-platform CI. Engine and mux logic land in later phases.
+- **`dispatch`** — the engine crate (`crates/dispatch`); builds the `qd` binary.
+- **`qrmux`** — the embedded terminal multiplexer (`crates/qrmux`).
+- **`golden`** / **`fakerepl`** — the golden-test harness and the deterministic
+  fake REPL the suites drive (`crates/golden`, `crates/fakerepl`).
 
 ## Status
 
-Phase 0a: scaffold + CI. The workspace builds and tests clean on macOS (arm64) and
-Linux (x86_64) in GitHub Actions.
+In active use across macOS (arm64) and Linux (x86_64), gated by a green
+two-platform CI.
 
 ## Build
 
@@ -46,8 +48,8 @@ fields never hard-fail deserialization.
 
 ```
 Cargo.toml            workspace manifest
-crates/qd/            engine crate
-crates/qrmux/         mux crate
+crates/dispatch/      engine crate (builds the qd binary)
+crates/qrmux/         embedded mux crate
 scripts/build-lock.sh build mutex (mkdir-based, stale-recovery)
 .github/workflows/    CI (macOS arm64 + Linux x86_64)
 doc/adr/              architecture decision records
