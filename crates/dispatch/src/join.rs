@@ -477,8 +477,41 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
     // b.mtime - a.mtime (descending). Stable sort matches TS Array.sort stability.
     all_jsonl.sort_by_key(|t| std::cmp::Reverse(t.mtime_ms));
 
+    // Item 3 (red-team round-2): an acp/* session is DAEMON-hosted, but its transcript IS
+    // the bridge's CC JSONL under ~/.claude/projects — so the claude ColdJsonl scan would
+    // otherwise SHADOW a STOPPED acp row's tombstone (claiming its sessionId FIRST, before
+    // the Tombstoned branch), surfacing it as a claude ColdJsonl row (provider "claude-code"
+    // + a JSONL-derived name) instead of the Tombstoned acp row (provider "acp/claude-code"
+    // + the FRIENDLY name). That breaks `qd resume <name>` post-stop (the friendly name is
+    // lost) AND misroutes resume to the claude path (not `run_acp_resume`'s faithful
+    // `session/load`). When tombstones are requested, let an ACP tombstone WIN over its own
+    // cold-JSONL shadow — skip the ColdJsonl row here so the Tombstoned branch surfaces the
+    // proper acp row. SCOPED to acp/* tombstones; claude/codex keep the cold-wins collapse
+    // (byte-stable — the `tombstone_seen_guard_skips_already_cold` regression is preserved).
+    let acp_tombstone_sids: HashSet<&str> = if opts.include_tombstoned {
+        inputs
+            .tombstoned
+            .iter()
+            .filter(|t| {
+                t.data
+                    .provider
+                    .as_deref()
+                    .map(|p| p.starts_with("acp/"))
+                    .unwrap_or(false)
+            })
+            .filter_map(|t| t.data.session_id.as_deref())
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     for jf in all_jsonl {
         if seen_session_ids.contains(&jf.session_id) {
+            continue;
+        }
+        // An acp tombstone owns this sessionId → let the Tombstoned branch surface it
+        // (acp provider + friendly name), NOT a shadowing claude ColdJsonl row.
+        if acp_tombstone_sids.contains(jf.session_id.as_str()) {
             continue;
         }
         let stats = inputs.stats_for.get(&jf.path).cloned().unwrap_or_default();
@@ -1616,6 +1649,113 @@ mod tests {
         assert_eq!(rows[0].status, SessionStatus::Cold);
         assert_eq!(rows[0].name.as_deref(), Some("cold-one"));
         assert_eq!(rows[0].pid, None);
+    }
+
+    /// Item 3 (red-team round-2 root-cause): a STOPPED dispatch acp row has BOTH a cold CC
+    /// JSONL (the bridge's transcript under ~/.claude/projects) AND an acp tombstone for the
+    /// SAME sessionId. The acp TOMBSTONE must WIN over the claude ColdJsonl shadow — so the
+    /// row carries `provider="acp/claude-code"` (→ resume routes to `run_acp_resume`, NOT
+    /// the claude path) and the FRIENDLY name (→ `qd resume <name>` resolves post-stop).
+    /// REVERT CONTROL: remove the acp-tombstone skip in the ColdJsonl loop → the row
+    /// surfaces as ColdJsonl (`provider="claude-code"`, name "jsonl-title") → these asserts
+    /// RED (the exact red-team failure: `claude-<sid>` route + name not resolvable).
+    #[test]
+    fn acp_tombstone_wins_over_its_cold_jsonl_shadow() {
+        let mut inputs = base_inputs();
+        // The bridge's CC JSONL exists for the acp sessionId (the shadow source).
+        inputs.transcripts = vec![meta("acp-S", "-w-projX", 5_000)];
+        inputs.stats_for = [(
+            PathBuf::from("/projects/-w-projX/acp-S.jsonl"),
+            JsonlStats {
+                name: Some("jsonl-title".to_string()),
+                user_named: true,
+                ..Default::default()
+            },
+        )]
+        .into_iter()
+        .collect();
+        inputs.jsonl_path_for =
+            [("acp-S".to_string(), PathBuf::from("/projects/-w-projX/acp-S.jsonl"))]
+                .into_iter()
+                .collect();
+        // The acp tombstone (kill_acp preserves provider + friendly name).
+        inputs.tombstoned = vec![TombstonedEntry {
+            path: PathBuf::from("/sessions/7.json.tombstoned"),
+            pid: 7,
+            data: RegistryEntry {
+                pid: Some(7),
+                session_id: Some("acp-S".to_string()),
+                name: Some("myacp".to_string()),
+                provider: Some("acp/claude-code".to_string()),
+                cwd: Some("/w/projX".to_string()),
+                status: Some("idle".to_string()),
+                ..Default::default()
+            },
+            mtime_ms: 2000,
+            degraded: Vec::new(),
+        }];
+        let opts = JoinOpts {
+            include_all: true,
+            include_tombstoned: true,
+            ..Default::default()
+        };
+        let out = join_sessions(&inputs, opts);
+        let rows: Vec<&Session> = out.iter().filter(|s| s.session_id == "acp-S").collect();
+        assert_eq!(rows.len(), 1, "exactly one row for the acp sessionId (no dup)");
+        let r = rows[0];
+        assert_eq!(
+            r.which_branch,
+            SessionBranch::Tombstoned,
+            "the acp TOMBSTONE wins, not the claude ColdJsonl shadow"
+        );
+        assert_eq!(
+            r.provider, "acp/claude-code",
+            "provider preserved → resume routes to run_acp_resume (not the claude path)"
+        );
+        assert_eq!(
+            r.name.as_deref(),
+            Some("myacp"),
+            "the FRIENDLY name is surfaced → qd resume <name> resolves post-stop"
+        );
+        // resolve-by-name finds the stopped acp row (the user path).
+        match crate::resolve::resolve_session("myacp", &out) {
+            crate::resolve::Resolution::One(s) => assert_eq!(s.session_id, "acp-S"),
+            other => panic!("resolve-by-name must find the stopped acp row, got {other:?}"),
+        }
+    }
+
+    /// Negative control / isolation: a CLAUDE (non-acp) tombstone + its cold JSONL still
+    /// COLLAPSES cold-wins (unchanged) — the acp fix does not perturb the claude/codex
+    /// path. (Mirrors `tombstone_seen_guard_skips_already_cold`, asserting the fix is
+    /// acp-scoped.)
+    #[test]
+    fn non_acp_tombstone_still_cold_wins_after_acp_fix() {
+        let mut inputs = base_inputs();
+        inputs.transcripts = vec![meta("cld-S", "-w-projY", 5_000)];
+        inputs.stats_for = [(
+            PathBuf::from("/projects/-w-projY/cld-S.jsonl"),
+            JsonlStats { name: Some("cold-name".into()), user_named: true, ..Default::default() },
+        )]
+        .into_iter()
+        .collect();
+        inputs.tombstoned = vec![TombstonedEntry {
+            path: PathBuf::from("/sessions/8.json.tombstoned"),
+            pid: 8,
+            data: RegistryEntry {
+                pid: Some(8),
+                session_id: Some("cld-S".to_string()),
+                name: Some("dead-name".to_string()),
+                provider: Some("claude-code".to_string()), // NON-acp → cold-wins preserved
+                ..Default::default()
+            },
+            mtime_ms: 2000,
+            degraded: Vec::new(),
+        }];
+        let opts = JoinOpts { include_all: true, include_tombstoned: true, ..Default::default() };
+        let out = join_sessions(&inputs, opts);
+        let r = out.iter().find(|s| s.session_id == "cld-S").unwrap();
+        assert_eq!(r.which_branch, SessionBranch::ColdJsonl, "claude cold still wins (unchanged)");
+        assert_eq!(r.name.as_deref(), Some("cold-name"));
     }
 
     // --- sort order ---
