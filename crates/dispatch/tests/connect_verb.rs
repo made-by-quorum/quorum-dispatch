@@ -176,7 +176,7 @@ fn attach_verb_is_retired_erroring_stub() {
 /// "could not launch" / "did not confirm ready" / "Failed to resume"), which attach
 /// NEVER does. Then connect appends the shared cold-error recovery pointer.
 ///
-/// Run with: `cargo test -p dispatch --test connect_verb -- --ignored connect_cold`.
+/// Run with: `cargo test -p qd --test connect_verb -- --ignored connect_cold`.
 ///
 /// MUTATION EVIDENCE: reverting connect to short-circuit Cold → a bare cold-error
 /// (the pre-phase-2 behavior) reds the revive-attempt assert (no revive line ever

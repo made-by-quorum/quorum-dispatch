@@ -20,7 +20,7 @@
 //!
 //! Gated on `QD_ACP_LIVE=1` (real bridge + real CC creds + model budget). A no-op
 //! otherwise, so the default suite never spends budget. Run:
-//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p dispatch --test acp_resume_faithfulness_spike -- --nocapture --include-ignored
+//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p qd --test acp_resume_faithfulness_spike -- --nocapture --include-ignored
 
 use std::io::Write;
 use std::path::PathBuf;

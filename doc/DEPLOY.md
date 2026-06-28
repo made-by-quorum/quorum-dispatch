@@ -20,7 +20,7 @@ echo "deploying over: $LIVE"
 Known live paths:
 - **Linux / Lima dev box:** `~/.local/bin/qd` (canonical; the `~/.bun/bin/qd` symlink and the TS
   engine were deleted 2026-06-09 — see ADR 0016).
-- **macOS (legacy):** `~/.bun/bin/qd`, with `~/.local/bin/sbr` as a canonical rust copy.
+- **macOS (legacy):** `~/.bun/bin/qd`, with `~/.local/bin/qdr` as a canonical rust copy.
 
 ## Steps (machine-agnostic)
 
@@ -43,8 +43,8 @@ case "$(uname)" in Darwin) codesign --force --sign - "$LIVE.new" ;; esac
 
 # 5. ATOMIC rename into place (NOT cp — see below). Refresh any canonical rust copy too.
 mv -f "$LIVE.new" "$LIVE"
-# macOS legacy only: keep ~/.local/bin/sbr in sync as the rollback-source rust binary.
-case "$(uname)" in Darwin) cp target/release/qd ~/.local/bin/sbr && codesign --force --sign - ~/.local/bin/sbr ;; esac
+# macOS legacy only: keep ~/.local/bin/qdr in sync as the rollback-source rust binary.
+case "$(uname)" in Darwin) cp target/release/qd ~/.local/bin/qdr && codesign --force --sign - ~/.local/bin/qdr ;; esac
 
 # 6. Verify.
 qd --version && sha256sum "$LIVE" 2>/dev/null | cut -c1-16 || shasum -a 256 "$LIVE" | cut -c1-16

@@ -6,7 +6,7 @@
 //! Two `#[ignore]` integration proofs (run explicitly — they spawn real `qd`
 //! subprocesses + a detached daemon + sleep):
 //!
-//!   cargo test -p dispatch --test headless_observe_cutover -- --ignored --nocapture
+//!   cargo test -p qd --test headless_observe_cutover -- --ignored --nocapture
 //!
 //!  (A) `live_observe_rerenders_control_facts_only_busy_to_idle` — across ONE
 //!      `qd connect`, the read-only dashboard RE-RENDERS live as the turn goes

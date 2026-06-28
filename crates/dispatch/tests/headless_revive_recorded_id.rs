@@ -15,7 +15,7 @@
 //! and genuinely re-spawn `claude --resume <recorded-id>`, not reattach a stale
 //! pane / confirm boot off a still-live daemon.
 //!
-//!   cargo test -p dispatch --test headless_revive_recorded_id -- --ignored --nocapture
+//!   cargo test -p qd --test headless_revive_recorded_id -- --ignored --nocapture
 //!
 //! Proves: `qd connect` on the COLD row → `resolve_target_mode(headless,
 //! pid_alive=false)` → `TargetMode::Cold` → `revive_claude`, which spawns

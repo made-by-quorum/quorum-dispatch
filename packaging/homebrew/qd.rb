@@ -1,22 +1,26 @@
-# Homebrew formula for the Rust dispatch engine (Stage 1: ships ON pinned zmx 0.6.0).
+# Homebrew formula for the Rust qd engine (Stage 1: ships ON pinned zmx 0.6.0).
 #
-# A7 packaging deliverable (plan §A7: "brew formula + cargo build of single dispatch
+# A7 packaging deliverable (plan §A7: "brew formula + cargo build of single qd
 # binary (+ pinned zmx)"). Stage-1 reality, stated plainly:
 #   - The repo (private-org/qd-rust) is PRIVATE: a public `url` cannot resolve
 #     without auth. Until the D-phase cutover publishes a release asset, install
 #     from a LOCAL source tarball:
 #       cd <repo> && git archive --prefix=qd-rust/ -o /tmp/qd-rust-local.tar.gz HEAD
 #       QD_FORMULA_LOCAL=/tmp/qd-rust-local.tar.gz \
-#         brew install --build-from-source --formula packaging/homebrew/dispatch.rb
+#         brew install --build-from-source --formula packaging/homebrew/qd.rb
 #     (the formula prefers $QD_FORMULA_LOCAL when set; the canonical url is the
 #     placeholder the D-phase release will make real).
 #   - zmx 0.6.0 is installed from the IN-REPO pinned mirror (vendor/zmx), sha256
 #     pin-verified — the same fail-closed pin scripts/fetch-zmx.sh enforces
 #     (selftested in CI: test_fetch_zmx.sh). No network fetch of zmx, ever.
-#   - Single binary: `cargo build --release -p dispatch --bin dispatch`; no bun, no node.
+#   - Single binary: `cargo build --release -p qd --bin qd`; no bun, no node.
 #     Success criterion #1's "no external zmx" half is Stage-2-conditional
 #     (B-track); Stage 1 deliberately pins and ships zmx alongside.
-class Dispatch < Formula
+#
+# NOTE: the deployed-artifact identity is `qd` (⟨PETE:#2⟩) — package `qd`, binary
+# `qd`, formula `qd`. The internal lib crate stays `dispatch` (preserved subsystem);
+# the `-p qd` package selector resolves because the package is renamed to `qd`.
+class Qd < Formula
   desc "Session engine for orchestrating Claude Code sessions (Rust port)"
   homepage "https://github.com/private-org/qd-rust"
   url ENV.fetch("QD_FORMULA_LOCAL", "https://github.com/private-org/qd-rust/archive/refs/tags/phase-a7.tar.gz")
@@ -27,8 +31,8 @@ class Dispatch < Formula
   depends_on "rust" => :build
 
   def install
-    system "cargo", "build", "--release", "-p", "dispatch", "--bin", "dispatch"
-    bin.install "target/release/dispatch"
+    system "cargo", "build", "--release", "-p", "qd", "--bin", "qd"
+    bin.install "target/release/qd"
 
     # Pinned zmx 0.6.0: the in-repo mirror is SOURCE (a zig project), verified
     # against the same fail-closed sha256 pin scripts/fetch-zmx.sh enforces.
@@ -47,7 +51,7 @@ class Dispatch < Formula
 
   def caveats
     <<~EOS
-      dispatch (Stage 1) drives sessions through zmx 0.6.0 (pinned). Install it from
+      qd (Stage 1) drives sessions through zmx 0.6.0 (pinned). Install it from
       the verified in-repo mirror staged at:
         #{pkgshare}/zmx/  (sha256-pinned tarball + fetch-zmx.sh)
       The Stage-2 embedded mux (qrmux) removes this dependency.
@@ -55,8 +59,8 @@ class Dispatch < Formula
   end
 
   test do
-    # `dispatch --version` prints the TS-parity version string (corpus rows 03/04).
-    assert_match(/^\d+\.\d+\.\d+$/, shell_output("#{bin}/dispatch --version").strip)
-    system bin/"dispatch", "--help"
+    # `qd --version` prints the TS-parity version string (corpus rows 03/04).
+    assert_match(/^\d+\.\d+\.\d+$/, shell_output("#{bin}/qd --version").strip)
+    system bin/"qd", "--help"
   end
 end

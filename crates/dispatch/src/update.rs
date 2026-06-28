@@ -27,10 +27,10 @@ pub const REPO_URL: &str = "https://github.com/private-org/qd-rust";
 
 /// The Homebrew formula name (A7 lands the real formula; until then the
 /// `brew upgrade` path is argv-level only).
-pub const BREW_FORMULA: &str = "dispatch";
+pub const BREW_FORMULA: &str = "qd";
 
 /// The cargo crate name installed via `cargo install`.
-pub const CARGO_CRATE: &str = "dispatch";
+pub const CARGO_CRATE: &str = "qd";
 
 /// The resolved update channel + the argv to run, OR a hard error.
 #[derive(Debug, Clone, PartialEq, Eq)]

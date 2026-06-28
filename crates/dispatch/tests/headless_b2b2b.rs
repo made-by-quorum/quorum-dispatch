@@ -593,7 +593,7 @@ fn wait_loop_completes_off_live_channel_no_disk() {
 /// the channel with ZERO disk-status reads. Isolation = the lib.sh `env -i` contract
 /// (synthetic HOME + CLAUDE_CONFIG_DIR, NEVER the live `~/.claude*`).
 ///
-///   cargo test -p dispatch --test headless_b2b2b real_isolated_claude_wait -- --ignored --nocapture
+///   cargo test -p qd --test headless_b2b2b real_isolated_claude_wait -- --ignored --nocapture
 #[test]
 #[ignore = "needs network + live credentials; isolated via lib.sh-style env -i"]
 fn real_isolated_claude_wait_completes_off_channel() {

@@ -22,7 +22,7 @@
 //!
 //! Gated on `QD_ACP_LIVE=1` (real bridge + real CC creds + ~2 model turns). No-op
 //! otherwise. Run:
-//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p dispatch --test acp_resume_roundtrip_live -- --nocapture --test-threads=1
+//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p qd --test acp_resume_roundtrip_live -- --nocapture --test-threads=1
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

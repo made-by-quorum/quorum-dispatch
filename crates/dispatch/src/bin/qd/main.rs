@@ -107,7 +107,7 @@ fn run_relay_register() -> i32 {
                 "relay:register: registered the relay MCP server with Claude Code (user scope) \
                  → `{cmd} relay:serve` (bare command, resolved via PATH).\n  \
                  New sessions will load it; verify with `claude mcp get relay`.\n  \
-                 (Ensure the deployed `dispatch` is on PATH — see doc/DEPLOY.md.)",
+                 (Ensure the deployed `qd` is on PATH — see doc/DEPLOY.md.)",
                 cmd = register::RELAY_BARE_COMMAND
             );
             0

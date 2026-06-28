@@ -1,11 +1,21 @@
 [package]
-name = "dispatch"
+# Deployed-artifact identity is `qd` (⟨PETE:#2⟩): the package is `qd` so
+# `cargo install --git <repo> --locked qd` resolves; the binary is `qd`. The
+# internal LIB symbol stays `dispatch` (see [lib]) — the dispatch crate/subsystem
+# is deliberately preserved (C3 ruling), so `dispatch::` call sites are untouched.
+name = "qd"
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "qd engine crate (Rust rewrite). A1: data layer + Mux trait."
+
+# Lib name preserved as `dispatch` (NOT renamed with the package): the dispatch
+# subsystem is preserved by the sb-purge composite; renaming the lib symbol would
+# churn 74 internal `dispatch::` call sites into the preserved subsystem.
+[lib]
+name = "dispatch"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -58,7 +68,7 @@ mutation-evidence = []
 # `faultinj` gates BOTH the RED-gate tests in tests/faultinj.rs AND the
 # faultinj_target victim bin, so the default `cargo build`/`cargo test` is byte-
 # unaffected (the no-regression floor). Run the harness with:
-#   cargo test -p dispatch --features faultinj --test faultinj -- --nocapture
+#   cargo test -p qd --features faultinj --test faultinj -- --nocapture
 faultinj = []
 
 # The controllable VICTIM process the fault-injection harness spawns. Gated on

@@ -14,7 +14,7 @@
 //! is the exact stale-busy precondition the three guarantees must survive.
 //!
 //! `#[ignore]` (spawns real `qd` subprocesses + a detached daemon + sleeps), run:
-//!   cargo test -p dispatch --test headless_daemon_death -- --ignored --nocapture
+//!   cargo test -p qd --test headless_daemon_death -- --ignored --nocapture
 //!
 //! Proves the three §7.5/R2 daemon-death guarantees, each fail-CLOSED:
 //!  (i)   CONTROL FAILS CLOSED — `qd wait` NEVER returns " done" after the daemon

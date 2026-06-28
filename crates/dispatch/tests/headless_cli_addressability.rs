@@ -10,7 +10,7 @@
 //! Cold→revive) is DETERMINISTIC, not racy. This is `#[ignore]` (it spawns real
 //! `qd` subprocesses + a detached daemon + sleeps), run explicitly:
 //!
-//!   cargo test -p dispatch --test headless_cli_addressability -- --ignored --nocapture
+//!   cargo test -p qd --test headless_cli_addressability -- --ignored --nocapture
 //!
 //! Proves (lead's D requirements):
 //!  (1) in the held-busy window: `qd connect <name>` AND `qd connect <id>` both

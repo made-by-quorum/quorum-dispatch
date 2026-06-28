@@ -39,7 +39,7 @@ fn qd_binary() -> PathBuf {
     assert!(
         dir.exists(),
         "qd binary not found at {dir:?} — build it first: \
-         scripts/build-lock.sh cargo build -p dispatch --bin dispatch"
+         scripts/build-lock.sh cargo build -p qd --bin qd"
     );
     dir
 }

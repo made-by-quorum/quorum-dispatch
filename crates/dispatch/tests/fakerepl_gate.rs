@@ -44,7 +44,7 @@ use dispatch::submit::{
 // binaries before running tests, so `<target>/<profile>/fakerepl` exists. We
 // derive `<target>/<profile>` from the running test exe path
 // (`.../target/<profile>/deps/<testbin>`), which is robust to debug/release and
-// to a custom CARGO_TARGET_DIR. If absent (e.g. a `cargo test -p dispatch` that did
+// to a custom CARGO_TARGET_DIR. If absent (e.g. a `cargo test -p qd` that did
 // not build fakerepl), we shell out to `cargo build -p fakerepl` once.
 // ===========================================================================
 
@@ -90,7 +90,7 @@ fn fakerepl_bin() -> PathBuf {
         }
         return bin;
     }
-    // Fallback: build it once (documented mechanism — keeps `cargo test -p dispatch`
+    // Fallback: build it once (documented mechanism — keeps `cargo test -p qd`
     // working without a prior `--workspace` build).
     let status = std::process::Command::new(env!("CARGO"))
         .args(["build", "-p", "fakerepl"])

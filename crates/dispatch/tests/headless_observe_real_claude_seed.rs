@@ -5,7 +5,7 @@
 //! ONLY the HOME isolated (the `headless_b2b2b` / lib.sh `env -i` contract: a
 //! synthetic HOME + CLAUDE_CONFIG_DIR with copied creds, NEVER the live `~/.claude`).
 //!
-//!   cargo test -p dispatch --test headless_observe_real_claude_seed -- --ignored --nocapture
+//!   cargo test -p qd --test headless_observe_real_claude_seed -- --ignored --nocapture
 //!   (needs network + live claude credentials; isolated tempdir HOME)
 //!
 //! What it proves on a genuine claude turn (ruling Q2a):

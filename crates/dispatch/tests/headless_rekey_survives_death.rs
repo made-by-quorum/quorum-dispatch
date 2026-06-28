@@ -17,7 +17,7 @@
 //!   daemon-pid row, NOT a duplicate), its pid the LIVE orphan claude child, and it
 //!   is still RESOLVABLE by `qd ls`/`qd connect` by id AND name.
 //!
-//!   cargo test -p dispatch --test headless_rekey_survives_death -- --ignored --nocapture
+//!   cargo test -p qd --test headless_rekey_survives_death -- --ignored --nocapture
 //!
 //! Per the lead ruling: addressability is asserted at ROW-RESOLUTION level (found by
 //! id + name, single child-pid-keyed row, CAS-protected) — NOT a live Observe
