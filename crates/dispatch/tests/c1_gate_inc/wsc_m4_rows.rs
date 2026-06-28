@@ -1,7 +1,7 @@
 // ===========================================================================
 // WS-C M4 ENGINE-LEVEL gate rows (spec §7). Driven through the REAL `qd` binary
 // against REAL per-session qrmux daemons in hermetic jails — the same harness
-// the C1 rows use (Jail / run_sb / mux_create / fake-claude / pid_alive). These
+// the C1 rows use (Jail / run_qd / mux_create / fake-claude / pid_alive). These
 // are the NEW/INVERTED arms that make the per-session split's claims falsifiable:
 //
 //   * G-ISOL (R-1(4))       — positive isolation + the QRMUX_TEST_SHARED
@@ -74,10 +74,10 @@ fn sigkill(pid: u32) {
 /// Boot a LIVE session end to end through the engine cold-start path: `qd start
 /// <name>` with the fake-claude (writes the live registry row + execs the app).
 /// Returns (exit, stdout, stderr). The daemon is auto-launched by `qd`.
-fn sb_new_live(jail: &Jail, name: &str, app: &str) -> (i32, String, String) {
+fn qd_new_live(jail: &Jail, name: &str, app: &str) -> (i32, String, String) {
     let fake = write_fake_claude(jail, app);
     let fake_s = fake.to_string_lossy().into_owned();
-    let r = run_sb_env(jail, &["start", name], &[("CLAUDE_BIN", &fake_s), ("QD_FAKE_NAME", name)]);
+    let r = run_qd_env(jail, &["start", name], &[("CLAUDE_BIN", &fake_s), ("QD_FAKE_NAME", name)]);
     // Teardown-leak belt: `qd start` AUTO-LAUNCHED a per-session daemon we never saw
     // a pid for at spawn. Record it post-boot via the exact-socket-dir ps lookup so
     // a future run can identity-reap it if this run dies before teardown.
@@ -104,8 +104,8 @@ fn g_isol() {
 
     // Cold-start two LIVE sessions via the engine (each auto-launches its own
     // per-session daemon binding `<name>.sock`).
-    let (ca, _oa, ea) = sb_new_live(&jail, "alpha", "cat");
-    let (cb, _ob, eb) = sb_new_live(&jail, "bravo", "cat");
+    let (ca, _oa, ea) = qd_new_live(&jail, "alpha", "cat");
+    let (cb, _ob, eb) = qd_new_live(&jail, "bravo", "cat");
     detail.push_str(&format!(
         "POS create: alpha exit={ca} (stderr {}), bravo exit={cb} (stderr {})\n",
         ea.trim(),
@@ -129,7 +129,7 @@ fn g_isol() {
     detail.push_str(&format!("POS children: alpha child pid={child_a:?}, bravo child pid={child_b:?}\n"));
 
     // Both live + operable pre-kill: send to bravo and confirm history carries it.
-    let (cs0, _o, _e) = run_sb(&jail, &["send:pty", "bravo", "PRE_KILL_B"]);
+    let (cs0, _o, _e) = run_qd(&jail, &["send:pty", "bravo", "PRE_KILL_B"]);
     ok &= cs0 == 0;
 
     // SIGKILL alpha's daemon ONLY.
@@ -173,7 +173,7 @@ fn g_isol() {
     // B PROVEN ALIVE BY OPERATION (not just pid): bravo's daemon still serves
     // send:pty acks AND history renders the post-kill marker.
     let b_pid_survives = pid_b.map(pid_alive).unwrap_or(false);
-    let (cs, _os, es) = run_sb(&jail, &["send:pty", "bravo", "POST_KILL_MARKER_B"]);
+    let (cs, _os, es) = run_qd(&jail, &["send:pty", "bravo", "POST_KILL_MARKER_B"]);
     let send_ok = cs == 0;
     let mut hist_ok = false;
     let t0 = Instant::now();
@@ -192,8 +192,8 @@ fn g_isol() {
     ok &= b_pid_survives && send_ok && hist_ok;
 
     // A RECOVERABLE COLD: a fresh `qd start alpha` relaunches a daemon for it.
-    let _ = run_sb(&jail, &["stop", "--force", "alpha"]);
-    let (cr, _or, er) = sb_new_live(&jail, "alpha", "cat");
+    let _ = run_qd(&jail, &["stop", "--force", "alpha"]);
+    let (cr, _or, er) = qd_new_live(&jail, "alpha", "cat");
     let relaunched = cr == 0 && session_daemon_pid(&dir, "alpha").is_some();
     detail.push_str(&format!(
         "POS recover-cold: qd start alpha exit={cr} (stderr {}), daemon relaunched={relaunched}\n",
@@ -262,10 +262,10 @@ fn g_coldstart_n() {
         let fake_s = fake.to_string_lossy().into_owned();
         let mut handles = Vec::new();
         for _ in 0..k {
-            let bin = sb_bin().to_string();
+            let bin = qd_bin().to_string();
             let fake_s = fake_s.clone();
             let home = jail.home.clone();
-            let sb_home = jail.root.join("sbhome");
+            let qd_home = jail.root.join("qdhome");
             let xdg = jail.xdg_runtime.clone();
             let tmp = jail.root.join("tmp");
             let zmx = jail.root.join("zmx");
@@ -276,7 +276,7 @@ fn g_coldstart_n() {
                     .args(["start", "--interactive", "alpha"])
                     .env_clear()
                     .env("HOME", &home)
-                    .env("QD_HOME", &sb_home)
+                    .env("QD_HOME", &qd_home)
                     .env("XDG_RUNTIME_DIR", &xdg)
                     .env("TMPDIR", &tmp)
                     .env("ZMX_DIR", &zmx)
@@ -327,11 +327,11 @@ fn g_coldstart_n() {
         let t0 = Instant::now();
         let mut handles = Vec::new();
         for name in &names {
-            let bin = sb_bin().to_string();
+            let bin = qd_bin().to_string();
             let fake_s = fake_s.clone();
             let name = name.clone();
             let home = jail.home.clone();
-            let sb_home = jail.root.join("sbhome");
+            let qd_home = jail.root.join("qdhome");
             let xdg = jail.xdg_runtime.clone();
             let tmp = jail.root.join("tmp");
             let zmx = jail.root.join("zmx");
@@ -341,7 +341,7 @@ fn g_coldstart_n() {
                     .args(["start", "--interactive", &name])
                     .env_clear()
                     .env("HOME", &home)
-                    .env("QD_HOME", &sb_home)
+                    .env("QD_HOME", &qd_home)
                     .env("XDG_RUNTIME_DIR", &xdg)
                     .env("TMPDIR", &tmp)
                     .env("ZMX_DIR", &zmx)
@@ -391,13 +391,13 @@ fn g_coldstart_n() {
     {
         let jail = Jail::establish("gcsn-cvt");
         let dir = jail.resolved_dir();
-        let (c1, _o, _e) = sb_new_live(&jail, "race", "cat");
+        let (c1, _o, _e) = qd_new_live(&jail, "race", "cat");
         ok &= c1 == 0;
         // Kill the session (engine kill → daemon exit-on-end teardown).
-        let _ = run_sb(&jail, &["stop", "--force", "race"]);
+        let _ = run_qd(&jail, &["stop", "--force", "race"]);
         // Race a fresh create immediately (the launcher's retiring/absent
         // four-state handles the socket-removed-between-scan-and-connect window).
-        let (c2, _o2, e2) = sb_new_live(&jail, "race", "cat");
+        let (c2, _o2, e2) = qd_new_live(&jail, "race", "cat");
         let relaunch_clean = c2 == 0
             && session_daemon_pid(&dir, "race").is_some()
             && !e2.to_lowercase().contains("address already in use")
@@ -423,7 +423,7 @@ fn g_coldstart_n() {
         let bogus_s = bogus.to_string_lossy().into_owned();
         let fake = write_fake_claude(&jail, "cat");
         let fake_s = fake.to_string_lossy().into_owned();
-        let (cm, om, em) = run_sb_env(
+        let (cm, om, em) = run_qd_env(
             &jail,
             &["start", "mut"],
             &[
@@ -492,8 +492,8 @@ fn g_evsplit() {
 
     // Two LIVE sessions (each its own per-session daemon → each its own events
     // writer by construction; no cross-daemon file sharing exists).
-    let (ca, _o, _e) = sb_new_live(&jail, "ev-a", "cat");
-    let (cb, _o, _e) = sb_new_live(&jail, "ev-b", "cat");
+    let (ca, _o, _e) = qd_new_live(&jail, "ev-a", "cat");
+    let (cb, _o, _e) = qd_new_live(&jail, "ev-b", "cat");
     ok &= ca == 0 && cb == 0;
 
     // INTERLEAVED sends to both, concurrently, to exercise concurrent writers.
@@ -502,9 +502,9 @@ fn g_evsplit() {
     // daemon could otherwise wedge the join — every wait in this row is bounded.
     let mut handles = Vec::new();
     for (name, marker) in [("ev-a", "AAA"), ("ev-b", "BBB")] {
-        let bin = sb_bin().to_string();
+        let bin = qd_bin().to_string();
         let home = jail.home.clone();
-        let sb_home = jail.root.join("sbhome");
+        let qd_home = jail.root.join("qdhome");
         let xdg = jail.xdg_runtime.clone();
         let tmp = jail.root.join("tmp");
         let zmx = jail.root.join("zmx");
@@ -514,7 +514,7 @@ fn g_evsplit() {
                     .args(["send:pty", name, &format!("{marker}{i}")])
                     .env_clear()
                     .env("HOME", &home)
-                    .env("QD_HOME", &sb_home)
+                    .env("QD_HOME", &qd_home)
                     .env("XDG_RUNTIME_DIR", &xdg)
                     .env("TMPDIR", &tmp)
                     .env("ZMX_DIR", &zmx)
@@ -597,10 +597,10 @@ fn g_evsplit() {
         }
     }
     // Re-create ev-a (cold relaunch → fresh daemon → epoch 2 file).
-    let _ = run_sb(&jail, &["stop", "--force", "ev-a"]);
-    let (cr, _o, _e) = sb_new_live(&jail, "ev-a", "cat");
+    let _ = run_qd(&jail, &["stop", "--force", "ev-a"]);
+    let (cr, _o, _e) = qd_new_live(&jail, "ev-a", "cat");
     ok &= cr == 0;
-    let _ = run_sb(&jail, &["send:pty", "ev-a", "EPOCH2_MARK"]);
+    let _ = run_qd(&jail, &["send:pty", "ev-a", "EPOCH2_MARK"]);
     std::thread::sleep(Duration::from_millis(400));
 
     let a_epoch2 = events_dir.join("ev-a.daemon.2.jsonl");

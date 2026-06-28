@@ -1,8 +1,8 @@
 {
   "name": "stale",
   "sessionId": "22222222-bbbb-4bbb-8bbb-222222222222",
-  "sbId": "ab47qrst",
-  "sbIdPrefix": "ab4",
+  "qdId": "ab47qrst",
+  "qdIdPrefix": "ab4",
   "status": "idle",
   "live": false,
   "pid": 2147483646,

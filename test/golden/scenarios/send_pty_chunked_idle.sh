@@ -132,7 +132,7 @@ scn_run() {
     # deliverIdleTwoWrite chunks it (>=5 chunks at <=1024B, ~150ms apart) and submits
     # with a separate \r; --wait anchors on OUR message's user record and completes
     # on idle. Capture the --wait reply (the stub's deterministic STUB-REPLY).
-    SCN_WAIT_OUT="$(scn_sb_target send:pty "$name" "$SCN_IDLE_MSG" --wait --timeout 60 2>/dev/null)"
+    SCN_WAIT_OUT="$(scn_qd_target send:pty "$name" "$SCN_IDLE_MSG" --wait --timeout 60 2>/dev/null)"
     SCN_WAIT_RC=$?
 
     local jsonl

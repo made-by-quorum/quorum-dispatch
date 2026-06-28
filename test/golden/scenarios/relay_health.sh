@@ -109,7 +109,7 @@ except Exception:
 
         # (d) ls join — relayPort surfaces in `qd ls --json` (PID-parentage join).
         printf 'CONTRACT ls-join:'
-        scn_sb ls --json 2>/dev/null > "$SCN_OUT.lsjson"
+        scn_qd ls --json 2>/dev/null > "$SCN_OUT.lsjson"
         python3 -c '
 import sys, json
 try:

@@ -1,1 +1,1 @@
-  name=sbrg-46597178066510020070-sp	pid=46728	clients=0	created=1780665100	start_dir=/home/u/work/wt-a4-passb
+  name=qdrg-46597178066510020070-sp	pid=46728	clients=0	created=1780665100	start_dir=/home/u/work/wt-a4-passb

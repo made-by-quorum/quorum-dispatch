@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-/// Build a jail-shaped env rooted in a tempdir: HOME=*/sbrg-runs/<x>/home,
+/// Build a jail-shaped env rooted in a tempdir: HOME=*/qdrg-runs/<x>/home,
 /// QD_HOME/ZMX_DIR/TMPDIR siblings under the same root.
 fn jail_env(root: &Path) -> Vec<(String, String)> {
-    let run_root = root.join("sbrg-runs").join("ack1seams");
-    for sub in ["home", "sb_home", "zmx", "tmp"] {
+    let run_root = root.join("qdrg-runs").join("ack1seams");
+    for sub in ["home", "qd_home", "zmx", "tmp"] {
         std::fs::create_dir_all(run_root.join(sub)).unwrap();
     }
     vec![
@@ -23,7 +23,7 @@ fn jail_env(root: &Path) -> Vec<(String, String)> {
         ),
         (
             "QD_HOME".into(),
-            run_root.join("sb_home").to_string_lossy().into_owned(),
+            run_root.join("qd_home").to_string_lossy().into_owned(),
         ),
         (
             "ZMX_DIR".into(),

@@ -501,7 +501,7 @@ mod tests {
     fn snap_env() -> EmbeddedEnv {
         EmbeddedEnv {
             xdg_runtime_dir: Some("/run/user/501".to_string()),
-            sb_home: None,
+            qd_home: None,
             uid: 501,
         }
     }

@@ -8,13 +8,13 @@
 //! (jail.sh:139-146):
 //!
 //!   export HOME="$JAIL_ROOT/home"
-//!   export QD_HOME="$JAIL_ROOT/sb_home"
+//!   export QD_HOME="$JAIL_ROOT/qd_home"
 //!   export ZMX_DIR="$JAIL_ROOT/zmx"
 //!   export TMPDIR="$JAIL_ROOT/tmp"
 //!
 //! Refuse (Err with the failed-check reason) unless ALL hold:
-//!   (a) HOME matches `*/sbrg-runs/*/home`  (the positive jail-layout marker);
-//!   (b) with `root := dirname(HOME)`:  QD_HOME == root/sb_home
+//!   (a) HOME matches `*/qdrg-runs/*/home`  (the positive jail-layout marker);
+//!   (b) with `root := dirname(HOME)`:  QD_HOME == root/qd_home
 //!                                       ZMX_DIR == root/zmx
 //!                                       TMPDIR == root/tmp
 //!
@@ -26,17 +26,17 @@
 
 use std::path::Path;
 
-/// Returns `Ok(())` if the current process env is a coherent sbrg jail, else
+/// Returns `Ok(())` if the current process env is a coherent qdrg jail, else
 /// `Err(reason)` naming the first failed check (so the exit-13 stderr is
 /// diagnostic, per a4-spec §5's negative-control rows).
 pub fn assert_jailed_env() -> Result<(), String> {
     let home = require_var("HOME")?;
     let home_n = normalize(&home);
 
-    // (a) HOME positive marker: `*/sbrg-runs/*/home`.
+    // (a) HOME positive marker: `*/qdrg-runs/*/home`.
     if !home_matches_jail_layout(&home_n) {
         return Err(format!(
-            "HOME does not match the jail layout `*/sbrg-runs/*/home` (got {home})"
+            "HOME does not match the jail layout `*/qdrg-runs/*/home` (got {home})"
         ));
     }
 
@@ -49,7 +49,7 @@ pub fn assert_jailed_env() -> Result<(), String> {
         .to_string();
 
     // (b) coherence: every exported isolation var must sit under the SAME root.
-    check_under_root("QD_HOME", "sb_home", &root)?;
+    check_under_root("QD_HOME", "qd_home", &root)?;
     check_under_root("ZMX_DIR", "zmx", &root)?;
     check_under_root("TMPDIR", "tmp", &root)?;
 
@@ -77,10 +77,10 @@ fn check_under_root(key: &str, leaf: &str, root: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// HOME matches `*/sbrg-runs/*/home`: the final component is `home`, the
+/// HOME matches `*/qdrg-runs/*/home`: the final component is `home`, the
 /// grandparent component is some run id, and the great-grandparent is
-/// `sbrg-runs`. Component-based (not substring) so a path like
-/// `/x/sbrg-runs-evil/home` cannot spoof it.
+/// `qdrg-runs`. Component-based (not substring) so a path like
+/// `/x/qdrg-runs-evil/home` cannot spoof it.
 fn home_matches_jail_layout(home_n: &str) -> bool {
     let p = Path::new(home_n);
     let mut comps: Vec<&str> = p
@@ -90,11 +90,11 @@ fn home_matches_jail_layout(home_n: &str) -> bool {
             _ => None,
         })
         .collect();
-    // Need at least: sbrg-runs / <runid> / home  (3 trailing components).
+    // Need at least: qdrg-runs / <runid> / home  (3 trailing components).
     let home = comps.pop();
     let _runid = comps.pop();
-    let sbrg = comps.pop();
-    home == Some("home") && sbrg == Some("sbrg-runs")
+    let qdrg = comps.pop();
+    home == Some("home") && qdrg == Some("qdrg-runs")
 }
 
 /// Strip a single trailing slash (jail.sh exports slash-free paths, but a caller
@@ -114,31 +114,31 @@ mod tests {
     #[test]
     fn home_layout_accepts_valid_jail() {
         assert!(home_matches_jail_layout(
-            "/var/folders/xx/T/sbrg-runs/ABC123/home"
+            "/var/folders/xx/T/qdrg-runs/ABC123/home"
         ));
-        assert!(home_matches_jail_layout("/tmp/sbrg-runs/r/home"));
+        assert!(home_matches_jail_layout("/tmp/qdrg-runs/r/home"));
     }
 
     #[test]
     fn home_layout_rejects_clean_and_spoofs() {
         assert!(!home_matches_jail_layout("/home/u"));
         assert!(!home_matches_jail_layout("/home/someone"));
-        // Substring spoof: `sbrg-runs-evil` is NOT the `sbrg-runs` component.
-        assert!(!home_matches_jail_layout("/x/sbrg-runs-evil/r/home"));
+        // Substring spoof: `qdrg-runs-evil` is NOT the `qdrg-runs` component.
+        assert!(!home_matches_jail_layout("/x/qdrg-runs-evil/r/home"));
         // Missing the trailing `home` component.
-        assert!(!home_matches_jail_layout("/tmp/sbrg-runs/r"));
-        // `home` present but not under sbrg-runs.
+        assert!(!home_matches_jail_layout("/tmp/qdrg-runs/r"));
+        // `home` present but not under qdrg-runs.
         assert!(!home_matches_jail_layout("/tmp/other/r/home"));
     }
 
     #[test]
     fn check_under_root_coherence() {
-        let root = "/tmp/sbrg-runs/r";
+        let root = "/tmp/qdrg-runs/r";
         // env-free variant of check: just the path equality the function does.
         assert_eq!(
-            normalize("/tmp/sbrg-runs/r/sb_home/"),
-            format!("{root}/sb_home")
+            normalize("/tmp/qdrg-runs/r/qd_home/"),
+            format!("{root}/qd_home")
         );
-        assert_ne!(normalize("/elsewhere/sb_home"), format!("{root}/sb_home"));
+        assert_ne!(normalize("/elsewhere/qd_home"), format!("{root}/qd_home"));
     }
 }

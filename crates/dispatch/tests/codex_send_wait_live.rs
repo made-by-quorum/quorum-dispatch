@@ -287,7 +287,7 @@ fn codex_send_wait_live_jailed_e2e() {
         rpc.set_request_timeout(std::time::Duration::from_secs(60));
 
         // believed state: read the rollout tail (none yet → None → believed IDLE).
-        let placeholder = dispatch::paths::SbPaths::from_home(Path::new(""));
+        let placeholder = dispatch::paths::QdPaths::from_home(Path::new(""));
         let root = codex_root(&env, &placeholder);
         let key = SessionKey {
             id: &thread_id,
@@ -304,7 +304,7 @@ fn codex_send_wait_live_jailed_e2e() {
         let rpc_ref: &dyn AppServerRpc = &rpc;
         let fx = ProviderFx {
             env: &env,
-            paths: &dispatch::paths::SbPaths::from_home(&jail.join("home")),
+            paths: &dispatch::paths::QdPaths::from_home(&jail.join("home")),
             socket_dir: sessions_dir.clone(),
             mux: None,
             clock: None,
@@ -338,7 +338,7 @@ fn codex_send_wait_live_jailed_e2e() {
         // LIVE thread/status/changed notification; the rollout tail is only the
         // daemon-unreachable fallback. The file IS present by the time the turn
         // completes (re-resolved below for the post-completion assertions).
-        let placeholder = dispatch::paths::SbPaths::from_home(Path::new(""));
+        let placeholder = dispatch::paths::QdPaths::from_home(Path::new(""));
         let root = codex_root(&env, &placeholder);
         let key = SessionKey {
             id: &thread_id,
@@ -429,9 +429,9 @@ fn codex_send_wait_live_jailed_e2e() {
 }
 
 /// Resolve the codex transcript_root off the jail env (codex's transcript_root
-/// reads `fx.env` $CODEX_HOME/$HOME — never paths; the placeholder SbPaths is just
+/// reads `fx.env` $CODEX_HOME/$HOME — never paths; the placeholder QdPaths is just
 /// to satisfy the borrow). Owned `paths` is passed in so the borrow outlives the fx.
-fn codex_root(env: &JailEnv, paths: &dispatch::paths::SbPaths) -> PathBuf {
+fn codex_root(env: &JailEnv, paths: &dispatch::paths::QdPaths) -> PathBuf {
     let fx = ProviderFx {
         env,
         paths,

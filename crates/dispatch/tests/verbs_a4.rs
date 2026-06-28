@@ -13,20 +13,20 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
 /// Run `qd <args...>` with HOME + ZMX_DIR jailed into `home`/`zmx` under `dir`.
 /// Returns (exit_code, stdout, stderr).
-fn run_sb(dir: &Path, args: &[&str]) -> (i32, String, String) {
+fn run_qd(dir: &Path, args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
     let zmx = dir.join("zmx");
     std::fs::create_dir_all(home.join(".claude").join("sessions")).unwrap();
     std::fs::create_dir_all(&zmx).unwrap();
     common::assert_not_real_home(&home);
 
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(args)
         // L9a: jailed HOME; ZMX_DIR pinned to an empty dir so zmx finds nothing.
         .env("HOME", &home)
@@ -54,7 +54,7 @@ fn new_retired_stub_errors_helpfully_exits_1() {
         vec!["new", "wk"],
         vec!["new", "wk", "-p", "hello", "--model", "opus"],
     ] {
-        let (code, _out, err) = run_sb(temp.path(), &args);
+        let (code, _out, err) = run_qd(temp.path(), &args);
         assert_eq!(
             code, 1,
             "retired `new` → exit 1 for {args:?} (stderr: {err})"
@@ -74,7 +74,7 @@ fn kill_retired_stub_errors_helpfully_exits_1() {
         vec!["kill", "wk"],
         vec!["kill", "--force", "wk"],
     ] {
-        let (code, _out, err) = run_sb(temp.path(), &args);
+        let (code, _out, err) = run_qd(temp.path(), &args);
         assert_eq!(
             code, 1,
             "retired `kill` → exit 1 for {args:?} (stderr: {err})"
@@ -90,7 +90,7 @@ fn kill_retired_stub_errors_helpfully_exits_1() {
 fn stop_unknown_session_exits_1() {
     // The LIVE stop verb reaches the real backend (resolveOrDie path).
     let temp = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb(temp.path(), &["stop", "nosuch"]);
+    let (code, _out, err) = run_qd(temp.path(), &["stop", "nosuch"]);
     assert_eq!(code, 1, "unknown session → exit 1 (stderr: {err})");
     assert!(
         err.contains("No session matching \"nosuch\""),
@@ -101,7 +101,7 @@ fn stop_unknown_session_exits_1() {
 #[test]
 fn send_pty_unknown_session_exits_1() {
     let temp = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb(temp.path(), &["send:pty", "nosuch", "hello"]);
+    let (code, _out, err) = run_qd(temp.path(), &["send:pty", "nosuch", "hello"]);
     assert_eq!(code, 1, "unknown session → exit 1 (stderr: {err})");
     assert!(
         err.contains("No session matching \"nosuch\""),
@@ -112,7 +112,7 @@ fn send_pty_unknown_session_exits_1() {
 #[test]
 fn send_http_unknown_session_exits_1() {
     let temp = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb(temp.path(), &["send:http", "nosuch", "hello"]);
+    let (code, _out, err) = run_qd(temp.path(), &["send:http", "nosuch", "hello"]);
     assert_eq!(code, 1, "unknown session → exit 1 (stderr: {err})");
     assert!(
         err.contains("No session matching \"nosuch\""),
@@ -123,7 +123,7 @@ fn send_http_unknown_session_exits_1() {
 #[test]
 fn wait_unknown_session_exits_1() {
     let temp = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb(temp.path(), &["wait", "nosuch"]);
+    let (code, _out, err) = run_qd(temp.path(), &["wait", "nosuch"]);
     assert_eq!(code, 1, "unknown session → exit 1 (stderr: {err})");
     assert!(
         err.contains("No session matching \"nosuch\""),
@@ -149,7 +149,7 @@ fn send_http_engine_session_is_never_opencode_error_block() {
     )
     .unwrap();
 
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(["send:http", "wk", "hello"])
         .env("HOME", &home)
         .env("ZMX_DIR", temp.path().join("zmx"))
@@ -187,7 +187,7 @@ fn wait_idle_session_reports_idle_exit_0() {
     )
     .unwrap();
 
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(["wait", "idlewk"])
         .env("HOME", &home)
         .env("ZMX_DIR", temp.path().join("zmx"))

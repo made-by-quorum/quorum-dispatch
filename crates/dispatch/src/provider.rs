@@ -34,7 +34,7 @@ use crate::create::BootWaiter;
 use crate::effects::Env;
 use crate::jsonl::{JsonlStats, TranscriptMeta};
 use crate::model::SessionStatus;
-use crate::paths::SbPaths;
+use crate::paths::QdPaths;
 use crate::relay::{RelayContract, RelayError};
 
 pub mod acp;
@@ -142,7 +142,7 @@ pub struct ProviderFx<'a> {
     /// boot waiter's PID-file root; `projects_dir` is the transcript root.
     /// CONSUMED BY: `ClaudeProvider::launch_plan` (config toml),
     /// `ClaudeProvider::boot_waiter` (sessions_dir).
-    pub paths: &'a SbPaths,
+    pub paths: &'a QdPaths,
     /// The canonical socket dir the session lives in (boot history + send
     /// target; create.rs `canonical_dir`). CONSUMED BY:
     /// `ClaudeProvider::boot_waiter` (the [`EventBootWaiter`] socket dir).
@@ -273,7 +273,7 @@ pub trait Provider {
 
     /// Launch command/flags/env resolution. The impl resolves its OWN config
     /// surfaces from `fx` (claude: `claude_bin` + `claude_flags` precedence
-    /// env > config.toml-at-SbPaths > DEFAULT_FLAGS + `build_new_extra_args`,
+    /// env > config.toml-at-QdPaths > DEFAULT_FLAGS + `build_new_extra_args`,
     /// byte-identical assembly to today).
     fn launch_plan(&self, fx: &ProviderFx, req: &LaunchRequest) -> LaunchPlan;
 

@@ -73,7 +73,7 @@ except Exception:
 
     # (2) The ENGINE surface: qd ls --json STILL joins the relay (sidecar-driven,
     # health-independent). A health-gating regression would drop the join.
-    scn_sb ls --json 2>/dev/null > "$SCN_OUT.lsjson"
+    scn_qd ls --json 2>/dev/null > "$SCN_OUT.lsjson"
     local joined
     joined="$(python3 -c '
 import sys, json

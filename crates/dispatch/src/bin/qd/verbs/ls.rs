@@ -246,14 +246,14 @@ fn run_inner(
     // ruled acceptable; a mint failure degrades to a warned id-less row.
     if let Ok(ids_path) = common::ids_store_path(&dispatch::effects::RealEnv) {
         for s in &mut sessions {
-            if s.sb_id.is_none() && !s.session_id.is_empty() {
+            if s.qd_id.is_none() && !s.session_id.is_empty() {
                 match dispatch::idstore::mint_or_get(
                     &ids_path,
                     &s.session_id,
                     s.name.as_deref(),
                     &dispatch::effects::RealClock,
                 ) {
-                    Ok(id) => s.sb_id = Some(id),
+                    Ok(id) => s.qd_id = Some(id),
                     Err(e) => eprintln!("qd ls: {e}"),
                 }
             }
@@ -274,7 +274,7 @@ fn run_inner(
         let sessions_dir = dispatch::effects::RealEnv
             .var("HOME")
             .filter(|h| !h.is_empty())
-            .map(|h| dispatch::paths::SbPaths::from_home(std::path::Path::new(&h)).sessions_dir);
+            .map(|h| dispatch::paths::QdPaths::from_home(std::path::Path::new(&h)).sessions_dir);
         sessions
             .iter()
             .map(|s| sessions_dir.as_deref().and_then(|sd| acp_human_status(s, sd)))
@@ -342,7 +342,7 @@ fn run_inner(
         let mut buf = String::new();
         for s in &sessions {
             let handle = s
-                .sb_id
+                .qd_id
                 .as_ref()
                 .and_then(|id| prefixes.get(id))
                 .map(String::as_str)
@@ -497,7 +497,7 @@ fn render_table_human_at_with(
 
             // Id: cyan(stable-id prefix) if mapped else dim("---") — the same
             // cyan/dim treatment the code cell had.
-            let id_cell = match s.sb_id.as_ref().and_then(|id| prefixes.get(id)) {
+            let id_cell = match s.qd_id.as_ref().and_then(|id| prefixes.get(id)) {
                 Some(prefix) => Cell::new(prefix.clone(), cyan(prefix)),
                 None => Cell::new("---", dim("---")),
             };
@@ -656,7 +656,7 @@ fn render_table(sessions: &[Session]) -> String {
 
             // Id: cyan(stable-id prefix) if mapped else dim("---") — the same
             // cyan/dim treatment the code cell had (index.ts:129).
-            let code_cell = match s.sb_id.as_ref().and_then(|id| prefixes.get(id)) {
+            let code_cell = match s.qd_id.as_ref().and_then(|id| prefixes.get(id)) {
                 Some(prefix) => Cell::new(prefix.clone(), cyan(prefix)),
                 None => Cell::new("---", dim("---")),
             };
@@ -879,10 +879,10 @@ mod tests {
     }
 
     /// A minimal Session fixture. Defaults are inert; tests set the load-bearing
-    /// fields (name, sb_id, status, last_active_ms, tokens).
+    /// fields (name, qd_id, status, last_active_ms, tokens).
     fn session(
         name: Option<&str>,
-        sb_id: Option<&str>,
+        qd_id: Option<&str>,
         status: SessionStatus,
         last_active_ms: Option<i64>,
         tokens: u64,
@@ -892,7 +892,7 @@ mod tests {
             user_named: None,
             session_id: "sid".to_string(),
             code: None,
-            sb_id: sb_id.map(String::from),
+            qd_id: qd_id.map(String::from),
             pid: None,
             status,
             zmx_name: None,
@@ -1016,7 +1016,7 @@ mod tests {
                 Some(NOW_MS - 5_400_000), // 1h ago
                 999,                      // → "999" (sub-1k plain integer)
             ),
-            // no-id row: sb_id None → dim "---"; zero tokens → natural "0".
+            // no-id row: qd_id None → dim "---"; zero tokens → natural "0".
             session(Some("no-code-row"), None, SessionStatus::Idle, None, 0),
         ]
     }

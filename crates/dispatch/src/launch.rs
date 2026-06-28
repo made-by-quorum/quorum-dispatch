@@ -324,7 +324,7 @@ pub fn capture_backend_env(env: &impl Env) -> Vec<(String, String)> {
 /// `QD_SESSION_ID` lands LAST and is never part of the capture whitelist — it
 /// is engine-asserted, never inherited.
 ///
-/// `sb_session_id` is `Some` whenever the verb minted/resolved a stable id:
+/// `qd_session_id` is `Some` whenever the verb minted/resolved a stable id:
 /// ALWAYS on resume/revive (the UUID is known, `mint_or_get` ran) and on every
 /// production `qd start` (unbound pre-mint); `None` only in unit fixtures.
 ///
@@ -343,7 +343,7 @@ pub fn capture_backend_env(env: &impl Env) -> Vec<(String, String)> {
 /// properties (FORCE, then alt-screen), then `QD_SESSION_ID` LAST.
 pub fn launch_env_pairs(
     backend_env: Vec<(String, String)>,
-    sb_session_id: Option<String>,
+    qd_session_id: Option<String>,
     render: RenderMode,
 ) -> Vec<(String, String)> {
     let mut pairs = backend_env;
@@ -351,7 +351,7 @@ pub fn launch_env_pairs(
     if render == RenderMode::Inline {
         pairs.push((ALT_SCREEN_DISABLE_KEY.to_string(), "1".to_string()));
     }
-    if let Some(id) = sb_session_id {
+    if let Some(id) = qd_session_id {
         pairs.push(("QD_SESSION_ID".to_string(), id));
     }
     pairs
@@ -971,16 +971,16 @@ mod tests {
     /// `render_default_from_config` reads the top-level `render-default` key
     /// from the QD_HOME-honoring config path (the same file `qd config` writes).
     #[test]
-    fn render_default_from_config_reads_sb_home_config() {
+    fn render_default_from_config_reads_qd_home_config() {
         let dir = tempfile::tempdir().unwrap();
-        let sb_home = dir.path().join("sbh");
-        std::fs::create_dir_all(&sb_home).unwrap();
+        let qd_home = dir.path().join("qdh");
+        std::fs::create_dir_all(&qd_home).unwrap();
         std::fs::write(
-            sb_home.join("config.toml"),
+            qd_home.join("config.toml"),
             "render-default = \"alt-screen\"\n[secrets]\nopenrouter-key = \"sk-x\"\n",
         )
         .unwrap();
-        let e = env(&[("QD_HOME", sb_home.to_str().unwrap())]);
+        let e = env(&[("QD_HOME", qd_home.to_str().unwrap())]);
         assert_eq!(
             render_default_from_config(&e).as_deref(),
             Some("alt-screen")

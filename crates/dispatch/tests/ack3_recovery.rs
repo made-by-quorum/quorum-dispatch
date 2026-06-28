@@ -8,7 +8,7 @@
 //! API's own seam (named honestly — not waited out). A PURE `is_dead_dangling`
 //! control proves the gate itself BEFORE the resolution call (no emission).
 //!
-//! Jail / run_sb helpers MIRROR ack2_gate.rs (duplicated — test binaries cannot
+//! Jail / run_qd helpers MIRROR ack2_gate.rs (duplicated — test binaries cannot
 //! import each other; ack3-spec §2 sanctions duplication).
 
 #![allow(clippy::too_many_arguments)]
@@ -27,7 +27,7 @@ use dispatch::events::{
 // Binary locators (duplicated from ack2_gate)
 // ===========================================================================
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -97,7 +97,7 @@ struct Jail {
     root: PathBuf,
     home: PathBuf,
     xdg: PathBuf,
-    sb_home: PathBuf,
+    qd_home: PathBuf,
     ev_dir: PathBuf,
     convo: PathBuf,
     uuid: String,
@@ -111,18 +111,18 @@ impl Jail {
             .unwrap()
             .as_nanos();
         let base = PathBuf::from("/tmp/qd-ack3rec");
-        let root = base.join("sbrg-runs").join(format!("{tag}-{nanos}"));
+        let root = base.join("qdrg-runs").join(format!("{tag}-{nanos}"));
         let home = root.join("home");
         let xdg = base.join(format!("x-{tag}-{nanos}"));
-        let sb_home = root.join("sb_home");
-        let ev_dir = sb_home.join("state").join("sessions");
+        let qd_home = root.join("qd_home");
+        let ev_dir = qd_home.join("state").join("sessions");
         let sessions = home.join(".claude").join("sessions");
         let projects = home.join(".claude").join("projects").join("proj");
         for d in [
             &sessions,
             &projects,
             &xdg,
-            &sb_home,
+            &qd_home,
             &root.join("tmp"),
             &root.join("zmx"),
         ] {
@@ -136,7 +136,7 @@ impl Jail {
             root,
             home,
             xdg,
-            sb_home,
+            qd_home,
             ev_dir,
             convo,
             uuid,
@@ -167,7 +167,7 @@ impl Jail {
     fn teardown(&self) {
         let names: Vec<String> = self.created.borrow().clone();
         for name in names {
-            let _ = run_sb(self, &["stop", "--force", &name], &[]);
+            let _ = run_qd(self, &["stop", "--force", &name], &[]);
         }
         let _ = std::fs::remove_dir_all(&self.root);
         let _ = std::fs::remove_dir_all(&self.xdg);
@@ -175,16 +175,16 @@ impl Jail {
 }
 
 // ===========================================================================
-// qd driver: blocking (run_sb) + child spawn (spawn_sb)
+// qd driver: blocking (run_qd) + child spawn (spawn_qd)
 // ===========================================================================
 
 fn build_cmd(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> Command {
     let fr = fakerepl_bin();
-    let mut cmd = Command::new(sb_bin());
+    let mut cmd = Command::new(qd_bin());
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &jail.home)
-        .env("QD_HOME", &jail.sb_home)
+        .env("QD_HOME", &jail.qd_home)
         .env("XDG_RUNTIME_DIR", &jail.xdg)
         .env("TMPDIR", jail.root.join("tmp"))
         .env("ZMX_DIR", jail.root.join("zmx"))
@@ -200,7 +200,7 @@ fn build_cmd(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> Command {
     cmd
 }
 
-fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String) {
+fn run_qd(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String) {
     // WP-B-CS-1 (D2): force the INTERACTIVE surface for `start` — this harness pipes
     // stdio (`.output()`), so a bare start auto-detects the HEADLESS surface. These
     // recovery tests exercise the interactive create + -p delivery. Behavior delta
@@ -229,7 +229,7 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
 }
 
 /// Spawn `qd` as a detached CHILD (handle kept so the test can SIGKILL it).
-fn spawn_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> Child {
+fn spawn_qd(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> Child {
     build_cmd(jail, args, extra)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -325,12 +325,12 @@ fn drive_and_kill(
     .unwrap();
 
     // Boot (idle session), settle.
-    let (cb, _o, _e) = run_sb(jail, &["start", name], &env);
+    let (cb, _o, _e) = run_qd(jail, &["start", name], &env);
     assert_eq!(cb, 0, "R-REC boot succeeds");
     std::thread::sleep(Duration::from_millis(800));
 
     // Spawn the --wait send as a CHILD; keep the handle.
-    let child = spawn_sb(
+    let child = spawn_qd(
         jail,
         &["send:pty", name, msg, "--wait", "--timeout", "30"],
         &env,
@@ -437,7 +437,7 @@ fn resolve_after_kill(
     });
     // events_path joins state_dir + "sessions" + "<key>.events.jsonl"; jail.ev_dir
     // is <QD_HOME>/state/sessions, so the writer/ctx state_dir is <QD_HOME>/state.
-    let state_dir = jail.sb_home.join("state");
+    let state_dir = jail.qd_home.join("state");
     let writer = dispatch::events::EventWriter::for_key(
         &state_dir,
         &jail.uuid,

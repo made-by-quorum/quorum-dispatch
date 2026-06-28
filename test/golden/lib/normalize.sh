@@ -98,7 +98,7 @@ normalize_paths() {
         local esc
         esc="$(printf '%s' "$root" | sed -e 's/[\/&]/\\&/g')"
         sed -E \
-            -e "s/${esc}\/sb_home/<QD_HOME>/g" \
+            -e "s/${esc}\/qd_home/<QD_HOME>/g" \
             -e "s/${esc}\/zmx/<ZMX_DIR>/g" \
             -e "s/${esc}\/xdg_config/<XDG_CONFIG>/g" \
             -e "s/${esc}\/xdg_data/<XDG_DATA>/g" \
@@ -141,8 +141,8 @@ normalize_runids() {
     if [ -n "$runid" ]; then
         local esc
         esc="$(printf '%s' "$runid" | sed -e 's/[][\/.^$*]/\\&/g')"
-        # Session prefix sbrg-<runid>- -> sbrg-<RUNID>- ; bare runid -> <RUNID>.
-        out_cmd="sed -E -e s/sbrg-${esc}-/sbrg-<RUNID>-/g -e s/${esc}/<RUNID>/g"
+        # Session prefix qdrg-<runid>- -> qdrg-<RUNID>- ; bare runid -> <RUNID>.
+        out_cmd="sed -E -e s/qdrg-${esc}-/qdrg-<RUNID>-/g -e s/${esc}/<RUNID>/g"
     fi
     if [ -n "$port" ]; then
         # Apply runid sed (if any), then the CONTEXT-GUARDED port seds. Each rule

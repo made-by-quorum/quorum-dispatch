@@ -4,8 +4,8 @@
 //! `const HOME = homedir(); SESSIONS_DIR = ~/.claude/sessions; PROJECTS_DIR =
 //! ~/.claude/projects`; RELAY_DIR = ~/.claude/relay, src/session.ts:150) — these
 //! derive from HOME ONLY. The qd DATA root is separate and QD_HOME-overridable:
-//! `sbHome = env.QD_HOME || join(HOME, ".quorum", "dispatch")`, and the hot-state dir is
-//! `<sbHome>/state` (bootstrap.ts:88-96 `resolveBootstrapPaths` +
+//! `qdHome = env.QD_HOME || join(HOME, ".quorum", "dispatch")`, and the hot-state dir is
+//! `<qdHome>/state` (bootstrap.ts:88-96 `resolveBootstrapPaths` +
 //! BootstrapPaths.stateDir doc, bootstrap.ts:~54). `marks.jsonl` (A3 ADD-3)
 //! lives in that state dir.
 //!
@@ -14,7 +14,7 @@
 //! the org's REAL registry (found during 0b dry-run setup; read-only exposure,
 //! fixed before any kill/gc/send). In Rust the same rule holds structurally:
 //! NOTHING in this crate resolves the real home OR reads QD_HOME directly;
-//! everything takes an `SbPaths` built from an injected home + the injected `Env`
+//! everything takes an `QdPaths` built from an injected home + the injected `Env`
 //! seam. Tests inject temp dirs, period.
 
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use crate::effects::Env;
 
 /// Resolved state-dir layout for one home.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SbPaths {
+pub struct QdPaths {
     pub home: PathBuf,
     /// PID registry: `<home>/.claude/sessions/<pid>.json` (+ `.tombstoned`).
     pub sessions_dir: PathBuf,
@@ -37,39 +37,39 @@ pub struct SbPaths {
     /// `join(homedir(), '.claude', 'channels', 'relay', 'inbox')`). Distinct
     /// from `relay_dir` which holds sidecar files. P-C2.
     pub inbox_dir: PathBuf,
-    /// qd hot-state dir, `<sbHome>/state` where `sbHome = QD_HOME || <home>/.quorum/dispatch`
+    /// qd hot-state dir, `<qdHome>/state` where `qdHome = QD_HOME || <home>/.quorum/dispatch`
     /// (bootstrap.ts:88-96). Holds `marks.jsonl` (ADD-3). QD_HOME comes through
     /// the injected `Env` seam (L9a), never raw `std::env`.
     pub state_dir: PathBuf,
 }
 
-impl SbPaths {
+impl QdPaths {
     /// Mirror of src/session.ts:6-8 + :150 for the `.claude` dirs, plus the qd
     /// DATA `state_dir`. With NO injected env this assumes QD_HOME is unset, so
     /// `state_dir = <home>/.quorum/dispatch/state` (the default). Callers that must honor an
-    /// QD_HOME override use [`SbPaths::from_home_env`].
+    /// QD_HOME override use [`QdPaths::from_home_env`].
     pub fn from_home(home: &Path) -> Self {
         Self::build(home, home.join(".quorum").join("dispatch"))
     }
 
     /// As [`from_home`], but resolves the qd data root via the injected `Env`
-    /// seam: `sbHome = QD_HOME || <home>/.quorum/dispatch` (bootstrap.ts:88-96), so `state_dir`
+    /// seam: `qdHome = QD_HOME || <home>/.quorum/dispatch` (bootstrap.ts:88-96), so `state_dir`
     /// honors an QD_HOME override (H4). QD_HOME is read ONLY through `env` (L9a),
     /// never raw `std::env`. The `.claude` dirs are unchanged (HOME-only).
     pub fn from_home_env(home: &Path, env: &dyn Env) -> Self {
-        let sb_home = env
+        let qd_home = env
             .var("QD_HOME")
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".quorum").join("dispatch"));
-        Self::build(home, sb_home)
+        Self::build(home, qd_home)
     }
 
     /// Shared constructor: the `.claude` dirs derive from `home`; `state_dir`
-    /// derives from the already-resolved `sb_home`.
-    fn build(home: &Path, sb_home: PathBuf) -> Self {
+    /// derives from the already-resolved `qd_home`.
+    fn build(home: &Path, qd_home: PathBuf) -> Self {
         let claude = home.join(".claude");
-        SbPaths {
+        QdPaths {
             home: home.to_path_buf(),
             sessions_dir: claude.join("sessions"),
             projects_dir: claude.join("projects"),
@@ -77,7 +77,7 @@ impl SbPaths {
             // server.ts:65: join(homedir(), '.claude', 'channels', 'relay', 'inbox').
             // DISTINCT from relay_dir (which is `.claude/relay`). P-C2.
             inbox_dir: claude.join("channels").join("relay").join("inbox"),
-            state_dir: sb_home.join("state"),
+            state_dir: qd_home.join("state"),
         }
     }
 }
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn layout_mirrors_ts() {
-        let p = SbPaths::from_home(Path::new("/jail/home"));
+        let p = QdPaths::from_home(Path::new("/jail/home"));
         assert_eq!(p.sessions_dir, Path::new("/jail/home/.claude/sessions"));
         assert_eq!(p.projects_dir, Path::new("/jail/home/.claude/projects"));
         assert_eq!(p.relay_dir, Path::new("/jail/home/.claude/relay"));
@@ -106,28 +106,28 @@ mod tests {
     fn from_home_env_default_state_dir() {
         // No QD_HOME → <home>/.quorum/dispatch/state (bootstrap.ts:88-96 default).
         let env = MapEnv::default();
-        let p = SbPaths::from_home_env(Path::new("/jail/home"), &env);
+        let p = QdPaths::from_home_env(Path::new("/jail/home"), &env);
         assert_eq!(p.state_dir, Path::new("/jail/home/.quorum/dispatch/state"));
     }
 
     #[test]
-    fn from_home_env_honors_sb_home_override() {
+    fn from_home_env_honors_qd_home_override() {
         // QD_HOME set → <QD_HOME>/state, NOT <home>/.quorum/dispatch/state.
         let mut env = MapEnv::default();
         env.vars
-            .insert("QD_HOME".to_string(), "/elsewhere/sbdata".to_string());
-        let p = SbPaths::from_home_env(Path::new("/jail/home"), &env);
-        assert_eq!(p.state_dir, Path::new("/elsewhere/sbdata/state"));
+            .insert("QD_HOME".to_string(), "/elsewhere/qddata".to_string());
+        let p = QdPaths::from_home_env(Path::new("/jail/home"), &env);
+        assert_eq!(p.state_dir, Path::new("/elsewhere/qddata/state"));
         // The .claude dirs remain HOME-derived (NOT under QD_HOME).
         assert_eq!(p.sessions_dir, Path::new("/jail/home/.claude/sessions"));
     }
 
     #[test]
-    fn empty_sb_home_falls_back_to_default() {
+    fn empty_qd_home_falls_back_to_default() {
         // QD_HOME="" is falsy → default (JS `||` semantics).
         let mut env = MapEnv::default();
         env.vars.insert("QD_HOME".to_string(), String::new());
-        let p = SbPaths::from_home_env(Path::new("/jail/home"), &env);
+        let p = QdPaths::from_home_env(Path::new("/jail/home"), &env);
         assert_eq!(p.state_dir, Path::new("/jail/home/.quorum/dispatch/state"));
     }
 }

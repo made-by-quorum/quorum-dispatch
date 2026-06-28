@@ -32,7 +32,7 @@ use dispatch::join::JoinOpts;
 use dispatch::kill::{have_kill_target, resolve_zmx_target};
 use dispatch::launch::remove_session_env_file;
 use dispatch::mux::{Mux, MuxSession};
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::reconcile::{plan as reconcile_plan, Action};
 use dispatch::registry::{ensure_tombstone, read_entries, read_entry, tombstone, RegistryEntry};
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
@@ -45,7 +45,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
     // W3 (ADD-15, Pete 2026-06-05): the interactive confirmation prompt is GONE —
     // kill executes directly. `--force` stays PARSE-ACCEPTED as a deprecated no-op
-    // (15+ in-repo scripted callers + the SBQA battery pass it; clap's unknown-flag
+    // (15+ in-repo scripted callers + the QDQA battery pass it; clap's unknown-flag
     // exit-2 would mint a new failure on the most destructive verb). Safety belts
     // are non-interactive: S2 name validation + resolve_or_die's LOUD
     // ambiguous-prefix refusal (common.rs) + the unambiguous W4 success line.
@@ -60,7 +60,7 @@ pub fn run(m: &ArgMatches) -> i32 {
             return 1;
         }
     };
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
 
     let sessions = match common::all_sessions(JoinOpts::default()) {
         Ok(s) => s,
@@ -560,7 +560,7 @@ pub fn run(m: &ArgMatches) -> i32 {
 /// audit trail carries provider + endpoint), call the lib, print the success line.
 /// NO zmx/mux reap (no pane). The HONEST EDGE (an already-dead daemon pid → no signal,
 /// still tombstone) is handled inside `kill_codex`.
-fn run_codex_kill(paths: &SbPaths, session: &dispatch::model::Session) -> i32 {
+fn run_codex_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
     use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
     use dispatch::resume_daemon::kill_codex;
 
@@ -611,7 +611,7 @@ fn run_codex_kill(paths: &SbPaths, session: &dispatch::model::Session) -> i32 {
 /// AND its bridge child together — gated on the ACP cmdline identity, then tombstones. No
 /// zmx/mux reap (an acp row has no pane). After this, `pgrep` shows ZERO adapter/bridge
 /// procs for the killed session (the no-leaked-procs proof).
-fn run_acp_kill(paths: &SbPaths, session: &dispatch::model::Session) -> i32 {
+fn run_acp_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
     use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
     use dispatch::resume_daemon::kill_acp;
 

@@ -63,7 +63,7 @@ fi
 scratch() {
     local T; T="$(mktemp -d)"
     GATE_T="$T"
-    GATE_HOME="$T"; GATE_SBH="$T/qd"
+    GATE_HOME="$T"; GATE_QDH="$T/qd"
 }
 scratch_done() { rm -rf "$GATE_T"; }
 
@@ -73,14 +73,14 @@ scratch_done() { rm -rf "$GATE_T"; }
 # ===========================================================================
 hdr "G-C1 config file-backend round-trip + chmod 600"
 scratch
-HOME="$GATE_HOME" QD_HOME="$GATE_SBH" QD_SECRET_BACKEND=file "$QD_BIN" \
+HOME="$GATE_HOME" QD_HOME="$GATE_QDH" QD_SECRET_BACKEND=file "$QD_BIN" \
     config set openrouter-key sk-gate-ABCD1234 >/dev/null 2>&1
 set_rc=$?
-masked="$(HOME="$GATE_HOME" QD_HOME="$GATE_SBH" QD_SECRET_BACKEND=file "$QD_BIN" config get openrouter-key 2>&1)"
-reveal="$(HOME="$GATE_HOME" QD_HOME="$GATE_SBH" QD_SECRET_BACKEND=file "$QD_BIN" config get openrouter-key --reveal 2>&1)"
-perms="$(ls -l "$GATE_SBH/config.toml" 2>/dev/null | cut -c1-10)"
-HOME="$GATE_HOME" QD_HOME="$GATE_SBH" QD_SECRET_BACKEND=file "$QD_BIN" config unset openrouter-key >/dev/null 2>&1
-afterunset="$(HOME="$GATE_HOME" QD_HOME="$GATE_SBH" QD_SECRET_BACKEND=file "$QD_BIN" config get openrouter-key 2>&1)"
+masked="$(HOME="$GATE_HOME" QD_HOME="$GATE_QDH" QD_SECRET_BACKEND=file "$QD_BIN" config get openrouter-key 2>&1)"
+reveal="$(HOME="$GATE_HOME" QD_HOME="$GATE_QDH" QD_SECRET_BACKEND=file "$QD_BIN" config get openrouter-key --reveal 2>&1)"
+perms="$(ls -l "$GATE_QDH/config.toml" 2>/dev/null | cut -c1-10)"
+HOME="$GATE_HOME" QD_HOME="$GATE_QDH" QD_SECRET_BACKEND=file "$QD_BIN" config unset openrouter-key >/dev/null 2>&1
+afterunset="$(HOME="$GATE_HOME" QD_HOME="$GATE_QDH" QD_SECRET_BACKEND=file "$QD_BIN" config get openrouter-key 2>&1)"
 printf '    set rc=%s | masked=[%s] | reveal=[%s] | perms=[%s] | after-unset=[%s]\n' \
     "$set_rc" "$masked" "$reveal" "$perms" "$afterunset"
 if [ "$set_rc" = "0" ] \
@@ -105,9 +105,9 @@ SHIM="$GATE_T/bin"; mkdir -p "$SHIM"
 printf '#!/usr/bin/env bash\necho "User interaction is not allowed." >&2\nexit 36\n' > "$SHIM/security"
 chmod +x "$SHIM/security"
 # (a) keychain SELECTED (NOT env-forced) + locked → fallback to file.
-a_out="$(PATH="$SHIM:$PATH" HOME="$GATE_HOME" QD_HOME="$GATE_SBH" "$QD_BIN" config set openrouter-key sk-fb-9999 2>&1)"
-a_perms="$(ls -l "$GATE_SBH/config.toml" 2>/dev/null | cut -c1-10)"
-a_get="$(PATH="$SHIM:$PATH" HOME="$GATE_HOME" QD_HOME="$GATE_SBH" "$QD_BIN" config get openrouter-key --reveal 2>&1 | tail -1)"
+a_out="$(PATH="$SHIM:$PATH" HOME="$GATE_HOME" QD_HOME="$GATE_QDH" "$QD_BIN" config set openrouter-key sk-fb-9999 2>&1)"
+a_perms="$(ls -l "$GATE_QDH/config.toml" 2>/dev/null | cut -c1-10)"
+a_get="$(PATH="$SHIM:$PATH" HOME="$GATE_HOME" QD_HOME="$GATE_QDH" "$QD_BIN" config get openrouter-key --reveal 2>&1 | tail -1)"
 printf '    (a) selected+locked set-out:\n%s\n' "$(printf '%s' "$a_out" | sed 's/^/        /')"
 printf '    (a) perms=[%s] get-reveal-tail=[%s]\n' "$a_perms" "$a_get"
 if printf '%s' "$a_out" | grep -q "keychain locked (headless?)" \
@@ -123,13 +123,13 @@ scratch
 SHIM="$GATE_T/bin"; mkdir -p "$SHIM"
 printf '#!/usr/bin/env bash\necho "User interaction is not allowed." >&2\nexit 36\n' > "$SHIM/security"
 chmod +x "$SHIM/security"
-b_out="$(PATH="$SHIM:$PATH" HOME="$GATE_HOME" QD_HOME="$GATE_SBH" QD_SECRET_BACKEND=keychain "$QD_BIN" config set openrouter-key sk-nope 2>&1)"
+b_out="$(PATH="$SHIM:$PATH" HOME="$GATE_HOME" QD_HOME="$GATE_QDH" QD_SECRET_BACKEND=keychain "$QD_BIN" config set openrouter-key sk-nope 2>&1)"
 b_rc=$?
 printf '    (b) env-forced+locked set-out:\n%s\n' "$(printf '%s' "$b_out" | sed 's/^/        /')"
-printf '    (b) rc=%s config.toml-exists=%s\n' "$b_rc" "$( [ -f "$GATE_SBH/config.toml" ] && echo YES || echo no )"
+printf '    (b) rc=%s config.toml-exists=%s\n' "$b_rc" "$( [ -f "$GATE_QDH/config.toml" ] && echo YES || echo no )"
 if [ "$b_rc" = "1" ] \
    && printf '%s' "$b_out" | grep -q "forbids file fallback" \
-   && [ ! -f "$GATE_SBH/config.toml" ]; then
+   && [ ! -f "$GATE_QDH/config.toml" ]; then
     row_pass "G-C3b" "env-forced keychain + locked → loud exit 1, NO fallback file"
 else
     row_fail "G-C3b" "see excerpt above"
@@ -142,8 +142,8 @@ scratch_done
 # ===========================================================================
 hdr "G-C6 N1: config get (no key) = exit 2"
 scratch
-c6_err="$(HOME="$GATE_HOME" QD_HOME="$GATE_SBH" "$QD_BIN" config get 2>&1 1>/dev/null)"
-HOME="$GATE_HOME" QD_HOME="$GATE_SBH" "$QD_BIN" config get >/dev/null 2>&1; c6_rc=$?
+c6_err="$(HOME="$GATE_HOME" QD_HOME="$GATE_QDH" "$QD_BIN" config get 2>&1 1>/dev/null)"
+HOME="$GATE_HOME" QD_HOME="$GATE_QDH" "$QD_BIN" config get >/dev/null 2>&1; c6_rc=$?
 printf '    stderr=[%s] rc=%s\n' "$c6_err" "$c6_rc"
 if [ "$c6_rc" = "2" ] && [ "$c6_err" = "qd config get: a key is required." ]; then
     row_pass "G-C6" "config get no-key → stderr byte-exact + exit 2 (N1 closed; A3 exit-0 stale)"
@@ -195,13 +195,13 @@ fi
 #       relay reported PRESENT (the seam mutes ONLY the port-scan).
 # ===========================================================================
 hdr "NEW relay rows (b) default-path + (d) disable-scan-keeps-sidecar"
-export JAIL_SB_CMD="$QD_BIN"
+export JAIL_QD_CMD="$QD_BIN"
 export JAIL_REAL_HOME="$HOME"
 . "$REPO_ROOT/test/golden/lib/jail.sh"
 if jail_establish "a5gaterelay$$" >/dev/null 2>&1; then
     # (b) default-path — scan ENABLED. Tolerant: assert the line SHAPE, not finding.
     unset QRM_RELAY_DISABLE_SCAN
-    b_out="$(jail_sb bootstrap </dev/null 2>&1)"
+    b_out="$(jail_qd bootstrap </dev/null 2>&1)"
     b_relay="$(printf '%s' "$b_out" | grep '^\[bootstrap\] relay:')"
     printf '    (b) relay line: %s\n' "$b_relay"
     if printf '%s' "$b_relay" | grep -qE '^\[bootstrap\] relay: (present \(healthy\)\.|present \(unhealthy\)\.|absent.*)'; then
@@ -214,7 +214,7 @@ if jail_establish "a5gaterelay$$" >/dev/null 2>&1; then
     RELAY_DIR="$HOME/.claude/relay"; mkdir -p "$RELAY_DIR"
     printf '{"port": %s, "sessionId": "%sseed", "pid": 0, "status": "ok"}\n' \
         "$JAIL_RELAY_PORT" "$JAIL_PREFIX" > "$RELAY_DIR/seeded.json"
-    d_out="$(jail_sb bootstrap </dev/null 2>&1)"
+    d_out="$(jail_qd bootstrap </dev/null 2>&1)"
     d_relay="$(printf '%s' "$d_out" | grep '^\[bootstrap\] relay:')"
     printf '    (d) relay line: %s\n' "$d_relay"
     if printf '%s' "$d_relay" | grep -qi 'relay: present'; then
@@ -245,7 +245,7 @@ unset QD_HOME ZMX_DIR XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME \
 # the live-jail G-L rows, and the G-REC corpus round-trip.
 #
 # Each scenario runs in a CLEAN child bash with only the needed env (QD_BIN /
-# JAIL_SB_CMD / QD_UNDER_TEST), so an earlier scenario's jail env never leaks
+# JAIL_QD_CMD / QD_UNDER_TEST), so an earlier scenario's jail env never leaks
 # into the next — the live G-L rows establish their own jail and fail closed on
 # a stale ZMX_DIR.
 # ===========================================================================
@@ -256,7 +256,7 @@ invoke() {
            -u QRM_RELAY_DISABLE_SCAN -u QRM_RELAY_PORT -u QRM_RELAY_SOCKET_PREFIX \
            -u JAIL_ROOT -u JAIL_PREFIX \
            HOME="${JAIL_REAL_HOME:-$HOME}" QD_BIN="$QD_BIN" \
-           JAIL_SB_CMD="$QD_BIN" QD_UNDER_TEST="$QD_BIN" \
+           JAIL_QD_CMD="$QD_BIN" QD_UNDER_TEST="$QD_BIN" \
            "$@"; then
         row_pass "$id" "$desc — scenario exit 0"
     else
@@ -282,7 +282,7 @@ if [ "${A5_GATE_SKIP_LIVE:-0}" != "1" ]; then
                -u QRM_RELAY_DISABLE_SCAN -u QRM_RELAY_PORT -u QRM_RELAY_SOCKET_PREFIX \
                -u JAIL_ROOT -u JAIL_PREFIX \
                HOME="${JAIL_REAL_HOME:-$HOME}" \
-               QD_UNDER_TEST="$QD_BIN" JAIL_SB_CMD="$QD_BIN" RECORD_RUNID="grec${s}$$" \
+               QD_UNDER_TEST="$QD_BIN" JAIL_QD_CMD="$QD_BIN" RECORD_RUNID="grec${s}$$" \
                bash "$REPO_ROOT/test/golden/verify.sh" \
                --scenario "$HERE/a5rec_${s}.sh" >/dev/null 2>&1; then
             printf '    a5rec_%-10s verify PASS\n' "$s"

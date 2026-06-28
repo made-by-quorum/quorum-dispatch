@@ -93,7 +93,7 @@ mod tests {
             user_named: None,
             session_id: id.to_string(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status: SessionStatus::Cold,
             zmx_name: None,

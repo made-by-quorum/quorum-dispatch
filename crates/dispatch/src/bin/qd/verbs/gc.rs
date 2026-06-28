@@ -19,7 +19,7 @@ use dispatch::gc::{
     format_bytes, jsonl_is_candidate, move_to_trash_at, parse_iso_ms, relative_time, shorten_path,
     should_purge, tombstone_is_candidate, Candidate, CandidateType, TrashMeta,
 };
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::registry::{get_tombstoned_entries, read_entries};
 
 /// `qd gc` — mutually-exclusive modes, then the default scan→trash run.
@@ -73,7 +73,7 @@ fn gc_run(home: &Path, env: &RealEnv, clock: &RealClock, dry_run: bool) -> i32 {
     // from_home_env so the presence `state_dir` honors QD_HOME (the recovery rows +
     // liveness locks live under `<QD_HOME>/state`, not the HOME default). The
     // `.claude` dirs (sessions/projects/relay/inbox) stay HOME-derived regardless.
-    let paths = SbPaths::from_home_env(home, env);
+    let paths = QdPaths::from_home_env(home, env);
     let now = clock.now_ms();
 
     eprintln!("Scanning for GC candidates...");

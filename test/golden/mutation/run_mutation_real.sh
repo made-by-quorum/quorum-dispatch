@@ -39,7 +39,7 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS + 1)); printf 'ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$1"; }
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/sbmut-real.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/qdmut-real.XXXXXX")"
 trap 'rm -rf "$TMP" 2>/dev/null || true' EXIT INT TERM
 
 # A "caught" mutation = verify/comparator returns NON-ZERO on diverged input.

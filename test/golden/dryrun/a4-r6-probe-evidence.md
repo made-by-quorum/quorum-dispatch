@@ -153,7 +153,7 @@ fresh-boot drain timing) got the 16KB accepted. So the live create-path drop at
   the ≤2 budget. Zero pre-boot failures (pre-verification caught nothing).
 - **REAL-HOME BELT: 731 → 731 HOLDS on BOTH boots**, zero leaked prefixed rows.
   Clean trap-protected teardown via jail primitives; post-run sweep confirmed zero
-  orphaned claude/zmx of mine and both jail roots (`sbrg-9445…`, `sbrg-4512…`)
+  orphaned claude/zmx of mine and both jail roots (`qdrg-9445…`, `qdrg-4512…`)
   removed.
 
 ## Driver-bug note (accounting only — NOT a data defect)
@@ -255,13 +255,13 @@ path. GREEN 2 / RED 0.
 
 ## Boots / belt accounting
 
-- **Boots spent (macOS real-claude): 1** — ONE session (`sbrg-…-r7`): warm-up
+- **Boots spent (macOS real-claude): 1** — ONE session (`qdrg-…-r7`): warm-up
   (AUTHOK, urc=1) + 12KB + 16KB. Within the ≤2 budget; planned for 1, spent 1.
   Zero pre-boot failures.
 - **REAL-HOME BELT: 734 → 734 HOLDS**, zero leaked prefixed rows. Clean
   trap-protected teardown via jail primitives; post-run sweep confirmed zero
   orphaned claude/zmx of mine and the jail root
-  (`/tmp/claude-501/sbrg-runs/209801780658671170`) removed.
+  (`/tmp/claude-501/qdrg-runs/209801780658671170`) removed.
 
 ## FACTS-ONLY disposition
 

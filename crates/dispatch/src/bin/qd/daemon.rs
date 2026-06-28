@@ -77,7 +77,7 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
             .var("HOME")
             .filter(|s| !s.is_empty())
             .map(|home| {
-                let paths = dispatch::paths::SbPaths::from_home_env(
+                let paths = dispatch::paths::QdPaths::from_home_env(
                     std::path::Path::new(&home),
                     &dispatch::effects::RealEnv,
                 );
@@ -91,7 +91,7 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
 
     // R3c-Step-1: resolve the per-session control socket path the daemon binds.
     // It MUST rendezvous with the relay server's `send_control` target, which keys
-    // on `CLAUDE_CODE_SESSION_ID` + `SbPaths::state_dir` (relay_server/mod.rs). The
+    // on `CLAUDE_CODE_SESSION_ID` + `QdPaths::state_dir` (relay_server/mod.rs). The
     // daemon derives the identical path from the SAME env, so both sides agree
     // without a new CLI arg. Only THIS entry can name `dispatch::control_sock`
     // (qrmux cannot — it is the lower crate); bare qrmux (`qrmux/src/main.rs`) passes
@@ -109,7 +109,7 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
                 .var("HOME")
                 .filter(|h| !h.is_empty())
                 .map(|home| {
-                    let paths = dispatch::paths::SbPaths::from_home_env(
+                    let paths = dispatch::paths::QdPaths::from_home_env(
                         std::path::Path::new(&home),
                         &dispatch::effects::RealEnv,
                     );

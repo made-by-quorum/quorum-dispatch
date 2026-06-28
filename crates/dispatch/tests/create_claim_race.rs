@@ -27,7 +27,7 @@ use dispatch::create::{run_new, NewDeps, NewParams};
 use dispatch::effects::{FixedClock, MapEnv};
 use dispatch::exec::{ExecResult, ScriptedExec};
 use dispatch::mux::{Mux, MuxSession};
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 
 mod common;
 
@@ -103,7 +103,7 @@ fn child_body() -> ! {
     let result_file = PathBuf::from(std::env::var(RESULT_ENV).unwrap());
     common::assert_not_real_home(&home);
 
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     let exec = ScriptedExec::new().on("zmx", &["--help"], Some(0), ZMX_HELP_OK, "");
     // SlowEmptyMux: pre-check passes (nothing listed) so all children race the
     // O_EXCL claim; the winner HOLDS its claim across the 400ms run_detached
@@ -142,7 +142,7 @@ fn child_body() -> ! {
         cwd: PathBuf::from("/work"),
         backend_env: vec![],
         backend_env_unset: vec![],
-        sb_session_id: None,
+        qd_session_id: None,
         render: dispatch::launch::RenderMode::Inline,
     };
     let marker = match run_new(&deps, &params) {
@@ -254,7 +254,7 @@ fn create_path_claim_race_exactly_one_winner_across_processes() {
 #[test]
 fn claims_dir_is_under_claude_root() {
     let home = Path::new("/jail/home");
-    let paths = SbPaths::from_home(home);
+    let paths = QdPaths::from_home(home);
     let exec = ScriptedExec::new();
     let mux = SlowEmptyMux;
     let env = MapEnv {

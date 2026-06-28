@@ -42,23 +42,23 @@ use crate::relay;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapPaths {
     /// The qd data root, `QD_HOME` or `<home>/.quorum/dispatch` (bootstrap.ts:88-96).
-    pub sb_home: PathBuf,
-    /// Reserved hot-state dir, `<sbHome>/state` (bootstrap.ts:90 stateDir).
+    pub qd_home: PathBuf,
+    /// Reserved hot-state dir, `<qdHome>/state` (bootstrap.ts:90 stateDir).
     pub state_dir: PathBuf,
 }
 
 /// Resolve the engine's bootstrap paths from the injected home + env
-/// (`sbHome = QD_HOME || <home>/.quorum/dispatch`, bootstrap.ts:88-96). The home is injected
+/// (`qdHome = QD_HOME || <home>/.quorum/dispatch`, bootstrap.ts:88-96). The home is injected
 /// (never resolved from the real environment here, L9a); QD_HOME is read ONLY
 /// through `env`.
 pub fn resolve_bootstrap_paths(home: &Path, env: &dyn Env) -> BootstrapPaths {
-    let sb_home = env
+    let qd_home = env
         .var("QD_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".quorum").join("dispatch"));
-    let state_dir = sb_home.join("state");
-    BootstrapPaths { sb_home, state_dir }
+    let state_dir = qd_home.join("state");
+    BootstrapPaths { qd_home, state_dir }
 }
 
 // ----------------------------------------------------------------------------
@@ -672,14 +672,14 @@ pub struct ExtensionsDeps<'a> {
     pub interactive: bool,
     /// A short opaque label for the pinned `qb` ref (e.g. a short sha), for the
     /// report line. Engine-truthful, content-free.
-    pub sbx_pin_label: String,
+    pub qb_pin_label: String,
     /// A short opaque label for the pinned plugin ref, for the report line.
     pub plugin_pin_label: String,
     /// Ask a yes/no question; default No.
     pub prompt_yes_no: &'a dyn Fn(&str) -> bool,
     /// Run the external installer for the `qb` extension. Returns Ok on success,
     /// Err(message) on failure (toolchain/auth/build). Only called on a yes.
-    pub install_sbx: &'a dyn Fn() -> Result<(), String>,
+    pub install_qb: &'a dyn Fn() -> Result<(), String>,
     /// Run the external installer for the work-model plugin. Same contract.
     pub install_plugin: &'a dyn Fn() -> Result<(), String>,
 }
@@ -728,14 +728,14 @@ pub fn check_extensions(deps: &ExtensionsDeps) -> (ExtensionsStepOutcome, Vec<St
         deps.interactive,
         &format!(
             "Install the pinned extension binary ({}) via the install script? [y/N] ",
-            deps.sbx_pin_label
+            deps.qb_pin_label
         ),
-        deps.install_sbx,
+        deps.install_qb,
         deps.prompt_yes_no,
         "extensions: binary — install later with: qd bootstrap (on a TTY)",
         &format!(
             "extensions: binary — installed (pinned {}).",
-            deps.sbx_pin_label
+            deps.qb_pin_label
         ),
         "extensions: binary — install FAILED",
         &mut lines,
@@ -770,7 +770,7 @@ pub fn check_extensions(deps: &ExtensionsDeps) -> (ExtensionsStepOutcome, Vec<St
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapResult {
     pub paths: BootstrapPaths,
-    /// True if `sb_home`/`state_dir` already existed (idempotent re-run).
+    /// True if `qd_home`/`state_dir` already existed (idempotent re-run).
     pub already_existed: bool,
     pub zmx: ZmxResult,
     pub relay: RelayStepOutcome,
@@ -803,10 +803,10 @@ pub fn run_bootstrap(
     wrapper_deps: &WrapperDeps,
     extensions_deps: &ExtensionsDeps,
 ) -> Result<BootstrapResult, String> {
-    let already_existed = (fs.exists)(&paths.sb_home) && (fs.exists)(&paths.state_dir);
+    let already_existed = (fs.exists)(&paths.qd_home) && (fs.exists)(&paths.state_dir);
 
     // Ensure the state dirs (idempotent: mkdir -p on an existing dir is a no-op).
-    (fs.mkdir_p)(&paths.sb_home)?;
+    (fs.mkdir_p)(&paths.qd_home)?;
     (fs.mkdir_p)(&paths.state_dir)?;
 
     let zmx = check_zmx(zmx_deps);
@@ -818,7 +818,7 @@ pub fn run_bootstrap(
     let mut report = Vec::new();
     report.push(format!(
         "[bootstrap] state dir: {}",
-        paths.sb_home.display()
+        paths.qd_home.display()
     ));
     report.push(format!(
         "[bootstrap]   state: {} ({})",
@@ -902,10 +902,10 @@ mod tests {
     // --- resolve_bootstrap_paths ------------------------------------------
 
     #[test]
-    fn paths_default_to_home_dot_sb() {
+    fn paths_default_to_home_dot_qd() {
         let env = map_env(&[]);
         let p = resolve_bootstrap_paths(Path::new("/jail/home"), &env);
-        assert_eq!(p.sb_home, PathBuf::from("/jail/home/.quorum/dispatch"));
+        assert_eq!(p.qd_home, PathBuf::from("/jail/home/.quorum/dispatch"));
         assert_eq!(
             p.state_dir,
             PathBuf::from("/jail/home/.quorum/dispatch/state")
@@ -913,18 +913,18 @@ mod tests {
     }
 
     #[test]
-    fn paths_honor_sb_home_override() {
-        let env = map_env(&[("QD_HOME", "/jail/sbhome")]);
+    fn paths_honor_qd_home_override() {
+        let env = map_env(&[("QD_HOME", "/jail/qdhome")]);
         let p = resolve_bootstrap_paths(Path::new("/jail/home"), &env);
-        assert_eq!(p.sb_home, PathBuf::from("/jail/sbhome"));
-        assert_eq!(p.state_dir, PathBuf::from("/jail/sbhome/state"));
+        assert_eq!(p.qd_home, PathBuf::from("/jail/qdhome"));
+        assert_eq!(p.state_dir, PathBuf::from("/jail/qdhome/state"));
     }
 
     #[test]
-    fn paths_ignore_empty_sb_home() {
+    fn paths_ignore_empty_qd_home() {
         let env = map_env(&[("QD_HOME", "")]);
         let p = resolve_bootstrap_paths(Path::new("/jail/home"), &env);
-        assert_eq!(p.sb_home, PathBuf::from("/jail/home/.quorum/dispatch"));
+        assert_eq!(p.qd_home, PathBuf::from("/jail/home/.quorum/dispatch"));
     }
 
     // --- decide_zmx_action: EVERY branch (TS "every branch" test) ---------
@@ -1584,17 +1584,17 @@ mod tests {
     struct ExtFx {
         interactive: bool,
         yes: bool,
-        sbx_ok: bool,
+        qb_ok: bool,
         plugin_ok: bool,
-        sbx_called: Cell<bool>,
+        qb_called: Cell<bool>,
         plugin_called: Cell<bool>,
     }
 
     fn run_ext(fx: &ExtFx) -> (ExtensionsStepOutcome, Vec<String>) {
         let prompt = |_q: &str| fx.yes;
-        let install_sbx = || {
-            fx.sbx_called.set(true);
-            if fx.sbx_ok {
+        let install_qb = || {
+            fx.qb_called.set(true);
+            if fx.qb_ok {
                 Ok(())
             } else {
                 Err("cargo not found".to_string())
@@ -1610,10 +1610,10 @@ mod tests {
         };
         let deps = ExtensionsDeps {
             interactive: fx.interactive,
-            sbx_pin_label: "abc1234".to_string(),
+            qb_pin_label: "abc1234".to_string(),
             plugin_pin_label: "def5678".to_string(),
             prompt_yes_no: &prompt,
-            install_sbx: &install_sbx,
+            install_qb: &install_qb,
             install_plugin: &install_plugin,
         };
         check_extensions(&deps)
@@ -1623,9 +1623,9 @@ mod tests {
         ExtFx {
             interactive: false,
             yes: false,
-            sbx_ok: true,
+            qb_ok: true,
             plugin_ok: true,
-            sbx_called: Cell::new(false),
+            qb_called: Cell::new(false),
             plugin_called: Cell::new(false),
         }
     }
@@ -1636,7 +1636,7 @@ mod tests {
         let (o, lines) = run_ext(&f);
         assert_eq!(o.qb, ExtInstallOutcome::NotOffered);
         assert_eq!(o.plugin, ExtInstallOutcome::NotOffered);
-        assert!(!f.sbx_called.get(), "non-TTY must NEVER install");
+        assert!(!f.qb_called.get(), "non-TTY must NEVER install");
         assert!(!f.plugin_called.get(), "non-TTY must NEVER install");
         assert!(lines.iter().any(|l| l.contains("install later")));
     }
@@ -1651,7 +1651,7 @@ mod tests {
         let (o, _) = run_ext(&f);
         assert_eq!(o.qb, ExtInstallOutcome::Declined);
         assert_eq!(o.plugin, ExtInstallOutcome::Declined);
-        assert!(!f.sbx_called.get(), "declined → no install");
+        assert!(!f.qb_called.get(), "declined → no install");
         assert!(!f.plugin_called.get(), "declined → no install");
     }
 
@@ -1665,20 +1665,20 @@ mod tests {
         let (o, lines) = run_ext(&f);
         assert_eq!(o.qb, ExtInstallOutcome::Installed);
         assert_eq!(o.plugin, ExtInstallOutcome::Installed);
-        assert!(f.sbx_called.get());
+        assert!(f.qb_called.get());
         assert!(f.plugin_called.get());
         assert!(lines.iter().any(|l| l.contains("binary — installed")));
         assert!(lines.iter().any(|l| l.contains("plugin — installed")));
     }
 
     #[test]
-    fn check_extensions_partial_safe_sbx_fails_plugin_still_offered() {
+    fn check_extensions_partial_safe_qb_fails_plugin_still_offered() {
         // Partial-safe: an qb install FAILURE does NOT short-circuit the plugin
         // offer — the two are independent.
         let f = ExtFx {
             interactive: true,
             yes: true,
-            sbx_ok: false,
+            qb_ok: false,
             plugin_ok: true,
             ..efx()
         };
@@ -1747,14 +1747,14 @@ mod tests {
         };
         // extensions: non-interactive → never offered (no installs), clean FYI.
         let e_prompt = |_q: &str| false;
-        let e_install_sbx = || Ok(());
+        let e_install_qb = || Ok(());
         let e_install_plugin = || Ok(());
         let extensions_deps = ExtensionsDeps {
             interactive: false,
-            sbx_pin_label: "abc1234".to_string(),
+            qb_pin_label: "abc1234".to_string(),
             plugin_pin_label: "def5678".to_string(),
             prompt_yes_no: &e_prompt,
-            install_sbx: &e_install_sbx,
+            install_qb: &e_install_qb,
             install_plugin: &e_install_plugin,
         };
         let paths = resolve_bootstrap_paths(home, env);

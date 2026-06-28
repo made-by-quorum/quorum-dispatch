@@ -23,11 +23,11 @@ scn_run() {
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=ping (forged status/turns; age=/uptime= → <DUR>)"
         echo "\$ qd ping (no target → error exit 3)"
-        scn_sb ping 2>&1; echo "exit=$?"
-        echo "\$ qd ping --prefix sbrg- (empty registry)"
-        scn_sb ping --prefix sbrg- 2>&1; echo "exit=$?"
-        echo "\$ qd ping --prefix sbrg- --json (empty)"
-        scn_sb ping --prefix sbrg- --json 2>&1; echo "exit=$?"
+        scn_qd ping 2>&1; echo "exit=$?"
+        echo "\$ qd ping --prefix qdrg- (empty registry)"
+        scn_qd ping --prefix qdrg- 2>&1; echo "exit=$?"
+        echo "\$ qd ping --prefix qdrg- --json (empty)"
+        scn_qd ping --prefix qdrg- --json 2>&1; echo "exit=$?"
     } > "$SCN_OUT"
     # DONE: idle, recent (uptime < 300) → exit 0.
     a5_forge_registry "${JAIL_PREFIX}done" idle 5 "$P_DONE" 60
@@ -36,13 +36,13 @@ scn_run() {
     # AMBIGUOUS: idle, 0 turns, uptime > 300 → exit 4.
     a5_forge_registry "${JAIL_PREFIX}ambg" idle 0 "$P_AMBG" 600
     {
-        echo "\$ qd ping sbrg-done (idle recent → done exit 0)"
+        echo "\$ qd ping qdrg-done (idle recent → done exit 0)"
         # Isolate each target: ping by exact name reads only that entry.
-        scn_sb ping "${JAIL_PREFIX}done" 2>&1; echo "exit=$?"
-        echo "\$ qd ping sbrg-actv (busy recent → active exit 2)"
-        scn_sb ping "${JAIL_PREFIX}actv" 2>&1; echo "exit=$?"
-        echo "\$ qd ping sbrg-ambg (idle 0-turns aged → ambiguous exit 4)"
-        scn_sb ping "${JAIL_PREFIX}ambg" 2>&1; echo "exit=$?"
+        scn_qd ping "${JAIL_PREFIX}done" 2>&1; echo "exit=$?"
+        echo "\$ qd ping qdrg-actv (busy recent → active exit 2)"
+        scn_qd ping "${JAIL_PREFIX}actv" 2>&1; echo "exit=$?"
+        echo "\$ qd ping qdrg-ambg (idle 0-turns aged → ambiguous exit 4)"
+        scn_qd ping "${JAIL_PREFIX}ambg" 2>&1; echo "exit=$?"
     } >> "$SCN_OUT"
     kill "$P_DONE" "$P_ACTV" "$P_AMBG" 2>/dev/null
     printf '0\n' > "$SCN_OUT.exit"
@@ -51,7 +51,7 @@ scn_run() {
 scn_assert() {
     [ -f "$SCN_OUT" ] || return 1
     grep -q "qd ping: provide a <session> or --prefix" "$SCN_OUT" || return 1
-    grep -q "No sessions matching 'sbrg-'" "$SCN_OUT" || return 1
+    grep -q "No sessions matching 'qdrg-'" "$SCN_OUT" || return 1
     grep -q "${JAIL_PREFIX}done: status=idle" "$SCN_OUT" || return 1
     grep -q "${JAIL_PREFIX}actv: status=busy" "$SCN_OUT" || return 1
     grep -q "AMBIGUOUS" "$SCN_OUT" || return 1

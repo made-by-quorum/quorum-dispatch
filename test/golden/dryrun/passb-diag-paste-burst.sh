@@ -15,7 +15,7 @@ SUT="${SUT:-/home/u/work/wt-a4-passb/target/debug/qd}"
     > "$DIAG/verify.log" 2>&1; echo "$?" > "$DIAG/verify.rc" ) &
 vpid=$!
 
-base="${TMPDIR:-/tmp}"; base="${base%/}/sbrg-runs"
+base="${TMPDIR:-/tmp}"; base="${base%/}/qdrg-runs"
 # Poll-copy jail artifacts until verify exits (teardown removes the jail root).
 while kill -0 "$vpid" 2>/dev/null; do
     for d in "$base"/*/; do

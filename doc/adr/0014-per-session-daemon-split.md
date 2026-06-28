@@ -23,7 +23,7 @@ specced):
   REQUIRED; the per-dir multi-session mode is retired). Capacity-1 enforced by
   identity: every session-addressed verb checks `name == self.session`.
 - **Naming (no third resolution scheme):** dir resolution is UNCHANGED (two-tier
-  XDG/sbHome, ADR-0013). Leaves: `<dir>/<name>.sock` / `<name>.lock` / `<name>.log`.
+  XDG/qdHome, ADR-0013). Leaves: `<dir>/<name>.sock` / `<name>.lock` / `<name>.log`.
   Injective name→leaf mapping (refuse-don't-escape; reserved: `qrmux`, leading `.`);
   dynamic sun_path budget with remedy-naming errors (zmx precedent).
 - **Protocol v3 + capability exchange:** preamble byte 0x03; `ClientMsg::Hello {caps}` /

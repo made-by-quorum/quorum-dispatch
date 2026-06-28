@@ -52,7 +52,7 @@ scn_run() {
     # partial state). Run a few times across the boot window.
     local ls_never_crashed=1 k=0
     while [ "$k" -lt 8 ]; do
-        scn_sb ls --json >/dev/null 2>&1
+        scn_qd ls --json >/dev/null 2>&1
         [ $? -ne 0 ] && ls_never_crashed=0
         sleep 1; k=$((k + 1))
     done
@@ -71,7 +71,7 @@ scn_run() {
 
     # AFTER the write settles: the session is VISIBLE in ls (ls exits 0 and the row
     # is present). This is the post-completion visibility OUTCOME.
-    scn_sb ls --json 2>/dev/null > "$SCN_OUT.lsjson"
+    scn_qd ls --json 2>/dev/null > "$SCN_OUT.lsjson"
     local ls_after_rc=$?
     local visible_after=0
     visible_after="$(python3 -c '

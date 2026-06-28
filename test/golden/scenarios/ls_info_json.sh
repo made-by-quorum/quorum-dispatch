@@ -17,7 +17,7 @@ SCN_FIXTURE="fixtures/ls-info-json/normalized/ls-empty.json"
 scn_run() {
     # Empty-registry ls --json: the simplest deterministic JSON contract. The
     # jail guarantees an empty registry (HOME is sandboxed), so output is stable.
-    scn_sb ls --json > "$SCN_OUT" 2>/dev/null
+    scn_qd ls --json > "$SCN_OUT" 2>/dev/null
     printf '%s\n' "$?" > "$SCN_OUT.exit"
 }
 

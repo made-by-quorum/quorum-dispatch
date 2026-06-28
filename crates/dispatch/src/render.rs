@@ -77,7 +77,7 @@ pub fn ls_json_full_acp(
 ) -> Value {
     // P0 wave-1: shortest-unique prefixes (min 2 chars) computed among the
     // LISTED sessions' stable ids — pure read-time computation, the same way
-    // codes were computed. Sessions with no sb_id contribute nothing and gain
+    // codes were computed. Sessions with no qd_id contribute nothing and gain
     // no keys (additive: a fixture with no ids renders today's exact bytes).
     let prefixes = crate::idstore::prefix_map(sessions);
     let mut arr: Vec<Value> = sessions
@@ -222,18 +222,18 @@ fn session_to_value(
     // sessions with no id (no session_id / not yet minted) gain no keys, so
     // id-less fixtures render today's exact bytes. Placed before `code` so
     // `code` stays LAST (back-compat: external consumers parse `code`).
-    if let Some(sb_id) = &s.sb_id {
-        m.insert("sbId".into(), Value::String(sb_id.clone()));
-        if let Some(prefix) = id_prefixes.get(sb_id) {
-            m.insert("sbIdPrefix".into(), Value::String(prefix.clone()));
+    if let Some(qd_id) = &s.qd_id {
+        m.insert("qdId".into(), Value::String(qd_id.clone()));
+        if let Some(prefix) = id_prefixes.get(qd_id) {
+            m.insert("qdIdPrefix".into(), Value::String(prefix.clone()));
         }
     }
 
     // WP-B7 PIECE 2 (B5-iii obl-4 OUTPUT field) ADDITIVE: a FORK's lineage pointer
-    // — STRICTLY the PARENT instance's sbId — emitted ONLY when this row is a fork
+    // — STRICTLY the PARENT instance's qdId — emitted ONLY when this row is a fork
     // (`lineage` is `Some`). A non-fork row gains no key, so the no-lineage case is
     // BYTE-IDENTICAL to before (the same additive-when-present precedent as
-    // `sbId`/`backend`/`spawnedBy`). The fork's OWN id stays `sbId` (no parent-id
+    // `qdId`/`backend`/`spawnedBy`). The fork's OWN id stays `qdId` (no parent-id
     // leak into the fork's own identity). Placed before `code` so `code` stays LAST.
     if let Some(lineage) = &s.lineage {
         m.insert("lineage".into(), Value::String(lineage.clone()));
@@ -338,25 +338,25 @@ fn stray_short_code(session_id: &str) -> String {
 /// P0 `qd info <target> --json`: ONE json object for the RESOLVED session — the
 /// point-resolution surface bond joins against (liveness/names/ids), promised to
 /// P1 as this EXACT field list. Shape follows the `ls --json` conventions:
-/// camelCase keys; `sbId`/`sbIdPrefix` ABSENT (not null) when the session has
+/// camelCase keys; `qdId`/`qdIdPrefix` ABSENT (not null) when the session has
 /// no mapped stable id. That absence is a LIFECYCLE state, not an error
 /// (B5 item 12 doc note, accepted r2): ids are minted at `qd start` and bound
 /// at boot-confirm, and `qd ls` lazily backfills pre-existing sessions — so a
 /// session can legitimately surface here BEFORE its id exists
 /// (absent-until-minted; resolution stays engine-side per spec §3). Consumers
-/// must treat a missing `sbId` as "not yet minted". Unlike the ls rows, `name`
+/// must treat a missing `qdId` as "not yet minted". Unlike the ls rows, `name`
 /// and `pid` are EXPLICIT `null` when absent (the spec'd contract:
 /// `"name": "wk" | null`, `"pid": 123 | null`).
 ///
 /// - `prefixes` is the shortest-unique prefix map computed among the resolved
 ///   session LIST (`idstore::prefix_map`, the same computation ls uses) —
-///   `sbIdPrefix` is emitted only when `sbId` is and the map has it.
+///   `qdIdPrefix` is emitted only when `qdId` is and the map has it.
 /// - `live` is computed by the caller via `resolve::is_live_with_pid` (the pid
 ///   check needs the `is_pid_alive` effects seam; this render fn stays pure).
 /// - A pid of `0` means "no pid recorded" (the engine-wide convention, see
 ///   `is_live_with_pid`) and renders as `null`, matching what `live` consulted.
 ///
-/// Key order: name, sessionId, sbId?, sbIdPrefix?, status, live, pid, provider.
+/// Key order: name, sessionId, qdId?, qdIdPrefix?, status, live, pid, provider.
 pub fn info_json(
     s: &Session,
     prefixes: &std::collections::HashMap<String, String>,
@@ -371,10 +371,10 @@ pub fn info_json(
             .unwrap_or(Value::Null),
     );
     m.insert("sessionId".into(), json!(s.session_id));
-    if let Some(sb_id) = &s.sb_id {
-        m.insert("sbId".into(), Value::String(sb_id.clone()));
-        if let Some(prefix) = prefixes.get(sb_id) {
-            m.insert("sbIdPrefix".into(), Value::String(prefix.clone()));
+    if let Some(qd_id) = &s.qd_id {
+        m.insert("qdId".into(), Value::String(qd_id.clone()));
+        if let Some(prefix) = prefixes.get(qd_id) {
+            m.insert("qdIdPrefix".into(), Value::String(prefix.clone()));
         }
     }
     m.insert("status".into(), json!(s.status.as_str()));
@@ -534,8 +534,8 @@ pub fn info_text_with_fold(session: &Session, now_ms: i64, fold: Option<&Snapsho
     // P0 wave-1 ADDITIVE: the engine-minted stable id, ONLY when mapped —
     // id-less sessions render today's exact bytes (the parity goldens carry no
     // ids, so they are untouched).
-    if let Some(sb_id) = &session.sb_id {
-        push(&mut out, format!("Stable ID:   {sb_id}"));
+    if let Some(qd_id) = &session.qd_id {
+        push(&mut out, format!("Stable ID:   {qd_id}"));
     }
     push(
         &mut out,
@@ -672,7 +672,7 @@ mod tests {
             user_named: None,
             session_id: String::new(),
             code: Some("abc".into()),
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status: SessionStatus::Idle,
             zmx_name: None,
@@ -1146,28 +1146,28 @@ mod tests {
         assert!(text.contains("Spawned by:  orc\n"));
     }
 
-    // --- P0 wave-1: sbId / sbIdPrefix additive surfacing ---
+    // --- P0 wave-1: qdId / qdIdPrefix additive surfacing ---
 
     #[test]
-    fn ls_json_emits_sb_id_and_prefix_only_when_mapped() {
+    fn ls_json_emits_qd_id_and_prefix_only_when_mapped() {
         // Two rows share a 2-char id prefix → "ab3"/"ab4"; a third row has no
-        // sb_id → NO sbId/sbIdPrefix keys (additive, today's exact bytes).
+        // qd_id → NO qdId/qdIdPrefix keys (additive, today's exact bytes).
         let mut a = a6_session();
         a.session_id = "uuid-a".into();
-        a.sb_id = Some("ab3kx9mq".into());
+        a.qd_id = Some("ab3kx9mq".into());
         let mut b = a6_session();
         b.session_id = "uuid-b".into();
-        b.sb_id = Some("ab47qrst".into());
+        b.qd_id = Some("ab47qrst".into());
         let bare = a6_session();
         let v = ls_json(&[a, b, bare], &[]);
         let arr = v.as_array().unwrap();
-        assert_eq!(arr[0]["sbId"], json!("ab3kx9mq"));
-        assert_eq!(arr[0]["sbIdPrefix"], json!("ab3"));
-        assert_eq!(arr[1]["sbId"], json!("ab47qrst"));
-        assert_eq!(arr[1]["sbIdPrefix"], json!("ab4"));
+        assert_eq!(arr[0]["qdId"], json!("ab3kx9mq"));
+        assert_eq!(arr[0]["qdIdPrefix"], json!("ab3"));
+        assert_eq!(arr[1]["qdId"], json!("ab47qrst"));
+        assert_eq!(arr[1]["qdIdPrefix"], json!("ab4"));
         let bare_obj = arr[2].as_object().unwrap();
-        assert!(!bare_obj.contains_key("sbId"), "no id → no sbId key");
-        assert!(!bare_obj.contains_key("sbIdPrefix"));
+        assert!(!bare_obj.contains_key("qdId"), "no id → no qdId key");
+        assert!(!bare_obj.contains_key("qdIdPrefix"));
         // Existing fields kept (additive) and code stays LAST.
         let keys: Vec<&str> = arr[0]
             .as_object()
@@ -1178,40 +1178,40 @@ mod tests {
         assert!(keys.contains(&"sessionId"));
         assert!(keys.contains(&"code"));
         assert_eq!(keys.last(), Some(&"code"), "code stays last");
-        let si = keys.iter().position(|k| *k == "sbId").unwrap();
+        let si = keys.iter().position(|k| *k == "qdId").unwrap();
         let ci = keys.iter().position(|k| *k == "code").unwrap();
-        assert!(si < ci, "sbId lands before code");
+        assert!(si < ci, "qdId lands before code");
     }
 
     #[test]
-    fn ls_json_without_sb_ids_is_byte_identical_to_before() {
+    fn ls_json_without_qd_ids_is_byte_identical_to_before() {
         // The parity-golden protection: id-less sessions render NO new keys.
         let s = a6_session();
         let out = to_pretty(&ls_json(std::slice::from_ref(&s), &[]));
-        assert!(!out.contains("sbId"), "no sbId without a mapped id: {out}");
+        assert!(!out.contains("qdId"), "no qdId without a mapped id: {out}");
     }
 
     // --- WP-B7 PIECE 2: lineage (B5-iii obl-4 OUTPUT field) additive surfacing ---
 
     #[test]
     fn ls_json_emits_lineage_only_when_fork() {
-        // A fork row (lineage Some = the PARENT's sbId) emits the additive
+        // A fork row (lineage Some = the PARENT's qdId) emits the additive
         // `lineage` key = that parent pointer; a non-fork row (lineage None) emits
         // NO key (additive both-ways, today's exact bytes). The fork's OWN id stays
-        // `sbId` — lineage is STRICTLY the parent, never the fork's own identity.
+        // `qdId` — lineage is STRICTLY the parent, never the fork's own identity.
         let mut fork = a6_session();
         fork.session_id = "fork-uuid".into();
-        fork.sb_id = Some("forkid01".into());
-        fork.lineage = Some("parentsb".into());
-        let nonfork = a6_session(); // lineage None, no sb_id
+        fork.qd_id = Some("forkid01".into());
+        fork.lineage = Some("parentqd".into());
+        let nonfork = a6_session(); // lineage None, no qd_id
         let v = ls_json(&[fork, nonfork], &[]);
         let arr = v.as_array().unwrap();
 
         // false-negative guard: the fork DOES emit lineage = the parent pointer.
-        assert_eq!(arr[0]["lineage"], json!("parentsb"));
+        assert_eq!(arr[0]["lineage"], json!("parentqd"));
         // GUARDRAIL: lineage is the parent, NOT the fork's own id (no leak).
-        assert_eq!(arr[0]["sbId"], json!("forkid01"));
-        assert_ne!(arr[0]["lineage"], arr[0]["sbId"], "lineage ≠ own sbId");
+        assert_eq!(arr[0]["qdId"], json!("forkid01"));
+        assert_ne!(arr[0]["lineage"], arr[0]["qdId"], "lineage ≠ own qdId");
 
         // false-positive guard: the non-fork row gains NO lineage key.
         let nf = arr[1].as_object().unwrap();
@@ -1220,7 +1220,7 @@ mod tests {
             "non-fork row emits no lineage key: {nf:?}"
         );
 
-        // code stays LAST; lineage lands before it (additive-before-code, like sbId).
+        // code stays LAST; lineage lands before it (additive-before-code, like qdId).
         let keys: Vec<&str> = arr[0]
             .as_object()
             .unwrap()
@@ -1248,7 +1248,7 @@ mod tests {
     #[test]
     fn info_text_stable_id_line_only_when_mapped() {
         let mut s = a6_session();
-        s.sb_id = Some("ab3kx9mq".into());
+        s.qd_id = Some("ab3kx9mq".into());
         let text = info_text(&s, 0);
         assert!(
             text.contains("Stable ID:   ab3kx9mq\n"),
@@ -1264,7 +1264,7 @@ mod tests {
     #[test]
     fn info_json_mapped_emits_all_fields_in_order() {
         let mut s = a6_session();
-        s.sb_id = Some("ab3kx9mq".into());
+        s.qd_id = Some("ab3kx9mq".into());
         let prefixes: std::collections::HashMap<String, String> =
             [("ab3kx9mq".to_string(), "ab3".to_string())].into();
         let v = info_json(&s, &prefixes, true);
@@ -1275,8 +1275,8 @@ mod tests {
             [
                 "name",
                 "sessionId",
-                "sbId",
-                "sbIdPrefix",
+                "qdId",
+                "qdIdPrefix",
                 "status",
                 "live",
                 "pid",
@@ -1286,8 +1286,8 @@ mod tests {
         );
         assert_eq!(obj["name"], json!("worker"));
         assert_eq!(obj["sessionId"], json!("sess-a6"));
-        assert_eq!(obj["sbId"], json!("ab3kx9mq"));
-        assert_eq!(obj["sbIdPrefix"], json!("ab3"));
+        assert_eq!(obj["qdId"], json!("ab3kx9mq"));
+        assert_eq!(obj["qdIdPrefix"], json!("ab3"));
         assert_eq!(obj["status"], json!("busy"));
         assert_eq!(obj["live"], json!(true));
         assert_eq!(obj["pid"], json!(4242));
@@ -1295,13 +1295,13 @@ mod tests {
     }
 
     #[test]
-    fn info_json_unmapped_omits_sb_id_keys_not_null() {
-        // The ls --json convention: absent-not-null for unmapped sbId.
+    fn info_json_unmapped_omits_qd_id_keys_not_null() {
+        // The ls --json convention: absent-not-null for unmapped qdId.
         let s = a6_session();
         let v = info_json(&s, &std::collections::HashMap::new(), true);
         let obj = v.as_object().unwrap();
-        assert!(!obj.contains_key("sbId"), "unmapped → sbId ABSENT");
-        assert!(!obj.contains_key("sbIdPrefix"), "sbIdPrefix ABSENT too");
+        assert!(!obj.contains_key("qdId"), "unmapped → qdId ABSENT");
+        assert!(!obj.contains_key("qdIdPrefix"), "qdIdPrefix ABSENT too");
     }
 
     #[test]
@@ -1323,14 +1323,14 @@ mod tests {
 
     #[test]
     fn info_json_prefix_omitted_when_map_lacks_the_id() {
-        // sbId mapped but no prefix computed (defensive: prefix_map always has
-        // it in production since it is built from the same list) → sbId only.
+        // qdId mapped but no prefix computed (defensive: prefix_map always has
+        // it in production since it is built from the same list) → qdId only.
         let mut s = a6_session();
-        s.sb_id = Some("ab3kx9mq".into());
+        s.qd_id = Some("ab3kx9mq".into());
         let v = info_json(&s, &std::collections::HashMap::new(), true);
         let obj = v.as_object().unwrap();
-        assert_eq!(obj["sbId"], json!("ab3kx9mq"));
-        assert!(!obj.contains_key("sbIdPrefix"));
+        assert_eq!(obj["qdId"], json!("ab3kx9mq"));
+        assert!(!obj.contains_key("qdIdPrefix"));
     }
 
     #[test]

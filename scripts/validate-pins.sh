@@ -43,8 +43,8 @@ read_pin() {
     ' "$manifest"
 }
 
-sbx_repo="$(read_pin qb repo)"
-sbx_rev="$(read_pin qb rev)"
+qb_repo="$(read_pin qb repo)"
+qb_rev="$(read_pin qb rev)"
 plugins_repo="$(read_pin plugins repo)"
 plugins_rev="$(read_pin plugins rev)"
 
@@ -90,7 +90,7 @@ check_ref_exists() {
     fi
 }
 
-check_ref_exists "qb" "$sbx_repo" "$sbx_rev"
+check_ref_exists "qb" "$qb_repo" "$qb_rev"
 
 # The plugins repo is consumed RAW (no build step — plugins/core is documentation
 # + roles + skills, no Cargo crate). Validate existence + the marketplace shape.

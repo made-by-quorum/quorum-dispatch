@@ -5,13 +5,13 @@
   credentials seeded: yes
 
 === qd new (real claude) ===
-  qd new exit=0 : Started detached session "sbrg-47484178063424827716-b6"
+  qd new exit=0 : Started detached session "qdrg-47484178063424827716-b6"
   claude version in jail: 2.1.163
-  resolution belt: sbrg-47484178063424827716-b6 resolves uniquely in-jail (OK)
+  resolution belt: qdrg-47484178063424827716-b6 resolves uniquely in-jail (OK)
 
 === (a) warm-up send:pty (turns flowing; resolve $JP via glob-fallback) ===
-  (a) send out=[Message sent to sbrg-47484178063424827716-b6]
-  (a) GREEN: turns flowing; $JP=/tmp/claude-501/sbrg-runs/47484178063424827716/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-47484178063424827716-tmp-work/ed703c5d-ea43-4a1b-8dda-0fe329cfb5b0.jsonl (urc=1)
+  (a) send out=[Message sent to qdrg-47484178063424827716-b6]
+  (a) GREEN: turns flowing; $JP=/tmp/claude-501/qdrg-runs/47484178063424827716/home/.claude/projects/-private-tmp-claude-501-qdrg-runs-47484178063424827716-tmp-work/ed703c5d-ea43-4a1b-8dda-0fe329cfb5b0.jsonl (urc=1)
 
 === (b) send:pty --wait #1 (idle), --timeout 60 ===
   (b) --wait rc=0
@@ -29,16 +29,16 @@
   (c) GREEN: queued-then-answered — reply attributed to OUR message (WAITREPLY_TWO), exit 0
 
 === (d) qd wait x3 ===
-  (d1) qd wait (busy) rc=0 out=[Waiting for sbrg-47484178063424827716-b6... done]
+  (d1) qd wait (busy) rc=0 out=[Waiting for qdrg-47484178063424827716-b6... done]
   (d1) GREEN: busy -> ' done' exit 0
-  (d2) qd wait (idle) rc=0 out=[sbrg-47484178063424827716-b6 is idle]
+  (d2) qd wait (idle) rc=0 out=[qdrg-47484178063424827716-b6 is idle]
   (d2) GREEN: idle-at-entry -> 'is idle' exit 0
-  (d3) qd wait --timeout 5 (kept busy) rc=0 out=[Waiting for sbrg-47484178063424827716-b6... done]
+  (d3) qd wait --timeout 5 (kept busy) rc=0 out=[Waiting for qdrg-47484178063424827716-b6... done]
   (d3) RED (rc=0)
 
 === (e) R4 LIVE CONFIRM: >=4.2KB idle-path single paste -> DELTA==1 + busy ===
   (e) pasting 4302 bytes (>=4.2KB); instruct reply PASTEACK_R4
-  (e) send rc=0 out=[Message sent to sbrg-47484178063424827716-b6]
+  (e) send rc=0 out=[Message sent to qdrg-47484178063424827716-b6]
   (e) session WENT BUSY (paste accepted on the idle two-write path)
   (e) user-records before=6 after=7 DELTA=1 busy_seen=1 status=idle
   (e) JSONL tail (last user/assistant records):
@@ -49,7 +49,7 @@
   (e) zmx history tail:
       ⏺ PASTEACK_R4
       ✻ Brewed for 2s
-      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-47484178063424827716-b6 ──
+      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-47484178063424827716-b6 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         paste again to expand

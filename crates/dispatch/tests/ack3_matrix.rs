@@ -6,14 +6,14 @@
 //! joined by content sha (unique-by-construction contents). Plus the R-REC
 //! recovery-read rows (§4) and the coverage assertion (§3.3).
 //!
-//! The jail / run_sb / event-reader helpers MIRROR ack2_gate.rs (duplicated, not
+//! The jail / run_qd / event-reader helpers MIRROR ack2_gate.rs (duplicated, not
 //! factored — integration test binaries cannot import each other; ack3-spec §2
 //! sanctions duplication, and another agent owns ack2_gate.rs this phase).
 //!
 //! ## Fault arming (the matrix keystone, spec §1)
 //!
 //! `ensure_server_running_with` spawns the daemon WITHOUT `env_clear`, so
-//! `QRMUX_FAULT_*` passed as run_sb extras reaches the daemon process; the fault
+//! `QRMUX_FAULT_*` passed as run_qd extras reaches the daemon process; the fault
 //! layer reads its env ONCE at daemon start. The arming `qd` call IS the
 //! session-creating one, and `qd start`'s boot waiter writes an Enter ("\r")
 //! through the SAME session — so every daemon fault carries
@@ -41,7 +41,7 @@ use qrmux::events::{parse_line, DaemonEvent};
 // Binary locators (ack2_gate patterns, duplicated)
 // ===========================================================================
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -116,7 +116,7 @@ struct Jail {
     root: PathBuf,
     home: PathBuf,
     xdg: PathBuf,
-    sb_home: PathBuf,
+    qd_home: PathBuf,
     ev_dir: PathBuf,
     convo: PathBuf,
     uuid: String,
@@ -130,18 +130,18 @@ impl Jail {
             .unwrap()
             .as_nanos();
         let base = PathBuf::from("/tmp/qd-ack3mat");
-        let root = base.join("sbrg-runs").join(format!("{tag}-{nanos}"));
+        let root = base.join("qdrg-runs").join(format!("{tag}-{nanos}"));
         let home = root.join("home");
         let xdg = base.join(format!("x-{tag}-{nanos}"));
-        let sb_home = root.join("sb_home");
-        let ev_dir = sb_home.join("state").join("sessions");
+        let qd_home = root.join("qd_home");
+        let ev_dir = qd_home.join("state").join("sessions");
         let sessions = home.join(".claude").join("sessions");
         let projects = home.join(".claude").join("projects").join("proj");
         for d in [
             &sessions,
             &projects,
             &xdg,
-            &sb_home,
+            &qd_home,
             &root.join("tmp"),
             &root.join("zmx"),
         ] {
@@ -155,7 +155,7 @@ impl Jail {
             root,
             home,
             xdg,
-            sb_home,
+            qd_home,
             ev_dir,
             convo,
             uuid,
@@ -197,7 +197,7 @@ impl Jail {
     /// All engine events text under the jail (for the privacy grep).
     fn all_engine_text(&self) -> String {
         let mut out = String::new();
-        let _ = walk(&self.sb_home, &mut |p| {
+        let _ = walk(&self.qd_home, &mut |p| {
             if p.to_string_lossy().ends_with(".events.jsonl") {
                 out.push_str(&std::fs::read_to_string(p).unwrap_or_default());
                 out.push('\n');
@@ -247,7 +247,7 @@ impl Jail {
     fn teardown(&self) {
         let names: Vec<String> = self.created.borrow().clone();
         for name in names {
-            let _ = run_sb(self, &["stop", "--force", &name], &[]);
+            let _ = run_qd(self, &["stop", "--force", &name], &[]);
         }
         let _ = std::fs::remove_dir_all(&self.root);
         let _ = std::fs::remove_dir_all(&self.xdg);
@@ -269,10 +269,10 @@ fn walk(dir: &Path, f: &mut dyn FnMut(&Path)) -> std::io::Result<()> {
 }
 
 // ===========================================================================
-// qd driver (ack2_gate run_sb, duplicated)
+// qd driver (ack2_gate run_qd, duplicated)
 // ===========================================================================
 
-fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String, Duration) {
+fn run_qd(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String, Duration) {
     // WP-B-CS-1 (D2): `qd start` now auto-detects the driver, and this harness pipes
     // stdio (`cmd.output()`), so a bare start would be a non-TTY caller → the HEADLESS
     // surface (and a no-`-p` start would even hit Fork B's refuse-no-prompt). These
@@ -295,11 +295,11 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
         args
     };
     let fr = fakerepl_bin();
-    let mut cmd = Command::new(sb_bin());
+    let mut cmd = Command::new(qd_bin());
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &jail.home)
-        .env("QD_HOME", &jail.sb_home)
+        .env("QD_HOME", &jail.qd_home)
         .env("XDG_RUNTIME_DIR", &jail.xdg)
         .env("TMPDIR", jail.root.join("tmp"))
         .env("ZMX_DIR", jail.root.join("zmx"))
@@ -503,11 +503,11 @@ fn drive_m1(jail: &Jail, name: &str) -> (String, String, i32, String, String) {
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     // Boot (the arming call). The boot "\r" passes the sha AND-filter.
-    let (cb, _o, _e, _) = run_sb(jail, &["start", name], &env);
+    let (cb, _o, _e, _) = run_qd(jail, &["start", name], &env);
     assert_eq!(cb, 0, "M1 boot succeeds (boot Enter passes the sha filter)");
     std::thread::sleep(Duration::from_millis(600));
 
-    let (code, _out, err, d) = run_sb(jail, &["send:pty", name, &msg], &env);
+    let (code, _out, err, d) = run_qd(jail, &["send:pty", name, &msg], &env);
     eprintln!(
         "[M1] send:pty (frame drop) took {:.1}s exit={code}",
         d.as_secs_f64()
@@ -570,10 +570,10 @@ fn m1_negative_twin_clean() {
     let mut env = jail.fakerepl_env(name);
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(600));
-    let (code, _out, _err, _) = run_sb(&jail, &["send:pty", name, &msg], &env);
+    let (code, _out, _err, _) = run_qd(&jail, &["send:pty", name, &msg], &env);
     assert_eq!(code, 0, "N-twin clean idle send exits 0");
 
     let recs = jail.engine_records();
@@ -608,11 +608,11 @@ fn drive_m2(jail: &Jail, name: &str) -> (String, String, i32, String, String) {
     env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
-    let (cb, _o, _e, _) = run_sb(jail, &["start", name], &env);
+    let (cb, _o, _e, _) = run_qd(jail, &["start", name], &env);
     assert_eq!(cb, 0, "M2 boot succeeds (boot Enter passes the sha filter)");
     std::thread::sleep(Duration::from_millis(600));
 
-    let (code, _out, err, d) = run_sb(jail, &["send:pty", name, &msg], &env);
+    let (code, _out, err, d) = run_qd(jail, &["send:pty", name, &msg], &env);
     eprintln!(
         "[M2] send:pty (write error) took {:.1}s exit={code}",
         d.as_secs_f64()
@@ -671,10 +671,10 @@ fn m2_negative_twin_clean() {
     let mut env = jail.fakerepl_env(name);
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(600));
-    let (code, _out, _err, _) = run_sb(&jail, &["send:pty", name, &msg], &env);
+    let (code, _out, _err, _) = run_qd(&jail, &["send:pty", name, &msg], &env);
     assert_eq!(code, 0);
     let recs = jail.engine_records();
     let sid = send_id_for(&recs, "send:pty", None).expect("N-twin send-initiated");
@@ -722,12 +722,12 @@ fn m2_filter_precision_other_session_clean() {
     env.push(("QRMUX_FAULT_SESSION", armed_for.to_string()));
     env.push(("QRMUX_FAULT_MATCH_SHA256", sha.clone()));
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
-    let (c1, _o, _e, _) = run_sb(&jail, &["start", other], &env);
+    let (c1, _o, _e, _) = run_qd(&jail, &["start", other], &env);
     assert_eq!(c1, 0, "non-matching session boots in the ARMED daemon");
 
     // Send the FILTERED-SHA content to the non-matching session → flows clean
     // (plain idle send, no --wait — the clean path returns exit 0).
-    let (code, out, err, _) = run_sb(&jail, &["send:pty", other, &msg], &env);
+    let (code, out, err, _) = run_qd(&jail, &["send:pty", other, &msg], &env);
     assert_eq!(
         code, 0,
         "send to the non-armed session flows clean (exit 0); stdout={out:?} stderr={err:?}"
@@ -771,11 +771,11 @@ fn m3_silent_swallow_event_streams() {
 
     // Seed the convo (so --wait resolves the jsonl) + settle to idle. The seed's
     // sha differs from the injected content sha → it passes the AND-filter clean.
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(1200));
 
-    let (code, _out, _err, d) = run_sb(
+    let (code, _out, _err, d) = run_qd(
         &jail,
         &["send:pty", name, &msg, "--wait", "--timeout", "3"],
         &env,
@@ -848,11 +848,11 @@ fn m3_negative_twin_clean() {
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     // Seed convo so --wait resolves the jsonl, settle to idle.
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(1200));
 
-    let (code, _out, _err, _) = run_sb(
+    let (code, _out, _err, _) = run_qd(
         &jail,
         &["send:pty", name, &msg, "--wait", "--timeout", "8"],
         &env,
@@ -898,11 +898,11 @@ fn m4_eat_input_event_streams() {
         "{\"type\":\"user\",\"message\":{\"content\":\"seed-prior\"}}\n",
     )
     .unwrap();
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(600));
 
-    let (code, _out, _err, d) = run_sb(
+    let (code, _out, _err, d) = run_qd(
         &jail,
         &["send:pty", name, &msg, "--wait", "--timeout", "3"],
         &env,
@@ -967,10 +967,10 @@ fn m4_negative_twin_clean() {
     let mut env = jail.fakerepl_env(name);
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(1200));
-    let (code, _out, _err, _) = run_sb(
+    let (code, _out, _err, _) = run_qd(
         &jail,
         &["send:pty", name, &msg, "--wait", "--timeout", "8"],
         &env,
@@ -1011,11 +1011,11 @@ fn m5_truncation_event_streams() {
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
     // Seed convo + settle to idle so the idle chunked path (W8 verify) engages.
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(1200));
 
-    let (code, _out, err, d) = run_sb(&jail, &["send:pty", name, &msg], &env);
+    let (code, _out, err, d) = run_qd(&jail, &["send:pty", name, &msg], &env);
     eprintln!(
         "[M5] truncation idle send took {:.1}s exit={code}",
         d.as_secs_f64()
@@ -1080,10 +1080,10 @@ fn m5_negative_twin_clean() {
     let mut env = jail.fakerepl_env(name);
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(1200));
-    let (code, _out, _err, _) = run_sb(&jail, &["send:pty", name, &msg], &env);
+    let (code, _out, _err, _) = run_qd(&jail, &["send:pty", name, &msg], &env);
     assert_eq!(
         code, 0,
         "M5 N-twin clean idle send exit 0 (verify Verified)"
@@ -1125,11 +1125,11 @@ fn i2_async_pty_short_send_ungated_to_message_seen_exit0() {
     // (the ungate then fires on the !wait path).
     env.push(("QD_FAKEREPL_BUSY_MS", "800".to_string()));
 
-    let (cb, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+    let (cb, _o, _e, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(cb, 0);
     std::thread::sleep(Duration::from_millis(1200));
     // NO --wait: the async no-wait path is the one Group C ungates.
-    let (code, _out, _err, _) = run_sb(&jail, &["send:pty", name, &msg], &env);
+    let (code, _out, _err, _) = run_qd(&jail, &["send:pty", name, &msg], &env);
     assert_eq!(
         code, 0,
         "I2: a short async no-wait send STILL exits 0 (ungate degrades, never fails-loud)"

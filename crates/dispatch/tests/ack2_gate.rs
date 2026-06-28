@@ -21,7 +21,7 @@
 //! ## Jail invariants (rule 9 + ADD-4 + ADD-12 + ADD-14)
 //!
 //! Each row builds its own jail tempdir laid out EXACTLY as fakerepl's belt
-//! requires: HOME=`<base>/sbrg-runs/<id>/home`, QD_HOME=`root/sb_home`,
+//! requires: HOME=`<base>/qdrg-runs/<id>/home`, QD_HOME=`root/qd_home`,
 //! ZMX_DIR=`root/zmx`, TMPDIR=`root/tmp`, plus an own XDG_RUNTIME_DIR (0700) so
 //! the embedded qrmux socket dir is per-run. The base lives under a SHORT
 //! literal-/tmp prefix so the qrmux `sun_path` fits macOS's 104-byte budget —
@@ -56,7 +56,7 @@ use dispatch::events::{parse_events, EventRecord, ReadResult};
 // Binary locators (c1_gate + fakerepl_gate patterns)
 // ===========================================================================
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -138,13 +138,13 @@ fn require_bins() {
 // ===========================================================================
 
 /// A per-run hermetic jail shaped EXACTLY as the fakerepl belt requires
-/// (HOME=`*/sbrg-runs/<id>/home`, QD_HOME=`root/sb_home`, ZMX_DIR=`root/zmx`,
+/// (HOME=`*/qdrg-runs/<id>/home`, QD_HOME=`root/qd_home`, ZMX_DIR=`root/zmx`,
 /// TMPDIR=`root/tmp`) plus an own XDG_RUNTIME_DIR for the embedded qrmux socket.
 struct Jail {
     root: PathBuf,
     home: PathBuf,
     xdg: PathBuf,
-    sb_home: PathBuf,
+    qd_home: PathBuf,
     /// state-tier sessions dir (`<QD_HOME>/state/sessions`) where events files land.
     ev_dir: PathBuf,
     /// pre-resolved convo JSONL path (a project dir under HOME); fakerepl writes here.
@@ -163,20 +163,20 @@ impl Jail {
             .unwrap()
             .as_nanos();
         // SHORT literal-/tmp base so the embedded qrmux sun_path fits (c1_gate
-        // note); the sbrg-runs/<id> segment satisfies fakerepl's HOME belt.
+        // note); the qdrg-runs/<id> segment satisfies fakerepl's HOME belt.
         let base = PathBuf::from("/tmp/qd-ack2gate");
-        let root = base.join("sbrg-runs").join(format!("{tag}-{nanos}"));
+        let root = base.join("qdrg-runs").join(format!("{tag}-{nanos}"));
         let home = root.join("home");
         let xdg = base.join(format!("x-{tag}-{nanos}"));
-        let sb_home = root.join("sb_home");
-        let ev_dir = sb_home.join("state").join("sessions");
+        let qd_home = root.join("qd_home");
+        let ev_dir = qd_home.join("state").join("sessions");
         let sessions = home.join(".claude").join("sessions");
         let projects = home.join(".claude").join("projects").join("proj");
         for d in [
             &sessions,
             &projects,
             &xdg,
-            &sb_home,
+            &qd_home,
             &root.join("tmp"),
             &root.join("zmx"),
         ] {
@@ -195,7 +195,7 @@ impl Jail {
             root,
             home,
             xdg,
-            sb_home,
+            qd_home,
             ev_dir,
             convo,
             uuid,
@@ -230,7 +230,7 @@ impl Jail {
     /// All events-file text under the jail (for the privacy grep — covers both keys).
     fn all_events_text(&self) -> String {
         let mut out = String::new();
-        let _ = walk(&self.sb_home, &mut |p| {
+        let _ = walk(&self.qd_home, &mut |p| {
             if p.to_string_lossy().ends_with(".events.jsonl") {
                 out.push_str(&std::fs::read_to_string(p).unwrap_or_default());
                 out.push('\n');
@@ -247,7 +247,7 @@ impl Jail {
         // talks to this jail's embedded daemon only.
         let names: Vec<String> = self.created.borrow().clone();
         for name in names {
-            let _ = run_sb(self, &["stop", "--force", &name], &[]);
+            let _ = run_qd(self, &["stop", "--force", &name], &[]);
         }
         let _ = std::fs::remove_dir_all(&self.root);
         let _ = std::fs::remove_dir_all(&self.xdg);
@@ -275,7 +275,7 @@ fn walk(dir: &Path, f: &mut dyn FnMut(&Path)) -> std::io::Result<()> {
 
 /// Run `qd <args>` under the jail env with `fakerepl` as CLAUDE_BIN and the given
 /// extra env (fakerepl knobs etc.). Returns (exit, stdout, stderr, elapsed).
-fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String, Duration) {
+fn run_qd(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String, Duration) {
     // WP-B-CS-1 (D2): `qd start` now auto-detects the driver, and this harness pipes
     // stdio (`cmd.output()`), so a bare start would be a non-TTY caller → the HEADLESS
     // surface. These gate tests exercise the INTERACTIVE -p delivery + §9/ack2 event
@@ -300,11 +300,11 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
         args
     };
     let fr = fakerepl_bin();
-    let mut cmd = Command::new(sb_bin());
+    let mut cmd = Command::new(qd_bin());
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &jail.home)
-        .env("QD_HOME", &jail.sb_home)
+        .env("QD_HOME", &jail.qd_home)
         .env("XDG_RUNTIME_DIR", &jail.xdg)
         .env("TMPDIR", jail.root.join("tmp"))
         .env("ZMX_DIR", jail.root.join("zmx"))
@@ -328,7 +328,7 @@ fn run_sb(jail: &Jail, args: &[&str], extra: &[(&str, String)]) -> (i32, String,
 }
 
 /// Override CLAUDE_BIN (e.g. /bin/sleep for the never-ready readiness arm).
-fn run_sb_claude(
+fn run_qd_claude(
     jail: &Jail,
     args: &[&str],
     claude_bin: &str,
@@ -336,7 +336,7 @@ fn run_sb_claude(
 ) -> (i32, String, String, Duration) {
     // WP-B-CS-1 (D2): force the INTERACTIVE surface for `start` (this harness pipes
     // stdio → a bare start would auto-detect the headless surface). Same reason +
-    // delta as `run_sb`'s injection above.
+    // delta as `run_qd`'s injection above.
     let injected: Vec<String>;
     let arg_refs: Vec<&str>;
     let args: &[&str] = if args.first() == Some(&"start") {
@@ -349,11 +349,11 @@ fn run_sb_claude(
     } else {
         args
     };
-    let mut cmd = Command::new(sb_bin());
+    let mut cmd = Command::new(qd_bin());
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &jail.home)
-        .env("QD_HOME", &jail.sb_home)
+        .env("QD_HOME", &jail.qd_home)
         .env("XDG_RUNTIME_DIR", &jail.xdg)
         .env("TMPDIR", jail.root.join("tmp"))
         .env("ZMX_DIR", jail.root.join("zmx"))
@@ -469,7 +469,7 @@ fn g3_seq_new_p_idle_chunked_anchors() {
     let mut env = env;
     env.push(("QD_FAKEREPL_BUSY_MS", "1500".to_string()));
 
-    let (code, out, _err, _d) = run_sb(&jail, &["start", name, "-p", &payload], &env);
+    let (code, out, _err, _d) = run_qd(&jail, &["start", name, "-p", &payload], &env);
     assert_eq!(code, 0, "new -p chunked Accepted exit 0");
     // §9 stdout literal (G9 piggyback).
     assert!(
@@ -558,7 +558,7 @@ fn g3_seq_new_p_idle_single_no_terminal() {
     let mut env = jail.fakerepl_env(name);
     env.push(("QD_FAKEREPL_BUSY_MS", "1200".to_string()));
 
-    let (code, out, _err, _d) = run_sb(&jail, &["start", name, "-p", &payload], &env);
+    let (code, out, _err, _d) = run_qd(&jail, &["start", name, "-p", &payload], &env);
     assert_eq!(code, 0, "new -p single Accepted exit 0");
     assert!(out.contains(&format!("Prompt delivered to \"{name}\"")));
 
@@ -594,12 +594,12 @@ fn g3_seq_sendpty_queue_busy_queued() {
     env.push(("QD_FAKEREPL_BUSY_MS", "8000".to_string())); // long busy hold
 
     // Prior send: new -p makes the session busy for ~8s (seeds the convo too).
-    let (c1, _o1, _e1, _) = run_sb(&jail, &["start", name, "-p", "seed-prior"], &env);
+    let (c1, _o1, _e1, _) = run_qd(&jail, &["start", name, "-p", "seed-prior"], &env);
     assert_eq!(c1, 0, "prior new -p Accepted");
 
     // While busy → send:pty queues. Payload carries the canary.
     let qmsg = format!("{canary}-queued");
-    let (c2, out2, _e2, _) = run_sb(&jail, &["send:pty", name, &qmsg], &env);
+    let (c2, out2, _e2, _) = run_qd(&jail, &["send:pty", name, &qmsg], &env);
     assert_eq!(c2, 0, "queue send exit 0 (Message queued)");
     assert!(
         out2.contains(&format!("Message queued in \"{name}\" (session busy)")),
@@ -642,12 +642,12 @@ fn g3_seq_sendpty_wait_complete_anchored_with_status_transitions() {
     env.push(("QD_FAKEREPL_BUSY_MS", "1200".to_string()));
 
     // Seed the session + convo via new -p (so send:pty --wait resolves the jsonl).
-    let (c1, _o1, _e1, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+    let (c1, _o1, _e1, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
     assert_eq!(c1, 0);
     std::thread::sleep(Duration::from_millis(1500)); // settle back to idle
 
     let payload = chunked_payload(&canary);
-    let (c2, _o2, _e2, _) = run_sb(
+    let (c2, _o2, _e2, _) = run_qd(
         &jail,
         &["send:pty", name, &payload, "--wait", "--timeout", "8"],
         &env,
@@ -721,13 +721,13 @@ fn g3_seq_sendpty_wait_timeout_emits_anchor_timeout() {
 
     // new WITHOUT -p (avoid the slow stalled-deliver path); fakerepl boots + writes
     // its pid file regardless of ABSORB.
-    let (c1, _o1, _e1, _) = run_sb(&jail, &["start", name], &env);
+    let (c1, _o1, _e1, _) = run_qd(&jail, &["start", name], &env);
     assert_eq!(c1, 0, "new (no -p) boots under ABSORB");
     std::thread::sleep(Duration::from_millis(800));
 
     let timeout_s = 3u64;
     let qmsg = format!("{canary}-neveranchors");
-    let (c2, _o2, err2, _) = run_sb(
+    let (c2, _o2, err2, _) = run_qd(
         &jail,
         &[
             "send:pty",
@@ -802,7 +802,7 @@ fn g7a_pipeline_arm_nn_anchored() {
         let mut env = jail.fakerepl_env(&name);
         env.push(("QD_FAKEREPL_BUSY_MS", "1200".to_string()));
 
-        let (code, _out, err, _d) = run_sb(&jail, &["start", &name, "-p", &payload], &env);
+        let (code, _out, err, _d) = run_qd(&jail, &["start", &name, "-p", &payload], &env);
         let recs = events_of(&jail).records;
         let got_anchor = recs.iter().any(|r| {
             r.event == "turn-anchored"
@@ -851,7 +851,7 @@ fn g7b_measurement_arm_induced_swallow_counted() {
     env.push(("QD_FAKEREPL_BUSY_MS", "1500".to_string()));
     env.push(("QD_FAKEREPL_ABSORB_ALL_CRS", "1".to_string()));
 
-    let (code, _out, _err, d) = run_sb(&jail, &["start", name, "-p", &payload], &env);
+    let (code, _out, _err, d) = run_qd(&jail, &["start", name, "-p", &payload], &env);
     eprintln!("[G7b] induced-swallow new -p took {:.1}s", d.as_secs_f64());
     assert_eq!(code, 10, "Stalled exit 10 (unchanged contract)");
 
@@ -913,7 +913,7 @@ fn g7c_readiness_arm_priming_timeout_no_blind_write() {
     // /bin/sleep never writes the named pid file → EventBootWaiter refuses,
     // OR (under load) the I6 verify refuses first with NotAttachable.
     let (code, _out, err, _d) =
-        run_sb_claude(&jail, &["start", name, "-p", &payload], "/bin/sleep", &[]);
+        run_qd_claude(&jail, &["start", name, "-p", &payload], "/bin/sleep", &[]);
     eprintln!(
         "[G7c] readiness /bin/sleep took {:.1}s",
         start.elapsed().as_secs_f64()
@@ -990,7 +990,7 @@ fn g7_negative_control_normal_boot_no_readiness_event() {
     let mut env = jail.fakerepl_env(name);
     env.push(("QD_FAKEREPL_BUSY_MS", "1000".to_string()));
 
-    let (code, _out, _err, _d) = run_sb(&jail, &["start", name, "-p", &payload], &env);
+    let (code, _out, _err, _d) = run_qd(&jail, &["start", name, "-p", &payload], &env);
     assert_eq!(code, 0, "normal boot succeeds");
 
     // No byname readiness file (sessionId resolved → sessionId-keyed file used),
@@ -1116,7 +1116,7 @@ fn g9_exit_codes_and_stdout_match_pre_ack2() {
         let payload = chunked_payload(&key_canary("G9A"));
         let mut env = jail.fakerepl_env(name);
         env.push(("QD_FAKEREPL_BUSY_MS", "1000".to_string()));
-        let (code, out, _e, _) = run_sb(&jail, &["start", name, "-p", &payload], &env);
+        let (code, out, _e, _) = run_qd(&jail, &["start", name, "-p", &payload], &env);
         assert_eq!(code, 0, "Accepted exit 0");
         assert_eq!(
             out.trim_end().lines().last(),
@@ -1132,9 +1132,9 @@ fn g9_exit_codes_and_stdout_match_pre_ack2() {
         let name = "g9q";
         let mut env = jail.fakerepl_env(name);
         env.push(("QD_FAKEREPL_BUSY_MS", "8000".to_string()));
-        let (c1, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+        let (c1, _o, _e, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
         assert_eq!(c1, 0);
-        let (c2, out2, _e2, _) = run_sb(&jail, &["send:pty", name, "qmsg"], &env);
+        let (c2, out2, _e2, _) = run_qd(&jail, &["send:pty", name, "qmsg"], &env);
         assert_eq!(c2, 0, "queue exit 0");
         assert!(
             out2.contains(&format!("Message queued in \"{name}\" (session busy)")),
@@ -1150,11 +1150,11 @@ fn g9_exit_codes_and_stdout_match_pre_ack2() {
         let mut env = jail.fakerepl_env(name);
         env.push(("QD_FAKEREPL_BUSY_MS", "1000".to_string()));
         // seed so the session exists + is idle.
-        let (c1, _o, _e, _) = run_sb(&jail, &["start", name, "-p", "seed"], &env);
+        let (c1, _o, _e, _) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
         assert_eq!(c1, 0);
         std::thread::sleep(Duration::from_millis(1500));
         // single-chunk idle send (no --wait): "Message sent to <name>".
-        let (c2, out2, _e2, _) = run_sb(&jail, &["send:pty", name, "hello"], &env);
+        let (c2, out2, _e2, _) = run_qd(&jail, &["send:pty", name, "hello"], &env);
         assert_eq!(c2, 0, "idle send exit 0");
         assert!(
             out2.contains(&format!("Message sent to {name}")),
@@ -1202,7 +1202,7 @@ fn g10_privacy_grep_is_load_bearing() {
     let mut env = jail.fakerepl_env(name);
     env.push(("QD_FAKEREPL_BUSY_MS", "1000".to_string()));
 
-    let (code, _out, _e, _) = run_sb(&jail, &["start", name, "-p", &payload], &env);
+    let (code, _out, _e, _) = run_qd(&jail, &["start", name, "-p", &payload], &env);
     assert_eq!(code, 0);
 
     let events = jail.all_events_text();

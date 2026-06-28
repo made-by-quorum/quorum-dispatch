@@ -50,7 +50,7 @@ scn_run() {
 
     # Drive a DETERMINISTIC backlog into the server-side VT BEFORE attaching, so the
     # reattach replay carries the sentinel "SBLINE 7" into the first window.
-    scn_sb_target send:pty "$name" "EMIT $SCN_SENTINEL_K" >/dev/null 2>&1
+    scn_qd_target send:pty "$name" "EMIT $SCN_SENTINEL_K" >/dev/null 2>&1
     sleep 2
 
     # Initiate a REAL `qd attach` under a PTY; capture the first window; DETACH

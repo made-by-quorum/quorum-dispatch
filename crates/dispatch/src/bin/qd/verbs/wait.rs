@@ -556,7 +556,7 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
 /// Unconfirmed that emits a LOUD degraded-confidence warning but does not fail the turn).
 /// One-time: the marker is consumed (removed) whatever the verdict.
 fn verify_post_resume_if_marked(
-    paths: &dispatch::paths::SbPaths,
+    paths: &dispatch::paths::QdPaths,
     session: &dispatch::model::Session,
 ) -> Option<i32> {
     let pid = session.pid.filter(|&p| p != 0)?;
@@ -631,7 +631,7 @@ fn verify_post_resume_for(
 /// (codex's `transcript_root` reads `fx.env` $CODEX_HOME/$HOME — never paths).
 fn codex_root_fx<'a>(
     env: &'a RealEnv,
-    paths: &'a dispatch::paths::SbPaths,
+    paths: &'a dispatch::paths::QdPaths,
 ) -> dispatch::provider::ProviderFx<'a> {
     dispatch::provider::ProviderFx {
         env,

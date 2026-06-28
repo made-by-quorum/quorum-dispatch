@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -43,7 +43,7 @@ impl Jail {
     }
 
     fn ls_json(&self) -> Vec<serde_json::Value> {
-        let out = Command::new(sb_bin())
+        let out = Command::new(qd_bin())
             .args(["ls", "--json"])
             .env("HOME", &self.home)
             .env_remove("QD_HOME")

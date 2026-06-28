@@ -1,6 +1,6 @@
 //! Shared real-deps wiring for the REAL backends (spec §3). Centralizes the
 //! backend-selected mux (C1 D3: QD_MUX → embedded/zmx via [`select_backend`] +
-//! [`build_mux`]/[`build_mux_dirs`]), `RealEnv`/`RealClock`/`SbPaths`
+//! [`build_mux`]/[`build_mux_dirs`]), `RealEnv`/`RealClock`/`QdPaths`
 //! construction, and the A1 `gather`+`join`+`assign_codes` pipeline `ls`/`info`/
 //! `attach` all consume.
 
@@ -12,7 +12,7 @@ use dispatch::join::{self, JoinOpts, MuxDirs};
 use dispatch::model::Session;
 use dispatch::mux::Mux;
 use dispatch::mux_selector::{self, Backend};
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::registry;
 use dispatch::relay_http::HttpRelayProbe;
 use dispatch::resolve::{
@@ -20,11 +20,11 @@ use dispatch::resolve::{
     LiveRow, Resolution,
 };
 
-/// Resolve HOME → `SbPaths` (L9a: never the real home directly — read the env).
+/// Resolve HOME → `QdPaths` (L9a: never the real home directly — read the env).
 /// Returns `Err(exit)` with a printed message if HOME is unset.
-pub fn paths_from_home(env: &dyn Env) -> Result<SbPaths, i32> {
+pub fn paths_from_home(env: &dyn Env) -> Result<QdPaths, i32> {
     match env.var("HOME").filter(|s| !s.is_empty()) {
-        Some(h) => Ok(SbPaths::from_home(std::path::Path::new(&h))),
+        Some(h) => Ok(QdPaths::from_home(std::path::Path::new(&h))),
         None => {
             eprintln!("qd: HOME is not set — cannot resolve the session state dir.");
             Err(1)
@@ -32,17 +32,17 @@ pub fn paths_from_home(env: &dyn Env) -> Result<SbPaths, i32> {
     }
 }
 
-/// The stable-id store path: `<sbHome>/state/ids.jsonl` where `sbHome =
+/// The stable-id store path: `<qdHome>/state/ids.jsonl` where `qdHome =
 /// QD_HOME || <home>/.quorum/dispatch` (P0 wave-1; the QD_HOME-honoring `from_home_env`
 /// resolution, same as marks.jsonl). Returns `Err(exit)` if HOME is unset.
 pub fn ids_store_path(env: &dyn Env) -> Result<std::path::PathBuf, i32> {
     let home = home_path(env)?;
-    let paths = SbPaths::from_home_env(&home, env);
+    let paths = QdPaths::from_home_env(&home, env);
     Ok(dispatch::idstore::ids_path(&paths.state_dir))
 }
 
 /// Resolve HOME as a `PathBuf` (the embedded mux + qrmux dir resolution need the
-/// raw home, not the `.claude`-layout `SbPaths`). Same L9a discipline.
+/// raw home, not the `.claude`-layout `QdPaths`). Same L9a discipline.
 fn home_path(env: &dyn Env) -> Result<std::path::PathBuf, i32> {
     match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => Ok(std::path::PathBuf::from(h)),
@@ -174,8 +174,8 @@ pub fn all_sessions_counted(opts: JoinOpts) -> Result<(Vec<Session>, usize), i32
     // taken (torn trailing lines are tolerated by the fold). Reading never
     // writes; the lazy-mint backfill is `qd ls`'s alone (ls.rs).
     let ids = dispatch::idstore::fold(&ids_store_path(&env)?);
-    dispatch::idstore::fill_sb_ids(&mut sessions, &ids);
-    // WP-B5-iii obl-4: fill a fork's lineage (parent sbId) from the SAME fold —
+    dispatch::idstore::fill_qd_ids(&mut sessions, &ids);
+    // WP-B5-iii obl-4: fill a fork's lineage (parent qdId) from the SAME fold —
     // so a fork's parent is discoverable through this live resolver path.
     dispatch::idstore::fill_lineage(&mut sessions, &ids);
     Ok((sessions, capped_out))
@@ -185,12 +185,12 @@ pub fn all_sessions_counted(opts: JoinOpts) -> Result<(Vec<Session>, usize), i32
 /// passes through; only that explicit value caps. A non-integer / absent value →
 /// None (apply_list_cap treats non-positive/None as unset).
 pub fn parse_limit(raw: Option<&String>) -> Option<i64> {
-    raw.and_then(|s| sb_parse_int_prefix(s))
+    raw.and_then(|s| qd_parse_int_prefix(s))
 }
 
 /// JS `parseInt` leading-integer-prefix parse ("12abc" → 12, "abc" → None). The
 /// data layer's `apply_list_cap` then treats `<= 0` as unset.
-fn sb_parse_int_prefix(s: &str) -> Option<i64> {
+fn qd_parse_int_prefix(s: &str) -> Option<i64> {
     let t = s.trim_start();
     let mut chars = t.chars().peekable();
     let mut out = String::new();
@@ -320,7 +320,7 @@ pub fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Se
             for s in v {
                 // P0 wave-2 addendum: the handle is the STABLE id (codes are
                 // retired from display); id-less rows show "---" as before.
-                let sb_id = s.sb_id.as_deref().unwrap_or("---");
+                let qd_id = s.qd_id.as_deref().unwrap_or("---");
                 let name = s.name.as_deref().unwrap_or("(unnamed)");
                 let id = dispatch::fmt::truncate_id_default(&s.session_id);
                 let pid = s
@@ -328,7 +328,7 @@ pub fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Se
                     .filter(|&p| p != 0)
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "-".to_string());
-                eprintln!("  [{sb_id}] {name}\t{id}\tPID {pid}");
+                eprintln!("  [{qd_id}] {name}\t{id}\tPID {pid}");
             }
             Err(1)
         }

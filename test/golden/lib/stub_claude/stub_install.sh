@@ -31,14 +31,14 @@ _stub_sha256() {
 }
 
 # stub_install — create the jail-rooted shim + re-export CLAUDE_BIN. Requires a
-# live jail (JAIL_ROOT under sbrg-runs). Fails closed otherwise.
+# live jail (JAIL_ROOT under qdrg-runs). Fails closed otherwise.
 stub_install() {
     if [ -z "${JAIL_ROOT:-}" ]; then
         printf '[stub] REFUSED: no JAIL_ROOT (call jail_establish first).\n' >&2
         return 1
     fi
     case "$JAIL_ROOT" in
-        */sbrg-runs/*) ;;
+        */qdrg-runs/*) ;;
         *) printf '[stub] REFUSED: JAIL_ROOT %s is not a sandbox dir.\n' "$JAIL_ROOT" >&2; return 1 ;;
     esac
     [ -f "$STUB_CLAUDE_MAIN" ] || { printf '[stub] stub main not found: %s\n' "$STUB_CLAUDE_MAIN" >&2; return 1; }

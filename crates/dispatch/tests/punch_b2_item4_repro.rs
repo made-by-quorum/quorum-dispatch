@@ -35,7 +35,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::time::Duration;
 
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::relay::{RelayContract, RelayError};
 use dispatch::relay_http::CcRelay;
 use dispatch::relay_server::{RelayServer, TestServerHandle};
@@ -66,7 +66,7 @@ fn plant_sidecar(relay_dir: &Path, fname: &str, port: u16, session_id: &str, sta
 /// Scan `home`'s inbox dir for a persisted message whose text starts with
 /// `[REPLY to <message_id>]`. Returns the FULL text (byte-exact) if present.
 fn pushed_reply_text_at(home: &Path, message_id: &str) -> Option<String> {
-    let inbox = SbPaths::from_home(home).inbox_dir;
+    let inbox = QdPaths::from_home(home).inbox_dir;
     let prefix = format!("[REPLY to {message_id}]");
     let entries = std::fs::read_dir(inbox).ok()?;
     for ent in entries.flatten() {
@@ -334,7 +334,7 @@ fn truncated_post_body_is_rejected_400_no_minted_id() {
         "no message_id may be minted for a truncated body, got: {resp}"
     );
     // Nothing was persisted: the inbox dir holds no record of this request.
-    let inbox = SbPaths::from_home(home_a.path()).inbox_dir;
+    let inbox = QdPaths::from_home(home_a.path()).inbox_dir;
     let count = std::fs::read_dir(&inbox)
         .map(|d| d.flatten().count())
         .unwrap_or(0);
@@ -832,7 +832,7 @@ const VERIFY_SERIALIZE_SLACK: Duration = Duration::from_secs(5);
 /// All `[REPLY to <message_id>]` texts persisted at `home` (the multi-copy
 /// variant of [`pushed_reply_text_at`] — the both-push-back arm needs both).
 fn pushed_reply_texts_at(home: &Path, message_id: &str) -> Vec<String> {
-    let inbox = SbPaths::from_home(home).inbox_dir;
+    let inbox = QdPaths::from_home(home).inbox_dir;
     let prefix = format!("[REPLY to {message_id}]");
     let mut texts = Vec::new();
     if let Ok(entries) = std::fs::read_dir(inbox) {

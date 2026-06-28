@@ -41,7 +41,7 @@ use crate::effects::{Clock, Env, ProcessTable, RelayProbe};
 use crate::jsonl::{self, JsonlStats, TranscriptMeta};
 use crate::model::{Session, SessionBranch, SessionStatus};
 use crate::mux::{merge_canonical_wins, Mux, MuxSession};
-use crate::paths::SbPaths;
+use crate::paths::QdPaths;
 use crate::registry::{self, ScannedEntry, TombstonedEntry};
 use crate::relay::{self, match_by_ancestry};
 use crate::stray::{self, Stray};
@@ -424,7 +424,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             user_named: Some(user_named),
             session_id: sid,
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: p.pid,
             status,
             zmx_name: zmx_match.map(|z| z.name.clone()),
@@ -538,7 +538,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             user_named: Some(stats.user_named),
             session_id: jf.session_id.clone(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: zmx_match.map(|z| z.pid as i64),
             // TS: `zmxMatch ? "cold" : "cold"` — cold either way (ported honestly).
             status: SessionStatus::Cold,
@@ -583,7 +583,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             user_named: None, // ABSENT in the ZmxOnly branch (TS literal omits it).
             session_id: String::new(), // TS "".
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: Some(z.pid as i64),
             status: SessionStatus::Cold,
             zmx_name: Some(z.name.clone()),
@@ -638,7 +638,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
                 user_named: Some(user_named),
                 session_id: sid,
                 code: None,
-                sb_id: None,
+                qd_id: None,
                 pid: t.data.pid,
                 status: SessionStatus::Killed,
                 zmx_name: None,
@@ -693,7 +693,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             name,
             session_id: cold.id.clone(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status: SessionStatus::Cold,
             zmx_name: None,
@@ -858,7 +858,7 @@ pub fn assign_codes(sessions: &mut [Session]) {
 /// NOT suppress the XDG family, and the literal `/tmp` must NOT force it on).
 #[allow(clippy::too_many_arguments)]
 pub fn gather(
-    paths: &SbPaths,
+    paths: &QdPaths,
     mux: &dyn Mux,
     env: &dyn Env,
     pt: &dyn ProcessTable,
@@ -883,7 +883,7 @@ pub fn gather(
 /// legacy list. Everything else (registry/relay/ppid/transcripts) is unchanged.
 #[allow(clippy::too_many_arguments)]
 pub fn gather_with_dirs(
-    paths: &SbPaths,
+    paths: &QdPaths,
     mux: &dyn Mux,
     mux_dirs: &MuxDirs,
     pt: &dyn ProcessTable,
@@ -1080,9 +1080,9 @@ fn gather_codex(
     let mut stats_for: HashMap<PathBuf, JsonlStats> = HashMap::new();
 
     // The codex provider resolves its OWN root off `fx.env` ONLY (L9a). A MINIMAL
-    // fx: env + a placeholder SbPaths (codex's transcript_root reads ONLY env; the
+    // fx: env + a placeholder QdPaths (codex's transcript_root reads ONLY env; the
     // paths member is unused by it). Built once and reused per row.
-    let placeholder = SbPaths::from_home(Path::new("/nonexistent-codex-fx-home"));
+    let placeholder = QdPaths::from_home(Path::new("/nonexistent-codex-fx-home"));
     let fx = ProviderFx {
         env,
         paths: &placeholder,
@@ -1781,7 +1781,7 @@ mod tests {
             user_named: Some(named),
             session_id: sid.to_string(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: Some(1),
             status,
             zmx_name: None,

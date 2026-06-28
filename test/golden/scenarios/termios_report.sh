@@ -61,7 +61,7 @@ scn_run() {
 
     # Submit the STTY prompt; the stub prints the deterministic termios report to the
     # session PTY (zmx's server-side VT). Read it back via zmx history.
-    scn_sb_target send:pty "$name" "STTY" >/dev/null 2>&1
+    scn_qd_target send:pty "$name" "STTY" >/dev/null 2>&1
     sleep 2
 
     ZMX_DIR="$ZMX_DIR" zmx history "$name" 2>/dev/null > "$SCN_OUT.fullvt" || true

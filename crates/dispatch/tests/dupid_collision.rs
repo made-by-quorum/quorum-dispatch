@@ -17,7 +17,7 @@ mod common;
 use std::path::Path;
 use std::process::{Child, Command};
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -33,7 +33,7 @@ fn live_child() -> Child {
 
 /// Forge the given `<pid>.json` rows under a freshly-jailed HOME and run
 /// `qd <args...>`. Returns (exit, stdout, stderr).
-fn run_sb_with_rows(dir: &Path, rows: &[(i64, String)], args: &[&str]) -> (i32, String, String) {
+fn run_qd_with_rows(dir: &Path, rows: &[(i64, String)], args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
     let zmx = dir.join("zmx");
     let sessions = home.join(".claude").join("sessions");
@@ -43,7 +43,7 @@ fn run_sb_with_rows(dir: &Path, rows: &[(i64, String)], args: &[&str]) -> (i32, 
     for (pid, json) in rows {
         std::fs::write(sessions.join(format!("{pid}.json")), json).unwrap();
     }
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(args)
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
@@ -91,7 +91,7 @@ fn resume_refuses_a_duplicate_id_collision() {
     ];
 
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "qd-rust-orc-dup"]);
+    let (code, _out, err) = run_qd_with_rows(t.path(), &rows, &["resume", "qd-rust-orc-dup"]);
 
     let _ = c1.kill();
     let _ = c1.wait();
@@ -143,7 +143,7 @@ fn resume_resolves_past_a_dead_pid_stale_namesake() {
 
     let t = tempfile::tempdir().unwrap();
     // Exact-NAME query exercises the NAME tier's pid-aware refinement.
-    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "qd-dup-name"]);
+    let (code, _out, err) = run_qd_with_rows(t.path(), &rows, &["resume", "qd-dup-name"]);
 
     let _ = child.kill();
     let _ = child.wait();
@@ -194,7 +194,7 @@ fn connect_refuses_a_duplicate_id_collision() {
         ];
 
         let t = tempfile::tempdir().unwrap();
-        let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &[verb, "qd-add8-dup"]);
+        let (code, _out, err) = run_qd_with_rows(t.path(), &rows, &[verb, "qd-add8-dup"]);
 
         let _ = c1.kill();
         let _ = c1.wait();
@@ -234,7 +234,7 @@ fn connect_does_not_refuse_a_single_alive_session() {
         )];
 
         let t = tempfile::tempdir().unwrap();
-        let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &[verb, "qd-add8-single"]);
+        let (code, _out, err) = run_qd_with_rows(t.path(), &rows, &[verb, "qd-add8-single"]);
 
         let _ = child.kill();
         let _ = child.wait();
@@ -301,7 +301,7 @@ fn kill_sweeps_dead_pid_registry_leftovers_but_spares_live_ones() {
     ];
 
     let t = tempfile::tempdir().unwrap();
-    let (code, out, err) = run_sb_with_rows(t.path(), &rows, &["stop", "qd-kill-victim"]);
+    let (code, out, err) = run_qd_with_rows(t.path(), &rows, &["stop", "qd-kill-victim"]);
 
     let _ = bystander.kill();
     let _ = bystander.wait();
@@ -360,7 +360,7 @@ fn resume_refuses_an_already_alive_session() {
     )];
 
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(t.path(), &rows, &["resume", "qd-rust-live"]);
+    let (code, _out, err) = run_qd_with_rows(t.path(), &rows, &["resume", "qd-rust-live"]);
 
     let _ = child.kill();
     let _ = child.wait();

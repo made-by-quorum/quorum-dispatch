@@ -26,7 +26,7 @@
 set -u
 WT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/qd"
+export JAIL_QD_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -83,7 +83,7 @@ mark(){ if [ "$1" = G ]; then GREEN=$((GREEN+1)); else RED=$((RED+1)); fi; }
 # --- BOOT ------------------------------------------------------------------
 log ""
 log "=== qd new (real claude) ==="
-( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
+( cd "$WORKDIR" && "$JAIL_QD_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 code=$?
 log "  qd new exit=$code : $(cat "$JAIL_ROOT/o")"
 [ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; head -5 "$JAIL_ROOT/e"|sed 's/^/    /'|tee -a "$EV"; }
@@ -99,7 +99,7 @@ log "  resolution belt: $NAME resolves uniquely in-jail (OK)"
 # --- (a) WARM-UP -----------------------------------------------------------
 log ""
 log "=== (a) warm-up send:pty (turns flowing; resolve \$JP via glob-fallback) ==="
-out="$("$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK and nothing else." 2>&1)"
+out="$("$JAIL_QD_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK and nothing else." 2>&1)"
 log "  (a) send out=[$out]"
 i=0; JP=""; while [ "$i" -lt 120 ]; do JP="$(jp_of)"; [ -n "$JP" ]&&[ "$(urc "$JP")" -ge 1 ]&&break; sleep 0.5; i=$((i+1)); done
 [ -z "$JP" ] && { log "  !!! AUTH/WARMUP FAILED — no user record after 60s"; jail_zmx history "$NAME" 2>/dev/null|strip|grep -v '^[[:space:]]*$'|tail -20|sed 's/^/    /'|tee -a "$EV"; exit 3; }
@@ -111,7 +111,7 @@ log ""
 log "=== (b) send:pty --wait #1 (idle), --timeout 60 ==="
 ws "$NAME" idle 40 || log "  (b) WARN not idle pre-wait"
 jail_assert_resolves_in_jail "$NAME" || { log "  RESOLUTION BELT REFUSED (b)"; exit 4; }
-out="$(tmo 90 "$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: WAITREPLY_ONE and nothing else." --wait --timeout 60 2>&1)"; rc=$?
+out="$(tmo 90 "$JAIL_QD_CMD" send:pty "$NAME" "Reply with exactly: WAITREPLY_ONE and nothing else." --wait --timeout 60 2>&1)"; rc=$?
 log "  (b) --wait rc=$rc"
 log "  (b) reply text:"; printf '%s\n' "$out"|sed 's/^/      /'|tee -a "$EV"
 if [ "$rc" = 0 ] && printf '%s' "$out"|grep -q "WAITREPLY_ONE"; then
@@ -126,10 +126,10 @@ ws "$NAME" idle 60 || true
 log ""
 log "=== (c) send:pty --wait #2 (busy): queued-then-answered attribution ==="
 ws "$NAME" idle 40 || log "  (c) WARN not idle pre-busy"
-"$JAIL_SB_CMD" send:pty "$NAME" "Count slowly from 1 to 20, one number per line, pausing, then say BUSYDONE." >/dev/null 2>&1
+"$JAIL_QD_CMD" send:pty "$NAME" "Count slowly from 1 to 20, one number per line, pausing, then say BUSYDONE." >/dev/null 2>&1
 if ws "$NAME" busy 15; then
     log "  (c) session busy; issuing send:pty --wait WHILE busy"
-    out="$(tmo 180 "$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: WAITREPLY_TWO and nothing else." --wait --timeout 120 2>&1)"; rc=$?
+    out="$(tmo 180 "$JAIL_QD_CMD" send:pty "$NAME" "Reply with exactly: WAITREPLY_TWO and nothing else." --wait --timeout 120 2>&1)"; rc=$?
     log "  (c) busy --wait rc=$rc"
     log "  (c) reply text:"; printf '%s\n' "$out"|sed 's/^/      /'|tee -a "$EV"
     if [ "$rc" = 0 ] && printf '%s' "$out"|grep -q "WAITREPLY_TWO"; then
@@ -148,9 +148,9 @@ log ""
 log "=== (d) qd wait x3 ==="
 # d1: busy -> ' done' exit 0
 ws "$NAME" idle 40 || log "  (d1) WARN not idle pre"
-"$JAIL_SB_CMD" send:pty "$NAME" "Count slowly from 1 to 15, one per line, then say WAITDONE_1." >/dev/null 2>&1
+"$JAIL_QD_CMD" send:pty "$NAME" "Count slowly from 1 to 15, one per line, then say WAITDONE_1." >/dev/null 2>&1
 if ws "$NAME" busy 15; then
-    out="$(tmo 180 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
+    out="$(tmo 180 "$JAIL_QD_CMD" wait "$NAME" 2>&1)"; rc=$?
     log "  (d1) qd wait (busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
     { [ "$rc" = 0 ] && printf '%s' "$out"|grep -qi "done"; } && { log "  (d1) GREEN: busy -> ' done' exit 0"; mark G; } || { log "  (d1) RED"; mark R; }
 else
@@ -159,14 +159,14 @@ fi
 ws "$NAME" idle 60 || true
 # d2: idle-at-entry -> 'is idle' exit 0
 ws "$NAME" idle 40 || log "  (d2) WARN not idle pre"
-out="$(tmo 20 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
+out="$(tmo 20 "$JAIL_QD_CMD" wait "$NAME" 2>&1)"; rc=$?
 log "  (d2) qd wait (idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { [ "$rc" = 0 ] && printf '%s' "$out"|grep -qi "idle"; } && { log "  (d2) GREEN: idle-at-entry -> 'is idle' exit 0"; mark G; } || { log "  (d2) RED"; mark R; }
 # d3: --timeout 5 kept-busy -> ' timeout' exit 1
 ws "$NAME" idle 40 || log "  (d3) WARN not idle pre"
-"$JAIL_SB_CMD" send:pty "$NAME" "Count VERY slowly from 1 to 60, one number per line, pause between each, then say LONGDONE." >/dev/null 2>&1
+"$JAIL_QD_CMD" send:pty "$NAME" "Count VERY slowly from 1 to 60, one number per line, pause between each, then say LONGDONE." >/dev/null 2>&1
 if ws "$NAME" busy 15; then
-    out="$(tmo 20 "$JAIL_SB_CMD" wait "$NAME" --timeout 5 2>&1)"; rc=$?
+    out="$(tmo 20 "$JAIL_QD_CMD" wait "$NAME" --timeout 5 2>&1)"; rc=$?
     log "  (d3) qd wait --timeout 5 (kept busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
     { [ "$rc" = 1 ] && printf '%s' "$out"|grep -qi "timeout"; } && { log "  (d3) GREEN: kept-busy --timeout 5 -> ' timeout' exit 1"; mark G; } || { log "  (d3) RED (rc=$rc)"; mark R; }
 else
@@ -185,7 +185,7 @@ before="$(urc "$JP")"
 P="$(mkp 4300)"; plen="$(printf '%s' "$P"|wc -c|tr -d ' ')"
 log "  (e) pasting $plen bytes (>=4.2KB); instruct reply PASTEACK_R4"
 busy_seen=0
-out="$("$JAIL_SB_CMD" send:pty "$NAME" "$P -- after reading the above, reply with exactly PASTEACK_R4 and nothing else." 2>&1)"; rc=$?
+out="$("$JAIL_QD_CMD" send:pty "$NAME" "$P -- after reading the above, reply with exactly PASTEACK_R4 and nothing else." 2>&1)"; rc=$?
 log "  (e) send rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 if ws "$NAME" busy 12; then busy_seen=1; log "  (e) session WENT BUSY (paste accepted on the idle two-write path)"; else log "  (e) WARN: did not observe busy in 12s"; fi
 ws "$NAME" idle 120 || log "  (e) WARN not idle 120s post-paste"
@@ -220,7 +220,7 @@ else
 fi
 
 # --- TEARDOWN + BELT -------------------------------------------------------
-"$JAIL_SB_CMD" ls --all --short 2>/dev/null | grep -q "$NAME" && jail_kill_session "$NAME" >/dev/null 2>&1
+"$JAIL_QD_CMD" ls --all --short 2>/dev/null | grep -q "$NAME" && jail_kill_session "$NAME" >/dev/null 2>&1
 "$JAIL_ZMX_CMD" kill "$NAME" --force >/dev/null 2>&1 || true
 sleep 1
 ra="$(ls "$REAL_SESS" 2>/dev/null | wc -l | tr -d ' ')"

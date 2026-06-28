@@ -476,7 +476,7 @@ fn reap_process_subtree(pid: i32) {
 /// seam returns if codex forks ever become legal.
 fn fork_transcript_missing_error(
     provider_impl: &dyn dispatch::provider::Provider,
-    paths: &dispatch::paths::SbPaths,
+    paths: &dispatch::paths::QdPaths,
     target: &Session,
 ) -> Option<String> {
     let root = &paths.projects_dir;
@@ -518,13 +518,13 @@ fn fork_transcript_missing_error(
 /// exp F-SEED), so the seed must live under the FORK's launch-cwd slug. The
 /// parent transcript is read O_RDONLY only (never mutated). Identity rides the
 /// pre-minted `fork_uuid`: the caller `mint_or_get(fork_uuid)`s the fork's OWN
-/// sbId (option A — never the parent's). Mechanism S is uniform (default + the
+/// qdId (option A — never the parent's). Mechanism S is uniform (default + the
 /// `--turn` rewind) per the lead's Q4-FOLLOWUP ruling; it touches ZERO banked
 /// daemon/qrmux/protocol/argv surface (the fidelity gate proves it equivalent to
 /// native `--fork-session`).
 fn seed_fork_transcript(
     provider_impl: &dyn dispatch::provider::Provider,
-    paths: &dispatch::paths::SbPaths,
+    paths: &dispatch::paths::QdPaths,
     cwd: &std::path::Path,
     target: &Session,
     turn: Option<usize>,
@@ -570,7 +570,7 @@ fn seed_fork_transcript(
         }
     };
     // Option A: the fork's session-id is known PRE-spawn (we mint it), so the
-    // seed is named by it AND the fork's own sbId is minted from it.
+    // seed is named by it AND the fork's own qdId is minted from it.
     let fork_uuid = dispatch::fork_seed::new_fork_uuid();
     let seed = dispatch::fork_seed::rekey_truncate(&records, resolved.boundary_idx, &fork_uuid);
     // Write under the FORK's launch-cwd slug (claude resolves --resume by it).
@@ -591,15 +591,15 @@ fn seed_fork_transcript(
         );
         return Err(1);
     }
-    // WP-B5-iii obl-4: record the fork→parent lineage pointer (the PARENT's sbId,
+    // WP-B5-iii obl-4: record the fork→parent lineage pointer (the PARENT's qdId,
     // keyed by the fork's uuid — works for BOTH the interactive and headless
     // launch paths, no daemon/protocol change). Best-effort + additive: a lineage
     // hiccup never fails the launch; only recorded when the parent has a stable
-    // sbId. STRICTLY the parent pointer — the fork's OWN sbId is minted elsewhere.
-    if let Some(parent_sb) = target.sb_id.as_deref() {
+    // qdId. STRICTLY the parent pointer — the fork's OWN qdId is minted elsewhere.
+    if let Some(parent_qd) = target.qd_id.as_deref() {
         if let Ok(ids_path) = common::ids_store_path(env) {
             if let Err(e) =
-                dispatch::idstore::record_lineage(&ids_path, &fork_uuid, parent_sb, &RealClock)
+                dispatch::idstore::record_lineage(&ids_path, &fork_uuid, parent_qd, &RealClock)
             {
                 eprintln!("qd start: WARNING — fork lineage not recorded: {e}");
             }
@@ -744,7 +744,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let cwd =
         cwd_opt.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let paths = dispatch::paths::SbPaths::from_home(&home);
+    let paths = dispatch::paths::QdPaths::from_home(&home);
 
     // --- P0 start-surface rework: resolve the `--fork <session>` target -------
     // The standard target pipeline (common::all_sessions + resolve_or_die — the
@@ -813,7 +813,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             // WP-B5-iii Mechanism S: seed a NEW forked transcript at a fresh fork
             // uuid and resume THAT (not the parent) — the parent stays untouched
             // (O_RDONLY). The fork's identity rides the pre-minted uuid (option A:
-            // `mint_or_get(fork_uuid)` below mints the fork's OWN sbId, never the
+            // `mint_or_get(fork_uuid)` below mints the fork's OWN qdId, never the
             // parent's). Uniform for the default (latest safe) + `--turn` rewind.
             match seed_fork_transcript(provider_impl, &paths, &cwd, target, fork_turn, &env) {
                 Ok((uuid, stale)) => (Some(uuid), stale),
@@ -887,7 +887,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             // interactive-only refusal is LIFTED. Mechanism S already seeded the
             // forked transcript at `fork_uuid` above; the headless launch resumes
             // THAT (additive on the proven headless spine — zero daemon/qrmux/
-            // protocol/argv change). The daemon mints the fork's OWN sbId via
+            // protocol/argv change). The daemon mints the fork's OWN qdId via
             // `mint_or_get(resume_session_id=fork_uuid)` (B5-ii-b parity, never the
             // parent's) + the daemon-minted child-pid row (`provider=None`). A
             // headless fork still requires `-p` (the agent's first subtask;
@@ -987,7 +987,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     };
     // WP-B5-iii option A (interactive fork): a fork's claude session-id is the
     // pre-minted `fork_uuid` (the seeded transcript) — known PRE-spawn — so mint
-    // the fork's OWN sbId from it via `mint_or_get` (RESUME-path parity, row↔env
+    // the fork's OWN qdId from it via `mint_or_get` (RESUME-path parity, row↔env
     // match at spawn, NEVER the parent's). A non-fork start keeps the unbound
     // pre-mint (bound at boot-confirm). (The headless fork path mints identically
     // inside the daemon via `mint_or_get(resume_session_id=fork_uuid)`.)
@@ -995,7 +995,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         Some(uuid) => dispatch::idstore::mint_or_get(&ids_path, uuid, Some(&name), &clock),
         None => dispatch::idstore::mint_unbound(&ids_path, Some(&name), &clock),
     };
-    let sb_session_id = match minted {
+    let qd_session_id = match minted {
         Ok(id) => id,
         Err(e) => {
             eprintln!("qd start: could not mint a stable session id: {e}. No session was created.");
@@ -1058,7 +1058,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         cwd,
         backend_env,
         backend_env_unset,
-        sb_session_id: Some(sb_session_id.clone()),
+        qd_session_id: Some(qd_session_id.clone()),
         render,
     };
 
@@ -1070,7 +1070,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             // a late-booting session's env id matches what `ls` will surface.
             // Silent: the loud boot error below stays byte-stable.
             if let NewError::BootTimeout { .. } = &e {
-                bind_minted_id_best_effort(&ids_path, &sb_session_id, &paths, &name, &clock);
+                bind_minted_id_best_effort(&ids_path, &qd_session_id, &paths, &name, &clock);
             }
             // §5.1 / D6: a BootTimeout on the -p flow emits a positive
             // priming-readiness-timeout to the BYNAME file (no sessionId exists on
@@ -1106,7 +1106,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         let alive = |pid: i64| dispatch::effects::is_pid_alive(pid as i32);
         match dispatch::registry::pick_live_named_row(&rows, &name, &alive) {
             dispatch::registry::LiveNamePick::One { session_id: sid } => {
-                match dispatch::idstore::bind(&ids_path, &sb_session_id, &sid, &clock) {
+                match dispatch::idstore::bind(&ids_path, &qd_session_id, &sid, &clock) {
                     // Bound, or an idempotent re-bind of the same pair: silent.
                     Ok(dispatch::idstore::BindOutcome::Bound)
                     | Ok(dispatch::idstore::BindOutcome::AlreadyBoundSameId) => {}
@@ -1115,14 +1115,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                     Ok(dispatch::idstore::BindOutcome::SessionHasDifferentId { existing }) => {
                         eprintln!(
                             "WARNING: stable-id divergence for session \"{name}\": env \
-                             carries {sb_session_id}, registry session {sid} already \
+                             carries {qd_session_id}, registry session {sid} already \
                              maps to {existing} — sessions disagree; `qd ls` will \
                              surface {existing}, not the session's QD_SESSION_ID."
                         );
                     }
                     Err(e) => {
                         eprintln!(
-                            "WARNING: could not bind stable id {sb_session_id} to session \
+                            "WARNING: could not bind stable id {qd_session_id} to session \
                              {sid}: {e} — `qd ls` may surface a different id than the \
                              session's QD_SESSION_ID."
                         );
@@ -1132,14 +1132,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             dispatch::registry::LiveNamePick::NoneBindable => {
                 eprintln!(
                     "WARNING: session \"{name}\" booted but its registry row carries no \
-                     sessionId yet — stable id {sb_session_id} is unbound; `qd ls` may \
+                     sessionId yet — stable id {qd_session_id} is unbound; `qd ls` may \
                      surface a different id than the session's QD_SESSION_ID."
                 );
             }
             dispatch::registry::LiveNamePick::Ambiguous { count } => {
                 eprintln!(
                     "WARNING: {count} RUNNING sessions claim the name \"{name}\" — \
-                     refusing to bind stable id {sb_session_id} to either (two live \
+                     refusing to bind stable id {qd_session_id} to either (two live \
                      sessions sharing a name is an anomaly; resolve it, e.g. `qd ls` + \
                      `qd kill`, before trusting name addressing)."
                 );
@@ -1241,7 +1241,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         // events key: sessionId if resolvable NOW (the existing non-blocking
         // registry read), else byname(name) — the key choice is STICKY for ALL of
         // this send's events (§4.1). state_dir honors QD_HOME (§4.1 / ADD-14).
-        let ev_state = dispatch::paths::SbPaths::from_home_env(&home, &env).state_dir;
+        let ev_state = dispatch::paths::QdPaths::from_home_env(&home, &env).state_dir;
         let ev_session_id = dispatch::registry::read_entries(&paths.sessions_dir, false)
             .into_iter()
             .find(|s| s.entry.name.as_deref() == Some(name.as_str()))
@@ -1480,8 +1480,8 @@ pub fn run_new(m: &ArgMatches) -> i32 {
 /// contract.
 fn bind_minted_id_best_effort(
     ids_path: &std::path::Path,
-    sb_session_id: &str,
-    paths: &dispatch::paths::SbPaths,
+    qd_session_id: &str,
+    paths: &dispatch::paths::QdPaths,
     name: &str,
     clock: &RealClock,
 ) {
@@ -1490,7 +1490,7 @@ fn bind_minted_id_best_effort(
     if let dispatch::registry::LiveNamePick::One { session_id: sid } =
         dispatch::registry::pick_live_named_row(&rows, name, &alive)
     {
-        let _ = dispatch::idstore::bind(ids_path, sb_session_id, &sid, clock);
+        let _ = dispatch::idstore::bind(ids_path, qd_session_id, &sid, clock);
     }
 }
 
@@ -1506,7 +1506,7 @@ fn run_new_codex_daemon(
     provider_impl: &'static dyn dispatch::provider::Provider,
     env: &RealEnv,
     home: &std::path::Path,
-    paths: &dispatch::paths::SbPaths,
+    paths: &dispatch::paths::QdPaths,
     name: &str,
     cwd: &std::path::Path,
     agent: Option<String>,
@@ -1552,7 +1552,7 @@ fn run_new_codex_daemon(
         clock: &clock,
         sessions_dir: paths.sessions_dir.clone(),
         claims_dir,
-        // The daemon's stdout/stderr log root: `<sb_home>/.quorum/dispatch/log` (codex-p2-spec
+        // The daemon's stdout/stderr log root: `<qd_home>/.quorum/dispatch/log` (codex-p2-spec
         // §3.2). Resolved off the injected home so a jailed HOME points the log
         // into the jail (L9a). The file is `codex-<name>.log`.
         log_dir: home.join(".quorum").join("dispatch").join("log"),
@@ -1593,7 +1593,7 @@ fn run_new_acp_daemon(
     _provider_impl: &'static dyn dispatch::provider::Provider,
     _env: &RealEnv,
     home: &std::path::Path,
-    paths: &dispatch::paths::SbPaths,
+    paths: &dispatch::paths::QdPaths,
     name: &str,
     cwd: &std::path::Path,
     prompt: Option<String>,
@@ -1720,7 +1720,7 @@ fn emit_priming_timeout(
     name: &str,
     phase: dispatch::boot::BootPhase,
 ) {
-    let ev_state = dispatch::paths::SbPaths::from_home_env(home, env).state_dir;
+    let ev_state = dispatch::paths::QdPaths::from_home_env(home, env).state_dir;
     let writer = EventWriter::for_key(
         &ev_state,
         &events::byname_key(name),
@@ -1872,7 +1872,7 @@ impl dispatch::submit::DeliverDeps for RecordingDeliverDeps<'_> {
 /// step (claude hasn't written its row / id / transcript yet — normal for a
 /// fresh session).
 fn resolve_new_p_transcript(
-    paths: &dispatch::paths::SbPaths,
+    paths: &dispatch::paths::QdPaths,
     name: &str,
 ) -> Option<std::path::PathBuf> {
     let entry = dispatch::registry::read_entries(&paths.sessions_dir, false)
@@ -1889,7 +1889,7 @@ fn resolve_new_p_transcript(
 /// [`dispatch::submit::verify_chunked_payload`] degrades to `SourceUnavailable` only
 /// when NO read ever succeeds.
 struct NewPVerifyDeps<'a> {
-    paths: &'a dispatch::paths::SbPaths,
+    paths: &'a dispatch::paths::QdPaths,
     name: &'a str,
     offset: u64,
     clock: &'a RealClock,
@@ -1963,7 +1963,7 @@ fn map_deliver_outcome(outcome: dispatch::submit::DeliverOutcome, name: &str) ->
 /// Without `--via`: just the caller capture (lifecycle.ts:874). With `--via`:
 ///   1. the name passes an UNCONDITIONAL S2-style charset check (fresh surface —
 ///      never ruling-dependent; the name reaches the unknown-name error string),
-///   2. read+parse `<sbHome>/state/backends.json` (O_NOFOLLOW, perm WARN, §3.1),
+///   2. read+parse `<qdHome>/state/backends.json` (O_NOFOLLOW, perm WARN, §3.1),
 ///   3. resolve the profile (loud unknown-name listing known names only, §3.2.2),
 ///   4. compose profile-wins + credential-slot exclusivity (§3.2.3), resolving a
 ///      `secret` credential via the name-agnostic `get_secret` (keychain→file,
@@ -1997,9 +1997,9 @@ fn compose_backend_env(
         return Err(1);
     }
 
-    // Resolve <sbHome>/state via QD_HOME-honoring paths (same as marks.jsonl);
+    // Resolve <qdHome>/state via QD_HOME-honoring paths (same as marks.jsonl);
     // independent of the create path's own `paths` so nothing else changes.
-    let state_paths = dispatch::paths::SbPaths::from_home_env(home, env);
+    let state_paths = dispatch::paths::QdPaths::from_home_env(home, env);
     let file_path = dispatch::backends::backends_file_path(&state_paths.state_dir);
 
     let (file, perm_warning) = match dispatch::backends::read_backends_file(&file_path) {
@@ -2136,7 +2136,7 @@ pub fn run_info(m: &ArgMatches) -> i32 {
     };
 
     if json {
-        // sbIdPrefix: shortest-unique among the resolved session LIST, the
+        // qdIdPrefix: shortest-unique among the resolved session LIST, the
         // same computation ls uses (idstore::prefix_map).
         let prefixes = dispatch::idstore::prefix_map(&sessions);
         // live: status-live AND pid-alive-where-a-pid-exists, through the real
@@ -2387,7 +2387,7 @@ mod tests {
             user_named: Some(true),
             session_id: sid.to_string(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status,
             zmx_name: None,
@@ -2415,7 +2415,7 @@ mod tests {
     #[test]
     fn fork_preflight_tombstoned_with_transcript_is_legal() {
         let home = tempfile::tempdir().unwrap();
-        let paths = dispatch::paths::SbPaths::from_home(home.path());
+        let paths = dispatch::paths::QdPaths::from_home(home.path());
         // Plant the transcript where the claude provider seam resolves it
         // (projects_dir scan tier — any project subdir holding <sid>.jsonl).
         let proj = paths.projects_dir.join("-work-proj");
@@ -2443,7 +2443,7 @@ mod tests {
             return; // root ignores mode bits — the staging is meaningless.
         }
         let home = tempfile::tempdir().unwrap();
-        let paths = dispatch::paths::SbPaths::from_home(home.path());
+        let paths = dispatch::paths::QdPaths::from_home(home.path());
         std::fs::create_dir_all(&paths.projects_dir).unwrap();
         std::fs::set_permissions(&paths.projects_dir, std::fs::Permissions::from_mode(0o000))
             .unwrap();
@@ -2462,7 +2462,7 @@ mod tests {
     #[test]
     fn fork_preflight_transcript_less_is_teaching_error() {
         let home = tempfile::tempdir().unwrap();
-        let paths = dispatch::paths::SbPaths::from_home(home.path());
+        let paths = dispatch::paths::QdPaths::from_home(home.path());
         let target = fork_target("uuid-ghost", Some("/work/proj"), SessionStatus::Cold);
         let msg =
             fork_transcript_missing_error(&dispatch::provider::ClaudeProvider, &paths, &target)
@@ -2515,7 +2515,7 @@ mod tests {
     /// The byname events file emit_priming_timeout writes to, resolved the SAME
     /// way the function does (QD_HOME-honoring) so the test is hermetic.
     fn byname_events_file(home: &std::path::Path, name: &str) -> std::path::PathBuf {
-        let state = dispatch::paths::SbPaths::from_home_env(home, &RealEnv).state_dir;
+        let state = dispatch::paths::QdPaths::from_home_env(home, &RealEnv).state_dir;
         dispatch::events::events_path(&state, &byname_key(name))
     }
 

@@ -28,7 +28,7 @@ use std::process::{Child, Command};
 // the jail-belt dir scaffold, and the jailed runner live in
 // tests/common/p0bins.rs (shared with p0_id_matrix.rs ONLY).
 use common::p0bins::{
-    establish_jail, fakerepl_bin, run_sb_jailed, sb_bin, qrmux_bin, JailScaffold,
+    establish_jail, fakerepl_bin, run_qd_jailed, qd_bin, qrmux_bin, JailScaffold,
 };
 
 /// A pid that is reliably DEAD (never a running process) — `is_pid_alive` → false.
@@ -47,7 +47,7 @@ fn live_child() -> Child {
 /// jailed HOME and run `qd <args...>`. CLAUDE_BIN points at a NONEXISTENT path
 /// and PATH is minimal, so a refusal regression fails loudly downstream instead
 /// of booting a real claude (the stderr pins then catch the wrong text).
-fn run_sb_with_rows(
+fn run_qd_with_rows(
     dir: &Path,
     rows: &[(i64, String)],
     tombstoned: &[(i64, String)],
@@ -65,7 +65,7 @@ fn run_sb_with_rows(
     for (pid, json) in tombstoned {
         std::fs::write(sessions.join(format!("{pid}.json.tombstoned")), json).unwrap();
     }
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(args)
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
@@ -110,7 +110,7 @@ fn row(pid: i64, session_id: &str, name: &str, updated_at: i64) -> String {
 #[test]
 fn start_resume_is_an_unknown_option() {
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(
+    let (code, _out, err) = run_qd_with_rows(
         t.path(),
         &[],
         &[],
@@ -143,7 +143,7 @@ fn start_fork_ambiguous_target_errors() {
     ];
 
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(
+    let (code, _out, err) = run_qd_with_rows(
         t.path(),
         &rows,
         &[],
@@ -170,7 +170,7 @@ fn start_fork_ambiguous_target_errors() {
 #[test]
 fn start_fork_not_found_errors() {
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(
+    let (code, _out, err) = run_qd_with_rows(
         t.path(),
         &[],
         &[],
@@ -194,7 +194,7 @@ fn start_fork_not_found_errors() {
 fn start_fork_empty_sid_target_errors() {
     let rows = [(DEAD_PID, row(DEAD_PID, "", "qd-qafix-nosid", 1717000001000))];
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(
+    let (code, _out, err) = run_qd_with_rows(
         t.path(),
         &rows,
         &[],
@@ -221,7 +221,7 @@ fn start_fork_empty_sid_target_errors() {
 #[test]
 fn codex_start_refuses_fork_flag() {
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_rows(
+    let (code, _out, err) = run_qd_with_rows(
         t.path(),
         &[],
         &[],
@@ -265,7 +265,7 @@ fn codex_start_refuses_fork_flag() {
 fn fork_target_must_be_same_provider() {
     let t = tempfile::tempdir().unwrap();
     let codex_row = r#"{"pid":4242,"sessionId":"cdx-thread-uuid-1","cwd":"/w","startedAt":1717000000000,"updatedAt":1717000600000,"status":"idle","name":"cxwk","provider":"codex","endpoint":"ws://127.0.0.1:18999"}"#;
-    let (code, _out, err) = run_sb_with_rows(
+    let (code, _out, err) = run_qd_with_rows(
         t.path(),
         &[(4242, codex_row.to_string())],
         &[],
@@ -307,7 +307,7 @@ fn resume_killed_transcriptless_session_states_the_truth() {
         let tombs = [(DEAD_PID, row(DEAD_PID, sid, name, 1717000001000))];
 
         let t = tempfile::tempdir().unwrap();
-        let (code, _out, err) = run_sb_with_rows(t.path(), &[], &tombs, &["resume", name]);
+        let (code, _out, err) = run_qd_with_rows(t.path(), &[], &tombs, &["resume", name]);
 
         assert_eq!(
             code, 1,
@@ -336,7 +336,7 @@ fn resume_killed_transcriptless_session_states_the_truth() {
 /// A fakerepl boot jail (ack3_matrix shape, reduced to what this matrix needs).
 /// Rooted under /tmp for the zmx/qrmux socket-path length budget (L21).
 struct BootJail {
-    /// The shared jail-belt scaffold (root/home/xdg/sb_home) — p0bins.
+    /// The shared jail-belt scaffold (root/home/xdg/qd_home) — p0bins.
     dirs: JailScaffold,
     projects: PathBuf,
 }
@@ -344,7 +344,7 @@ struct BootJail {
 impl BootJail {
     fn establish(tag: &str) -> BootJail {
         // fakerepl's jail belt (a4-spec §5) requires HOME to match
-        // `*/sbrg-runs/*/home` with sb_home/zmx/tmp as root-siblings.
+        // `*/qdrg-runs/*/home` with qd_home/zmx/tmp as root-siblings.
         let dirs = establish_jail(Path::new("/tmp/qd-p0qafix"), tag);
         let projects = dirs.home.join(".claude").join("projects").join("proj");
         BootJail { dirs, projects }
@@ -365,7 +365,7 @@ impl BootJail {
         ]
     }
 
-    fn run_sb(&self, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String) {
+    fn run_qd(&self, args: &[&str], extra: &[(&str, String)]) -> (i32, String, String) {
         // WP-B-CS-1 (D2): force the INTERACTIVE surface for `qd start` — this harness
         // runs qd with piped stdio (non-TTY) + a fake-claude CLAUDE_BIN (not a PTY for
         // qd), so a bare start would auto-detect the HEADLESS surface (and a no-`-p`
@@ -383,12 +383,12 @@ impl BootJail {
         } else {
             args
         };
-        run_sb_jailed(&self.dirs, &fakerepl_bin(), args, extra)
+        run_qd_jailed(&self.dirs, &fakerepl_bin(), args, extra)
     }
 
     fn teardown(&self, names: &[&str]) {
         for name in names {
-            let _ = self.run_sb(&["stop", "--force", name], &[]);
+            let _ = self.run_qd(&["stop", "--force", name], &[]);
         }
         let _ = std::fs::remove_dir_all(&self.dirs.root);
         let _ = std::fs::remove_dir_all(&self.dirs.xdg);
@@ -419,7 +419,7 @@ fn start_fork_live_matrix_e2e() {
     let u1 = "aaaaaaaa-1111-2222-3333-444444444444";
 
     // Arm 0 (setup): boot the original; it registers provider uuid u1.
-    let (code, _out, err) = jail.run_sb(&["start", "orig"], &jail.fakerepl_env("orig", u1));
+    let (code, _out, err) = jail.run_qd(&["start", "orig"], &jail.fakerepl_env("orig", u1));
     assert_eq!(code, 0, "original boots; stderr: {err}");
 
     // punch item 11 + WP-B5-iii Mechanism S: the fork source needs a REAL
@@ -448,7 +448,7 @@ fn start_fork_live_matrix_e2e() {
     // adopts that uuid via `--resume <fork_uuid>` (faithful claude emulation) — the
     // test does NOT pre-inject a session id (name-only env), so the registered
     // uuid is whatever qd minted.
-    let (code, _out, err) = jail.run_sb(
+    let (code, _out, err) = jail.run_qd(
         &["start", "forked", "--fork", "orig"],
         &[("QD_FAKEREPL_NAME", "forked".to_string())],
     );
@@ -506,7 +506,7 @@ fn start_fork_live_matrix_e2e() {
     );
 
     // Arm 2b: BOTH participants are alive side by side — two rows, two UUIDs.
-    let (code, out, err) = jail.run_sb(&["ls", "--all", "--json"], &[]);
+    let (code, out, err) = jail.run_qd(&["ls", "--all", "--json"], &[]);
     assert_eq!(code, 0, "ls --json; stderr: {err}");
     assert!(
         out.contains(u1) && out.contains(&fork_uuid),
@@ -541,7 +541,7 @@ fn start_fork_live_matrix_e2e() {
 
     // Arm 3: the removed flag is an unknown option here too (boot jail, full
     // PATH/registry state — the parse rejection is environment-independent).
-    let (code, _out, err) = jail.run_sb(&["start", "branch", "--resume", u1], &[]);
+    let (code, _out, err) = jail.run_qd(&["start", "branch", "--resume", u1], &[]);
     assert_eq!(code, 1, "start --resume is gone; stderr: {err}");
     assert!(
         err.contains("error: unknown option '--resume'"),
@@ -566,7 +566,7 @@ fn start_fork_in_flight_source_reports_staleness() {
     let jail = BootJail::establish("stale");
     let u1 = "cccccccc-1111-2222-3333-444444444444";
 
-    let (code, _out, err) = jail.run_sb(&["start", "orig"], &jail.fakerepl_env("orig", u1));
+    let (code, _out, err) = jail.run_qd(&["start", "orig"], &jail.fakerepl_env("orig", u1));
     assert_eq!(
         code, 0,
         "orig boots (registers sessionId u1); stderr: {err}"
@@ -591,7 +591,7 @@ fn start_fork_in_flight_source_reports_staleness() {
     .unwrap();
 
     // Fork it: succeeds (forks the SAFE turn-1 prefix) AND reports staleness.
-    let (code, _out, err) = jail.run_sb(
+    let (code, _out, err) = jail.run_qd(
         &["start", "forked", "--fork", "orig"],
         &[("QD_FAKEREPL_NAME", "forked".to_string())],
     );

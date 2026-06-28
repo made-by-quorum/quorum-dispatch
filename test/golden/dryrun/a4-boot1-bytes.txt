@@ -6,46 +6,46 @@ credentials seeded: yes
 ### BOOT 1 -- qd new (default flags) -- REAL CLAUDE #1   ###
 ############################################################
 qd new exit=0
-  stdout: Started detached session "sbrg-79329178063075315738-soak"
+  stdout: Started detached session "qdrg-79329178063075315738-soak"
   stderr: 
-  pidfile: /tmp/claude-501/sbrg-runs/79329178063075315738/home/.claude/sessions/79501.json  status=idle
+  pidfile: /tmp/claude-501/qdrg-runs/79329178063075315738/home/.claude/sessions/79501.json  status=idle
   jsonl: NONE
   claude version in jail: 2.1.163
   baseline user-record count: 0
 
 === AUTH PROBE: one warm-up turn to confirm the jail is logged in ===
-  AUTH PROBE OK: warm-up turn produced a user record; jsonl now: /tmp/claude-501/sbrg-runs/79329178063075315738/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-79329178063075315738-tmp-work/ccb20dde-c680-43b3-b56d-c9a8848777e9.jsonl
+  AUTH PROBE OK: warm-up turn produced a user record; jsonl now: /tmp/claude-501/qdrg-runs/79329178063075315738/home/.claude/projects/-private-tmp-claude-501-qdrg-runs-79329178063075315738-tmp-work/ccb20dde-c680-43b3-b56d-c9a8848777e9.jsonl
   re-baselined user-record count after warm-up: 1
 
 === GROUP (a): 8 x send:pty idle-path short messages ===
-  (a1) send:pty rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
-  (a2) send:pty rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
-  (a3) send:pty rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
-  (a4) send:pty rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
-  (a5) send:pty rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
-  (a6) send:pty rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
-  (a7) send:pty rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
-  (a8) send:pty rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
+  (a1) send:pty rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
+  (a2) send:pty rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
+  (a3) send:pty rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
+  (a4) send:pty rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
+  (a5) send:pty rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
+  (a6) send:pty rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
+  (a7) send:pty rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
+  (a8) send:pty rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
   after group (a): user-record count = 9 (baseline 1)
 
 === GROUP (b): 4 x queue-path (send while busy) ===
   (b1) session went busy; sending WHILE busy
-  (b1) busy-send rc=0 out=[Message queued in "sbrg-79329178063075315738-soak" (session busy)]
+  (b1) busy-send rc=0 out=[Message queued in "qdrg-79329178063075315738-soak" (session busy)]
   (b1) OK: Message queued (session busy)
   (b1) user-records: before-busy=10 after-both=11 (delta=1)
   (b1) VERIFIED: queued message surfaced as a user record (QPROBE_1 in JSONL)
   (b2) session went busy; sending WHILE busy
-  (b2) busy-send rc=0 out=[Message queued in "sbrg-79329178063075315738-soak" (session busy)]
+  (b2) busy-send rc=0 out=[Message queued in "qdrg-79329178063075315738-soak" (session busy)]
   (b2) OK: Message queued (session busy)
   (b2) user-records: before-busy=12 after-both=13 (delta=1)
   (b2) VERIFIED: queued message surfaced as a user record (QPROBE_2 in JSONL)
   (b3) session went busy; sending WHILE busy
-  (b3) busy-send rc=0 out=[Message queued in "sbrg-79329178063075315738-soak" (session busy)]
+  (b3) busy-send rc=0 out=[Message queued in "qdrg-79329178063075315738-soak" (session busy)]
   (b3) OK: Message queued (session busy)
   (b3) user-records: before-busy=14 after-both=15 (delta=1)
   (b3) VERIFIED: queued message surfaced as a user record (QPROBE_3 in JSONL)
   (b4) session went busy; sending WHILE busy
-  (b4) busy-send rc=0 out=[Message queued in "sbrg-79329178063075315738-soak" (session busy)]
+  (b4) busy-send rc=0 out=[Message queued in "qdrg-79329178063075315738-soak" (session busy)]
   (b4) OK: Message queued (session busy)
   (b4) user-records: before-busy=16 after-both=17 (delta=1)
   (b4) VERIFIED: queued message surfaced as a user record (QPROBE_4 in JSONL)
@@ -64,17 +64,17 @@ qd new exit=0
 
 === GROUP (d): 3 x long-paste (exactly one turn each) ===
   (d1) pasting 1102 bytes; instruct reply PASTEACK_1
-  (d1) send rc=0 out=[Message sent to sbrg-79329178063075315738-soak]
+  (d1) send rc=0 out=[Message sent to qdrg-79329178063075315738-soak]
   (d1) user-records: before=18 after=19 DELTA=1
   (d1) VERIFIED: EXACTLY ONE turn from long paste (delta=1)
   (d2) pasting 4202 bytes; instruct reply PASTEACK_2
-  (d2) send rc=0 out=[WARNING: Message sent to "sbrg-79329178063075315738-soak" but session did not go busy — it may be stuck unsubmitted in the composer.
-Message sent to sbrg-79329178063075315738-soak]
+  (d2) send rc=0 out=[WARNING: Message sent to "qdrg-79329178063075315738-soak" but session did not go busy — it may be stuck unsubmitted in the composer.
+Message sent to qdrg-79329178063075315738-soak]
   (d2) user-records: before=19 after=19 DELTA=0
   (d2) ANOMALY: expected 1 user-record, got delta=0
   (d3) pasting 4502 bytes; instruct reply PASTEACK_3
-  (d3) send rc=0 out=[WARNING: Message sent to "sbrg-79329178063075315738-soak" but session did not go busy — it may be stuck unsubmitted in the composer.
-Message sent to sbrg-79329178063075315738-soak]
+  (d3) send rc=0 out=[WARNING: Message sent to "qdrg-79329178063075315738-soak" but session did not go busy — it may be stuck unsubmitted in the composer.
+Message sent to qdrg-79329178063075315738-soak]
   (d3) user-records: before=19 after=19 DELTA=0
   (d3) ANOMALY: expected 1 user-record, got delta=0
 
@@ -106,8 +106,8 @@ Message sent to sbrg-79329178063075315738-soak]
 ############################################################
   qd new -p exit code (echo $?): 0
   stdout:
-    Started detached session "sbrg-79329178063075315738-exitp"
-    Prompt delivered to "sbrg-79329178063075315738-exitp"
+    Started detached session "qdrg-79329178063075315738-exitp"
+    Prompt delivered to "qdrg-79329178063075315738-exitp"
   stderr:
   EXIT-CONTRACT: PASS (exit 0 + 'Prompt delivered' -- prompt ACCEPTED/went busy)
   exit-contract session killed; zmx tasks matching NAME2: 0
@@ -115,18 +115,18 @@ Message sent to sbrg-79329178063075315738-soak]
 
 === DEV-CHANNELS FINDING (A2 carry) ===
   claude --version in jail: 2.1.163
-  relay sidecar dir (/tmp/claude-501/sbrg-runs/79329178063075315738/home/.claude/relay):
+  relay sidecar dir (/tmp/claude-501/qdrg-runs/79329178063075315738/home/.claude/relay):
     (no relay sidecar dir -- relay server did not register a sidecar)
   ls --json relayPort field:
-    name=sbrg-79329178063075315738-exitp relayPort=None
-    name=sbrg-79329178063075315738-soak relayPort=None
-  channels dir state (/tmp/claude-501/sbrg-runs/79329178063075315738/home/.claude/channels):
+    name=qdrg-79329178063075315738-exitp relayPort=None
+    name=qdrg-79329178063075315738-soak relayPort=None
+  channels dir state (/tmp/claude-501/qdrg-runs/79329178063075315738/home/.claude/channels):
     total 0
     drwxr-xr-x   3 eric  wheel   96 Jun  4 23:39 .
     drwxr-xr-x  13 eric  wheel  416 Jun  4 23:42 ..
     lrwxr-xr-x   1 eric  wheel   25 Jun  4 23:39 relay -> /home/u/work/cc-relay
   trying send:relay (absence is a FINDING not a failure):
-    send:relay rc=1 out=[Session "sbrg-79329178063075315738-soak" has no relay.]
+    send:relay rc=1 out=[Session "qdrg-79329178063075315738-soak" has no relay.]
   dev-channels banner in scrollback?
 
 === BOOT 1 SOAK COMPLETE. Teardown via trap. ===

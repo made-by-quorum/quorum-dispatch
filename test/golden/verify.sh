@@ -138,8 +138,8 @@ verify_scenario() {
 
     # Establish the jail FIRST. Fail closed. Honor an optional caller-supplied
     # SHORT run id (RECORD_RUNID): zmx caps session names at 20 bytes, and the
-    # default jail runid (~20 chars) yields a 26-char `sbrg-<runid>-` prefix with
-    # no room for a session suffix — so live scenarios that spawn sbrg- sessions
+    # default jail runid (~20 chars) yields a 26-char `qdrg-<runid>-` prefix with
+    # no room for a session suffix — so live scenarios that spawn qdrg- sessions
     # (kill/ping) cannot fit a name. Mirrors the same seam in record.sh.
     if ! jail_establish "${RECORD_RUNID:-}"; then
         printf '[verify] JAIL refused — not running scenario %s\n' "$scn" >&2

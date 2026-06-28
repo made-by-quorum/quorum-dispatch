@@ -13,7 +13,7 @@
 # 2026-06-05T12:55:00Z.
 #
 === rider 4: in-VM re-derivation + replay-verify (Lima sbtest, Linux aarch64, uid 501) ===
-token values: JAIL_ROOT=/run/user/501/sbrg-runs/205321178063567617624  runid=205321178063567617624  uid=501
+token values: JAIL_ROOT=/run/user/501/qdrg-runs/205321178063567617624  runid=205321178063567617624  uid=501
 normalizer_sha (in-VM) = 39bbd74a2fbc0424d7f96b32fedfc6cbc0ae4fde8e7b23c10f787b5a2b507457
 re-derive(committed raw, NEW normalizer) == refreshed committed golden : BYTE-MATCH
 verify.sh --replay <golden> --class byte-exact --expected <golden>     : PASS

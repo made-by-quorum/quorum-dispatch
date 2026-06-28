@@ -193,7 +193,7 @@ fn emit_relay_send_events_with_env(
         return;
     };
     let state_dir =
-        dispatch::paths::SbPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
+        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
 
     // Key to the TARGET (not the sender): full-scan → target uuid; fast path
     // (Session unknown) → the `byname-<target>` file (session omitted, §X.3.1).
@@ -266,7 +266,7 @@ fn emit_relay_send_events_with_env(
 fn derive_from_session(env: &dyn Env) -> String {
     if let Some(stable) = env.var("QD_SESSION_ID").filter(|s| !s.is_empty()) {
         if let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) {
-            let paths = dispatch::paths::SbPaths::from_home_env(std::path::Path::new(&home), env);
+            let paths = dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env);
             let ids = dispatch::idstore::fold(&dispatch::idstore::ids_path(&paths.state_dir));
             // The SHARED resolution chain (S4): whoami and attribution answer
             // "what engine identity resolves?" identically by construction.
@@ -332,7 +332,7 @@ fn inject_via_provider(
     let env = RealEnv;
     let home = env.var("HOME").filter(|s| !s.is_empty());
     let paths =
-        dispatch::paths::SbPaths::from_home(std::path::Path::new(home.as_deref().unwrap_or("/")));
+        dispatch::paths::QdPaths::from_home(std::path::Path::new(home.as_deref().unwrap_or("/")));
     let fx = ProviderFx {
         env: &env,
         paths: &paths,
@@ -638,7 +638,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
 /// borrow lifetimes are bounded by the caller's `env`/`paths`.
 fn codex_resolve_fx<'a>(
     env: &'a RealEnv,
-    paths: &'a dispatch::paths::SbPaths,
+    paths: &'a dispatch::paths::QdPaths,
 ) -> dispatch::provider::ProviderFx<'a> {
     dispatch::provider::ProviderFx {
         env,
@@ -860,7 +860,7 @@ fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Sessio
             for s in v {
                 // P0 wave-2 addendum: the handle is the STABLE id (codes are
                 // retired from display); id-less rows show "---" as before.
-                let sb_id = s.sb_id.as_deref().unwrap_or("---");
+                let qd_id = s.qd_id.as_deref().unwrap_or("---");
                 let name = s.name.as_deref().unwrap_or("(unnamed)");
                 let id = dispatch::fmt::truncate_id_default(&s.session_id);
                 let pid = s
@@ -868,7 +868,7 @@ fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Sessio
                     .filter(|&p| p != 0)
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "-".to_string());
-                eprintln!("  [{sb_id}] {name}\t{id}\tPID {pid}");
+                eprintln!("  [{qd_id}] {name}\t{id}\tPID {pid}");
             }
             Err(1)
         }
@@ -1000,7 +1000,7 @@ mod tests {
     /// Build a MapEnv + a staged ids.jsonl under a tempdir HOME. Returns the
     /// tempdir (keep alive) and the env.
     fn identity_env(
-        sb_session_id: Option<&str>,
+        qd_session_id: Option<&str>,
         claude_session_id: Option<&str>,
         ids_lines: &str,
     ) -> (tempfile::TempDir, MapEnv) {
@@ -1013,7 +1013,7 @@ mod tests {
             "HOME".to_string(),
             home.path().to_string_lossy().to_string(),
         );
-        if let Some(v) = sb_session_id {
+        if let Some(v) = qd_session_id {
             vars.insert("QD_SESSION_ID".to_string(), v.to_string());
         }
         if let Some(v) = claude_session_id {
@@ -1167,7 +1167,7 @@ mod tests {
             user_named: None,
             session_id: target_uuid.to_string(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status: dispatch::model::SessionStatus::Idle,
             zmx_name: None,
@@ -1191,7 +1191,7 @@ mod tests {
         emit_relay_send_events_with_env(&env, "target-b", Some(&target), message, &message_id);
 
         // 4) Tail the TARGET's real delivery log under the sender HOME.
-        let state_dir = dispatch::paths::SbPaths::from_home_env(sender_home.path(), &env).state_dir;
+        let state_dir = dispatch::paths::QdPaths::from_home_env(sender_home.path(), &env).state_dir;
         let log = state_dir
             .join("sessions")
             .join(format!("{target_uuid}.events.jsonl"));

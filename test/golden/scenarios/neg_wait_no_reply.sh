@@ -53,7 +53,7 @@ scn_run() {
     # Send a turn --wait with a SMALL timeout. The user record lands; the assistant
     # reply is withheld; status reaches idle so --wait completes with no text.
     local waitout
-    waitout="$(scn_sb_target send:pty "$name" "$SCN_MSG" --wait --timeout 15 2>"$SCN_OUT.stderr")"
+    waitout="$(scn_qd_target send:pty "$name" "$SCN_MSG" --wait --timeout 15 2>"$SCN_OUT.stderr")"
     local waitrc=$?
 
     # JSONL record-class counts: exactly 1 user record, 0 assistant records.

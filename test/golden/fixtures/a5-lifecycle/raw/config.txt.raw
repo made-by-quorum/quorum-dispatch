@@ -1,7 +1,7 @@
 # RECORDED-FROM pin=8c59ec4 (verified-diff-carry from 0d0fa9e; proof exec/a5-grec-pin-carry-proof.md; orc-3 ruling relay-1780671157930-19) verb=config backend=file (fake key, masked+reveal)
 $ qd config path (no key set)
 Backend:     file
-Config file: /var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/sbrg-runs/9924c/sb_home/config.toml
+Config file: /var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/qdrg-runs/9924c/qd_home/config.toml
 Keys set:    (none)
 $ qd config set openrouter-key <FAKE>
 qd config: warning -- passing a secret on the command line may leave it in your shell history. Prefer `qd config set openrouter-key` (hidden prompt).
@@ -12,7 +12,7 @@ $ qd config get openrouter-key --reveal
 openrouter-key: sk-or-FAKE-0000
 $ qd config path (key set)
 Backend:     file
-Config file: /var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/sbrg-runs/9924c/sb_home/config.toml
+Config file: /var/folders/tk/nr8md68d7sl1tc7z4d6sp91r0000gn/T/qdrg-runs/9924c/qd_home/config.toml
 Keys set:    openrouter-key
 $ qd config unset openrouter-key
 Unset openrouter-key.

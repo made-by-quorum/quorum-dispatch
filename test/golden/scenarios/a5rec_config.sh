@@ -16,19 +16,19 @@ scn_run() {
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=config backend=file (fake key, masked+reveal)"
         echo "\$ qd config path (no key set)"
-        scn_sb config path 2>&1
+        scn_qd config path 2>&1
         echo "\$ qd config set openrouter-key <FAKE>"
-        scn_sb config set openrouter-key "$K" 2>&1
+        scn_qd config set openrouter-key "$K" 2>&1
         echo "\$ qd config get openrouter-key (masked)"
-        scn_sb config get openrouter-key 2>&1
+        scn_qd config get openrouter-key 2>&1
         echo "\$ qd config get openrouter-key --reveal"
-        scn_sb config get openrouter-key --reveal 2>&1
+        scn_qd config get openrouter-key --reveal 2>&1
         echo "\$ qd config path (key set)"
-        scn_sb config path 2>&1
+        scn_qd config path 2>&1
         echo "\$ qd config unset openrouter-key"
-        scn_sb config unset openrouter-key 2>&1
+        scn_qd config unset openrouter-key 2>&1
         echo "\$ qd config get openrouter-key (after unset)"
-        scn_sb config get openrouter-key 2>&1
+        scn_qd config get openrouter-key 2>&1
     } > "$SCN_OUT"
     printf '0\n' > "$SCN_OUT.exit"
 }

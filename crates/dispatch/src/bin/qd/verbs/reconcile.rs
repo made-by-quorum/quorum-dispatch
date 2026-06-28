@@ -17,7 +17,7 @@ use dispatch::effects::{
 };
 use dispatch::exec::RealExec;
 use dispatch::mux::{Mux, MuxSession};
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::reconcile::{plan, Action};
 use dispatch::registry::{read_entries, tombstone, RegistryEntry};
 use dispatch::stray::classify;
@@ -37,7 +37,7 @@ pub fn run(m: &ArgMatches) -> i32 {
             return 1;
         }
     };
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     // Backend-selected mux (C1 D3). ONE QD_MUX parse drives the mux AND the dir
     // sweep below. A bogus QD_MUX exits loudly here.
     let backend = match common::select_backend(&env) {
@@ -204,7 +204,7 @@ pub fn run(m: &ArgMatches) -> i32 {
 /// Gather strays READ-ONLY: scan transcripts + claude procs, build the registry
 /// union, classify. The PARKED-takeover path carries pid/paths but never acts.
 fn gather_strays(
-    paths: &SbPaths,
+    paths: &QdPaths,
     pt: &RealProcessTable<RealExec>,
     registry: &[RegistryEntry],
     clock: &RealClock,

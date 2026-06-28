@@ -219,7 +219,7 @@ mod tests {
     // --- agent-marker-beats-TTY rows (2) ------------------------------------
 
     #[test]
-    fn agent_marker_beats_tty_sb_session_id() {
+    fn agent_marker_beats_tty_qd_session_id() {
         // At a TTY, but inside a Claude session (QD_SESSION_ID) → Agent.
         assert_eq!(
             resolve_driver(DriverOverride::None, true, &agent_env("QD_SESSION_ID")),

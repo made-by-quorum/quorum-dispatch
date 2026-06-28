@@ -214,9 +214,9 @@ fn wait_dead(pid: i64) {
 }
 
 /// Resolve the codex transcript_root off the jail env (codex's transcript_root reads
-/// `fx.env` $CODEX_HOME/$HOME — never paths; the placeholder SbPaths satisfies the
+/// `fx.env` $CODEX_HOME/$HOME — never paths; the placeholder QdPaths satisfies the
 /// borrow). Owned `paths` is passed in so the borrow outlives the fx.
-fn codex_root(env: &JailEnv, paths: &dispatch::paths::SbPaths) -> PathBuf {
+fn codex_root(env: &JailEnv, paths: &dispatch::paths::QdPaths) -> PathBuf {
     let fx = ProviderFx {
         env,
         paths,
@@ -304,14 +304,14 @@ fn codex_resume_kill_live_jailed_e2e() {
     // P0 QA (spec-w4-qa A1, codex empirical pin): create minted a stable qb id
     // and BOUND it to the REAL thread uuid (mint-unbound → bind-after-thread/start).
     let ids_at_create = dispatch::idstore::fold(&ids_path);
-    let sbx_id_at_create = ids_at_create
+    let qb_id_at_create = ids_at_create
         .by_session
         .get(&thread_id)
         .cloned()
         .expect("create bound a stable id to the live thread uuid");
     assert!(
-        dispatch::idstore::is_valid_id(&sbx_id_at_create),
-        "well-formed qb id: {sbx_id_at_create:?}"
+        dispatch::idstore::is_valid_id(&qb_id_at_create),
+        "well-formed qb id: {qb_id_at_create:?}"
     );
 
     // A reaper that always kills the CURRENT live daemon pid (updated across the
@@ -332,7 +332,7 @@ fn codex_resume_kill_live_jailed_e2e() {
         let _ = rpc.initialized();
         rpc.set_request_timeout(std::time::Duration::from_secs(60));
 
-        let placeholder = dispatch::paths::SbPaths::from_home(Path::new(""));
+        let placeholder = dispatch::paths::QdPaths::from_home(Path::new(""));
         let root = codex_root(&env, &placeholder);
         let key = SessionKey {
             id: &thread_id,
@@ -349,7 +349,7 @@ fn codex_resume_kill_live_jailed_e2e() {
         let rpc_ref: &dyn AppServerRpc = &rpc;
         let fx = ProviderFx {
             env: &env,
-            paths: &dispatch::paths::SbPaths::from_home(&jail.join("home")),
+            paths: &dispatch::paths::QdPaths::from_home(&jail.join("home")),
             socket_dir: sessions_dir.clone(),
             mux: None,
             clock: None,
@@ -376,7 +376,7 @@ fn codex_resume_kill_live_jailed_e2e() {
 
     // WAIT for idle so the turn completes + the rollout has a balanced tail.
     {
-        let placeholder = dispatch::paths::SbPaths::from_home(Path::new(""));
+        let placeholder = dispatch::paths::QdPaths::from_home(Path::new(""));
         let root = codex_root(&env, &placeholder);
         let key = SessionKey {
             id: &thread_id,
@@ -418,7 +418,7 @@ fn codex_resume_kill_live_jailed_e2e() {
 
     // Confirm the rollout FILE now exists (the resumable history revive will hydrate).
     let rollout_after_turn = {
-        let placeholder = dispatch::paths::SbPaths::from_home(Path::new(""));
+        let placeholder = dispatch::paths::QdPaths::from_home(Path::new(""));
         let root = codex_root(&env, &placeholder);
         let key = SessionKey {
             id: &thread_id,
@@ -535,7 +535,7 @@ fn codex_resume_kill_live_jailed_e2e() {
     let ids_at_revive = dispatch::idstore::fold(&ids_path);
     assert_eq!(
         ids_at_revive.by_session.get(&thread_id),
-        Some(&sbx_id_at_create),
+        Some(&qb_id_at_create),
         "codex resume → SAME qb id (the A1 matrix row, codex column)"
     );
     assert_eq!(

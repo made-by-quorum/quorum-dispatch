@@ -644,7 +644,7 @@ fn revive<'a>(
     // stable id is keyed directly (mint_or_get — the SAME id across every
     // resume; lazy-mints for pre-stable-id sessions). Fail-closed on a mint
     // error (nothing spawned).
-    let sb_session_id = crate::idstore::mint_or_get(
+    let qd_session_id = crate::idstore::mint_or_get(
         &deps.ids_path,
         &params.thread_id,
         Some(&params.name),
@@ -656,7 +656,7 @@ fn revive<'a>(
     // breaks the loop; a bind-race connect failure re-rolls + respawns.
     let mut last_err: Option<DaemonError> = None;
     for _ in 0..SPAWN_RETRIES {
-        match try_spawn_and_connect(deps, params, &sb_session_id) {
+        match try_spawn_and_connect(deps, params, &qd_session_id) {
             Ok((spawned, endpoint, rpc)) => {
                 // Steps 5-7 with the connected rpc; any failure kills the daemon.
                 return finish_revive(deps, params, spawned, &endpoint, rpc.as_ref());
@@ -740,7 +740,7 @@ fn unpinned_override(env: &dyn Env) -> bool {
 fn try_spawn_and_connect<'a>(
     deps: &'a ReviveDeps<'a>,
     params: &ResumeParams,
-    sb_session_id: &str,
+    qd_session_id: &str,
 ) -> Result<(SpawnedDaemon, String, Box<dyn AppServerRpc + 'a>), (DaemonError, Option<SpawnedDaemon>)>
 {
     let port = (deps.alloc_port)().map_err(|e| {
@@ -795,7 +795,7 @@ fn try_spawn_and_connect<'a>(
     // P0 wave-2 (spec-w2-env D1 site 3): the revived daemon's process env
     // carries the stable id — an explicit set layered over the plan's env.
     let mut spawn_env = plan.env.clone();
-    spawn_env.push(("QD_SESSION_ID".to_string(), sb_session_id.to_string()));
+    spawn_env.push(("QD_SESSION_ID".to_string(), qd_session_id.to_string()));
 
     let log_path = deps.log_dir.join(format!("codex-{}.log", params.name));
     let spawned =
@@ -950,10 +950,10 @@ fn connect_with_retry<'a>(
     }
 }
 
-/// A throwaway `SbPaths` for the launch_plan fx — codex's launch_plan reads ONLY
+/// A throwaway `QdPaths` for the launch_plan fx — codex's launch_plan reads ONLY
 /// env, never paths (the minimal-fx negative control).
-fn placeholder_paths() -> crate::paths::SbPaths {
-    crate::paths::SbPaths::from_home(std::path::Path::new(""))
+fn placeholder_paths() -> crate::paths::QdPaths {
+    crate::paths::QdPaths::from_home(std::path::Path::new(""))
 }
 
 // ===========================================================================
@@ -1033,7 +1033,7 @@ mod tests {
             self.calls.borrow_mut().push("initialized".into());
             Ok(())
         }
-        fn thread_start(&self, _cwd: &str, _ap: &str, _sb: &str) -> Result<String, RpcError> {
+        fn thread_start(&self, _cwd: &str, _ap: &str, _qd: &str) -> Result<String, RpcError> {
             // MUTATION EVIDENCE (identity preservation): the revive path must NEVER
             // call thread_start (that would mint a NEW thread id, breaking m2). If
             // the no-rollout handling were "fabricate a thread", this would be

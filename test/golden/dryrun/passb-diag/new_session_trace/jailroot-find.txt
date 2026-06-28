@@ -4,7 +4,7 @@ drwxr-xr-x   4 eric  wheel  128 Jun  5 09:00 ..
 drwxr-xr-x   4 eric  wheel  128 Jun  5 09:00 home
 drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 lock
 -rw-r--r--   1 eric  wheel    0 Jun  5 09:00 pid-registry
-drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 sb_home
+drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 qd_home
 -rw-r--r--   1 eric  wheel   89 Jun  5 09:00 scn-out.raw
 -rw-r--r--   1 eric  wheel   58 Jun  5 09:00 scn-out.raw.boottrace
 -rw-r--r--   1 eric  wheel    2 Jun  5 09:00 scn-out.raw.boottrace.exit
@@ -17,14 +17,14 @@ drwx------   3 eric  wheel   96 Jun  5 09:00 xdg_runtime
 drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 xdg_state
 drwxr-xr-x   4 eric  wheel  128 Jun  5 09:00 zmx
 
-/tmp/sbrg-runs/13690178066444322881/home:
+/tmp/qdrg-runs/13690178066444322881/home:
 total 0
 drwxr-xr-x   4 eric  wheel  128 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 drwxr-xr-x   7 eric  wheel  224 Jun  5 09:00 .claude
 drwxr-xr-x   3 eric  wheel   96 Jun  5 09:00 Library
 
-/tmp/sbrg-runs/13690178066444322881/home/.claude:
+/tmp/qdrg-runs/13690178066444322881/home/.claude:
 total 8
 drwxr-xr-x  7 eric  wheel  224 Jun  5 09:00 .
 drwxr-xr-x  4 eric  wheel  128 Jun  5 09:00 ..
@@ -34,121 +34,121 @@ drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 relay
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 sessions
 -rw-r--r--  1 eric  wheel  121 Jun  5 09:00 stub-launch-argv.txt
 
-/tmp/sbrg-runs/13690178066444322881/home/.claude/claims:
+/tmp/qdrg-runs/13690178066444322881/home/.claude/claims:
 total 0
 drwxr-xr-x  2 eric  wheel   64 Jun  5 09:00 .
 drwxr-xr-x  7 eric  wheel  224 Jun  5 09:00 ..
 
-/tmp/sbrg-runs/13690178066444322881/home/.claude/projects:
+/tmp/qdrg-runs/13690178066444322881/home/.claude/projects:
 total 0
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 -Users-eric-work-wt-a4-passb
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 .
 drwxr-xr-x  7 eric  wheel  224 Jun  5 09:00 ..
 
-/tmp/sbrg-runs/13690178066444322881/home/.claude/projects/-Users-eric-work-wt-a4-passb:
+/tmp/qdrg-runs/13690178066444322881/home/.claude/projects/-Users-eric-work-wt-a4-passb:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 -rw-r--r--  1 eric  wheel   0 Jun  5 09:00 stub0000-0000-0000-0000-000000000000.jsonl
 
-/tmp/sbrg-runs/13690178066444322881/home/.claude/relay:
+/tmp/qdrg-runs/13690178066444322881/home/.claude/relay:
 total 8
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 .
 drwxr-xr-x  7 eric  wheel  224 Jun  5 09:00 ..
 -rw-r--r--  1 eric  wheel   98 Jun  5 09:00 stub0000-0000-0000-0000-000000000000.json
 
-/tmp/sbrg-runs/13690178066444322881/home/.claude/sessions:
+/tmp/qdrg-runs/13690178066444322881/home/.claude/sessions:
 total 8
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 .
 drwxr-xr-x  7 eric  wheel  224 Jun  5 09:00 ..
 -rw-r--r--  1 eric  wheel  349 Jun  5 09:00 13962.json
 
-/tmp/sbrg-runs/13690178066444322881/home/Library:
+/tmp/qdrg-runs/13690178066444322881/home/Library:
 total 0
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 .
 drwxr-xr-x  4 eric  wheel  128 Jun  5 09:00 ..
 drwxr-xr-x  4 eric  wheel  128 Jun  5 09:00 Caches
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches:
 total 0
 drwxr-xr-x  4 eric  wheel  128 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 bun
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 com.apple.python
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/bun:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/bun:
 total 0
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 .
 drwxr-xr-x  4 eric  wheel  128 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 @t@
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/bun/@t@:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/bun/@t@:
 total 128
 drwxr-xr-x  3 eric  wheel     96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel     96 Jun  5 09:00 ..
 -rw-r--r--  1 eric  wheel  63091 Jun  5 09:00 256562c7bd0789ed.pile
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python:
 total 0
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 .
 drwxr-xr-x  4 eric  wheel  128 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel   96 Jun  5 09:00 Library
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 Developer
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 CommandLineTools
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 Library
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 Frameworks
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 Python3.framework
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 Versions
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 3.9
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9:
 total 0
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 .
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 ..
 drwxr-xr-x  3 eric  wheel  96 Jun  5 09:00 lib
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib:
 total 0
 drwxr-xr-x   3 eric  wheel    96 Jun  5 09:00 .
 drwxr-xr-x   3 eric  wheel    96 Jun  5 09:00 ..
 drwxr-xr-x  59 eric  wheel  1888 Jun  5 09:00 python3.9
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9:
 total 1776
 drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 .
 drwxr-xr-x   3 eric  wheel     96 Jun  5 09:00 ..
@@ -210,14 +210,14 @@ drwxr-xr-x   4 eric  wheel    128 Jun  5 09:00 urllib
 -rw-r--r--   1 eric  wheel  13684 Jun  5 09:00 warnings.cpython-39.pyc
 -rw-r--r--   1 eric  wheel  20237 Jun  5 09:00 weakref.cpython-39.pyc
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/collections:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/collections:
 total 104
 drwxr-xr-x   4 eric  wheel    128 Jun  5 09:00 .
 drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
 -rw-r--r--   1 eric  wheel  48180 Jun  5 09:00 __init__.cpython-39.pyc
 -rw-r--r--   1 eric  wheel    383 Jun  5 09:00 abc.cpython-39.pyc
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/email:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/email:
 total 352
 drwxr-xr-x  17 eric  wheel    544 Jun  5 09:00 .
 drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
@@ -237,7 +237,7 @@ drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
 -rw-r--r--   1 eric  wheel   7753 Jun  5 09:00 quoprimime.cpython-39.pyc
 -rw-r--r--   1 eric  wheel  11830 Jun  5 09:00 utils.cpython-39.pyc
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/encodings:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/encodings:
 total 56
 drwxr-xr-x   7 eric  wheel   224 Jun  5 09:00 .
 drwxr-xr-x  59 eric  wheel  1888 Jun  5 09:00 ..
@@ -247,14 +247,14 @@ drwxr-xr-x  59 eric  wheel  1888 Jun  5 09:00 ..
 -rw-r--r--   1 eric  wheel  1974 Jun  5 09:00 latin_1.cpython-39.pyc
 -rw-r--r--   1 eric  wheel  1711 Jun  5 09:00 utf_8.cpython-39.pyc
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/html:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/html:
 total 112
 drwxr-xr-x   4 eric  wheel    128 Jun  5 09:00 .
 drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
 -rw-r--r--   1 eric  wheel   3204 Jun  5 09:00 __init__.cpython-39.pyc
 -rw-r--r--   1 eric  wheel  50600 Jun  5 09:00 entities.cpython-39.pyc
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http:
 total 160
 drwxr-xr-x   5 eric  wheel    160 Jun  5 09:00 .
 drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
@@ -262,7 +262,7 @@ drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
 -rw-r--r--   1 eric  wheel  34970 Jun  5 09:00 client.cpython-39.pyc
 -rw-r--r--   1 eric  wheel  34541 Jun  5 09:00 server.cpython-39.pyc
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/json:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/json:
 total 88
 drwxr-xr-x   6 eric  wheel    192 Jun  5 09:00 .
 drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
@@ -271,71 +271,71 @@ drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
 -rw-r--r--   1 eric  wheel  11210 Jun  5 09:00 encoder.cpython-39.pyc
 -rw-r--r--   1 eric  wheel   2032 Jun  5 09:00 scanner.cpython-39.pyc
 
-/tmp/sbrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib:
+/tmp/qdrg-runs/13690178066444322881/home/Library/Caches/com.apple.python/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib:
 total 80
 drwxr-xr-x   4 eric  wheel    128 Jun  5 09:00 .
 drwxr-xr-x  59 eric  wheel   1888 Jun  5 09:00 ..
 -rw-r--r--   1 eric  wheel    209 Jun  5 09:00 __init__.cpython-39.pyc
 -rw-r--r--   1 eric  wheel  35002 Jun  5 09:00 parse.cpython-39.pyc
 
-/tmp/sbrg-runs/13690178066444322881/lock:
+/tmp/qdrg-runs/13690178066444322881/lock:
 total 0
 drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 
-/tmp/sbrg-runs/13690178066444322881/sb_home:
+/tmp/qdrg-runs/13690178066444322881/qd_home:
 total 0
 drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 
-/tmp/sbrg-runs/13690178066444322881/stub-bin:
+/tmp/qdrg-runs/13690178066444322881/stub-bin:
 total 8
 drwxr-xr-x   3 eric  wheel   96 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 -rwxr-xr-x   1 eric  wheel  110 Jun  5 09:00 claude
 
-/tmp/sbrg-runs/13690178066444322881/tmp:
+/tmp/qdrg-runs/13690178066444322881/tmp:
 total 0
 drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 
-/tmp/sbrg-runs/13690178066444322881/xdg_config:
+/tmp/qdrg-runs/13690178066444322881/xdg_config:
 total 0
 drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 
-/tmp/sbrg-runs/13690178066444322881/xdg_data:
+/tmp/qdrg-runs/13690178066444322881/xdg_data:
 total 0
 drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 
-/tmp/sbrg-runs/13690178066444322881/xdg_runtime:
+/tmp/qdrg-runs/13690178066444322881/xdg_runtime:
 total 0
 drwx------   3 eric  wheel   96 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 drwxr-x---   3 eric  wheel   96 Jun  5 09:00 logs
 
-/tmp/sbrg-runs/13690178066444322881/xdg_runtime/logs:
+/tmp/qdrg-runs/13690178066444322881/xdg_runtime/logs:
 total 0
 drwxr-x---  3 eric  wheel  96 Jun  5 09:00 .
 drwx------  3 eric  wheel  96 Jun  5 09:00 ..
 -rw-r-----  1 eric  wheel   0 Jun  5 09:00 zmx.log
 
-/tmp/sbrg-runs/13690178066444322881/xdg_state:
+/tmp/qdrg-runs/13690178066444322881/xdg_state:
 total 0
 drwxr-xr-x   2 eric  wheel   64 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 
-/tmp/sbrg-runs/13690178066444322881/zmx:
+/tmp/qdrg-runs/13690178066444322881/zmx:
 total 0
 drwxr-xr-x   4 eric  wheel  128 Jun  5 09:00 .
 drwx------  17 eric  wheel  544 Jun  5 09:00 ..
 drwxr-x---   4 eric  wheel  128 Jun  5 09:00 logs
-srwxr-xr-x   1 eric  wheel    0 Jun  5 09:00 sbrg-13690178066444322881-new
+srwxr-xr-x   1 eric  wheel    0 Jun  5 09:00 qdrg-13690178066444322881-new
 
-/tmp/sbrg-runs/13690178066444322881/zmx/logs:
+/tmp/qdrg-runs/13690178066444322881/zmx/logs:
 total 16
 drwxr-x---  4 eric  wheel   128 Jun  5 09:00 .
 drwxr-xr-x  4 eric  wheel   128 Jun  5 09:00 ..
--rw-r-----  1 eric  wheel  3377 Jun  5 09:00 sbrg-13690178066444322881-new.log
+-rw-r-----  1 eric  wheel  3377 Jun  5 09:00 qdrg-13690178066444322881-new.log
 -rw-r-----  1 eric  wheel   197 Jun  5 09:00 zmx.log

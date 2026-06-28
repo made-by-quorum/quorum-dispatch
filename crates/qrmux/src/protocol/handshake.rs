@@ -36,7 +36,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub const PROTOCOL_VERSION: u8 = 3;
 
 /// Magic bytes identifying an qrmux client connection. Frozen forever.
-pub const PREAMBLE_MAGIC: [u8; 4] = *b"SBMX";
+pub const PREAMBLE_MAGIC: [u8; 4] = *b"QRMX";
 
 /// Total preamble length on the wire: magic + version byte.
 pub const PREAMBLE_LEN: usize = 5;
@@ -154,7 +154,7 @@ mod tests {
     #[tokio::test]
     async fn preamble_eof_on_partial_write() {
         let (mut w, mut r) = tokio::io::duplex(64);
-        w.write_all(b"SB").await.unwrap();
+        w.write_all(b"QR").await.unwrap();
         drop(w);
         assert_eq!(read_preamble(&mut r).await.unwrap(), PreambleCheck::Eof);
     }

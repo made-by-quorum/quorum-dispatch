@@ -580,7 +580,7 @@ mod tests {
             user_named: None,
             session_id: format!("sid-{name}"),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status,
             zmx_name: None,

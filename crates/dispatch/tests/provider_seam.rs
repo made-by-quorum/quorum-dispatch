@@ -25,7 +25,7 @@ use dispatch::effects::{FixedClock, MapEnv};
 use dispatch::model::RelayHealth;
 use dispatch::model::SessionStatus;
 use dispatch::mux::FixtureMux;
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::provider::codex::rpc::{
     AppServerRpc, ClientInfo, InitializeResult, Notification, RpcError, SteerOutcome,
 };
@@ -72,7 +72,7 @@ impl AppServerRpc for FixtureRpc {
     fn initialized(&self) -> Result<(), RpcError> {
         Ok(())
     }
-    fn thread_start(&self, _cwd: &str, _ap: &str, _sb: &str) -> Result<String, RpcError> {
+    fn thread_start(&self, _cwd: &str, _ap: &str, _qd: &str) -> Result<String, RpcError> {
         Ok("fixture-thread-1".to_string())
     }
     fn thread_resume(&self, _thread_id: &str) -> Result<(), RpcError> {
@@ -173,7 +173,7 @@ impl RelayContract for FakeRelay {
 /// the owned backing objects + the data the harness asserts against.
 struct Fixture {
     _tmp: TempDir,
-    paths: SbPaths,
+    paths: QdPaths,
     env: MapEnv,
     clock: FixedClock,
     sleeper: RealSleeper,
@@ -232,7 +232,7 @@ impl Fixture {
 fn claude_fixture() -> Fixture {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     let id = "abc-123-claude".to_string();
     let cwd = "/work/proj".to_string();
 
@@ -297,7 +297,7 @@ fn claude_fixture() -> Fixture {
 fn acp_fixture() -> Fixture {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     let id = "abc-123-acp".to_string();
     let cwd = "/work/proj".to_string();
 
@@ -346,7 +346,7 @@ fn acp_fixture() -> Fixture {
 fn daemon_fixture() -> (Fixture, FixtureDaemonProvider) {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     let id = "thread-seed-9".to_string();
     let cwd = "/work/proj".to_string();
     // The daemon keys <root>/2026/06/06/<thread-id>.jsonl. Seed the exact path
@@ -516,7 +516,7 @@ fn conformance(p: &dyn Provider, fix: &Fixture) {
 fn codex_fixture() -> Fixture {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     // A real uuidv7 (cited from the rss-jail rollout) — the thread id / SessionKey
     // id; the rollout filename embeds it.
     let id = "019ea0b3-04d3-7400-8d95-f55d41e961e4".to_string();
@@ -734,7 +734,7 @@ fn parse_status_cross_feed_returns_none() {
 fn daemon_launch_plan_minimal_fx_consumes_no_claude_config() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("nonexistent-home");
-    let paths = SbPaths::from_home(&home); // config toml path does not exist.
+    let paths = QdPaths::from_home(&home); // config toml path does not exist.
     let env = MapEnv::default(); // empty env.
     let fx = ProviderFx {
         env: &env,
@@ -772,7 +772,7 @@ fn daemon_launch_plan_minimal_fx_consumes_no_claude_config() {
 fn daemon_steer_stale_precondition_is_typed_error() {
     let provider = FixtureDaemonProvider::ready();
     let fx_tmp = TempDir::new().unwrap();
-    let paths = SbPaths::from_home(&fx_tmp.path().join("home"));
+    let paths = QdPaths::from_home(&fx_tmp.path().join("home"));
     let env = MapEnv::default();
     let fx = ProviderFx {
         env: &env,
@@ -848,7 +848,7 @@ fn claude_launch_plan_matches_launch_rs_helpers() {
 
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     let env = MapEnv::default();
     let fx = ProviderFx {
         env: &env,
@@ -924,7 +924,7 @@ fn claude_inject_preserves_relay_error_class() {
         }
     }
     let tmp = TempDir::new().unwrap();
-    let paths = SbPaths::from_home(&tmp.path().join("home"));
+    let paths = QdPaths::from_home(&tmp.path().join("home"));
     let env = MapEnv::default();
     let relay = FailingRelay(RelayError::Timeout);
     let fx = ProviderFx {
@@ -1025,7 +1025,7 @@ fn hosting_modes_are_both_expressible() {
 fn daemon_boot_unready_fails_with_handshake_detail() {
     let provider = FixtureDaemonProvider::default(); // handshake_ready = false.
     let tmp = TempDir::new().unwrap();
-    let paths = SbPaths::from_home(&tmp.path().join("home"));
+    let paths = QdPaths::from_home(&tmp.path().join("home"));
     let env = MapEnv::default();
     let fx = ProviderFx {
         env: &env,
@@ -1213,7 +1213,7 @@ fn codex_status_map_truth_table() {
 fn codex_launch_plan_minimal_fx_uses_codex_bin() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("nonexistent-home");
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     let env = MapEnv::default(); // empty env.
     let fx = ProviderFx {
         env: &env,
@@ -1281,7 +1281,7 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
 #[test]
 fn codex_inject_no_transport_when_app_server_absent() {
     let tmp = TempDir::new().unwrap();
-    let paths = SbPaths::from_home(&tmp.path().join("home"));
+    let paths = QdPaths::from_home(&tmp.path().join("home"));
     let env = MapEnv::default();
     let fx = ProviderFx {
         env: &env,
@@ -1411,7 +1411,7 @@ impl AppServerRpc for LadderRpc {
 /// Build a ProviderFx carrying the connected ladder rpc + a believed open turn id.
 fn ladder_fx<'a>(
     env: &'a MapEnv,
-    paths: &'a SbPaths,
+    paths: &'a QdPaths,
     rpc: &'a dyn AppServerRpc,
     expected: Option<&'a str>,
 ) -> ProviderFx<'a> {
@@ -1435,7 +1435,7 @@ fn send_ladder_idle_starts_a_turn_returns_id() {
     // start id. NO steer call.
     let tmp = TempDir::new().unwrap();
     let env = MapEnv::default();
-    let paths = SbPaths::from_home(&tmp.path().join("home"));
+    let paths = QdPaths::from_home(&tmp.path().join("home"));
     let rpc = LadderRpc::new("TURN-START-1", vec![]);
     let fx = ladder_fx(&env, &paths, &rpc, None);
     let key = SessionKey {
@@ -1455,7 +1455,7 @@ fn send_ladder_busy_steers_the_open_turn_returns_id() {
     // landed → returns the steered turn id. NO start call.
     let tmp = TempDir::new().unwrap();
     let env = MapEnv::default();
-    let paths = SbPaths::from_home(&tmp.path().join("home"));
+    let paths = QdPaths::from_home(&tmp.path().join("home"));
     let rpc = LadderRpc::new(
         "UNUSED-START",
         vec![SteerOutcome::Steered("TURN-STEERED-9".to_string())],
@@ -1489,7 +1489,7 @@ fn send_ladder_busy_stale_fence_falls_back_to_start_returns_id() {
     // the ladder (the prompt-swallow class is closed at the protocol level).
     let tmp = TempDir::new().unwrap();
     let env = MapEnv::default();
-    let paths = SbPaths::from_home(&tmp.path().join("home"));
+    let paths = QdPaths::from_home(&tmp.path().join("home"));
     let stale = ServerError {
         code: -32600,
         message: "expected active turn id `X` but found `Y`".to_string(),

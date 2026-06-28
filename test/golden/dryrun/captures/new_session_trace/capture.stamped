@@ -4,5 +4,5 @@
 # provisional=0 partial=1
 # NOTE: evidence only — NOT a golden expectation. Part 2 records the real fixture.
 #---raw-capture-below---
-Started detached session "sbrg-5626178060405329174-new"
-Waiting for "sbrg-5626178060405329174-new" to be ready. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter]
+Started detached session "qdrg-5626178060405329174-new"
+Waiting for "qdrg-5626178060405329174-new" to be ready. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter].. [enter]

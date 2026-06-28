@@ -362,9 +362,9 @@ Options:
   -h, --help  display help for command
 "####;
 
-// B5 item 12 (doc note, accepted r2): the --json sbId absent-until-minted
+// B5 item 12 (doc note, accepted r2): the --json qdId absent-until-minted
 // contract is surfaced here — behavior is unchanged and pinned by
-// tests/info_json.rs (info_json_unmapped_sb_id_golden / mapped_live_golden).
+// tests/info_json.rs (info_json_unmapped_qd_id_golden / mapped_live_golden).
 pub const INFO: &str = r####"Usage: qd info [options] <session>
 
 Detailed view of a single session
@@ -373,9 +373,9 @@ Options:
   --json      Output as JSON
   -h, --help  display help for command
 
---json: the sbId/sbIdPrefix keys are ABSENT until the session's stable id is
+--json: the qdId/qdIdPrefix keys are ABSENT until the session's stable id is
 minted (ids are minted at `qd start` and bound at boot-confirm; `qd ls` lazily
-backfills pre-existing sessions). Treat a missing sbId as "not yet minted",
+backfills pre-existing sessions). Treat a missing qdId as "not yet minted",
 not as an error — resolution stays engine-side.
 "####;
 

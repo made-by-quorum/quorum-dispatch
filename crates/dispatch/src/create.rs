@@ -41,7 +41,7 @@ use crate::launch::{
     session_env_prefix, write_session_env_file_with_unsets, RenderMode,
 };
 use crate::mux::Mux;
-use crate::paths::SbPaths;
+use crate::paths::QdPaths;
 use crate::preflight;
 use crate::provider::{LaunchRequest, Provider, ProviderFx};
 use crate::registry::{self, ClaimError, NameClaim};
@@ -82,7 +82,7 @@ pub struct NewDeps<'a> {
     pub clock: &'a dyn Clock,
     /// Home→state layout (L9a). `claims_dir` is derived from `sessions_dir`'s
     /// parent (the `.claude` root) so the claim lives beside the registry.
-    pub paths: &'a SbPaths,
+    pub paths: &'a QdPaths,
     /// The canonical zmx socket dir (from `resolve_zmx_dir`) — the dir the
     /// session is created in AND reaped-at-canonical in (Bug D keystone, L1).
     pub canonical_dir: PathBuf,
@@ -197,7 +197,7 @@ pub struct NewParams {
     /// set at every launch, overriding anything inherited through the
     /// commissioner's process subtree. `None` ⇒ legacy behavior (no injection;
     /// unit fixtures that don't exercise identity pass None).
-    pub sb_session_id: Option<String>,
+    pub qd_session_id: Option<String>,
     /// punch item 7: the session's resolved render mode (per-start flag >
     /// `render-default` config > inline). [`RenderMode::Inline`] (the default)
     /// injects `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` as a launch-time birth
@@ -647,7 +647,7 @@ fn live_registry_name_holder(deps: &NewDeps, name: &str) -> Option<String> {
                     .is_some_and(|p| p != 0 && crate::effects::is_pid_alive(p as i32))
         })?;
     // QD_HOME-honoring state dir (the same resolution the verb layer uses).
-    let state_dir = crate::paths::SbPaths::from_home_env(&deps.paths.home, deps.env).state_dir;
+    let state_dir = crate::paths::QdPaths::from_home_env(&deps.paths.home, deps.env).state_dir;
     Some(crate::idstore::holder_display_id(
         &crate::idstore::ids_path(&state_dir),
         holder.entry.session_id.as_deref(),
@@ -679,7 +679,7 @@ fn run_to_boot(deps: &NewDeps, params: &NewParams) -> Result<NewOutcome, NewErro
     // (including unit fixtures with no id and no backend env).
     let env_pairs = launch_env_pairs(
         params.backend_env.clone(),
-        params.sb_session_id.clone(),
+        params.qd_session_id.clone(),
         params.render,
     );
     // R2 (override-never-inherit): the unset list = the --via clobber list
@@ -1012,7 +1012,7 @@ Commands:
 
     struct Fix {
         _home: TempDir,
-        paths: SbPaths,
+        paths: QdPaths,
         canonical: PathBuf,
         env: MapEnv,
         clock: FixedClock,
@@ -1020,7 +1020,7 @@ Commands:
 
     fn fixture() -> Fix {
         let home = tempfile::tempdir().unwrap();
-        let paths = SbPaths::from_home(&home.path().join("home"));
+        let paths = QdPaths::from_home(&home.path().join("home"));
         let canonical = home.path().join("zmx-501");
         // codex P1 W3: the create path no longer takes an explicit config-toml
         // path — the provider derives it off `fx.paths.home/.quorum/dispatch/config.toml`
@@ -1048,7 +1048,7 @@ Commands:
             cwd: PathBuf::from("/work"),
             backend_env: vec![],
             backend_env_unset: vec![],
-            sb_session_id: None,
+            qd_session_id: None,
             // Fixtures pin the PRODUCTION default (inline → the alt-screen-
             // disable birth property rides every fixture launch, punch item 7).
             render: RenderMode::Inline,
@@ -1476,12 +1476,12 @@ Commands:
     /// are now UNCONDITIONAL: the launch cmd carries the prefix and the file
     /// carries the explicit `export QD_SESSION_ID='<id>'`.
     #[test]
-    fn sb_session_id_injected_unconditionally() {
+    fn qd_session_id_injected_unconditionally() {
         let fix = fixture();
         let exec = ok_exec();
         let mux = StagedMux::new(fix.canonical.clone(), "sess");
         let mut p = params("sess");
-        p.sb_session_id = Some("ab3kx9mq".to_string());
+        p.qd_session_id = Some("ab3kx9mq".to_string());
         let out = run_new(&deps(&fix, &exec, &mux, &OkBootWaiter), &p).unwrap();
 
         // The launch cmd is PREFIXED with the self-deleting dot-source.
@@ -1535,7 +1535,7 @@ Commands:
         let exec = ok_exec();
         let mux = StagedMux::new(fix.canonical.clone(), "child");
         let mut p = params("child");
-        p.sb_session_id = Some("childid2".to_string());
+        p.qd_session_id = Some("childid2".to_string());
         let out = run_new(&deps(&fix, &exec, &mux, &OkBootWaiter), &p).unwrap();
 
         let env_file = crate::launch::session_env_file_path(&fix.paths.home, "child");
@@ -1559,13 +1559,13 @@ Commands:
     /// Backend env + the id compose: exports for both land in the one file
     /// (backend pairs first, QD_SESSION_ID last).
     #[test]
-    fn sb_session_id_composes_with_backend_env() {
+    fn qd_session_id_composes_with_backend_env() {
         let fix = fixture();
         let exec = ok_exec();
         let mux = StagedMux::new(fix.canonical.clone(), "sess");
         let mut p = params("sess");
         p.backend_env = vec![("ANTHROPIC_BASE_URL".to_string(), "http://r".to_string())];
-        p.sb_session_id = Some("ab3kx9mq".to_string());
+        p.qd_session_id = Some("ab3kx9mq".to_string());
         run_new(&deps(&fix, &exec, &mux, &OkBootWaiter), &p).unwrap();
         let env_file = crate::launch::session_env_file_path(&fix.paths.home, "sess");
         let body = std::fs::read_to_string(&env_file).unwrap();
@@ -1594,7 +1594,7 @@ Commands:
             "ANTHROPIC_BASE_URL".to_string(),
             "ANTHROPIC_MODEL".to_string(),
         ];
-        p.sb_session_id = Some("ab3kx9mq".to_string());
+        p.qd_session_id = Some("ab3kx9mq".to_string());
         run_new(&deps(&fix, &exec, &mux, &OkBootWaiter), &p).unwrap();
         let env_file = crate::launch::session_env_file_path(&fix.paths.home, "sess");
         let body = std::fs::read_to_string(&env_file).unwrap();

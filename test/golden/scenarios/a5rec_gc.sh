@@ -17,31 +17,31 @@ scn_run() {
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=gc (forged file mtimes >7d / prunedAt >30d)"
         echo "\$ qd gc --dry-run (empty)"
-        scn_sb gc --dry-run 2>&1
+        scn_qd gc --dry-run 2>&1
         echo "\$ qd gc --list-trash (empty)"
-        scn_sb gc --list-trash 2>&1
+        scn_qd gc --list-trash 2>&1
     } > "$SCN_OUT"
     # Forge an aged dead jsonl candidate (>7d), no live PID claims its sid.
     printf '{"type":"summary"}\n' > "$DJ"
     touch -t "$(date -v-8d +%Y%m%d%H%M 2>/dev/null || date -d '8 days ago' +%Y%m%d%H%M)" "$DJ" 2>/dev/null
     {
         echo "\$ qd gc --dry-run (forged aged candidate)"
-        scn_sb gc --dry-run 2>&1
+        scn_qd gc --dry-run 2>&1
         echo "\$ qd gc (real prune to trash)"
-        scn_sb gc 2>&1
+        scn_qd gc 2>&1
         echo "\$ qd gc --list-trash (after prune)"
-        scn_sb gc --list-trash 2>&1
+        scn_qd gc --list-trash 2>&1
         echo "\$ qd gc --recover deadsession-rec"
-        scn_sb gc --recover "$DEADSID" 2>&1
+        scn_qd gc --recover "$DEADSID" 2>&1
     } >> "$SCN_OUT"
     # Re-trash the recovered file (re-age it so gc sees it as a candidate), then
     # drop a COLLIDING original back BEFORE recover so recover refuses.
     touch -t "$(date -v-8d +%Y%m%d%H%M 2>/dev/null || date -d '8 days ago' +%Y%m%d%H%M)" "$DJ" 2>/dev/null
-    scn_sb gc >/dev/null 2>&1
+    scn_qd gc >/dev/null 2>&1
     printf '{"type":"summary"}\n' > "$DJ"
     {
         echo "\$ qd gc --recover deadsession-rec (collision: original exists → refuse)"
-        scn_sb gc --recover "$DEADSID" 2>&1
+        scn_qd gc --recover "$DEADSID" 2>&1
         echo "exit=$?"
     } >> "$SCN_OUT"
     # Age the trash meta prunedAt >30d, then purge.
@@ -53,7 +53,7 @@ scn_run() {
     fi
     {
         echo "\$ qd gc --purge (>30d trash)"
-        scn_sb gc --purge 2>&1
+        scn_qd gc --purge 2>&1
     } >> "$SCN_OUT"
     printf '0\n' > "$SCN_OUT.exit"
 }

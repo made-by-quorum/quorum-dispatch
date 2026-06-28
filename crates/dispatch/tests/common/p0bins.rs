@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The REAL `qd` binary under test.
-pub fn sb_bin() -> &'static str {
+pub fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -77,7 +77,7 @@ fn mtime(p: &Path) -> Option<std::time::SystemTime> {
 }
 
 /// The shared jail dir layout (fakerepl's jail belt, a4-spec §5): HOME at
-/// `<base>/sbrg-runs/<tag>-<nanos>/home` with `sb_home`/`tmp`/`zmx` as
+/// `<base>/qdrg-runs/<tag>-<nanos>/home` with `qd_home`/`tmp`/`zmx` as
 /// root-siblings, plus a 0700 XDG dir beside the runs. `base` must be a SHORT
 /// literal-/tmp path so the embedded qrmux sun_path fits (the 104-byte macOS
 /// budget; c1_gate note / L21).
@@ -85,26 +85,26 @@ pub struct JailScaffold {
     pub root: PathBuf,
     pub home: PathBuf,
     pub xdg: PathBuf,
-    pub sb_home: PathBuf,
+    pub qd_home: PathBuf,
 }
 
 /// Create the shared jail scaffold under `base` for `tag` (nanos-unique).
 /// Creates `home/.claude/{sessions,projects/proj}`, the XDG dir (0700),
-/// `sb_home`, `root/tmp`, `root/zmx`; asserts the L9a not-real-home guard.
+/// `qd_home`, `root/tmp`, `root/zmx`; asserts the L9a not-real-home guard.
 pub fn establish_jail(base: &Path, tag: &str) -> JailScaffold {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = base.join("sbrg-runs").join(format!("{tag}-{nanos}"));
+    let root = base.join("qdrg-runs").join(format!("{tag}-{nanos}"));
     let home = root.join("home");
     let xdg = base.join(format!("x-{tag}-{nanos}"));
-    let sb_home = root.join("sb_home");
+    let qd_home = root.join("qd_home");
     for d in [
         &home.join(".claude").join("sessions"),
         &home.join(".claude").join("projects").join("proj"),
         &xdg,
-        &sb_home,
+        &qd_home,
         &root.join("tmp"),
         &root.join("zmx"),
     ] {
@@ -117,7 +117,7 @@ pub fn establish_jail(base: &Path, tag: &str) -> JailScaffold {
         root,
         home,
         xdg,
-        sb_home,
+        qd_home,
     }
 }
 
@@ -125,18 +125,18 @@ pub fn establish_jail(base: &Path, tag: &str) -> JailScaffold {
 /// HOME/QD_HOME/XDG_RUNTIME_DIR/TMPDIR/ZMX_DIR off the scaffold, PATH =
 /// fakerepl's dir + `/usr/bin:/bin`, TERM, and `claude_bin` as CLAUDE_BIN.
 /// `extra` pairs land LAST (per-launch fakerepl identity knobs).
-pub fn run_sb_jailed(
+pub fn run_qd_jailed(
     j: &JailScaffold,
     claude_bin: &Path,
     args: &[&str],
     extra: &[(&str, String)],
 ) -> (i32, String, String) {
     let fr = fakerepl_bin();
-    let mut cmd = Command::new(sb_bin());
+    let mut cmd = Command::new(qd_bin());
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &j.home)
-        .env("QD_HOME", &j.sb_home)
+        .env("QD_HOME", &j.qd_home)
         .env("XDG_RUNTIME_DIR", &j.xdg)
         .env("TMPDIR", j.root.join("tmp"))
         .env("ZMX_DIR", j.root.join("zmx"))

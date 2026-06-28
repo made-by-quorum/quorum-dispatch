@@ -48,7 +48,7 @@ scn_run() {
 EOF
 
     # ONE ls --json read observes the registry.
-    scn_sb ls --json 2>/dev/null > "$SCN_OUT.lsjson"
+    scn_qd ls --json 2>/dev/null > "$SCN_OUT.lsjson"
     local ls_rc=$?
 
     python3 - "$SCN_OUT.lsjson" "$ls_rc" "$SCN_WRONGTS_SID" > "$SCN_OUT" <<'PY'

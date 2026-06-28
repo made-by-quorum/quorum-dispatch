@@ -1681,8 +1681,8 @@ fn class_r3c2_rung4_destructive_isolated_victim() {
     // ---- (B) IDENTITY FENCE first (cheap, no kill expected) -----------------
     // A throwaway victim whose recorded identity is DELIBERATELY mismatched.
     let (mut fence_child, fpid, fstart) = spawn_victim_in_cgroup("idle");
-    let fence_sb = Sandbox::new();
-    fence_sb.write_busy_row(fpid, fstart.unwrap_or(0), fstart.unwrap_or(0));
+    let fence_qd = Sandbox::new();
+    fence_qd.write_busy_row(fpid, fstart.unwrap_or(0), fstart.unwrap_or(0));
     let bogus = Identity {
         pid: fpid,
         // Recorded start far from the live victim's → a recycled-pid mismatch.
@@ -1700,8 +1700,8 @@ fn class_r3c2_rung4_destructive_isolated_victim() {
         confirm_ready: &|_p, _s| panic!("must not confirm on identity mismatch"),
     };
     let fence_out = execute_rung4(
-        fence_sb.path(),
-        fence_sb.path(),
+        fence_qd.path(),
+        fence_qd.path(),
         RecoveryRow::cold("fence-sess"),
         &bogus,
         Some(fstart.unwrap_or(0)),

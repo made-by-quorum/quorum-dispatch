@@ -4,7 +4,7 @@
 set -u
 WT=/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/qd"
+export JAIL_QD_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 jail_establish || { echo FATAL; exit 1; }
@@ -24,7 +24,7 @@ export CLAUDE_BIN="$FAKE"
 mkdir -p "$HOME/.claude/sessions"
 WORKDIR="$JAIL_ROOT/tmp/work"; mkdir -p "$WORKDIR"
 NAME="${JAIL_PREFIX}fake"
-( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) > "$JAIL_ROOT/o.txt" 2> "$JAIL_ROOT/e.txt"
+( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_QD_CMD" new "$NAME" --cwd "$WORKDIR" ) > "$JAIL_ROOT/o.txt" 2> "$JAIL_ROOT/e.txt"
 code=$?
 echo "create exit=$code : $(cat "$JAIL_ROOT/o.txt")"
 [ -s "$JAIL_ROOT/e.txt" ] && { echo "stderr:"; sed 's/^/  /' "$JAIL_ROOT/e.txt"; }

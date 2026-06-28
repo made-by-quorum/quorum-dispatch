@@ -13,7 +13,7 @@
 # RECORD: record.sh in-VM (VM-local fixtures-out, NOT the RO /Users mount), double-
 # record by construction, stub 1.8.0 sha 581ad3c. zmx-dir rooted the jail under
 # TMPDIR=/run/user/501 so the XDG tier hits the REAL Linux runtime tmpfs while every
-# resolved socket dir stays under JAIL_ROOT (sbrg-prefixed) — hermetic, zero leftovers.
+# resolved socket dir stays under JAIL_ROOT (qdrg-prefixed) — hermetic, zero leftovers.
 # COPY-BACK: tar-streamed VM fixtures-out -> host staging -> platform-aware
 # fixture_admit (FA_PLATFORMS="macos linux") re-scan + hash-pairing re-verify BEFORE
 # placement (the audited single path, README M1). See .admit-evidence-linux-w42.txt.

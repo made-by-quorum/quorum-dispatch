@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -98,7 +98,7 @@ impl Jail {
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(sb_bin());
+        let mut c = Command::new(qd_bin());
         c.args(args)
             .current_dir(&self.home)
             .env("HOME", &self.home)

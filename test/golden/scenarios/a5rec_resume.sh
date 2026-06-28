@@ -41,12 +41,12 @@ scn_run() {
 
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=resume (error shapes; cold relaunch covered live by Rust+Lima)"
-        echo "\$ qd resume sbrg-nope (no such session)"
-        scn_sb resume "${JAIL_PREFIX}nope" 2>&1; echo "exit=$?"
+        echo "\$ qd resume qdrg-nope (no such session)"
+        scn_qd resume "${JAIL_PREFIX}nope" 2>&1; echo "exit=$?"
         echo "\$ qd resume coldsess-rec --zmx-name '../evil' (cold session, unsafe zmx-name)"
-        scn_sb resume "$COLDSID" --zmx-name '../evil' 2>&1; echo "exit=$?"
+        scn_qd resume "$COLDSID" --zmx-name '../evil' 2>&1; echo "exit=$?"
         echo "\$ qd resume gonecwd-rec (recorded cwd missing, no --cwd)"
-        scn_sb resume "$GONESID" --no-attach 2>&1; echo "exit=$?"
+        scn_qd resume "$GONESID" --no-attach 2>&1; echo "exit=$?"
     } > "$SCN_OUT"
     printf '0\n' > "$SCN_OUT.exit"
 }

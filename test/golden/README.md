@@ -20,7 +20,7 @@ invisible to it. `lib/jail.sh` establishes a per-run hermetic environment — ow
 ZMX_DIR, XDG_*, TMPDIR, relay port + socket prefix — all under a per-run temp dir.
 It uses POSITIVE sandbox detection (it REQUIRES every isolation var to resolve
 under the run dir) and FAILS CLOSED. Kill/gc refuse any session name not under the
-`sbrg-<runid>-` prefix; raw-kill only registered PIDs. Teardown reaps the jail's
+`qdrg-<runid>-` prefix; raw-kill only registered PIDs. Teardown reaps the jail's
 own prefixed sessions (qd gc + zmx kill) so a detached jailed daemon never leaks.
 
 `selftest/test_jail_refusal.sh` proves the refusals fire (production paths, bare

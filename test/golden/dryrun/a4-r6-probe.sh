@@ -30,7 +30,7 @@ set -u
 MODE="${1:-sendpty}"
 WT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/qd"
+export JAIL_QD_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -44,7 +44,7 @@ log ""
 log "=== A4 R6 LIVE PROBE (mode=$MODE) ==="
 log "  date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 log "  worktree: $WT  | tip: $(git -C "$WT" log -1 --format='%h %s' 2>/dev/null)"
-log "  binary: $JAIL_SB_CMD ($($JAIL_SB_CMD --version 2>/dev/null))"
+log "  binary: $JAIL_QD_CMD ($($JAIL_QD_CMD --version 2>/dev/null))"
 
 jail_establish || { echo FATAL; exit 1; }
 trap jail_teardown EXIT
@@ -135,7 +135,7 @@ addrow(){ ROWS="${ROWS}$1
 NAME="${JAIL_PREFIX}r6"
 log ""
 log "=== qd new (real claude) ==="
-( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
+( cd "$WORKDIR" && "$JAIL_QD_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 code=$?
 log "  qd new exit=$code : $(cat "$JAIL_ROOT/o")"
 [ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; head -5 "$JAIL_ROOT/e"|sed 's/^/    /'|tee -a "$EV"; }
@@ -151,7 +151,7 @@ log "  resolution belt: $NAME resolves uniquely in-jail (OK)"
 # --- WARM-UP (turns flowing; resolve $JP) ----------------------------------
 log ""
 log "=== warm-up send:pty (turns flowing; resolve \$JP via glob-fallback) ==="
-out="$("$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK and nothing else." 2>&1)"
+out="$("$JAIL_QD_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK and nothing else." 2>&1)"
 log "  warm-up send out=[$out]"
 i=0; JP=""; while [ "$i" -lt 120 ]; do JP="$(jp_of)"; [ -n "$JP" ]&&[ "$(urc "$JP")" -ge 1 ]&&break; sleep 0.5; i=$((i+1)); done
 [ -z "$JP" ] && { log "  !!! AUTH/WARMUP FAILED — no user record after 60s"; jail_zmx history "$NAME" 2>/dev/null|strip|grep -v '^[[:space:]]*$'|tail -20|sed 's/^/    /'|tee -a "$EV"; exit 3; }
@@ -171,7 +171,7 @@ sendpty_row(){
     JP="$(jp_of)"; before="$(urc "$JP")"
     P="$(mkp "$sz" "$marker")"; plen="$(printf '%s' "$P"|wc -c|tr -d ' ')"
     log "  payload actual bytes=$plen (target $sz); marker=$marker"
-    "$JAIL_SB_CMD" send:pty "$NAME" "$P" >"$JAIL_ROOT/row.out" 2>"$JAIL_ROOT/row.err"; vrc=$?
+    "$JAIL_QD_CMD" send:pty "$NAME" "$P" >"$JAIL_ROOT/row.out" 2>"$JAIL_ROOT/row.err"; vrc=$?
     log "  verb exit=$vrc"
     log "  verb stdout: $(cat "$JAIL_ROOT/row.out" 2>/dev/null|tr '\n' '|')"
     if [ -s "$JAIL_ROOT/row.err" ]; then log "  verb stderr:"; cat "$JAIL_ROOT/row.err"|sed 's/^/    /'|tee -a "$EV"; else log "  verb stderr: (none)"; fi
@@ -236,7 +236,7 @@ if [ "$MODE" = create ]; then
     log ""
     log "===== create ROW: qd new -p, target=16384 bytes marker=$marker ====="
     log "  payload actual bytes=$plen"
-    ( cd "$WORKDIR" && tmo 150 "$JAIL_SB_CMD" new "$CNAME" --cwd "$WORKDIR" -p "$P" ) >"$JAIL_ROOT/c.out" 2>"$JAIL_ROOT/c.err"; crc=$?
+    ( cd "$WORKDIR" && tmo 150 "$JAIL_QD_CMD" new "$CNAME" --cwd "$WORKDIR" -p "$P" ) >"$JAIL_ROOT/c.out" 2>"$JAIL_ROOT/c.err"; crc=$?
     log "  qd new -p exit=$crc"
     log "  stdout: $(cat "$JAIL_ROOT/c.out" 2>/dev/null|tr '\n' '|')"
     if [ -s "$JAIL_ROOT/c.err" ]; then log "  stderr:"; cat "$JAIL_ROOT/c.err"|sed 's/^/    /'|tee -a "$EV"; else log "  stderr: (none)"; fi
@@ -274,12 +274,12 @@ for t,c in recs[-4:]: print("      [%s] %s"%(t,c))' "$JPC" 2>/dev/null | tee -a 
     log "  CONTRACT: qd new -p exit=$crc -> $cmap"
     addrow "create(-p) | ${plen}B | delta=$cdelta | $ccls | exit=$crc ($cmap)"
     if [ "$ccls" = DELIVERED ]; then mark G; else mark R; fi
-    "$JAIL_SB_CMD" ls --all --short 2>/dev/null | grep -q "$CNAME" && jail_kill_session "$CNAME" >/dev/null 2>&1
+    "$JAIL_QD_CMD" ls --all --short 2>/dev/null | grep -q "$CNAME" && jail_kill_session "$CNAME" >/dev/null 2>&1
     "$JAIL_ZMX_CMD" kill "$CNAME" --force >/dev/null 2>&1 || true
 fi
 
 # --- TEARDOWN + BELT -------------------------------------------------------
-"$JAIL_SB_CMD" ls --all --short 2>/dev/null | grep -q "$NAME" && jail_kill_session "$NAME" >/dev/null 2>&1
+"$JAIL_QD_CMD" ls --all --short 2>/dev/null | grep -q "$NAME" && jail_kill_session "$NAME" >/dev/null 2>&1
 "$JAIL_ZMX_CMD" kill "$NAME" --force >/dev/null 2>&1 || true
 sleep 1
 ra="$(ls "$REAL_SESS" 2>/dev/null | wc -l | tr -d ' ')"

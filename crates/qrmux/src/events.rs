@@ -18,7 +18,7 @@
 //! epochs in filename order.
 //!
 //! File location: `<resolved qrmux socket dir>/events/` — the SAME tier
-//! resolution as `qrmux.sock` (socket.rs two-tier XDG/sbHome + the C1 override
+//! resolution as `qrmux.sock` (socket.rs two-tier XDG/qdHome + the C1 override
 //! seam), so events are discoverable wherever the socket is. Never literal
 //! /tmp (ADD-14: the socket tiers have no /tmp tier).
 

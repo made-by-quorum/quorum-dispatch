@@ -14,7 +14,7 @@
 set -u
 WT=/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/qd"
+export JAIL_QD_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -41,7 +41,7 @@ echo
 echo "=== NEGATIVE: qd new --agent bogus-agent-xyz (NO boot expected) ==="
 NAME1="${JAIL_PREFIX}bogus"
 ( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
-    "$JAIL_SB_CMD" new "$NAME1" --cwd "$WORKDIR" --agent bogus-agent-xyz ) \
+    "$JAIL_QD_CMD" new "$NAME1" --cwd "$WORKDIR" --agent bogus-agent-xyz ) \
     > "$JAIL_ROOT/neg-out.txt" 2> "$JAIL_ROOT/neg-err.txt"
 neg_code=$?
 echo "  exit=$neg_code (expect nonzero)"
@@ -66,7 +66,7 @@ NAME2="${JAIL_PREFIX}helper"
 # This WILL boot real claude (boot C). We let it reach idle, then assert it got
 # past the agent gate (a session exists) and tear down.
 ( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
-    "$JAIL_SB_CMD" new "$NAME2" --cwd "$WORKDIR" --agent real-helper ) \
+    "$JAIL_QD_CMD" new "$NAME2" --cwd "$WORKDIR" --agent real-helper ) \
     > "$JAIL_ROOT/pos-out.txt" 2> "$JAIL_ROOT/pos-err.txt"
 pos_code=$?
 echo "  exit=$pos_code (expect 0)"

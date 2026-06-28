@@ -35,7 +35,7 @@ PASS=9 FAIL=0
   [PASS] refuse-clean           exit 13 (belt refuses a clean env)
   exit=13 (expect 13)
   [PASS] refuse-spoof           exit 13 on QD_HOME coherence (not just HOME shape)
-  --- W8-TRUNC (name=sbrg-wb43434-w8trunc1) ---
+  --- W8-TRUNC (name=qdrg-wb43434-w8trunc1) ---
   exit=0 (expect 1)
   [FAIL] w8-trunc                exit=0(want 1); missing 'payload truncated in delivery' error; missing the no-retry guidance; stdout claims delivery despite truncation;
   exit=0 (expect 0)

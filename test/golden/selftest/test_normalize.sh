@@ -63,14 +63,14 @@ eq "pid/preserve-bare" \
     "$(printf 'rows 24 cols 80 lines 3\n' | normalize_pids | tr -d '\n')"
 
 # --- paths ------------------------------------------------------------------
-JR="/tmp/sbrg-runs/abc123"
+JR="/tmp/qdrg-runs/abc123"
 # (a) collapses each jail subdir to its token
 eq "path/zmx-collapse" \
     "<ZMX_DIR>/sock" \
     "$(printf '%s/zmx/sock\n' "$JR" | normalize_paths "$JR" | tr -d '\n')"
-eq "path/sbhome-collapse" \
+eq "path/qdhome-collapse" \
     "<QD_HOME>/x" \
-    "$(printf '%s/sb_home/x\n' "$JR" | normalize_paths "$JR" | tr -d '\n')"
+    "$(printf '%s/qd_home/x\n' "$JR" | normalize_paths "$JR" | tr -d '\n')"
 eq "path/xdg-runtime-collapse" \
     "<XDG_RUNTIME>/r" \
     "$(printf '%s/xdg_runtime/r\n' "$JR" | normalize_paths "$JR" | tr -d '\n')"
@@ -86,8 +86,8 @@ eq "path/preserve-foreign" \
 # --- runids + port ----------------------------------------------------------
 # (a) collapses session prefix, bare runid, and relay port
 eq "runid/prefix-collapse" \
-    "sbrg-<RUNID>-mysess" \
-    "$(printf 'sbrg-abc123-mysess\n' | normalize_runids abc123 34567 | tr -d '\n')"
+    "qdrg-<RUNID>-mysess" \
+    "$(printf 'qdrg-abc123-mysess\n' | normalize_runids abc123 34567 | tr -d '\n')"
 eq "runid/port-collapse" \
     "port <RELAY_PORT> end" \
     "$(printf 'port 34567 end\n' | normalize_runids abc123 34567 | tr -d '\n')"

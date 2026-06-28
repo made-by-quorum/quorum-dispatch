@@ -15,7 +15,7 @@
 # (not just the idle path), turn 1 runs with STUB_BUSY_HOLD_MS so the stub stays busy
 # while turn 2 (a >400-char PASTE-BURST, the FINDING-E1 surface) is sent --wait: qd
 # observes status==busy -> send-queue; the queued message drains on idle and --wait
-# anchors on its user record. Session-targeting verbs use scn_sb_target (A4 belt).
+# anchors on its user record. Session-targeting verbs use scn_qd_target (A4 belt).
 #
 # B3 gate finding (multibyte input loss): markers are ASCII-only and every
 # assertion keys on APPLICATION OUTPUT (the JSONL user records + the --wait
@@ -100,14 +100,14 @@ scn_run() {
 
     # Turn 1: send a message that HOLDS the stub busy (STUB_BUSY_HOLD_MS), so the
     # next send observes a BUSY session. Fire-and-forget; do NOT wait.
-    scn_sb_target send:pty "$name" "$SCN_TURN1_MSG" >/dev/null 2>&1 &
+    scn_qd_target send:pty "$name" "$SCN_TURN1_MSG" >/dev/null 2>&1 &
     # Give turn 1 a moment to flip the session to busy.
     sleep 2
 
     # Turn 2: the PASTE-BURST, sent --wait WHILE BUSY -> queue-to-busy. --wait
     # anchors on the JSONL user record (the queue draining to us) and completes on
     # idle. Capture the --wait reply text (the stub's deterministic STUB-REPLY).
-    SCN_WAIT_OUT="$(scn_sb_target send:pty "$name" "$SCN_BURST_MSG" --wait --timeout 60 2>/dev/null)"
+    SCN_WAIT_OUT="$(scn_qd_target send:pty "$name" "$SCN_BURST_MSG" --wait --timeout 60 2>/dev/null)"
     SCN_WAIT_RC=$?
 
     # Observe the JSONL OUTCOME: both user records present, in queue order.

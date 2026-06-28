@@ -5,9 +5,9 @@
 //!
 //! The json object is the point-resolution surface bond joins against; the
 //! field list was promised to P1 exactly as the goldens freeze it:
-//! name, sessionId, sbId?, sbIdPrefix?, status, live, pid, provider.
+//! name, sessionId, qdId?, qdIdPrefix?, status, live, pid, provider.
 //!
-//! Rows pinned here: mapped + live, unmapped sbId, cold row,
+//! Rows pinned here: mapped + live, unmapped qdId, cold row,
 //! stale-idle-dead-pid (live:false), ambiguity error json-free on stderr.
 
 mod common;
@@ -17,7 +17,7 @@ use std::process::{Child, Command};
 
 use common::{assert_not_real_home, set_mtime_ms};
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -72,7 +72,7 @@ fn mint_line(id: &str, session_id: &str, name: &str) -> String {
 
 /// Build a jail under `dir`: registry rows in `<home>/.claude/sessions/`,
 /// optional ids.jsonl mints in `<home>/.quorum/dispatch/state/`, optional cold transcripts
-/// in `<home>/.claude/projects/proj/`. Returns nothing; `run_sb` runs against it.
+/// in `<home>/.claude/projects/proj/`. Returns nothing; `run_qd` runs against it.
 struct Jail {
     home: PathBuf,
     zmx: PathBuf,
@@ -120,7 +120,7 @@ impl Jail {
     }
 
     fn run(&self, args: &[&str]) -> (i32, String, String) {
-        let out = Command::new(sb_bin())
+        let out = Command::new(qd_bin())
             .args(args)
             .env("HOME", &self.home)
             .env("ZMX_DIR", &self.zmx)
@@ -164,7 +164,7 @@ fn mapped_jail(dir: &Path, live_pid: i64) -> Jail {
 /// Mapped + live: every promised field present; live:true (idle + alive pid).
 ///
 /// MUTATION EVIDENCE: dropping any field, emitting null-instead-of-absent for
-/// a MAPPED sbId, or breaking the prefix computation reds the golden.
+/// a MAPPED qdId, or breaking the prefix computation reds the golden.
 #[test]
 fn info_json_mapped_live_golden() {
     let t = tempfile::tempdir().unwrap();
@@ -203,10 +203,10 @@ fn info_json_stale_idle_dead_pid_golden() {
     );
 }
 
-/// Unmapped sbId: no ids.jsonl mint → sbId/sbIdPrefix keys ABSENT (the
+/// Unmapped qdId: no ids.jsonl mint → qdId/qdIdPrefix keys ABSENT (the
 /// ls --json absent-not-null convention).
 #[test]
-fn info_json_unmapped_sb_id_golden() {
+fn info_json_unmapped_qd_id_golden() {
     let t = tempfile::tempdir().unwrap();
     let mut child = live_child();
     let j = jail(t.path());
@@ -216,8 +216,8 @@ fn info_json_unmapped_sb_id_golden() {
     child.wait().ok();
     assert_eq!(code, 0, "stderr: {err}");
     assert!(
-        !out.contains("sbId"),
-        "unmapped → NO sbId/sbIdPrefix: {out}"
+        !out.contains("qdId"),
+        "unmapped → NO qdId/qdIdPrefix: {out}"
     );
     assert_golden(
         "info-json-unmapped.json",

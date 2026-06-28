@@ -433,13 +433,13 @@ fn resize_vertical_grow_restores_scrollback_from_pending() {
     for i in 1..=5 {
         screen.process(format!("L{}\r\n", i).as_bytes());
     }
-    let sb_before = screen.grid.scrollback_len();
-    assert!(sb_before > 0, "scrollback should exist");
+    let qd_before = screen.grid.scrollback_len();
+    assert!(qd_before > 0, "scrollback should exist");
 
     // Growing vertically restores scrollback rows into visible area
     screen.resize(15, 5);
 
-    let restored = sb_before - screen.grid.scrollback_len();
+    let restored = qd_before - screen.grid.scrollback_len();
     assert!(restored > 0, "some scrollback should have been restored");
     // pending_start clamped to scrollback_len
     assert!(screen.grid.pending_start() <= screen.grid.scrollback_len());

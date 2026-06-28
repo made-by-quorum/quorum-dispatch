@@ -238,9 +238,9 @@ fn wait_dead(pid: i64) {
 }
 
 /// Resolve the codex transcript_root off the jail env (codex's transcript_root reads
-/// `fx.env` $CODEX_HOME/$HOME — never paths; the placeholder SbPaths satisfies the
+/// `fx.env` $CODEX_HOME/$HOME — never paths; the placeholder QdPaths satisfies the
 /// borrow). Owned `paths` is passed in so the borrow outlives the fx.
-fn codex_root(env: &JailEnv, paths: &dispatch::paths::SbPaths) -> PathBuf {
+fn codex_root(env: &JailEnv, paths: &dispatch::paths::QdPaths) -> PathBuf {
     let fx = ProviderFx {
         env,
         paths,
@@ -305,7 +305,7 @@ fn ls_snapshot(
         include_preview: true,
         limit: None,
     };
-    let paths = dispatch::paths::SbPaths::from_home(&jail.join("home"));
+    let paths = dispatch::paths::QdPaths::from_home(&jail.join("home"));
     let inputs = join::gather(
         &paths, &mux, &genv, &pt, &probe, &clock,
         jail, // tmp_root pinned INSIDE the jail (legacy zmx scan stays hermetic)
@@ -468,7 +468,7 @@ fn codex_full_lifecycle_live_jailed() {
         rpc.set_request_timeout(std::time::Duration::from_secs(60));
 
         // believed state: read the rollout tail (none yet → None → believed IDLE).
-        let placeholder = dispatch::paths::SbPaths::from_home(Path::new(""));
+        let placeholder = dispatch::paths::QdPaths::from_home(Path::new(""));
         let root = codex_root(&env, &placeholder);
         let key = SessionKey {
             id: &thread_id,
@@ -485,7 +485,7 @@ fn codex_full_lifecycle_live_jailed() {
         let rpc_ref: &dyn AppServerRpc = &rpc;
         let fx = ProviderFx {
             env: &env,
-            paths: &dispatch::paths::SbPaths::from_home(&jail.join("home")),
+            paths: &dispatch::paths::QdPaths::from_home(&jail.join("home")),
             socket_dir: sessions_dir.clone(),
             mux: None,
             clock: None,
@@ -512,7 +512,7 @@ fn codex_full_lifecycle_live_jailed() {
 
     // === Step 4: WAIT for idle (W6) — the turn completes, rollout materializes ==
     {
-        let placeholder = dispatch::paths::SbPaths::from_home(Path::new(""));
+        let placeholder = dispatch::paths::QdPaths::from_home(Path::new(""));
         let root = codex_root(&env, &placeholder);
         let key = SessionKey {
             id: &thread_id,

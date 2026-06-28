@@ -111,8 +111,8 @@ fn file_mode(path: &str) -> u32 {
 #[test]
 fn gc1_file_backend_roundtrip_real_fs_chmod_600() {
     let tmp = tempfile::tempdir().unwrap();
-    let sb_home = tmp.path().join(".quorum").join("dispatch");
-    let env = TestEnv::new(&[("QD_HOME", sb_home.to_str().unwrap())]);
+    let qd_home = tmp.path().join(".quorum").join("dispatch");
+    let env = TestEnv::new(&[("QD_HOME", qd_home.to_str().unwrap())]);
     let exec = RealExec;
 
     with_real_deps(&env, &exec, "linux", false, |deps| {
@@ -188,13 +188,13 @@ fn shell_quote(s: &str) -> String {
 #[test]
 fn gc3_locked_keychain_fallback_real_exec_path_shim() {
     let tmp = tempfile::tempdir().unwrap();
-    let sb_home = tmp.path().join(".quorum").join("dispatch");
+    let qd_home = tmp.path().join(".quorum").join("dispatch");
     let (_shim_dir, shim_path) = install_fake_security(
         "security: SecKeychainItemCreateFromContent (<default>): User interaction is not allowed.",
         36,
     );
     // PATH must include the shim so RealExec's `security` resolves to it.
-    let env = TestEnv::new(&[("QD_HOME", sb_home.to_str().unwrap()), ("PATH", &shim_path)]);
+    let env = TestEnv::new(&[("QD_HOME", qd_home.to_str().unwrap()), ("PATH", &shim_path)]);
     // RealExec inherits the PROCESS PATH, not the injected Env — so we must also
     // set the process PATH for the duration of this test. Save + restore under a
     // lock (set_var is process-global).
@@ -233,11 +233,11 @@ fn gc3_locked_keychain_fallback_real_exec_path_shim() {
 #[test]
 fn gc3_env_forced_keychain_lock_fails_loud_no_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let sb_home = tmp.path().join(".quorum").join("dispatch");
+    let qd_home = tmp.path().join(".quorum").join("dispatch");
     let (_shim_dir, shim_path) =
         install_fake_security("security: User interaction is not allowed.", 36);
     let env = TestEnv::new(&[
-        ("QD_HOME", sb_home.to_str().unwrap()),
+        ("QD_HOME", qd_home.to_str().unwrap()),
         ("QD_SECRET_BACKEND", "keychain"),
         ("PATH", &shim_path),
     ]);

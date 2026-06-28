@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -92,7 +92,7 @@ impl Jail {
         self.home.join(".claude").join("sessions")
     }
     fn run(&self, args: &[&str]) -> std::process::Output {
-        Command::new(sb_bin())
+        Command::new(qd_bin())
             .args(args)
             .current_dir(&self.home)
             .env("HOME", &self.home)

@@ -43,7 +43,7 @@ pressure WARN). Jail: rule 9 + ADD-4 hermetic env via lib/jail.sh throughout.
   passb-diag-boot.sh / passb-diag-argv.sh (stub never invoked pre-F2 fix; then
   blocked post-F2 fix), passb-diag-row.sh (full jail snapshots: stub alive w/
   sidecar fork, no sessions/ or projects/ dirs ever created under jail HOME;
-  real-home belt checked — no sbrg files in /home/u/.claude/sessions, 735
+  real-home belt checked — no qdrg files in /home/u/.claude/sessions, 735
   entries baseline). DEV-TIME evidence, uncommitted jail state reproduced on
   demand.
 
@@ -51,14 +51,14 @@ pressure WARN). Jail: rule 9 + ADD-4 hermetic env via lib/jail.sh throughout.
 
 - With this session's shell `TMPDIR=/var/folders/.../T/` the jail base is ~82
   chars; zmx derives a session-name cap from the ~104-byte socket-path limit →
-  cap ~20 bytes < the 27-byte `sbrg-<runid>-*` names → `zmx run` prints
+  cap ~20 bytes < the 27-byte `qdrg-<runid>-*` names → `zmx run` prints
   `error: session name is too long` **but exits 0**; qd's I6 Bug-D scan then
   correctly reports NotAttachable. Engine behaves per contract; zmx's
   error+exit-0 is a quirk worth an upstream note.
 - Workaround used (replays): invoke with TMPDIR=/tmp (jail base 38 chars) —
   matches how prior recordings ran.
 - Residual marginality: verify.sh-wrapped SELF-JAILING scenarios double-jail
-  (`/tmp/sbrg-runs/<id>/tmp/sbrg-runs/<id>/zmx`, ~74 chars) → socket path
+  (`/tmp/qdrg-runs/<id>/tmp/qdrg-runs/<id>/zmx`, ~74 chars) → socket path
   ~108 bytes with 20-digit runids → fails; passes with shorter pids/RANDOM.
   The pass-(a) 7/7 Level-2 runs were marginal on runid digit count. Canonical
   invocation (`bash $SCN`, single jail — what run_selftests.sh does) is safe.

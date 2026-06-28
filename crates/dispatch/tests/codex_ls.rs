@@ -229,7 +229,7 @@ fn run_codex(opts: JoinOpts) -> CodexRun {
     let probe = dispatch::effects::FixtureRelayProbe(Vec::new());
     let clock = FixedClock(NOW_MS);
 
-    let paths = dispatch::paths::SbPaths::from_home(&home);
+    let paths = dispatch::paths::QdPaths::from_home(&home);
     let inputs = join::gather(
         &paths,
         &mux,

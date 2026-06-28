@@ -90,7 +90,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn crate_marker_is_sb() {
+    fn crate_marker_is_qd() {
         assert_eq!(crate_marker(), "qd");
     }
 }

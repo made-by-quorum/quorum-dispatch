@@ -4,8 +4,8 @@
 //! Two tiers, NO literal `/tmp` (ADD-14: the engine never WRITES under literal
 //! `/tmp`):
 //!   1. `$XDG_RUNTIME_DIR/qrmux` (per-user, systemd-managed), else
-//!   2. `<sbHome>/mux` where `sbHome = QD_HOME || <home>/.quorum/dispatch`, resolved through
-//!      the existing [`SbPaths::from_home_env`] seam (paths.rs:53-58) so the mux
+//!   2. `<qdHome>/mux` where `qdHome = QD_HOME || <home>/.quorum/dispatch`, resolved through
+//!      the existing [`QdPaths::from_home_env`] seam (paths.rs:53-58) so the mux
 //!      dir MOVES with a relocated engine state dir and with QD_HOME-only jails
 //!      (spec D2/R32: NOT literal `$HOME/.quorum/dispatch`).
 //!
@@ -27,7 +27,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::effects::Env;
-use crate::paths::SbPaths;
+use crate::paths::QdPaths;
 
 /// Conservative upper bound on the bytes the socket *filename* + NUL add to the
 /// socket-directory path. Mirrors qrmux's `SOCKET_LEAF_BUDGET` (the daemon places
@@ -44,9 +44,9 @@ const SUN_PATH_MAX: usize = 104;
 /// Resolve the engine's qrmux socket dir from the injected `home` + `Env` seam.
 ///
 /// Tier 1 `$XDG_RUNTIME_DIR/qrmux` (trimmed; empty/whitespace-only treated as
-/// unset, matching the zmx-dir tier semantics), else tier 2 `<sbHome>/mux` via
-/// [`SbPaths::from_home_env`] (`state_dir = <sbHome>/state`, so the mux sibling
-/// is `<sbHome>/mux`). Applies the sun_path guard with a remedy-naming error.
+/// unset, matching the zmx-dir tier semantics), else tier 2 `<qdHome>/mux` via
+/// [`QdPaths::from_home_env`] (`state_dir = <qdHome>/state`, so the mux sibling
+/// is `<qdHome>/mux`). Applies the sun_path guard with a remedy-naming error.
 ///
 /// Returns `Err(msg)` ONLY when the guard trips; tier resolution itself is
 /// total (home is always injected). The caller maps the message to an io::Error.
@@ -54,19 +54,19 @@ pub fn resolve_qrmux_dir(home: &Path, env: &dyn Env) -> Result<PathBuf, String> 
     let dir = match nonblank(env.var("XDG_RUNTIME_DIR")) {
         // Tier 1: $XDG_RUNTIME_DIR/qrmux.
         Some(xdg) => PathBuf::from(xdg.trim()).join("qrmux"),
-        // Tier 2: <sbHome>/mux. SbPaths.state_dir == <sbHome>/state, so the mux
-        // dir is its sibling `<sbHome>/mux`. Derive sbHome from state_dir's parent
+        // Tier 2: <qdHome>/mux. QdPaths.state_dir == <qdHome>/state, so the mux
+        // dir is its sibling `<qdHome>/mux`. Derive qdHome from state_dir's parent
         // so the ONE QD_HOME-resolution seam (paths.rs) governs both.
         None => {
-            let paths = SbPaths::from_home_env(home, env);
-            let sb_home = paths
+            let paths = QdPaths::from_home_env(home, env);
+            let qd_home = paths
                 .state_dir
                 .parent()
                 .map(Path::to_path_buf)
-                // state_dir is always `<sbHome>/state`, so parent is always Some;
+                // state_dir is always `<qdHome>/state`, so parent is always Some;
                 // the fallback is unreachable but keeps this total.
                 .unwrap_or_else(|| home.join(".quorum").join("dispatch"));
-            sb_home.join("mux")
+            qd_home.join("mux")
         }
     };
 
@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn tier2_sb_home_default_under_home() {
+    fn tier2_qd_home_default_under_home() {
         // No XDG, no QD_HOME → <home>/.quorum/dispatch/mux.
         let e = env(501, &[]);
         let dir = resolve_qrmux_dir(Path::new("/jail/home"), &e).unwrap();
@@ -133,16 +133,16 @@ mod tests {
     }
 
     #[test]
-    fn tier2_relocates_with_sb_home() {
+    fn tier2_relocates_with_qd_home() {
         // QD_HOME-relocation (R32): the mux dir MOVES with the relocated engine
         // state dir, NOT pinned to literal $HOME/.quorum/dispatch.
-        let e = env(501, &[("QD_HOME", "/elsewhere/sbdata")]);
+        let e = env(501, &[("QD_HOME", "/elsewhere/qddata")]);
         let dir = resolve_qrmux_dir(Path::new("/jail/home"), &e).unwrap();
-        assert_eq!(dir, PathBuf::from("/elsewhere/sbdata/mux"));
+        assert_eq!(dir, PathBuf::from("/elsewhere/qddata/mux"));
     }
 
     #[test]
-    fn tier2_sb_home_only_jail() {
+    fn tier2_qd_home_only_jail() {
         // An QD_HOME-only jail (HOME points at a real-ish home, but QD_HOME
         // relocates state) still moves the mux dir under QD_HOME.
         let e = env(501, &[("QD_HOME", "/jail/qd")]);
@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_sb_home_falls_back_to_default() {
+    fn empty_qd_home_falls_back_to_default() {
         // QD_HOME="" is falsy (JS `||`) → default <home>/.quorum/dispatch/mux (paths.rs seam).
         let e = env(501, &[("QD_HOME", "")]);
         let dir = resolve_qrmux_dir(Path::new("/jail/home"), &e).unwrap();

@@ -1,6 +1,6 @@
 //! Shared helpers for the A1 integration tests (spec §9).
 //!
-//! L9a discipline: every `SbPaths` a test builds is rooted at a TEMP home; this
+//! L9a discipline: every `QdPaths` a test builds is rooted at a TEMP home; this
 //! module's [`assert_not_real_home`] panics if a constructed home ever equals the
 //! real `$HOME` (or its `.claude` subtree). No test ever resolves the real home.
 
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use dispatch::effects::{FixtureProcessTable, FixtureRelayProbe, MapEnv, ProcInfo};
 use dispatch::mux::FixtureMux;
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 
 /// The committed fixtures dir, resolved via `CARGO_MANIFEST_DIR` (NEVER the real
 /// home).
@@ -23,7 +23,7 @@ pub fn fixtures_root() -> PathBuf {
 }
 
 /// L9a guard: assert a home path is NOT the real `$HOME` (nor a parent of its
-/// `.claude`). Tests call this for every `SbPaths` they build.
+/// `.claude`). Tests call this for every `QdPaths` they build.
 pub fn assert_not_real_home(home: &Path) {
     if let Ok(real) = std::env::var("HOME") {
         let real = PathBuf::from(real);
@@ -31,7 +31,7 @@ pub fn assert_not_real_home(home: &Path) {
         let home_canon = fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
         assert_ne!(
             home_canon, real_canon,
-            "L9a: a test must NEVER root SbPaths at the real $HOME ({real:?})"
+            "L9a: a test must NEVER root QdPaths at the real $HOME ({real:?})"
         );
         // Also ensure we're not pointing at the real ~/.claude tree.
         assert_ne!(
@@ -85,18 +85,18 @@ pub fn set_mtime_ms(path: &Path, epoch_ms: i64) {
 /// mtimes frozen. Holds the `TempDir` so it lives for the test's duration.
 pub struct TestHome {
     pub temp: tempfile::TempDir,
-    pub paths: SbPaths,
+    pub paths: QdPaths,
 }
 
 impl TestHome {
     /// Copy a committed fixture (e.g. `"home-basic"`) into a fresh tempdir and
-    /// build `SbPaths`. Asserts L9a discipline.
+    /// build `QdPaths`. Asserts L9a discipline.
     pub fn from_fixture(name: &str) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         copy_dir(&fixtures_root().join(name), &home);
         assert_not_real_home(&home);
-        let paths = SbPaths::from_home(&home);
+        let paths = QdPaths::from_home(&home);
         TestHome { temp, paths }
     }
 

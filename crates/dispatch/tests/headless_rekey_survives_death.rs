@@ -13,7 +13,7 @@
 //! stays alive across the kill+respawn — the live orphan). We:
 //!   start --headless → mint the child-pid row → SIGKILL the owning daemon (orphan
 //!   claude stays alive, row persists) → RESPAWN the daemon → assert EXACTLY ONE
-//!   row, the SAME child-pid `<P>.json` (same pid + sessionId + sbId; NOT a
+//!   row, the SAME child-pid `<P>.json` (same pid + sessionId + qdId; NOT a
 //!   daemon-pid row, NOT a duplicate), its pid the LIVE orphan claude child, and it
 //!   is still RESOLVABLE by `qd ls`/`qd connect` by id AND name.
 //!
@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -101,7 +101,7 @@ impl Jail {
         self.cmd(args).output().expect("spawn qd")
     }
     fn cmd(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(sb_bin());
+        let mut c = Command::new(qd_bin());
         c.args(args)
             .current_dir(&self.home)
             .env("HOME", &self.home)
@@ -224,7 +224,7 @@ fn rekey_survives_daemon_kill_and_respawn() {
     );
 
     let deadline = Instant::now() + Duration::from_secs(8);
-    let (child_pid, sb_id) = loop {
+    let (child_pid, qd_id) = loop {
         assert!(
             Instant::now() < deadline,
             "minted row never appeared within 8s"
@@ -236,8 +236,8 @@ fn rekey_survives_daemon_kill_and_respawn() {
                 let pid = row.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
                 let sid = row.get("sessionId").and_then(|v| v.as_str());
                 if pid != 0 && sid == Some(SID) {
-                    let sb_id = row.get("sbId").and_then(|v| v.as_str()).map(str::to_string);
-                    break (pid, sb_id);
+                    let qd_id = row.get("qdId").and_then(|v| v.as_str()).map(str::to_string);
+                    break (pid, qd_id);
                 }
             }
         }
@@ -254,8 +254,8 @@ fn rekey_survives_daemon_kill_and_respawn() {
          cmdline={:?}",
         proc_cmdline(child_pid)
     );
-    let sb_id = sb_id.expect("the minted row carries a stable sbId");
-    println!("[mint] child_pid={child_pid} sessionId={SID} sbId={sb_id}");
+    let qd_id = qd_id.expect("the minted row carries a stable qdId");
+    println!("[mint] child_pid={child_pid} sessionId={SID} qdId={qd_id}");
 
     // --- SIGKILL the owning per-session daemon (D1) -----------------------------
     let d1 = find_daemon_pid(SESSION).expect("owning qrmux-server daemon found in /proc");
@@ -326,7 +326,7 @@ fn rekey_survives_daemon_kill_and_respawn() {
         "the surviving row's pid is the claude CHILD (cmdline={:?}), never the daemon",
         proc_cmdline(child_pid)
     );
-    // Same identity: sessionId + sbId unchanged across kill+respawn.
+    // Same identity: sessionId + qdId unchanged across kill+respawn.
     assert_eq!(
         row.get("sessionId").and_then(|v| v.as_str()),
         Some(SID),
@@ -343,9 +343,9 @@ fn rekey_survives_daemon_kill_and_respawn() {
         "post-respawn row resolvable by id AND name"
     );
     assert_eq!(
-        ls2_row.get("sbId").and_then(|v| v.as_str()),
-        Some(sb_id.as_str()),
-        "post-respawn row keeps the SAME stable sbId (identity survived)"
+        ls2_row.get("qdId").and_then(|v| v.as_str()),
+        Some(qd_id.as_str()),
+        "post-respawn row keeps the SAME stable qdId (identity survived)"
     );
     // connect RESOLVES the target by id AND name (resolution, not a live re-stream).
     for (label, target) in [("name", SESSION), ("id", SID)] {

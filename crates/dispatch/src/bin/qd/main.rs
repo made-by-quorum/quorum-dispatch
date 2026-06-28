@@ -18,7 +18,7 @@
 //! - **Default action:** bare `qd` (no verb) runs `ls` (index.ts:202-204).
 //!
 //! Real-deps wiring (kept from A2's pattern): `RealExec` / `ZmxMux` / `RealEnv` /
-//! `RealClock` / `SbPaths::from_home(HOME)` / `EventBootWaiter`.
+//! `RealClock` / `QdPaths::from_home(HOME)` / `EventBootWaiter`.
 
 mod cli;
 mod config;

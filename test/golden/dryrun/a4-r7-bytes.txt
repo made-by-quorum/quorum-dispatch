@@ -7,18 +7,18 @@
   credentials seeded: yes
 
 === qd new (real claude) ===
-  qd new exit=0 : Started detached session "sbrg-209801780658671170-r7"
+  qd new exit=0 : Started detached session "qdrg-209801780658671170-r7"
   claude version in jail: 2.1.165
-  resolution belt: sbrg-209801780658671170-r7 resolves uniquely in-jail (OK)
+  resolution belt: qdrg-209801780658671170-r7 resolves uniquely in-jail (OK)
 
 === warm-up send:pty (turns flowing; resolve $JP via glob-fallback) ===
-  warm-up send out=[Message sent to sbrg-209801780658671170-r7]
-  warm-up OK: $JP=/tmp/claude-501/sbrg-runs/209801780658671170/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-209801780658671170-tmp-work/ccc09ee0-39f4-4f7e-9c72-4f98bd6801db.jsonl (urc=1)
+  warm-up send out=[Message sent to qdrg-209801780658671170-r7]
+  warm-up OK: $JP=/tmp/claude-501/qdrg-runs/209801780658671170/home/.claude/projects/-private-tmp-claude-501-qdrg-runs-209801780658671170-tmp-work/ccc09ee0-39f4-4f7e-9c72-4f98bd6801db.jsonl (urc=1)
 
 ===== send:pty ROW: target=12288 bytes marker=R7_12K_209801780658671170 =====
   payload actual bytes=12318 (target 12288); marker=R7_12K_209801780658671170
   verb exit=0
-  verb stdout: Message sent to sbrg-209801780658671170-r7|
+  verb stdout: Message sent to qdrg-209801780658671170-r7|
   verb stderr: (none)
   WENT BUSY within 12s
   user-records before=1 after=2 DELTA=1 busy_seen=1 status=idle CLASS=DELIVERED
@@ -32,7 +32,7 @@
         ~12K characters). There's no instruction or question in it. What would you like me to do?
       ✻ Brewed for 4s
                                                                                                                                                      ● high · /effort
-      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-209801780658671170-r7 ──
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-209801780658671170-r7 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
@@ -40,7 +40,7 @@
 ===== send:pty ROW: target=16384 bytes marker=R7_16K_209801780658671170 =====
   payload actual bytes=16414 (target 16384); marker=R7_16K_209801780658671170
   verb exit=0
-  verb stdout: Message sent to sbrg-209801780658671170-r7|
+  verb stdout: Message sent to qdrg-209801780658671170-r7|
   verb stderr: (none)
   WENT BUSY within 12s
   user-records before=2 after=3 DELTA=1 busy_seen=1 status=idle CLASS=DELIVERED
@@ -54,7 +54,7 @@
       ⏺ Received another test payload — this one marked R7_16K_209801780658671170_START … END (~16K characters of the same filler pattern). Still no instruction or
         question. Let me know what you'd like me to do with these.
       ✻ Cogitated for 4s
-      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-209801780658671170-r7 ──
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-209801780658671170-r7 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents

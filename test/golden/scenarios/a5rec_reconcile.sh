@@ -26,7 +26,7 @@ scn_run() {
         echo "# RECORDED-FROM pin=0d0fa9e verb=reconcile mode=--dry-run (ADD-12: destructive OFF on macOS)"
         echo "# NON-DRY 'Repaired' line: LIMA-DEFERRED (G-X1) — TS sweeps literal /tmp; sweep-belt refuses on brano."
         echo "\$ qd reconcile --dry-run (clean — all agree)"
-        scn_sb reconcile --dry-run 2>&1
+        scn_qd reconcile --dry-run 2>&1
     } > "$SCN_OUT"
     # Forge I1: a LIVE registry entry whose PID is dead (HOME-bounded forged file).
     mkdir -p "$HOME/.claude/sessions"
@@ -34,7 +34,7 @@ scn_run() {
         "$DEADPID" "$JAIL_PREFIX" "$JAIL_ROOT/tmp" > "$HOME/.claude/sessions/$DEADPID.json"
     {
         echo "\$ qd reconcile --dry-run (forged I1 dead-PID registry → Would repair)"
-        scn_sb reconcile --dry-run 2>&1
+        scn_qd reconcile --dry-run 2>&1
     } >> "$SCN_OUT"
     printf '0\n' > "$SCN_OUT.exit"
 }

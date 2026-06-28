@@ -56,7 +56,7 @@ require_cmd() {
     fi
 }
 
-install_sbx() {
+install_qb() {
     local repo rev
     repo="$(read_pin qb repo)"
     rev="$(read_pin qb rev)"
@@ -123,7 +123,7 @@ install_plugin() {
 }
 
 case "${1:-}" in
-    qb) install_sbx ;;
+    qb) install_qb ;;
     plugin) install_plugin ;;
     *)
         echo "usage: install-extensions.sh {qb|plugin}" >&2

@@ -44,7 +44,7 @@ fn resolve_state_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
         return Some(p);
     }
     let home = std::env::var("HOME").ok().filter(|s| !s.is_empty())?;
-    let paths = dispatch::paths::SbPaths::from_home_env(
+    let paths = dispatch::paths::QdPaths::from_home_env(
         std::path::Path::new(&home),
         &dispatch::effects::RealEnv,
     );

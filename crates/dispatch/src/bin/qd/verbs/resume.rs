@@ -29,7 +29,7 @@ use dispatch::launch::{
 };
 use dispatch::model::SessionStatus;
 use dispatch::mux::Mux;
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::resume::{derive_zmx_name, resolve_resume_cwd, validate_session_name, ResumeCwd};
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 
@@ -96,7 +96,7 @@ pub fn run(m: &ArgMatches) -> i32 {
             return 1;
         }
     };
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
 
     // Resolve via A1 (includeAll so a cold session resolves).
     let opts = JoinOpts {
@@ -316,7 +316,7 @@ fn prepare_claude_resume_env(
     verb: &str,
     env: &dyn Env,
     home: &Path,
-    paths: &SbPaths,
+    paths: &QdPaths,
     zmx_name: &str,
     session_id: &str,
     session_name: Option<&str>,
@@ -330,7 +330,7 @@ fn prepare_claude_resume_env(
     {
         return Err(code);
     }
-    let sb_id =
+    let qd_id =
         match dispatch::idstore::mint_or_get(&ids_path, session_id, session_name, &RealClock) {
             Ok(id) => id,
             Err(e) => {
@@ -345,7 +345,7 @@ fn prepare_claude_resume_env(
     // the child inheriting it from an inline parent env — so the unset list
     // rides this path too (the with-unsets writer; empty for inline, whose
     // export clobbers anything inherited).
-    let env_pairs = launch_env_pairs(backend_env, Some(sb_id), render);
+    let env_pairs = launch_env_pairs(backend_env, Some(qd_id), render);
     let env_unsets = dispatch::launch::render_env_unsets(render);
     if let Err(e) = write_session_env_file_with_unsets(home, zmx_name, &env_pairs, &env_unsets) {
         eprintln!("qd {verb}: failed to write session env file: {e}");
@@ -380,7 +380,7 @@ fn run_detached_revive(
     zmx_name: &str,
     claude_cmd: &str,
     cwd_path: &Path,
-    paths: &SbPaths,
+    paths: &QdPaths,
 ) -> Result<(), i32> {
     match mux.run_detached(canonical, zmx_name, claude_cmd, cwd_path) {
         Ok(r) if r.status == Some(0) => {}
@@ -475,7 +475,7 @@ pub fn revive_claude(
             return Err(1);
         }
     };
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
 
     if session.session_id.is_empty() {
         eprintln!("Cannot resume: no session ID found.");
@@ -596,7 +596,7 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
         Ok(p) => p,
         Err(code) => return code,
     };
-    // The revived daemon's stdout/stderr log root: `<sb_home>/.quorum/dispatch/log` (codex-p2-spec
+    // The revived daemon's stdout/stderr log root: `<qd_home>/.quorum/dispatch/log` (codex-p2-spec
     // §3.2), resolved off the injected home so a jailed HOME points the log into the
     // jail (L9a) — identical to the W4 create path's resolution.
     let log_dir = paths.home.join(".quorum").join("dispatch").join("log");
@@ -708,7 +708,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
             return 1;
         }
     };
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
 
     // Resumability gate (the acp analog of resume.rs's `no resumable transcript` arm):
     // a stopped acp row needs BOTH a sessionId (to `session/load`) and a jsonl_path
@@ -952,7 +952,7 @@ mod tests {
             user_named: Some(true),
             session_id: session_id.to_string(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status: SessionStatus::Cold,
             zmx_name: None,
@@ -1018,7 +1018,7 @@ mod tests {
         use dispatch::launch::RenderMode;
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().to_path_buf();
-        let paths = dispatch::paths::SbPaths::from_home(&home);
+        let paths = dispatch::paths::QdPaths::from_home(&home);
         let mut vars = std::collections::HashMap::new();
         vars.insert("HOME".to_string(), home.to_string_lossy().into_owned());
         let env = MapEnv { vars, uid: 501 };
@@ -1083,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_env_pairs_always_carry_sb_session_id() {
+    fn resume_env_pairs_always_carry_qd_session_id() {
         use dispatch::launch::RenderMode;
         // No backend env captured → the file STILL has the identity export
         // (punch item 7 adds the inline render birth property; item 1 adds the
@@ -1295,7 +1295,7 @@ mod tests {
     #[test]
     fn revive_nonzero_zmx_run_fails_immediately_with_stderr() {
         let tmp = tempfile::tempdir().unwrap();
-        let paths = dispatch::paths::SbPaths::from_home(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
         let mux = FailingMux { spawn_err: false };
         let code = run_detached_revive(
             &mux,
@@ -1314,7 +1314,7 @@ mod tests {
     #[test]
     fn revive_spawn_err_fails_immediately() {
         let tmp = tempfile::tempdir().unwrap();
-        let paths = dispatch::paths::SbPaths::from_home(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
         let mux = FailingMux { spawn_err: true };
         let code = run_detached_revive(
             &mux,

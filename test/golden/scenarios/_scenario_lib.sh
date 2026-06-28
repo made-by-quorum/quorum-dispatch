@@ -6,13 +6,13 @@
 #
 #   QD_UNDER_TEST   — how to invoke the qd-under-test. Default: the TS qd on PATH.
 #                     For dry-runs this is `bun <TS-entrypoint>` or just `qd`.
-#                     For Part 2 / SBQA swap it points at the Rust binary.
+#                     For Part 2 / QDQA swap it points at the Rust binary.
 #   PINNED_TS_COMMIT — set ONLY in Part 2. Part 1 dry-runs run against current TS
 #                      main and stamp DRYRUN-NOT-ORACLE.
 #
 # Every scenario runs INSIDE the jail (verify.sh calls jail_establish before
 # sourcing the scenario, so QD_HOME/ZMX_DIR/XDG_*/TMPDIR/JAIL_PREFIX are set).
-# Scenarios MUST use jail_sb / jail_zmx / the jail-guarded kill helpers — never a
+# Scenarios MUST use jail_qd / jail_zmx / the jail-guarded kill helpers — never a
 # bare qd/zmx invocation.
 # ---------------------------------------------------------------------------
 
@@ -24,20 +24,20 @@ scn_session_name() {
     printf '%s%s' "${JAIL_PREFIX:?jail not established}" "${1:-sess}"
 }
 
-# scn_sb <args...> — run the qd-under-test under the hermetic jail env.
+# scn_qd <args...> — run the qd-under-test under the hermetic jail env.
 # Honors a multi-word QD_UNDER_TEST (e.g. "bun /path/index.ts").
 #
-# NOTE: scn_sb is for NON-session-targeting invocations (ls, info, config, help,
+# NOTE: scn_qd is for NON-session-targeting invocations (ls, info, config, help,
 # --json contract surfaces). For any verb that TARGETS A SESSION BY NAME and could
 # act on it — kill / send (send:pty/relay/http) / wait — scenarios MUST use
-# scn_sb_target below, which applies the target-resolution belt first.
-scn_sb() {
+# scn_qd_target below, which applies the target-resolution belt first.
+scn_qd() {
     jail_assert_established || return 1
     # shellcheck disable=SC2086
     $QD_UNDER_TEST "$@"
 }
 
-# scn_sb_target <verb> <name> [args...] — session-targeting invocation, BELTED.
+# scn_qd_target <verb> <name> [args...] — session-targeting invocation, BELTED.
 #
 # A4 finding (orchestrator-ruled): the jailed qd resolves a name through the
 # engine's production tiers (incl. the literal-/tmp legacy zmx scan), so a
@@ -45,7 +45,7 @@ scn_sb() {
 # verb reaches the engine this asserts the name resolves ONLY under JAIL_ROOT
 # (fail-closed on miss / out-of-jail / ambiguity) — the SECOND WALL behind the
 # prefix guard. Use this for: kill, send / send:pty / send:relay / send:http, wait.
-scn_sb_target() {
+scn_qd_target() {
     local verb="$1" name="$2"; shift 2
     jail_assert_established || return 1
     jail_guard_name "$name" || return 1

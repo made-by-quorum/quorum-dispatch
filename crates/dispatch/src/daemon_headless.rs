@@ -40,10 +40,10 @@ pub struct DaemonHeadlessFactory {
     pub sessions_dir: PathBuf,
     /// The idstore path (`<state_dir>/ids.jsonl`) — the SAME store `qd ls` folds.
     /// WP-B5-ii-b PROOF 3: on a headless RESUME the factory resolves the child's
-    /// OWN stable sbId from its recorded `session_id` here (`mint_or_get`) and
+    /// OWN stable qdId from its recorded `session_id` here (`mint_or_get`) and
     /// injects it as `QD_SESSION_ID` (internal self-identity, parity with the
     /// interactive path). Because it is the same store keyed by the same UUID, the
-    /// injected `QD_SESSION_ID` MATCHES the sbId `qd ls` surfaces for the
+    /// injected `QD_SESSION_ID` MATCHES the qdId `qd ls` surfaces for the
     /// daemon-minted child-pid row (the row↔env consistency invariant).
     pub ids_path: PathBuf,
     /// R3b-Step-0: the per-daemon shared **signal-B** progress producer. Threaded
@@ -71,7 +71,7 @@ impl DaemonHeadlessFactory {
     /// rejected option A keyed status on the daemon's own `std::process::id()`; B
     /// keys identity AND status on the claude CHILD pid (known only post-spawn), so
     /// the sink is built per-launch in [`Self::resolve`] via a deferred factory.
-    pub fn from_daemon_env(env: &impl crate::effects::Env, paths: &crate::paths::SbPaths) -> Self {
+    pub fn from_daemon_env(env: &impl crate::effects::Env, paths: &crate::paths::QdPaths) -> Self {
         let config_toml = paths
             .home
             .join(".quorum")
@@ -119,16 +119,16 @@ impl HeadlessFactory for DaemonHeadlessFactory {
         // + self-directed `qd` need it). The interactive/zmux path injects it via
         // `launch_env_pairs` (`resume.rs` → `prepare_claude_resume_env`); the D3
         // headless path DIVERGED and never did — that divergence is the bug this
-        // closes. Resolve the child's OWN stable sbId from its RECORDED `session_id`
+        // closes. Resolve the child's OWN stable qdId from its RECORDED `session_id`
         // via the SAME idstore `qd ls` folds (so the injected `QD_SESSION_ID`
-        // MATCHES the sbId of the daemon-minted child-pid row — one identity, two
+        // MATCHES the qdId of the daemon-minted child-pid row — one identity, two
         // surfaces, the row↔env consistency invariant). A future fork resumes its
-        // OWN session_id → mints its OWN sbId (never the parent's) — forward-
+        // OWN session_id → mints its OWN qdId (never the parent's) — forward-
         // compatible with B5-iii. On START (`resume_session_id == None` — the UUID is
         // only known at `system/init`) there is nothing to resolve pre-spawn; the row
         // carries identity externally and the env stays byte-stable with pre-B5-ii-b
         // start (FORCE only).
-        let sb_session_id = resume_session_id.and_then(|uuid| {
+        let qd_session_id = resume_session_id.and_then(|uuid| {
             match crate::idstore::mint_or_get(
                 &self.ids_path,
                 uuid,
@@ -152,7 +152,7 @@ impl HeadlessFactory for DaemonHeadlessFactory {
         // so START's env is byte-identical to the prior hand-rolled FORCE-only env.
         let env = crate::launch::launch_env_pairs(
             self.env.clone(),
-            sb_session_id,
+            qd_session_id,
             crate::launch::RenderMode::AltScreen,
         );
         let launch = HeadlessLaunch {
@@ -329,16 +329,16 @@ mod tests {
     /// WP-B5-ii-b PROOF 3 (cheap default-floor mirror of the a1/a4 end-to-end
     /// seeds): a headless RESUME injects `QD_SESSION_ID` LAST, resolved from the
     /// child's OWN recorded `session_id` via the SAME idstore — so the env self-id
-    /// MATCHES the sbId `qd ls` surfaces for the daemon-minted row (the row↔env
+    /// MATCHES the qdId `qd ls` surfaces for the daemon-minted row (the row↔env
     /// consistency invariant). A START launch (`resume_session_id == None`) injects
     /// NONE (byte-stable with pre-B5-ii-b start: FORCE only, no `QD_SESSION_ID`).
     ///
     /// FIX-SHAPED MUTATION (red-before): drop the `resume_session_id.and_then(...)`
-    /// resolution (force `sb_session_id = None`, the pre-fix D3 divergence) → the
-    /// resume env carries NO `QD_SESSION_ID` → the "resume injects the recorded sbId"
+    /// resolution (force `qd_session_id = None`, the pre-fix D3 divergence) → the
+    /// resume env carries NO `QD_SESSION_ID` → the "resume injects the recorded qdId"
     /// assert reds (`a1` got `''`).
     #[test]
-    fn resolve_injects_sb_session_id_on_resume_matching_idstore() {
+    fn resolve_injects_qd_session_id_on_resume_matching_idstore() {
         let dir = tempfile::tempdir().unwrap();
         let ids_path = dir.path().join("ids.jsonl");
         let f = DaemonHeadlessFactory {
@@ -354,7 +354,7 @@ mod tests {
         };
         let uuid = "11111111-2222-3333-4444-555555555555";
 
-        // RESUME: the injected QD_SESSION_ID is the sbId the SAME idstore resolves for
+        // RESUME: the injected QD_SESSION_ID is the qdId the SAME idstore resolves for
         // this session_id (the row↔env match — `qd ls` folds the same store/UUID).
         let plan = f.resolve("wk", "p", Some(uuid), None, &[]).unwrap();
         let want =
@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(
             sid.as_deref(),
             Some(want.as_str()),
-            "resume injects the child's OWN recorded sbId (matches `qd ls` for the row)"
+            "resume injects the child's OWN recorded qdId (matches `qd ls` for the row)"
         );
         // It lands LAST (the launch_env_pairs discipline).
         assert_eq!(

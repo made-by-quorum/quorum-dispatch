@@ -46,7 +46,7 @@ scn_run() {
     done
 
     # Produce backlog WHILE DETACHED (clients=0): the lines must survive server-side.
-    scn_sb_target send:pty "$name" "EMIT $SCN_ADR_N" >/dev/null 2>&1
+    scn_qd_target send:pty "$name" "EMIT $SCN_ADR_N" >/dev/null 2>&1
     sleep 2
 
     # The reattach-replay source: zmx's serialized server-side VT. dtach would have

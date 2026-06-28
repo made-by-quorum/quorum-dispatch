@@ -63,7 +63,7 @@ use std::time::{Duration, Instant};
 use crate::bootstrap::real_command_exists;
 use crate::effects::{Env, RealEnv};
 use crate::exec::{Exec, RealExec};
-use crate::paths::SbPaths;
+use crate::paths::QdPaths;
 use state::{decide_delivery, origin_from_inbox, DeliveryDecision, OriginRec, RelayState};
 
 use crate::relay::{read_sidecars, RelayContract};
@@ -132,7 +132,7 @@ pub struct RelayServer {
     pub pid: u32,
     /// Resolved state-dir layout (`relay_dir` for the sidecar, `inbox_dir` for
     /// `/message` persistence + `/inbox`). Immutable.
-    pub paths: SbPaths,
+    pub paths: QdPaths,
     /// The `/replies` long-poll park deadline. Production = 120s; tests inject a
     /// smaller budget through the SAME park code (P-F3b — not a forked branch).
     pub reply_park_timeout: Duration,
@@ -161,7 +161,7 @@ impl RelayServer {
         session_id: String,
         port: u16,
         pid: u32,
-        paths: SbPaths,
+        paths: QdPaths,
         park: Duration,
         request_read_timeout: Duration,
     ) -> Arc<Self> {
@@ -798,7 +798,7 @@ pub fn run_with_env(env: &dyn Env) -> i32 {
             return 1;
         }
     };
-    let paths = SbPaths::from_home_env(&home, env);
+    let paths = QdPaths::from_home_env(&home, env);
 
     // SELF-HEAL ON USE (relay-path hardening): the strongest guarantee against a
     // moved/upgraded `qd` orphaning its own MCP registration. Claude Code spawns
@@ -1205,7 +1205,7 @@ fn find_port(start: u16) -> Option<(TcpListener, u16)> {
 }
 
 /// Sidecar path `<relay_dir>/<pid>.json` (P-D2, server.ts:339).
-fn sidecar_path(paths: &SbPaths, pid: u32) -> PathBuf {
+fn sidecar_path(paths: &QdPaths, pid: u32) -> PathBuf {
     paths.relay_dir.join(format!("{pid}.json"))
 }
 
@@ -1214,7 +1214,7 @@ fn sidecar_path(paths: &SbPaths, pid: u32) -> PathBuf {
 /// (port + sessionId truthy required) — FROZEN. `startedAt` is an ISO-8601 UTC
 /// timestamp (server.ts uses `new Date().toISOString()`; we use the crate's
 /// `epoch_ms_to_iso`, the verified-vs-bun `toISOString` port).
-fn write_sidecar(paths: &SbPaths, port: u16, pid: u32, session_id: &str) -> std::io::Result<()> {
+fn write_sidecar(paths: &QdPaths, port: u16, pid: u32, session_id: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(&paths.relay_dir)?;
     let started_at = crate::render::epoch_ms_to_iso(now_ms());
     let record = serde_json::json!({
@@ -1305,7 +1305,7 @@ static SIDECAR_CPATH: OnceLock<CString> = OnceLock::new();
 /// build it.
 fn install_signal_cleanup(path: &Path) {
     // Pre-encode the path; if it somehow contains an interior NUL we skip handler
-    // install rather than risk a bad unlink (paths from SbPaths never do).
+    // install rather than risk a bad unlink (paths from QdPaths never do).
     if let Ok(cpath) = CString::new(path.as_os_str().as_encoded_bytes()) {
         let _ = SIDECAR_CPATH.set(cpath);
     }
@@ -1387,7 +1387,7 @@ impl RelayServer {
         park: Duration,
         request_read_timeout: Duration,
     ) -> TestServerHandle {
-        let paths = SbPaths::from_home(home);
+        let paths = QdPaths::from_home(home);
         let session_id = random_uuid_v4();
         let (listener, port) = if port_base == 0 {
             // OS-assigned ephemeral port (matches tests/relay_contract.rs's
@@ -1758,7 +1758,7 @@ mod tests {
     /// tests that drive `deliver_reply` straight, not over the socket. Writes a real
     /// inbox dir under `home`. Park/read budgets are short (unused by these paths).
     fn bare_server(home: &Path) -> Arc<RelayServer> {
-        let paths = SbPaths::from_home(home);
+        let paths = QdPaths::from_home(home);
         RelayServer::new(
             "self-session".to_string(),
             0,
@@ -2471,7 +2471,7 @@ mod tests {
     #[test]
     fn i1_recipient_message_seen_emitted_on_transcript_landing() {
         let home = unique_home("i1-recv");
-        let paths = SbPaths::from_home(&home);
+        let paths = QdPaths::from_home(&home);
         let session_id = random_uuid_v4();
         let message_id = "relay-1781000000100-7";
         let body = "hello from the sender";
@@ -2540,7 +2540,7 @@ mod tests {
     #[test]
     fn i1_recipient_message_seen_is_deduped_across_rescans() {
         let home = unique_home("i1-dedup");
-        let paths = SbPaths::from_home(&home);
+        let paths = QdPaths::from_home(&home);
         let session_id = random_uuid_v4();
         let message_id = "relay-1781000000200-2";
         write_recipient_transcript(
@@ -2578,7 +2578,7 @@ mod tests {
     #[test]
     fn i3_latency_pending_then_seen() {
         let home = unique_home("i3");
-        let paths = SbPaths::from_home(&home);
+        let paths = QdPaths::from_home(&home);
         let session_id = random_uuid_v4();
         let message_id = "relay-1781000000300-5";
 

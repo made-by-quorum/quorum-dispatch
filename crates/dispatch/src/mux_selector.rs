@@ -93,7 +93,7 @@ pub fn select_mux(
 fn env_snapshot(env: &dyn Env) -> EmbeddedEnv {
     EmbeddedEnv {
         xdg_runtime_dir: env.var("XDG_RUNTIME_DIR"),
-        sb_home: env.var("QD_HOME"),
+        qd_home: env.var("QD_HOME"),
         uid: env.uid(),
     }
 }
@@ -104,7 +104,7 @@ fn env_snapshot(env: &dyn Env) -> EmbeddedEnv {
 #[derive(Debug, Clone)]
 pub struct EmbeddedEnv {
     pub xdg_runtime_dir: Option<String>,
-    pub sb_home: Option<String>,
+    pub qd_home: Option<String>,
     pub uid: u32,
 }
 
@@ -112,7 +112,7 @@ impl Env for EmbeddedEnv {
     fn var(&self, key: &str) -> Option<String> {
         match key {
             "XDG_RUNTIME_DIR" => self.xdg_runtime_dir.clone(),
-            "QD_HOME" => self.sb_home.clone(),
+            "QD_HOME" => self.qd_home.clone(),
             _ => None,
         }
     }

@@ -34,7 +34,7 @@ set -u
 
 # Normalize TMPDIR to /tmp (A4 F2 socket-length lesson) — the harness this script
 # invokes self-normalizes too, but keep our own mktemp paths short + consistent.
-[ "${SBRL_KEEP_TMPDIR:-}" = "1" ] || export TMPDIR=/tmp
+[ "${QDRL_KEEP_TMPDIR:-}" = "1" ] || export TMPDIR=/tmp
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WT="$(cd "$HERE/../.." && pwd)"
@@ -49,7 +49,7 @@ bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 # The mutated stub: a tiny wrapper that forces STUB_RL_NEVER_BUSY=1 on the real
 # stub. Written under a temp dir we own (NOT under test/golden, NOT the pinned
 # golden stub). It must be a single executable the harness can use as CLAUDE_BIN.
-MUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sbrl-mut.XXXXXX")" || { echo "FATAL: mktemp"; exit 1; }
+MUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/qdrl-mut.XXXXXX")" || { echo "FATAL: mktemp"; exit 1; }
 trap 'rm -rf "$MUT_DIR"' EXIT
 MUT_STUB="$MUT_DIR/stub_mutated.sh"
 cat > "$MUT_STUB" <<EOS

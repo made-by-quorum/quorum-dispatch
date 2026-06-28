@@ -24,7 +24,7 @@ use std::process::Command;
 
 use common::{assert_not_real_home, set_mtime_ms};
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -161,7 +161,7 @@ impl Jail {
     }
 
     fn run(&self, args: &[&str]) -> (i32, String, String) {
-        let out = Command::new(sb_bin())
+        let out = Command::new(qd_bin())
             .args(args)
             .env("HOME", &self.home)
             .env("ZMX_DIR", &self.zmx)
@@ -481,7 +481,7 @@ fn no_trailer_at_cap_or_on_flagged_views() {
 /// flag lives on the `ls` subcommand), so the faithful bare-`qd` coverage is: the
 /// default action flips to JSON and stays trailer-free.
 #[test]
-fn bare_sb_default_action_flips_to_json_no_trailer() {
+fn bare_qd_default_action_flips_to_json_no_trailer() {
     let t = tempfile::tempdir().unwrap();
     let j = mixed_jail(t.path(), 25, 3);
     let (code, out, err) = j.run(&[]);

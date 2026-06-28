@@ -2,20 +2,20 @@
 $ qd ping (no target → error exit 3)
 qd ping: provide a <session> or --prefix <p>
 exit=3
-$ qd ping --prefix sbrg- (empty registry)
-No sessions matching 'sbrg-'
+$ qd ping --prefix qdrg- (empty registry)
+No sessions matching 'qdrg-'
 exit=0
-$ qd ping --prefix sbrg- --json (empty)
+$ qd ping --prefix qdrg- --json (empty)
 []
 exit=0
-$ qd ping sbrg-done (idle recent → done exit 0)
-sbrg-<RUNID>-done: status=idle  age=<DUR>  turns=0  uptime=<DUR>
+$ qd ping qdrg-done (idle recent → done exit 0)
+qdrg-<RUNID>-done: status=idle  age=<DUR>  turns=0  uptime=<DUR>
 exit=0
-$ qd ping sbrg-actv (busy recent → active exit 2)
-sbrg-<RUNID>-actv: status=busy  age=<DUR>  turns=0  uptime=<DUR>
+$ qd ping qdrg-actv (busy recent → active exit 2)
+qdrg-<RUNID>-actv: status=busy  age=<DUR>  turns=0  uptime=<DUR>
 exit=2
-$ qd ping sbrg-ambg (idle 0-turns aged → ambiguous exit 4)
-sbrg-<RUNID>-ambg: status=idle  age=<DUR>  turns=0  uptime=<DUR>
+$ qd ping qdrg-ambg (idle 0-turns aged → ambiguous exit 4)
+qdrg-<RUNID>-ambg: status=idle  age=<DUR>  turns=0  uptime=<DUR>
 AMBIGUOUS: session cold with 0 completed turns — may have finished in one turn or never started
 ACTION: check for deliverable files before killing
 exit=4

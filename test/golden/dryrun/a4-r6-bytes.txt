@@ -7,18 +7,18 @@
   credentials seeded: yes
 
 === qd new (real claude) ===
-  qd new exit=0 : Started detached session "sbrg-94450178063817229903-r6"
+  qd new exit=0 : Started detached session "qdrg-94450178063817229903-r6"
   claude version in jail: 2.1.163
-  resolution belt: sbrg-94450178063817229903-r6 resolves uniquely in-jail (OK)
+  resolution belt: qdrg-94450178063817229903-r6 resolves uniquely in-jail (OK)
 
 === warm-up send:pty (turns flowing; resolve $JP via glob-fallback) ===
-  warm-up send out=[Message sent to sbrg-94450178063817229903-r6]
-  warm-up OK: $JP=/tmp/claude-501/sbrg-runs/94450178063817229903/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-94450178063817229903-tmp-work/ff229b4e-ca3b-4680-bcef-41997e517f4e.jsonl (urc=1)
+  warm-up send out=[Message sent to qdrg-94450178063817229903-r6]
+  warm-up OK: $JP=/tmp/claude-501/qdrg-runs/94450178063817229903/home/.claude/projects/-private-tmp-claude-501-qdrg-runs-94450178063817229903-tmp-work/ff229b4e-ca3b-4680-bcef-41997e517f4e.jsonl (urc=1)
 
 ===== send:pty ROW: target=8192 bytes marker=R6_8K_94450178063817229903 =====
   payload actual bytes=8223 (target 8192); marker=R6_8K_94450178063817229903
   verb exit=0
-  verb stdout: Message sent to sbrg-94450178063817229903-r6|
+  verb stdout: Message sent to qdrg-94450178063817229903-r6|
   verb stderr: (none)
   WENT BUSY within 12s
   user-records before=1 after=2 DELTA=1 busy_seen=1 status=idle CLASS=DELIVERED
@@ -32,7 +32,7 @@
         lorem ipsum) in between. There's no question or task in it. What would you like me to do?
       ✻ Sautéed for 7s
                                                                                                                                                      ● high · /effort
-      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-94450178063817229903-r6 ──
+      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-94450178063817229903-r6 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
@@ -40,9 +40,9 @@
 ===== send:pty ROW: target=16384 bytes marker=R6_16K_94450178063817229903 =====
   payload actual bytes=16416 (target 16384); marker=R6_16K_94450178063817229903
   verb exit=0
-  verb stdout: Message sent to sbrg-94450178063817229903-r6|
+  verb stdout: Message sent to qdrg-94450178063817229903-r6|
   verb stderr:
-    WARNING: Message sent to "sbrg-94450178063817229903-r6" but session did not go busy — it may be stuck unsubmitted in the composer.
+    WARNING: Message sent to "qdrg-94450178063817229903-r6" but session did not go busy — it may be stuck unsubmitted in the composer.
   did NOT observe busy in 12s (status=idle)
   user-records before=2 after=2 DELTA=0 busy_seen=0 status=idle CLASS=EMPTY-DROPPED
   JSONL tail (last 4 user/assistant):
@@ -55,7 +55,7 @@
       ⏺ I see your message — it starts with R6_8K_94450178063817229903_START and ends with R6_8K_94450178063817229903_END, with repeated filler text (日本語café☕ /
         lorem ipsum) in between. There's no question or task in it. What would you like me to do?
       ✻ Sautéed for 7s
-      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-94450178063817229903-r6 ──
+      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-94450178063817229903-r6 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
@@ -64,7 +64,7 @@
 ===== send:pty ROW: target=8192 bytes marker=R6_8K_94450178063817229903 =====
   payload actual bytes=8223 (target 8192); marker=R6_8K_94450178063817229903
   verb exit=0
-  verb stdout: Message sent to sbrg-94450178063817229903-r6|
+  verb stdout: Message sent to qdrg-94450178063817229903-r6|
   verb stderr: (none)
   WENT BUSY within 12s
   user-records before=1 after=2 DELTA=1 busy_seen=1 status=idle CLASS=DELIVERED
@@ -78,7 +78,7 @@
         lorem ipsum) in between. There's no question or task in it. What would you like me to do?
       ✻ Sautéed for 7s
                                                                                                                                                      ● high · /effort
-      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-94450178063817229903-r6 ──
+      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-94450178063817229903-r6 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
@@ -86,9 +86,9 @@ DELIVERED   16KB class=
 ===== send:pty ROW: target=16384 bytes marker=R6_16K_94450178063817229903 =====
   payload actual bytes=16416 (target 16384); marker=R6_16K_94450178063817229903
   verb exit=0
-  verb stdout: Message sent to sbrg-94450178063817229903-r6|
+  verb stdout: Message sent to qdrg-94450178063817229903-r6|
   verb stderr:
-    WARNING: Message sent to "sbrg-94450178063817229903-r6" but session did not go busy — it may be stuck unsubmitted in the composer.
+    WARNING: Message sent to "qdrg-94450178063817229903-r6" but session did not go busy — it may be stuck unsubmitted in the composer.
   did NOT observe busy in 12s (status=idle)
   user-records before=2 after=2 DELTA=0 busy_seen=0 status=idle CLASS=EMPTY-DROPPED
   JSONL tail (last 4 user/assistant):
@@ -101,7 +101,7 @@ DELIVERED   16KB class=
       ⏺ I see your message — it starts with R6_8K_94450178063817229903_START and ends with R6_8K_94450178063817229903_END, with repeated filler text (日本語café☕ /
         lorem ipsum) in between. There's no question or task in it. What would you like me to do?
       ✻ Sautéed for 7s
-      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-94450178063817229903-r6 ──
+      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-94450178063817229903-r6 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
@@ -110,7 +110,7 @@ EMPTY-DROPPED
 ===== send:pty ROW: target=8192 bytes marker=R6_8K_94450178063817229903 =====
   payload actual bytes=8223 (target 8192); marker=R6_8K_94450178063817229903
   verb exit=0
-  verb stdout: Message sent to sbrg-94450178063817229903-r6|
+  verb stdout: Message sent to qdrg-94450178063817229903-r6|
   verb stderr: (none)
   WENT BUSY within 12s
   user-records before=1 after=2 DELTA=1 busy_seen=1 status=idle CLASS=DELIVERED
@@ -124,7 +124,7 @@ EMPTY-DROPPED
         lorem ipsum) in between. There's no question or task in it. What would you like me to do?
       ✻ Sautéed for 7s
                                                                                                                                                      ● high · /effort
-      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-94450178063817229903-r6 ──
+      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-94450178063817229903-r6 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
@@ -132,9 +132,9 @@ DELIVERED, 16KB=
 ===== send:pty ROW: target=16384 bytes marker=R6_16K_94450178063817229903 =====
   payload actual bytes=16416 (target 16384); marker=R6_16K_94450178063817229903
   verb exit=0
-  verb stdout: Message sent to sbrg-94450178063817229903-r6|
+  verb stdout: Message sent to qdrg-94450178063817229903-r6|
   verb stderr:
-    WARNING: Message sent to "sbrg-94450178063817229903-r6" but session did not go busy — it may be stuck unsubmitted in the composer.
+    WARNING: Message sent to "qdrg-94450178063817229903-r6" but session did not go busy — it may be stuck unsubmitted in the composer.
   did NOT observe busy in 12s (status=idle)
   user-records before=2 after=2 DELTA=0 busy_seen=0 status=idle CLASS=EMPTY-DROPPED
   JSONL tail (last 4 user/assistant):
@@ -147,7 +147,7 @@ DELIVERED, 16KB=
       ⏺ I see your message — it starts with R6_8K_94450178063817229903_START and ends with R6_8K_94450178063817229903_END, with repeated filler text (日本語café☕ /
         lorem ipsum) in between. There's no question or task in it. What would you like me to do?
       ✻ Sautéed for 7s
-      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-94450178063817229903-r6 ──
+      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-94450178063817229903-r6 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
@@ -167,20 +167,20 @@ EMPTY-DROPPED)
   credentials seeded: yes
 
 === qd new (real claude) ===
-  qd new exit=0 : Started detached session "sbrg-45122178063828016721-r6"
+  qd new exit=0 : Started detached session "qdrg-45122178063828016721-r6"
   claude version in jail: 2.1.163
-  resolution belt: sbrg-45122178063828016721-r6 resolves uniquely in-jail (OK)
+  resolution belt: qdrg-45122178063828016721-r6 resolves uniquely in-jail (OK)
 
 === warm-up send:pty (turns flowing; resolve $JP via glob-fallback) ===
-  warm-up send out=[Message sent to sbrg-45122178063828016721-r6]
-  warm-up OK: $JP=/tmp/claude-501/sbrg-runs/45122178063828016721/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-45122178063828016721-tmp-work/53657ba5-ec17-4643-9ab7-251d735d1290.jsonl (urc=1)
+  warm-up send out=[Message sent to qdrg-45122178063828016721-r6]
+  warm-up OK: $JP=/tmp/claude-501/qdrg-runs/45122178063828016721/home/.claude/projects/-private-tmp-claude-501-qdrg-runs-45122178063828016721-tmp-work/53657ba5-ec17-4643-9ab7-251d735d1290.jsonl (urc=1)
 
 ===== send:pty ROW: target=12288 bytes marker=R6_12K_45122178063828016721 =====
   payload actual bytes=12320 (target 12288); marker=R6_12K_45122178063828016721
   verb exit=0
-  verb stdout: Message sent to sbrg-45122178063828016721-r6|
+  verb stdout: Message sent to qdrg-45122178063828016721-r6|
   verb stderr:
-    WARNING: Message sent to "sbrg-45122178063828016721-r6" but session did not go busy — it may be stuck unsubmitted in the composer.
+    WARNING: Message sent to "qdrg-45122178063828016721-r6" but session did not go busy — it may be stuck unsubmitted in the composer.
   did NOT observe busy in 12s (status=idle)
   user-records before=1 after=1 DELTA=0 busy_seen=0 status=idle CLASS=EMPTY-DROPPED
   JSONL tail (last 4 user/assistant):
@@ -192,7 +192,7 @@ EMPTY-DROPPED)
       ❯ Reply with exactly: AUTHOK and nothing else.
       ⏺ AUTHOK
       ✻ Sautéed for 4s
-      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-45122178063828016721-r6 ──
+      ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-45122178063828016721-r6 ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
@@ -202,9 +202,9 @@ EMPTY-DROPPED)
 ===== create ROW: qd new -p, target=16384 bytes marker=R6_CREATE16_45122178063828016721 =====
   payload actual bytes=16421
   qd new -p exit=0
-  stdout: Started detached session "sbrg-45122178063828016721-r6c"|Prompt delivered to "sbrg-45122178063828016721-r6c"|
+  stdout: Started detached session "qdrg-45122178063828016721-r6c"|Prompt delivered to "qdrg-45122178063828016721-r6c"|
   stderr: (none)
-  create session: jsonl=/tmp/claude-501/sbrg-runs/45122178063828016721/home/.claude/projects/-private-tmp-claude-501-sbrg-runs-45122178063828016721-tmp-work/d10aeba9-b005-43b6-8f99-415bc6c1246f.jsonl user-records=1 status=busy CLASS=DELIVERED
+  create session: jsonl=/tmp/claude-501/qdrg-runs/45122178063828016721/home/.claude/projects/-private-tmp-claude-501-qdrg-runs-45122178063828016721-tmp-work/d10aeba9-b005-43b6-8f99-415bc6c1246f.jsonl user-records=1 status=busy CLASS=DELIVERED
   create JSONL tail:
       [user] R6_CREATE16_45122178063828016721_START 日本語café☕ lorem ipsum dolor sit amet consectetur lor
   create zmx history tail:
@@ -212,7 +212,7 @@ EMPTY-DROPPED)
         consectetur lorem ipsum dolor sit amet consectetur  R6_CREATE16_451221780638 R6_CREATE16_45122178063828016721_END
       · Computing…
                                                                                                                                                      ● high · /effort
-      ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── sbrg-45122178063828016721-r6c ──
+      ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── qdrg-45122178063828016721-r6c ──
       ❯ 
       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
         paste again to expand

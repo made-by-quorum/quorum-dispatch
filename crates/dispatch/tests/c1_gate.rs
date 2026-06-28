@@ -61,7 +61,7 @@ use sha2::{Digest, Sha256};
 // Binary locators
 // ===========================================================================
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -184,7 +184,7 @@ impl Jail {
     fn apply_embedded(&self, cmd: &mut Command) {
         cmd.env_clear()
             .env("HOME", &self.home)
-            .env("QD_HOME", self.root.join("sbhome"))
+            .env("QD_HOME", self.root.join("qdhome"))
             .env("XDG_RUNTIME_DIR", &self.xdg_runtime)
             .env("TMPDIR", self.root.join("tmp"))
             .env("ZMX_DIR", self.root.join("zmx"))
@@ -198,7 +198,7 @@ impl Jail {
     fn apply_embedded_pty(&self, cmd: &mut CommandBuilder) {
         cmd.env_clear();
         cmd.env("HOME", &self.home);
-        cmd.env("QD_HOME", self.root.join("sbhome"));
+        cmd.env("QD_HOME", self.root.join("qdhome"));
         cmd.env("XDG_RUNTIME_DIR", &self.xdg_runtime);
         cmd.env("TMPDIR", self.root.join("tmp"));
         cmd.env("ZMX_DIR", self.root.join("zmx"));
@@ -337,7 +337,7 @@ use dispatch::mux_selector::EmbeddedEnv;
 fn embedded_env(jail: &Jail) -> EmbeddedEnv {
     EmbeddedEnv {
         xdg_runtime_dir: Some(jail.xdg_runtime.to_string_lossy().into_owned()),
-        sb_home: None,
+        qd_home: None,
         uid: 501,
     }
 }
@@ -391,7 +391,7 @@ fn forge_registry_row(jail: &Jail, name: &str, pid: u32) {
 /// the headless surface — and a no-`-p` start would even hit Fork B's
 /// refuse-no-prompt. These gate rows exercise the interactive zmx/embedded create
 /// path, so `--interactive` (the override) is inserted right after `start`. The PTY
-/// runner (`SbAttach`, real TTY) is unaffected. Behavior delta — non-TTY `qd start`
+/// runner (`QdAttach`, real TTY) is unaffected. Behavior delta — non-TTY `qd start`
 /// is headless by design now — is flagged in the WP-B-CS-1 response.
 fn with_interactive_start(args: &[&str]) -> Vec<String> {
     if args.first() == Some(&"start") {
@@ -406,8 +406,8 @@ fn with_interactive_start(args: &[&str]) -> Vec<String> {
 
 /// Run `qd <args>` (CLI, non-PTY) under the jail's embedded env. Returns
 /// (exit, stdout, stderr).
-fn run_sb(jail: &Jail, args: &[&str]) -> (i32, String, String) {
-    let mut cmd = Command::new(sb_bin());
+fn run_qd(jail: &Jail, args: &[&str]) -> (i32, String, String) {
+    let mut cmd = Command::new(qd_bin());
     cmd.args(with_interactive_start(args));
     jail.apply_embedded(&mut cmd);
     let out = cmd.output().expect("spawn qd");
@@ -419,8 +419,8 @@ fn run_sb(jail: &Jail, args: &[&str]) -> (i32, String, String) {
 }
 
 /// Run `qd <args>` with an explicit QD_MUX value + optional extra env.
-fn run_sb_env(jail: &Jail, args: &[&str], extra: &[(&str, &str)]) -> (i32, String, String) {
-    let mut cmd = Command::new(sb_bin());
+fn run_qd_env(jail: &Jail, args: &[&str], extra: &[(&str, &str)]) -> (i32, String, String) {
+    let mut cmd = Command::new(qd_bin());
     cmd.args(with_interactive_start(args));
     jail.apply_embedded(&mut cmd);
     for (k, v) in extra {
@@ -440,7 +440,7 @@ fn run_sb_env(jail: &Jail, args: &[&str], extra: &[(&str, &str)]) -> (i32, Strin
 /// the master write half for keystrokes (detach key, scroll, etc.). The ENGINE
 /// attach path (embedded_mux::attach → connect_for stdio-inherit) renders onto
 /// this PTY.
-struct SbAttach {
+struct QdAttach {
     writer: Mutex<Box<dyn Write + Send>>,
     output: Arc<Mutex<Vec<u8>>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -451,7 +451,7 @@ struct SbAttach {
     rows: u16,
 }
 
-impl SbAttach {
+impl QdAttach {
     fn spawn(jail: &Jail, name: &str, cols: u16, rows: u16) -> Self {
         Self::spawn_with_env(jail, name, cols, rows, &[])
     }
@@ -473,7 +473,7 @@ impl SbAttach {
             })
             .expect("openpty");
 
-        let mut cmd = CommandBuilder::new(sb_bin());
+        let mut cmd = CommandBuilder::new(qd_bin());
         cmd.arg("connect");
         cmd.arg(name);
         jail.apply_embedded_pty(&mut cmd);
@@ -566,7 +566,7 @@ impl SbAttach {
     }
 }
 
-impl Drop for SbAttach {
+impl Drop for QdAttach {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();

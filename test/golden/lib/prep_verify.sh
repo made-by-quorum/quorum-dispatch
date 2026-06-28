@@ -7,8 +7,8 @@
 # could be pointed at the floating shared ~/work/switchboard checkout (un-pinned)
 # or any arbitrary path, and the recording would bake un-pinned behavior.
 #
-# prep_verify_entrypoint <sb_under_test> <expected_pin>
-#   sb_under_test  — the value scenarios will run (e.g. "bun <clone>/src/index.ts"
+# prep_verify_entrypoint <qd_under_test> <expected_pin>
+#   qd_under_test  — the value scenarios will run (e.g. "bun <clone>/src/index.ts"
 #                    or a path/shim). We walk UP from the first existing path token
 #                    looking for a .prep-verified marker.
 #   expected_pin   — the ratified pin the marker must claim.
@@ -35,7 +35,7 @@ _pv_path_token() {
 prep_verify_entrypoint() {
     local sut="${1:-}" expected_pin="${2:-}"
     if [ -z "$sut" ] || [ -z "$expected_pin" ]; then
-        _pv_refuse "usage: prep_verify_entrypoint <sb_under_test> <expected_pin>"
+        _pv_refuse "usage: prep_verify_entrypoint <qd_under_test> <expected_pin>"
         return 64
     fi
     local p

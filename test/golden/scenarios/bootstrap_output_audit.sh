@@ -47,7 +47,7 @@ if [ ! -x "$QD_BIN" ]; then
     ( cd "$REPO_ROOT" && ./scripts/build-lock.sh cargo build -p qd --bin qd >/dev/null 2>&1 ) \
         || { echo "FAIL: could not build qd" >&2; exit 2; }
 fi
-export JAIL_SB_CMD="$QD_BIN"
+export JAIL_QD_CMD="$QD_BIN"
 # NOTE: the relay registration now uses the BARE `qd` command (resolved via PATH,
 # never goes stale on a binary move — relay-path hardening v2), so the recorded
 # `mcp add` argv carries `qd`, NOT this binary's absolute path. The G-B4 assertion
@@ -113,7 +113,7 @@ EOF
 chmod +x "$STUB_DIR/zmx"
 
 # Most arms run with the stubs on PATH (claude PRESENT). PATH is inherited by
-# the qd child through jail_sb. Save the original for the claude-missing arm.
+# the qd child through jail_qd. Save the original for the claude-missing arm.
 ORIG_PATH="$PATH"
 export PATH="$STUB_DIR:$PATH"
 
@@ -124,9 +124,9 @@ export PATH="$STUB_DIR:$PATH"
 OUT1="$JAIL_ROOT/run1.out"
 OUT2="$JAIL_ROOT/run2.out"
 
-jail_sb bootstrap </dev/null >"$OUT1" 2>&1
+jail_qd bootstrap </dev/null >"$OUT1" 2>&1
 RC1=$?
-jail_sb bootstrap </dev/null >"$OUT2" 2>&1
+jail_qd bootstrap </dev/null >"$OUT2" 2>&1
 RC2=$?
 
 # G-B1: exit 0 both runs.
@@ -206,7 +206,7 @@ fi
 # claude). The relay step must be a NOTICE, never a prompt/failure.
 # ===========================================================================
 OUTM="$JAIL_ROOT/runmissing.out"
-PATH="/usr/bin:/bin" jail_sb bootstrap </dev/null >"$OUTM" 2>&1
+PATH="/usr/bin:/bin" jail_qd bootstrap </dev/null >"$OUTM" 2>&1
 RCM=$?
 [ "$RCM" = "0" ] && ok "G-B6/claude-missing-exit-0" || bad "G-B6/claude-missing-exit-0 (rc=$RCM)"
 if grep -qi 'cannot configure' "$OUTM" && grep -qi '`claude` is not on PATH' "$OUTM"; then
@@ -230,7 +230,7 @@ if command -v python3 >/dev/null 2>&1; then
     OUT4="$JAIL_ROOT/run4.out"
     # PATH already has the stub dir prepended (ORIG_PATH restore happened only
     # for the G-B6 sub-shell). Drive bootstrap under a PTY (isatty → offers fire).
-    python3 - "$JAIL_SB_CMD" "$OUT4" <<'PYEOF'
+    python3 - "$JAIL_QD_CMD" "$OUT4" <<'PYEOF'
 import os, pty, sys, time, signal
 qd, outpath = sys.argv[1], sys.argv[2]
 out = open(outpath, "wb")
@@ -312,7 +312,7 @@ PYEOF
     # G-B4 (configured skips offers): re-run NON-interactively. The stub now
     # reports the relay registered (state present) and the init line is present.
     OUT5="$JAIL_ROOT/run5.out"
-    jail_sb bootstrap </dev/null >"$OUT5" 2>&1
+    jail_qd bootstrap </dev/null >"$OUT5" 2>&1
     RC5=$?
     [ "$RC5" = "0" ] && ok "G-B4/configured-rerun-exit-0" || bad "G-B4/configured-rerun-exit-0 (rc=$RC5)"
     if grep -qi 'relay: configured' "$OUT5"; then
@@ -347,7 +347,7 @@ cat > "$RELAY_DIR/seeded.json" <<EOF
 {"port": $JAIL_RELAY_PORT, "sessionId": "${JAIL_PREFIX}seed", "pid": 0, "status": "ok"}
 EOF
 OUT6="$JAIL_ROOT/run6.out"
-jail_sb bootstrap </dev/null >"$OUT6" 2>&1
+jail_qd bootstrap </dev/null >"$OUT6" 2>&1
 RC6=$?
 [ "$RC6" = "0" ] && ok "health/seeded-run-exit-0" || bad "health/seeded-run-exit-0 (rc=$RC6)"
 if grep -qi 'server is up' "$OUT6"; then

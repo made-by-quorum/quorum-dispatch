@@ -10,8 +10,8 @@
 # (== the recorded Linux test uid, established W1 Step-1). Captured 2026-06-05.
 #
 # RIDER 1: re-derived ONLY from committed raws. Token values per row:
-#   macOS resolution : JAIL_ROOT=/tmp/claude-501/sbrg-runs/73394178063451110570  runid=73394178063451110570
-#   Linux resolution : JAIL_ROOT=/run/user/501/sbrg-runs/205321178063567617624  runid=205321178063567617624  uid=501
+#   macOS resolution : JAIL_ROOT=/tmp/claude-501/qdrg-runs/73394178063451110570  runid=73394178063451110570
+#   Linux resolution : JAIL_ROOT=/run/user/501/qdrg-runs/205321178063567617624  runid=205321178063567617624  uid=501
 #   (8 presence/contract rows: raws already abstracted; root/runid/port irrelevant)
 #
 === RIDER 1: full re-derivation (NEW normalize_all over each committed raw) ===

@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
-[ -n "${SBRL_STUB_NAME:-}" ] && name="$SBRL_STUB_NAME"
+[ -n "${QDRL_STUB_NAME:-}" ] && name="$QDRL_STUB_NAME"
 [ -n "$name" ] || name="stub-session"
 
 SESS_DIR="$HOME/.claude/sessions"

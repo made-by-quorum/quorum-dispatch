@@ -170,7 +170,7 @@ main() {
 
     # Staging dir for the double-record (OUTSIDE fixtures/ — fixture_admit places).
     local staging
-    staging="$(mktemp -d "${TMPDIR:-/tmp}/sbrec-stage.XXXXXX")"
+    staging="$(mktemp -d "${TMPDIR:-/tmp}/qdrec-stage.XXXXXX")"
     mkdir -p "$staging/raw" "$staging/normalized"
     # Use a SHELL-GLOBAL for the trap (the EXIT trap fires after main() returns,
     # when a `local staging` would be unbound under set -u). _REC_STAGING is global.
@@ -204,7 +204,7 @@ main() {
             printf '. "$HERE/lib/check_python.sh"\n'
             # A5 RECORD_RUNID re-thread (merge of the pre-double-record feature):
             # zmx caps session names at 20 bytes; the default jail runid yields a
-            # `sbrg-<runid>-` prefix too long for live rows that spawn sbrg-
+            # `qdrg-<runid>-` prefix too long for live rows that spawn qdrg-
             # sessions (kill/ping). A caller passes RECORD_RUNID=<short> (e.g. 4
             # chars) to keep names under the cap; the jail sanitizes it.
             printf 'jail_establish %q || { printf "[record] jail refused\\n" >&2; exit 3; }\n' "${RECORD_RUNID:-}"
@@ -218,7 +218,7 @@ main() {
                 printf 'stub_install || { printf "[record] stub install failed\\n" >&2; exit 3; }\n'
             fi
             printf 'export QD_UNDER_TEST=%q\n' "$sut"
-            printf 'export JAIL_SB_CMD=%q\n' "${JAIL_SB_CMD:-qd}"
+            printf 'export JAIL_QD_CMD=%q\n' "${JAIL_QD_CMD:-qd}"
             printf 'SCN_OUT="$JAIL_ROOT/rec.raw"\n'
             printf '. %q\n' "$scn"
             printf 'scn_run\n'

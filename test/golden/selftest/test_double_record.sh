@@ -69,7 +69,7 @@ run_record() {
     PINNED_TS_COMMIT="$FAKEPIN" \
     QD_UNDER_TEST="$SUT" \
     RECORD_FIXTURES_ROOT="$FXROOT" \
-    JAIL_SB_CMD="/bin/true" \
+    JAIL_QD_CMD="/bin/true" \
         bash "$RECORD" --scenario "$scn"
 }
 

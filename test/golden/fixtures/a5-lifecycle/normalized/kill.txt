@@ -1,17 +1,17 @@
 # RECORDED-FROM pin=8c59ec4 verb=kill (wart-wave re-mint: ADD-15 W3 direct-kill + W4 line; belt pre-asserts destructive runs)
-$ qd kill --force sbrg-nope (no such session)
-No session matching "sbrg-<RUNID>-nope"
+$ qd kill --force qdrg-nope (no such session)
+No session matching "qdrg-<RUNID>-nope"
 exit=1
-$ qd kill sbrg-nope </dev/null (no --force, non-TTY, no such session)
-No session matching "sbrg-<RUNID>-nope"
+$ qd kill qdrg-nope </dev/null (no --force, non-TTY, no such session)
+No session matching "qdrg-<RUNID>-nope"
 exit=1
-$ qd kill sbrg-k1 </dev/null (LIVE, no --force, non-TTY — W3 direct kill)
-killed sbrg-<RUNID>-k1 (zmx sbrg-<RUNID>-k1, pid <PID>)
+$ qd kill qdrg-k1 </dev/null (LIVE, no --force, non-TTY — W3 direct kill)
+killed qdrg-<RUNID>-k1 (zmx qdrg-<RUNID>-k1, pid <PID>)
 exit=0
-$ qd kill --force sbrg-k2 (LIVE, deprecated no-op flag accepted)
-killed sbrg-<RUNID>-k2 (zmx sbrg-<RUNID>-k2, pid <PID>)
+$ qd kill --force qdrg-k2 (LIVE, deprecated no-op flag accepted)
+killed qdrg-<RUNID>-k2 (zmx qdrg-<RUNID>-k2, pid <PID>)
 exit=0
-$ qd kill sbrg-amb (ambiguous prefix — LOUD refusal, kills neither)
+$ qd kill qdrg-amb (ambiguous prefix — LOUD refusal, kills neither)
 ambiguous_exit=1
 ambiguous_loud=1
 ambiguous_survivors=2

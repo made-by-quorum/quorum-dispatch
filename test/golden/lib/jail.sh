@@ -25,7 +25,7 @@
 #   jail_guard_name <name>         — refuse any name not matching $JAIL_PREFIX.
 #   jail_register_pid <pid> <name> — whitelist a PID as a prefixed-session member.
 #   jail_raw_kill <pid>            — kill a PID only if registered.
-#   jail_sb <args...>             — run qd-under-test inside the jail env.
+#   jail_qd <args...>             — run qd-under-test inside the jail env.
 #   jail_zmx <args...>            — run zmx inside the jail env.
 #   jail_kill_session <name>       — kill a session by name (guarded + in-jail).
 #   jail_require_destructive_ok    — Lima destructive gate (mirror of safety.sh).
@@ -44,9 +44,9 @@
 # ---------------------------------------------------------------------------
 
 # The qd-under-test binary/entrypoint. Defaults to the TS qd for dry-runs; Part 2
-# / the SBQA swap points this at the Rust binary. Overridable, but it is only ever
-# invoked through the jail env (jail_sb), never bare.
-JAIL_SB_CMD="${JAIL_SB_CMD:-qd}"
+# / the QDQA swap points this at the Rust binary. Overridable, but it is only ever
+# invoked through the jail env (jail_qd), never bare.
+JAIL_QD_CMD="${JAIL_QD_CMD:-qd}"
 JAIL_ZMX_CMD="${JAIL_ZMX_CMD:-zmx}"
 
 # ---------------------------------------------------------------------------
@@ -84,13 +84,13 @@ jail_establish() {
     fi
 
     JAIL_RUNID="$runid"
-    JAIL_PREFIX="sbrg-${runid}-"
+    JAIL_PREFIX="qdrg-${runid}-"
 
     # Create the per-run root under the system temp dir, in a NEW subtree we own.
     # We deliberately do NOT reuse $TMPDIR for state — we mint a fresh dir and
     # override TMPDIR to point inside it.
     local sys_tmp="${TMPDIR:-/tmp}"
-    local base="${sys_tmp%/}/sbrg-runs"
+    local base="${sys_tmp%/}/qdrg-runs"
     if ! mkdir -p "$base" 2>/dev/null; then
         _jail_refuse "cannot create jail base dir: $base"
         return 1
@@ -121,7 +121,7 @@ jail_establish() {
 
     mkdir -p \
         "$JAIL_ROOT/home" \
-        "$JAIL_ROOT/sb_home" \
+        "$JAIL_ROOT/qd_home" \
         "$JAIL_ROOT/zmx" \
         "$JAIL_ROOT/xdg_config" \
         "$JAIL_ROOT/xdg_data" \
@@ -136,7 +136,7 @@ jail_establish() {
         }
     chmod 700 "$JAIL_ROOT/xdg_runtime" 2>/dev/null || true
 
-    # Export the hermetic env. Every qd/zmx invocation inherits these via jail_sb /
+    # Export the hermetic env. Every qd/zmx invocation inherits these via jail_qd /
     # jail_zmx. Exported here so scenarios run under them.
     #
     # HOME is LOAD-BEARING: the TS qd derives its registry (~/.claude/sessions),
@@ -146,7 +146,7 @@ jail_establish() {
     # (Empirically confirmed 2026-06-04: `qd ls --json` returned real org sessions
     # until HOME was jailed.) QD_HOME is kept too in case the Rust port honors it.
     export HOME="$JAIL_ROOT/home"
-    export QD_HOME="$JAIL_ROOT/sb_home"
+    export QD_HOME="$JAIL_ROOT/qd_home"
     export ZMX_DIR="$JAIL_ROOT/zmx"
     export XDG_CONFIG_HOME="$JAIL_ROOT/xdg_config"
     export XDG_DATA_HOME="$JAIL_ROOT/xdg_data"
@@ -231,10 +231,10 @@ jail_assert_established() {
 
     # JAIL_ROOT must sit under a recognizable sandbox base (POSITIVE marker).
     case "$JAIL_ROOT" in
-        */sbrg-runs/*) ;;
+        */qdrg-runs/*) ;;
         *)
             ok=0
-            reasons="${reasons}  JAIL_ROOT '$JAIL_ROOT' is not under an sbrg-runs/ sandbox base\n"
+            reasons="${reasons}  JAIL_ROOT '$JAIL_ROOT' is not under an qdrg-runs/ sandbox base\n"
             ;;
     esac
 
@@ -383,7 +383,7 @@ jail__resolve_target_paths() {
     # jailed HOME means this reads OUR registry; a colliding name that the engine
     # resolves via the legacy /tmp tier would surface a /tmp path here.
     local json
-    json="$("$JAIL_SB_CMD" info "$name" --json 2>/dev/null)"
+    json="$("$JAIL_QD_CMD" info "$name" --json 2>/dev/null)"
     if [ -n "$json" ]; then
         # Pull "/...":  quoted absolute paths out of the JSON (portable sed; no jq).
         printf '%s\n' "$json" \
@@ -459,7 +459,7 @@ jail_assert_target_resolves_in_jail() {
 
 # --- A4's parallel belt (kept on merge: same orc carry, independent impl; its
 # callers live in dryrun/a4-*.sh + A4 scenarios; ours is wired into
-# jail_kill_session/teardown/scn_sb_target). Both fail closed. ---
+# jail_kill_session/teardown/scn_qd_target). Both fail closed. ---
 # jail_assert_resolves_in_jail <name> — RESOLUTION BELT (A4 finding, orc-2 ruling
 # 2026-06-05: relay-1780630993819-7 item 3b).
 #
@@ -467,7 +467,7 @@ jail_assert_target_resolves_in_jail() {
 # design (Bug-D cross-dir discovery — production semantics, preserved per the
 # A-track ruling). Inside a jail that means `qd ls`/resolve can SEE — and a
 # kill/send could in principle RESOLVE — the host's real org sessions. The
-# sbrg- prefix discipline (jail_guard_name) is the first wall; this belt is the
+# qdrg- prefix discipline (jail_guard_name) is the first wall; this belt is the
 # SECOND: before any destructive or session-targeting live row (kill/send/wait)
 # acts on <name>, assert the name resolves to a zmx session whose socket dir
 # lives under JAIL_ROOT. Fail CLOSED on miss, ambiguity, or an out-of-jail dir.
@@ -504,7 +504,7 @@ jail_assert_resolves_in_jail() {
 # per-target belt cannot cover targets the verb discovers itself. This belt runs
 # the verb in --dry-run (READ-ONLY: the verb's `if !dry_run` guards every
 # kill/tombstone), parses the planned reap targets, and REFUSES (returns 1) unless
-# EVERY planned zmx-reap target is BOTH sbrg-prefixed AND resolves inside the
+# EVERY planned zmx-reap target is BOTH qdrg-prefixed AND resolves inside the
 # jailed zmx dir. A single out-of-jail planned target fails the whole belt closed.
 #
 # STANDING CONSTRAINT (orc-3): destructive `qd reconcile` on macOS is OFF
@@ -513,12 +513,12 @@ jail_assert_resolves_in_jail() {
 # phases from re-adding a macOS live sweep.
 #
 # Args: $1 = the qd-under-test verb invocation that supports --dry-run, default
-#       "reconcile". The caller's jail env (jail_sb) is used.
+#       "reconcile". The caller's jail env (jail_qd) is used.
 jail_sweep_belt_ok() {
     jail_assert_established || return 1
     local verb="${1:-reconcile}"
     local plan line name bad=0 saw_reap=0
-    plan="$("$JAIL_SB_CMD" "$verb" --dry-run 2>/dev/null)" || return 1
+    plan="$("$JAIL_QD_CMD" "$verb" --dry-run 2>/dev/null)" || return 1
     # Each `  reap-wrapper: zmx "<name>" (...)` line names a zmx target to reap.
     # (I1 `tombstone:` targets are pid-keyed registry files under the jailed HOME —
     # HOME-bounded, never the /tmp tier — so the residual exposure is the I3 reap.)
@@ -583,10 +583,10 @@ jail_raw_kill() {
 }
 
 # ---------------------------------------------------------------------------
-# jail_sb / jail_zmx — invoke qd / zmx under the hermetic env. Always re-asserts.
-jail_sb() {
+# jail_qd / jail_zmx — invoke qd / zmx under the hermetic env. Always re-asserts.
+jail_qd() {
     jail_assert_established || return 1
-    "$JAIL_SB_CMD" "$@"
+    "$JAIL_QD_CMD" "$@"
 }
 
 jail_zmx() {
@@ -605,7 +605,7 @@ jail_kill_session() {
     jail_assert_established || return 1
     jail_guard_name "$name" || return 1
     jail_assert_target_resolves_in_jail "$name" || return 1
-    "$JAIL_SB_CMD" kill "$name" 2>/dev/null || true
+    "$JAIL_QD_CMD" kill "$name" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -618,7 +618,7 @@ jail_teardown() {
     # If establish never completed (or HOME is not jail-rooted), those invocations
     # would read the REAL org registry / real zmx tier — the A6 set-u incident
     # mechanism (reproduced + root-caused 2026-06-05, A7 journal). Refuse the
-    # env-dependent steps; step 3 (exact registered PIDs) and the sbrg-guarded rm
+    # env-dependent steps; step 3 (exact registered PIDs) and the qdrg-guarded rm
     # remain available either way.
     local _jail_env_ok=1
     if [ "${_JAIL_ESTABLISHED:-0}" != "1" ]; then
@@ -640,9 +640,9 @@ jail_teardown() {
     #    scenario was hard-killed mid-flight before its own cleanup ran). Every
     #    name here is necessarily under JAIL_PREFIX because the jail's registry is
     #    hermetic, but jail_kill_session re-guards the prefix anyway (fail-safe).
-    if command -v "$JAIL_SB_CMD" >/dev/null 2>&1 || [ -n "${JAIL_SB_CMD:-}" ]; then
+    if command -v "$JAIL_QD_CMD" >/dev/null 2>&1 || [ -n "${JAIL_QD_CMD:-}" ]; then
         local names n
-        names="$("$JAIL_SB_CMD" ls --all --short 2>/dev/null || true)"
+        names="$("$JAIL_QD_CMD" ls --all --short 2>/dev/null || true)"
         for n in $names; do
             case "$n" in
                 "$JAIL_PREFIX"*) jail_kill_session "$n" >/dev/null 2>&1 || true ;;
@@ -689,7 +689,7 @@ jail_teardown() {
     fi
     # Only remove a dir that is clearly our sandbox.
     case "$JAIL_ROOT" in
-        */sbrg-runs/*) rm -rf "$JAIL_ROOT" 2>/dev/null || true ;;
+        */qdrg-runs/*) rm -rf "$JAIL_ROOT" 2>/dev/null || true ;;
         *) _jail_refuse "jail_teardown: refusing to rm non-sandbox JAIL_ROOT '$JAIL_ROOT'" ;;
     esac
     # Restore the real HOME so the calling shell is not left pointing at a deleted

@@ -241,7 +241,7 @@ secret_scan_selftest() {
     # very placeholder the corpus relies on.
     mkdir -p "$root/clean"
     printf 'openrouter-key: sk-or-FAKE-0000\n' > "$root/clean/masked.txt"
-    printf 'killed sbrg-x-k1 (zmx sbrg-x-k1, pid 12345)\nexit 0\n' > "$root/clean/kill.txt"
+    printf 'killed qdrg-x-k1 (zmx qdrg-x-k1, pid 12345)\nexit 0\n' > "$root/clean/kill.txt"
     if scan_secrets_path "$root/clean" >/dev/null 2>&1; then
         rc_clean=1   # clean PASSED — GOOD
     else

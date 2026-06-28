@@ -24,8 +24,8 @@ visibility feature is a C2 decision WITH Pete (a `--json` contract surface, ADD-
 
 ### 2. Embedded state dir (ADD-14-compliant)
 
-Engine resolution `resolve_qrmux_dir`: `$XDG_RUNTIME_DIR/qrmux` else `<sbHome>/mux` where
-`sbHome = QD_HOME || $HOME/.quorum/dispatch` (the engine's `SbPaths::from_home_env` seam). NO /tmp tier.
+Engine resolution `resolve_qrmux_dir`: `$XDG_RUNTIME_DIR/qrmux` else `<qdHome>/mux` where
+`qdHome = QD_HOME || $HOME/.quorum/dispatch` (the engine's `QdPaths::from_home_env` seam). NO /tmp tier.
 sun_path-length guard at resolve with a named remedy (set XDG_RUNTIME_DIR or shorten
 QD_HOME). The engine-resolved dir is the single source of truth: passed per-call into the
 qrmux client ops AND propagated to the daemon via `server --socket-dir` argv — daemon binds
@@ -34,7 +34,7 @@ gate row G-CRUD).
 
 **Standalone qrmux CLI fallback (checkpoint rider R-B, ruled):** ADD-14 extends to every
 shipped binary — qrmux's own `socket.rs` fallback changed from `/tmp/qrmux-{uid}` to
-`$XDG_RUNTIME_DIR/qrmux` else `<sbHome>/mux`, **honoring QD_HOME** (implementer choice,
+`$XDG_RUNTIME_DIR/qrmux` else `<qdHome>/mux`, **honoring QD_HOME** (implementer choice,
 ratified here): engine and standalone agree fully; a relocated QD_HOME moves the mux dir
 with it; QD_HOME-only jails stay hermetic. D-SOCKDIR is therefore a NON-divergence record.
 
@@ -93,6 +93,6 @@ unchanged.
 
 The per-session daemon split (ADR-0014) changes the TOPOLOGY (one daemon per session,
 `<dir>/<name>.sock`) but NOT this ADR's dir-resolution contract: the two-tier
-XDG/sbHome resolution, QD_HOME honoring, ADD-14 no-/tmp-writes, and the whole-world
+XDG/qdHome resolution, QD_HOME honoring, ADD-14 no-/tmp-writes, and the whole-world
 backend rule are all unmodified. The v2 skew-window note above generalizes per-session
 ("stale qrmux daemon for session '<name>' at <dir>; kill or restart THAT session").

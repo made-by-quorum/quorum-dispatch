@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dispatch::effects::MapEnv;
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::provider::acp::{AcpClient, AcpEvent, AcpHost, AcpTurnCompletion, StopReason};
 use dispatch::provider::acp::{Confidence, TerminalReason};
 use dispatch::provider::{provider_for, InjectError, ProviderFx, SessionKey};
@@ -198,7 +198,7 @@ fn acp_host_queue_overflow_honors_configured_capacity() {
     let session = host.new_session(&tmp.path().to_string_lossy()).expect("session/new");
 
     let env = MapEnv::default();
-    let paths = SbPaths::from_home(tmp.path());
+    let paths = QdPaths::from_home(tmp.path());
     let fx = ProviderFx {
         env: &env,
         paths: &paths,
@@ -288,7 +288,7 @@ fn acp_cc_live_full_lifecycle() {
     // --- Drive the PROVIDER SEAM: boot readiness = the ACP initialize handshake. ---
     let provider = provider_for("acp/claude-code").expect("acp/claude-code is registered");
     let env = MapEnv::default();
-    let paths = SbPaths::from_home(work.path());
+    let paths = QdPaths::from_home(work.path());
     let fx = ProviderFx {
         env: &env,
         paths: &paths,

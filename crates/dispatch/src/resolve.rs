@@ -135,7 +135,7 @@ pub fn resolve_session_with_liveness<'a>(
     if crate::idstore::is_valid_id(&q) {
         let id_match: Vec<&Session> = sessions
             .iter()
-            .filter(|s| s.sb_id.as_deref() == Some(q.as_str()))
+            .filter(|s| s.qd_id.as_deref() == Some(q.as_str()))
             .collect();
         if !id_match.is_empty() {
             let name_shadow: Vec<&Session> = sessions
@@ -227,15 +227,15 @@ pub fn resolve_session_with_liveness<'a>(
     // query (e.g. carrying 0/1/o/l or a hyphen) skips this tier entirely and
     // falls through to the UUID tier below.
     if q.chars().count() >= 2 && crate::idstore::is_alphabet_prefix(&q) {
-        let sbid_prefix: Vec<&Session> = sessions
+        let qdid_prefix: Vec<&Session> = sessions
             .iter()
-            .filter(|s| s.sb_id.as_deref().is_some_and(|id| id.starts_with(&q)))
+            .filter(|s| s.qd_id.as_deref().is_some_and(|id| id.starts_with(&q)))
             .collect();
-        if sbid_prefix.len() == 1 {
-            return Resolution::One(sbid_prefix[0]);
+        if qdid_prefix.len() == 1 {
+            return Resolution::One(qdid_prefix[0]);
         }
-        if sbid_prefix.len() > 1 {
-            return Resolution::Many(sbid_prefix);
+        if qdid_prefix.len() > 1 {
+            return Resolution::Many(qdid_prefix);
         }
     }
 
@@ -373,7 +373,7 @@ mod tests {
             user_named: None,
             session_id: session_id.to_string(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status,
             zmx_name: None,
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn stable_id_full_exact_resolves() {
         let mut a = base("aaa", SessionStatus::Idle);
-        a.sb_id = Some("ab3kx9mq".into());
+        a.qd_id = Some("ab3kx9mq".into());
         let b = base("bbb", SessionStatus::Idle);
         let sessions = vec![a, b];
         assert_eq!(one_id(&resolve_session("ab3kx9mq", &sessions)), "aaa");
@@ -454,14 +454,14 @@ mod tests {
     #[test]
     fn stable_id_full_exact_is_case_insensitive() {
         let mut a = base("aaa", SessionStatus::Idle);
-        a.sb_id = Some("ab3kx9mq".into());
+        a.qd_id = Some("ab3kx9mq".into());
         let sessions = vec![a];
         assert_eq!(one_id(&resolve_session("AB3KX9MQ", &sessions)), "aaa");
     }
 
     #[test]
     fn stable_id_full_miss_falls_through_to_later_tiers() {
-        // A valid-shaped 8-char id that matches NO sb_id must keep falling: here
+        // A valid-shaped 8-char id that matches NO qd_id must keep falling: here
         // it lands on the session-UUID prefix tier (the uuid starts with it).
         let a = base("ab3kx9mq-uuid-rest", SessionStatus::Cold);
         let sessions = vec![a];
@@ -473,12 +473,12 @@ mod tests {
 
     #[test]
     fn stable_id_full_duplicate_rows_are_many() {
-        // Two joined rows carrying the SAME sb_id (impossible by construction;
+        // Two joined rows carrying the SAME qd_id (impossible by construction;
         // defense in depth) → loud Many under the status-only view.
         let mut a = base("aaa", SessionStatus::Idle);
-        a.sb_id = Some("ab3kx9mq".into());
+        a.qd_id = Some("ab3kx9mq".into());
         let mut b = base("bbb", SessionStatus::Idle);
-        b.sb_id = Some("ab3kx9mq".into());
+        b.qd_id = Some("ab3kx9mq".into());
         let sessions = vec![a, b];
         match resolve_session("ab3kx9mq", &sessions) {
             Resolution::Many(v) => assert_eq!(v.len(), 2),
@@ -504,9 +504,9 @@ mod tests {
     #[test]
     fn stable_id_prefix_unambiguous_resolves() {
         let mut a = base("aaa", SessionStatus::Idle);
-        a.sb_id = Some("ab3kx9mq".into());
+        a.qd_id = Some("ab3kx9mq".into());
         let mut b = base("bbb", SessionStatus::Idle);
-        b.sb_id = Some("cd47qrst".into());
+        b.qd_id = Some("cd47qrst".into());
         let sessions = vec![a, b];
         assert_eq!(one_id(&resolve_session("ab", &sessions)), "aaa");
         assert_eq!(one_id(&resolve_session("AB3", &sessions)), "aaa");
@@ -521,7 +521,7 @@ mod tests {
         let mut a = base("aaa", SessionStatus::Idle);
         a.pid = Some(23);
         let mut b = base("bbb", SessionStatus::Idle);
-        b.sb_id = Some("23abcdef".into());
+        b.qd_id = Some("23abcdef".into());
         let sessions = vec![a, b];
         // "23" is both a live PID and an id prefix → the PID wins, by design.
         assert_eq!(one_id(&resolve_session("23", &sessions)), "aaa");
@@ -535,9 +535,9 @@ mod tests {
     #[test]
     fn stable_id_prefix_ambiguous_is_loud_many() {
         let mut a = base("aaa", SessionStatus::Idle);
-        a.sb_id = Some("ab3kx9mq".into());
+        a.qd_id = Some("ab3kx9mq".into());
         let mut b = base("bbb", SessionStatus::Idle);
-        b.sb_id = Some("ab47qrst".into());
+        b.qd_id = Some("ab47qrst".into());
         let sessions = vec![a, b];
         match resolve_session("ab", &sessions) {
             Resolution::Many(v) => assert_eq!(v.len(), 2),
@@ -549,9 +549,9 @@ mod tests {
 
     #[test]
     fn stable_id_prefix_miss_falls_through_to_uuid_tier() {
-        // No sb_id starts with "de"; the provider UUID does → UUID tier resolves.
+        // No qd_id starts with "de"; the provider UUID does → UUID tier resolves.
         let mut a = base("deadbeef-1234", SessionStatus::Cold);
-        a.sb_id = Some("ab3kx9mq".into());
+        a.qd_id = Some("ab3kx9mq".into());
         let sessions = vec![a];
         assert_eq!(one_id(&resolve_session("de", &sessions)), "deadbeef-1234");
     }
@@ -561,7 +561,7 @@ mod tests {
         // "10ab" carries 0/1 (not in the id alphabet) → skips the stable-id
         // prefix tier entirely and falls through to the UUID-prefix tier.
         let mut a = base("10abcdef-9999", SessionStatus::Cold);
-        a.sb_id = Some("ab3kx9mq".into());
+        a.qd_id = Some("ab3kx9mq".into());
         let sessions = vec![a];
         assert_eq!(one_id(&resolve_session("10ab", &sessions)), "10abcdef-9999");
     }
@@ -573,7 +573,7 @@ mod tests {
         let mut named = base("named-uuid", SessionStatus::Idle);
         named.name = Some("ab".into());
         let mut by_id = base("id-uuid", SessionStatus::Idle);
-        by_id.sb_id = Some("ab3kx9mq".into());
+        by_id.qd_id = Some("ab3kx9mq".into());
         let sessions = vec![named, by_id];
         assert_eq!(one_id(&resolve_session("ab", &sessions)), "named-uuid");
     }
@@ -588,7 +588,7 @@ mod tests {
         // owner (the pre-fix behavior made Y unaddressable by its own unique
         // name and sent `stop <query>` to X). Case-insensitive on both sides.
         let mut id_owner = base("uuid-x", SessionStatus::Idle);
-        id_owner.sb_id = Some("fz2p89tv".into());
+        id_owner.qd_id = Some("fz2p89tv".into());
         id_owner.name = Some("first".into());
         let mut name_owner = base("uuid-y", SessionStatus::Idle);
         name_owner.name = Some("FZ2P89TV".into()); // exact name, case-folded
@@ -608,7 +608,7 @@ mod tests {
         // The SAME session carrying the query as both its id and its name is
         // not ambiguous — one referent, One.
         let mut s = base("uuid-x", SessionStatus::Idle);
-        s.sb_id = Some("fz2p89tv".into());
+        s.qd_id = Some("fz2p89tv".into());
         s.name = Some("fz2p89tv".into());
         let sessions = vec![s];
         assert_eq!(one_id(&resolve_session("fz2p89tv", &sessions)), "uuid-x");
@@ -621,7 +621,7 @@ mod tests {
         // must disambiguate — rename, or use the other token). This pins that
         // the fix did not bolt the pid-aware refinement onto this case.
         let mut id_owner = base("uuid-x", SessionStatus::Cold);
-        id_owner.sb_id = Some("fz2p89tv".into());
+        id_owner.qd_id = Some("fz2p89tv".into());
         let mut name_owner = base("uuid-y", SessionStatus::Busy);
         name_owner.name = Some("fz2p89tv".into());
         let sessions = vec![id_owner, name_owner];
@@ -685,11 +685,11 @@ mod tests {
         // truly-alive session.
         let mut alive = base("alive-uuid", SessionStatus::Idle);
         alive.name = Some("orc-13".into());
-        alive.sb_id = Some("ab3kx9mq".into());
+        alive.qd_id = Some("ab3kx9mq".into());
         alive.pid = Some(100);
         let mut stale = base("stale-uuid", SessionStatus::Idle);
         stale.name = Some("orc-13".into());
-        stale.sb_id = Some("ab3kx9mq".into()); // duplicate row, same stable id
+        stale.qd_id = Some("ab3kx9mq".into()); // duplicate row, same stable id
         stale.pid = Some(200); // status still Idle, but its process is DEAD
         let sessions = vec![stale, alive];
 

@@ -4,8 +4,8 @@
      Running unittests src/lib.rs (target/debug/deps/qd-9b6baa9dc17fbf4f)
 test backends::tests::unknown_name_message_carries_no_values ... ok
 test bootstrap::tests::bootstrap_idempotent_same_state_both_runs ... ok
-test bootstrap::tests::paths_default_to_home_dot_sb ... ok
-test bootstrap::tests::paths_honor_sb_home_override ... ok
+test bootstrap::tests::paths_default_to_home_dot_qd ... ok
+test bootstrap::tests::paths_honor_qd_home_override ... ok
 test codes::tests::same_id_reuses_code_no_offset_bump ... ok
 test codes::tests::deterministic_same_input_same_codes ... ok
 test create::tests::name_reject_plain_names_unaffected ... ok
@@ -33,9 +33,9 @@ test kill::tests::no_target_when_no_name_and_no_pid ... ok
 test kill::tests::fallback2_skipped_when_name_already_resolved ... ok
 test launch::tests::build_new_extra_args_name_first_then_opts_then_passthrough ... ok
 test launch::tests::session_env_file_path_is_home_rooted ... ok
-test paths::tests::empty_sb_home_falls_back_to_default ... ok
+test paths::tests::empty_qd_home_falls_back_to_default ... ok
 test paths::tests::from_home_env_default_state_dir ... ok
-test paths::tests::from_home_env_honors_sb_home_override ... ok
+test paths::tests::from_home_env_honors_qd_home_override ... ok
 test ping::tests::single_ambiguous_name_is_error_exit_3 ... ok
 test ping::tests::prefix_filters_by_name_prefix_only ... ok
 test ping::tests::single_ambiguous_name_json_lists_matches ... ok
@@ -51,11 +51,11 @@ test resume::tests::empty_name_rejected ... ok
 test resume::tests::empty_opt_and_name_fall_through ... ok
 test resume::tests::session_name_when_no_opt ... ok
 test resume::tests::zmx_name_opt_wins ... ok
-test qrmux_dir::tests::empty_sb_home_falls_back_to_default ... ok
+test qrmux_dir::tests::empty_qd_home_falls_back_to_default ... ok
 test qrmux_dir::tests::tier1_xdg_runtime_dir_wins ... test events::tests::events_test_child ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 697 filtered out; finished in 0.02s
-test qrmux_dir::tests::tier2_sb_home_default_under_home ... ok
-test qrmux_dir::tests::tier2_sb_home_only_jail ... ok
+test qrmux_dir::tests::tier2_qd_home_default_under_home ... ok
+test qrmux_dir::tests::tier2_qd_home_only_jail ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 697 filtered out; finished in 0.02s
 test stray::tests::two_procs_same_dir_take_distinct_transcripts ... ok
 test stray::tests::two_transcripts_same_dir_most_recent_wins ... ok
@@ -68,11 +68,11 @@ test cli::tests::whoami_alias_name_parses ... ok
 test verbs::lifecycle::tests::deliver_outcome_accepted_is_0 ... ok
 test verbs::lifecycle::tests::deliver_outcome_pidfile_missing_is_1_not_10 ... ok
 test verbs::lifecycle::tests::deliver_outcome_stalled_is_10 ... ok
-test verbs::mark::tests::marks_path_default_under_home_dot_sb_state ... ok
-test verbs::mark::tests::marks_path_honors_sb_home_override ... ok
+test verbs::mark::tests::marks_path_default_under_home_dot_qd_state ... ok
+test verbs::mark::tests::marks_path_honors_qd_home_override ... ok
 test verbs::mark::tests::marks_path_none_when_home_unset ... ok
 test verbs::resume::tests::resume_boot_unconfirmed_line_is_byte_identical_both_phases ... ok
-test verbs::mark::tests::marks_land_under_sb_home_when_set_else_home_dot_sb ... ok
+test verbs::mark::tests::marks_land_under_qd_home_when_set_else_home_dot_qd ... ok
 test result: ok. 90 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
      Running tests/ack2_gate.rs (target/debug/deps/ack2_gate-8a92259c94185d5f)
 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.79s

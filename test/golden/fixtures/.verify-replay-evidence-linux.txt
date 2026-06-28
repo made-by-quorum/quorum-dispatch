@@ -10,7 +10,7 @@
 #
 # Recorder rooted the jail under /run/user/501 (TMPDIR=/run/user/501) so the XDG
 # tier hits the REAL Linux runtime tmpfs while every resolved socket dir stays
-# under JAIL_ROOT (sbrg-prefixed) — hermetic, zero leftovers.
+# under JAIL_ROOT (qdrg-prefixed) — hermetic, zero leftovers.
 #
 zmx_dir_resolution_linux: [verify] PASS: zmx-dir-resolution-linux
   case=XDG_RUNTIME_DIR_tier  resolved==expected (<XDG_RUNTIME>/zmx)

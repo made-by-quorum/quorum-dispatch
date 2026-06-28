@@ -3,7 +3,7 @@
 #
 # Drives the spec §7 G-A3 (fault-model) + G-A6 (opaque-payload / usage / dirty-
 # state) rows fully JAILED, against the qd-under-test binary. Every qd invocation
-# runs through the jail env (jail_sb) and touches ONLY the jail HOME/QD_HOME — the
+# runs through the jail env (jail_qd) and touches ONLY the jail HOME/QD_HOME — the
 # `qd mark`/`ls`/`info` engine invocations with stub state are sanctioned (spec:
 # they touch only jail HOME/QD_HOME). No real sessions are created.
 #
@@ -22,7 +22,7 @@ QD_BIN="${QD_BIN:-$REPO_ROOT/target/debug/qd}"
 [ -x "$QD_BIN" ] || { echo "FATAL: qd binary missing: $QD_BIN (build it first)"; exit 2; }
 
 # Point the jail's qd-under-test at our binary BEFORE sourcing jail.sh.
-export JAIL_SB_CMD="$QD_BIN"
+export JAIL_QD_CMD="$QD_BIN"
 
 # shellcheck source=test/golden/lib/jail.sh
 . "$REPO_ROOT/test/golden/lib/jail.sh"
@@ -67,7 +67,7 @@ seed_registry() {
 hdr "G-A6a qd mark: payload line + usage line, opaque inner event key"
 seed_registry 999001 "${JAIL_PREFIX}alpha" "sid-alpha"
 : > "$MARKS"  # start clean
-jail_sb mark "${JAIL_PREFIX}alpha" '{"event":"create","on_behalf_of":"lead","backend":"SPOOF"}' >/dev/null 2>&1
+jail_qd mark "${JAIL_PREFIX}alpha" '{"event":"create","on_behalf_of":"lead","backend":"SPOOF"}' >/dev/null 2>&1
 mark_rc=$?
 # Two lines: one mark (top-level "payload"), one usage (top-level "event":"usage").
 line_count="$(wc -l < "$MARKS" | tr -d ' ')"
@@ -113,8 +113,8 @@ seed_registry 999002 "${JAIL_PREFIX}beta" "sid-beta"
 # A hand-written create event line (the lead's create.rs stamp emits this shape).
 printf '{"ts":"2026-06-05T10:00:00.000Z","event":"create","name":"%sbeta","sessionId":"sid-beta","spawnedBy":"orchestrator","backend":"ccr-3456"}\n' \
     "$JAIL_PREFIX" >> "$MARKS"
-info_out="$(jail_sb info "${JAIL_PREFIX}beta" 2>/dev/null)"
-ls_out="$(jail_sb ls --json 2>/dev/null)"
+info_out="$(jail_qd info "${JAIL_PREFIX}beta" 2>/dev/null)"
+ls_out="$(jail_qd ls --json 2>/dev/null)"
 info_has_backend="$(counts "$info_out" 'Backend:.*ccr-3456')"
 info_has_spawn="$(counts "$info_out" 'Spawned by:.*orchestrator')"
 ls_has_backend="$(counts "$ls_out" '"backend": "ccr-3456"')"
@@ -135,8 +135,8 @@ fi
 hdr "G-A1 negative control: no telemetry → no A6 lines/fields"
 seed_registry 999003 "${JAIL_PREFIX}gamma" "sid-gamma"
 : > "$MARKS"  # empty marks → fold yields nothing for gamma
-info_g="$(jail_sb info "${JAIL_PREFIX}gamma" 2>/dev/null)"
-ls_g="$(jail_sb ls --json 2>/dev/null)"
+info_g="$(jail_qd info "${JAIL_PREFIX}gamma" 2>/dev/null)"
+ls_g="$(jail_qd ls --json 2>/dev/null)"
 g_info_backend="$(counts "$info_g" 'Backend:')"
 g_info_spawn="$(counts "$info_g" 'Spawned by:')"
 g_ls_backend="$(counts "$ls_g" '"backend"')"
@@ -163,23 +163,23 @@ seed_registry 999004 "${JAIL_PREFIX}delta" "sid-delta"
 : > "$MARKS"
 printf '{"ts":"t","event":"create","name":"%sdelta","sessionId":"sid-delta","backend":"be-delta"}\n' "$JAIL_PREFIX" >> "$MARKS"
 printf '{"ts":"t2","event":"crea' >> "$MARKS"   # torn, no newline
-torn_info="$(jail_sb info "${JAIL_PREFIX}delta" 2>/dev/null)"
+torn_info="$(jail_qd info "${JAIL_PREFIX}delta" 2>/dev/null)"
 torn_rc=$?
 torn_ok="$(counts "$torn_info" 'Backend:.*be-delta')"
 
 # (2) `qd mark` appends onto the torn file → still works (non-fatal, whole lines).
-jail_sb mark "${JAIL_PREFIX}delta" '{"k":1}' >/dev/null 2>&1
+jail_qd mark "${JAIL_PREFIX}delta" '{"k":1}' >/dev/null 2>&1
 append_rc=$?
 
 # (3) Missing file: remove it → info still exits 0 with no A6 line, no crash.
 rm -f "$MARKS"
-miss_info="$(jail_sb info "${JAIL_PREFIX}delta" 2>/dev/null)"
+miss_info="$(jail_qd info "${JAIL_PREFIX}delta" 2>/dev/null)"
 miss_rc=$?
 miss_clean="$(counts "$miss_info" 'Backend:')"
 
 # (4) Empty file: truncate → same.
 : > "$MARKS"
-empty_info="$(jail_sb info "${JAIL_PREFIX}delta" 2>/dev/null)"
+empty_info="$(jail_qd info "${JAIL_PREFIX}delta" 2>/dev/null)"
 empty_rc=$?
 empty_clean="$(counts "$empty_info" 'Backend:')"
 
@@ -238,7 +238,7 @@ while IFS= read -r ln || [ -n "$ln" ]; do
 done < "$MARKS"
 # At most one torn line (the final partial write); never a torn line in the middle.
 # We approximate "torn only at the tail" by: torn <= 1.
-fold_info="$(jail_sb info "${JAIL_PREFIX}epsilon" 2>/dev/null)"
+fold_info="$(jail_qd info "${JAIL_PREFIX}epsilon" 2>/dev/null)"
 fold_rc=$?
 printf '    total-lines=%s torn=%s fold-info-rc=%s\n' "$total" "$torn" "$fold_rc"
 if [ "$total" -ge 1 ] && [ "$torn" -le 1 ] && [ "$fold_rc" = "0" ]; then

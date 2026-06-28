@@ -10,7 +10,7 @@
 //! answerer. The blind-Enter loop (lifecycle.ts:213-227) is DELETED by design
 //! (L5 sanctioned divergence) — nothing in this file sends a keystroke.
 //!
-//! L9a: the sessions dir is INJECTED (from `SbPaths::sessions_dir`), never the
+//! L9a: the sessions dir is INJECTED (from `QdPaths::sessions_dir`), never the
 //! real `homedir()` the TS hardcodes (lifecycle.ts:131) — tests pass a temp dir.
 //! L8: registry rows are parsed PERMISSIVELY — a corrupt `<x>.json` row is
 //! SKIPPED, never fatal to the scan (TS per-file `catch {}`, lifecycle.ts:146).

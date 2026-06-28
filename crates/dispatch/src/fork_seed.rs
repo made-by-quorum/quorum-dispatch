@@ -295,7 +295,7 @@ pub fn rekey_truncate(records: &[Value], boundary_idx: usize, fork_uuid: &str) -
 
 /// Generate a fresh RFC-4122 v4 UUID for the fork's claude session-id (option A:
 /// the id is known PRE-spawn, so the verb names the seed `<uuid>.jsonl` AND mints
-/// the fork's own sbId via `idstore::mint_or_get(<uuid>)` — never the parent's).
+/// the fork's own qdId via `idstore::mint_or_get(<uuid>)` — never the parent's).
 /// Self-contained `/dev/urandom` draw with a pid+nanos fallback, deliberately
 /// mirroring `relay_server::random_uuid_v4` / `idstore::random_id` (the codebase
 /// keeps these per-module rather than sharing). claude's `--resume` accepts a

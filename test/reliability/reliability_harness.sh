@@ -83,11 +83,11 @@
 #   This harness runs INSIDE the repo jail (test/golden/lib/jail.sh, rule 9 +
 #   ADD-4). jail_establish is called FIRST and exports the jailed HOME/QD_HOME/
 #   ZMX_DIR/XDG_*/TMPDIR BEFORE any EXIT trap is installed (hard ordering req —
-#   A6 set-u incident class). The jail's sbrg- prefix + PID-whitelist + production-
+#   A6 set-u incident class). The jail's qdrg- prefix + PID-whitelist + production-
 #   path refusal COMPOSE with the TS harness's own safety rules, which are KEPT:
-#     - every session this harness creates is sbrl-<run>-<n> (the TS cstest-<run>
-#       prefix, RENAMED to nest under the jail's sbrg- prefix as
-#       `${JAIL_PREFIX}rl-<n>`, so a name is BOTH sbrg-jail-guarded AND sbrl-tagged);
+#     - every session this harness creates is qdrl-<run>-<n> (the TS cstest-<run>
+#       prefix, RENAMED to nest under the jail's qdrg- prefix as
+#       `${JAIL_PREFIX}rl-<n>`, so a name is BOTH qdrg-jail-guarded AND qdrl-tagged);
 #     - every created claude/stub PID is recorded and killed by EXACT PID only;
 #     - no pkill, no name globs, no pattern kills;
 #     - sessions are created ONLY via the Rust binary inside the jail (ADD-10a
@@ -110,7 +110,7 @@
 # come up, sentinels are absent, and the harness shows false REDs that look like
 # SUT bugs. This harness NORMALIZES TMPDIR to /tmp BEFORE jail_establish (below),
 # so the socket path stays short. Callers need not set it; an inherited long
-# TMPDIR is overridden. (Set SBRL_KEEP_TMPDIR=1 to opt out — not recommended.)
+# TMPDIR is overridden. (Set QDRL_KEEP_TMPDIR=1 to opt out — not recommended.)
 #
 # Bash 3.2 floor (macOS). No GNU timeout (deadline loops, verify.sh pattern).
 # Usage:  bash test/reliability/reliability_harness.sh
@@ -132,16 +132,16 @@ ZMX_BIN="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}
 
 # --- normalize TMPDIR to /tmp (A4 F2: long /var/folders socket path => zmx exits
 # 0 SILENTLY and sessions never come up). Must happen BEFORE jail_establish, which
-# roots JAIL_ROOT under $TMPDIR. Opt out only via SBRL_KEEP_TMPDIR=1.
-if [ "${SBRL_KEEP_TMPDIR:-}" != "1" ]; then
+# roots JAIL_ROOT under $TMPDIR. Opt out only via QDRL_KEEP_TMPDIR=1.
+if [ "${QDRL_KEEP_TMPDIR:-}" != "1" ]; then
   export TMPDIR=/tmp
 fi
 
 # --- establish the jail FIRST (before any trap; ordering is load-bearing) ----
-export JAIL_SB_CMD="$QD_BIN"
+export JAIL_QD_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$ZMX_BIN"
 . test/golden/lib/jail.sh
-# Short runid so the prefix `sbrg-XXXX-` (10 chars) leaves room under zmx's
+# Short runid so the prefix `qdrg-XXXX-` (10 chars) leaves room under zmx's
 # 20-byte name cap for our `rlN` suffix.
 SHORT_RUNID="$(printf '%s' "${RANDOM:-0}${RANDOM:-0}" | tr -cd 'a-z0-9' | cut -c1-4)"
 [ -n "$SHORT_RUNID" ] || SHORT_RUNID="z$$"
@@ -151,7 +151,7 @@ jail_establish "$SHORT_RUNID" || { echo "FATAL: jail_establish failed"; exit 1; 
 trap harness_cleanup EXIT
 
 # TS harness safety rule, KEPT + composed with the jail: our own session tag.
-# A created name is `${JAIL_PREFIX}rl-<n>` — sbrg-jail-guarded AND sbrl-tagged.
+# A created name is `${JAIL_PREFIX}rl-<n>` — qdrg-jail-guarded AND qdrl-tagged.
 RL_TAG="rl"
 
 # Real-home invisibility belt (rule 9, house pattern): snapshot the ORG's real
@@ -292,8 +292,8 @@ wait_dead() {
   return 1
 }
 
-# scn_name <suffix> — a jail-prefixed, sbrl-tagged, zmx-safe session name:
-# `${JAIL_PREFIX}rl<suffix>` (e.g. sbrg-ab12-rl1). Both jail-guarded AND sbrl-tagged.
+# scn_name <suffix> — a jail-prefixed, qdrl-tagged, zmx-safe session name:
+# `${JAIL_PREFIX}rl<suffix>` (e.g. qdrg-ab12-rl1). Both jail-guarded AND qdrl-tagged.
 scn_name() { printf '%s%s%s' "${JAIL_PREFIX:?jail not established}" "$RL_TAG" "$1"; }
 
 # --- claude binary selection: stub (default) or real (RELIABILITY_LIVE) ------
@@ -331,7 +331,7 @@ echo
 # stdout/err -> $JAIL_ROOT/<name>.{out,err}. Returns qd's exit code.
 rl_new() {
   local name="$1"
-  ( cd "$WORKDIR" && env SBRL_STUB_NAME="$name" "$QD_BIN" new "$name" --cwd "$WORKDIR" ) \
+  ( cd "$WORKDIR" && env QDRL_STUB_NAME="$name" "$QD_BIN" new "$name" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/$name.out" 2> "$JAIL_ROOT/$name.err"
 }
 
@@ -352,7 +352,7 @@ else
   record_pid "$PID1"
   assert I6 "$S1 registered a live claude PID ($PID1)" is_alive "$PID1"
   assert I6 "$S1 attachable: zmx task present" zmx_has "$S1"
-  LS1="$(jail_sb ls --json 2>/dev/null)"
+  LS1="$(jail_qd ls --json 2>/dev/null)"
   # `qd ls --json` is PRETTY-printed (`"name": "x"` with spaces), so all field
   # greps are whitespace-tolerant (-E with [[:space:]]*). The registry file is
   # compact JSON; only the ls-output greps need this.
@@ -370,7 +370,7 @@ if [ -n "${PID1:-}" ]; then
   # so the name / zmxName / pid fields all belong to OUR row — we grep the whole
   # blob per field (whitespace-tolerant). zmxName==name is the I2 resolve proof;
   # pid==registry-pid ties the ls row to the registry entry.
-  LS1="$(jail_sb ls --json 2>/dev/null)"
+  LS1="$(jail_qd ls --json 2>/dev/null)"
   echo "    ls row name/zmxName/pid:"
   printf '%s' "$LS1" | grep -E "\"(name|zmxName|pid)\":" | sed 's/^/      /'
   assert I2 "$S1 ls row has zmxName==name" \
@@ -380,7 +380,7 @@ if [ -n "${PID1:-}" ]; then
 
   step "I2: send:pty LANDS — session must go busy (wait_busy; TS line 326)"
   jail_assert_resolves_in_jail "$S1" \
-    && jail_sb send:pty "$S1" 'reliability probe line' >"$JAIL_ROOT/$S1.send" 2>&1 \
+    && jail_qd send:pty "$S1" 'reliability probe line' >"$JAIL_ROOT/$S1.send" 2>&1 \
     || echo "    (send:pty dispatch returned non-zero or belt refused)"
   # THE I2-CLASS ASSERTION. The mutation negative-control makes this UNREACHABLE-
   # as-PASS: a wedged stub registers + stays alive but never goes busy.
@@ -397,7 +397,7 @@ fi
 step "I4: qd kill --force (atomic-or-loud)"
 if [ -n "${PID1:-}" ]; then
   if jail_assert_resolves_in_jail "$S1"; then
-    KOUT="$(jail_sb kill --force "$S1" 2>"$JAIL_ROOT/$S1.kill")"; KRC=$?
+    KOUT="$(jail_qd kill --force "$S1" 2>"$JAIL_ROOT/$S1.kill")"; KRC=$?
     echo "    kill exit=$KRC out=[$KOUT]"
     [ -s "$JAIL_ROOT/$S1.kill" ] && sed 's/^/    err: /' "$JAIL_ROOT/$S1.kill"
     assert I4 "kill exit 0" test "$KRC" -eq 0
@@ -426,19 +426,19 @@ else
   echo "    simulating crash: kill -9 $PID2 (registry left live-and-dead)"
   kill -9 "$PID2" 2>/dev/null || true
   wait_dead "$PID2" 10 || echo "    WARN: $PID2 not dead after 10s"
-  jail_sb reconcile >"$JAIL_ROOT/$S2.rec1" 2>&1
+  jail_qd reconcile >"$JAIL_ROOT/$S2.rec1" 2>&1
   sed 's/^/    rec: /' "$JAIL_ROOT/$S2.rec1"
   assert I1 "$S2 PID $PID2 dead" is_dead "$PID2"
   assert I1 "$S2 registry tombstoned after reconcile" tombstone_exists "$PID2"
   assert I1 "$S2 no longer listed live in qd ls --json" \
-    bash -c "! jail_sb ls --json 2>/dev/null | grep -Eq '\"name\":[[:space:]]*\"$S2\"'"
+    bash -c "! jail_qd ls --json 2>/dev/null | grep -Eq '\"name\":[[:space:]]*\"$S2\"'"
 fi
 
 # ---------------------------------------------------------------------------
 # I5 — reconcile is idempotent (2nd run is a no-op)
 # ---------------------------------------------------------------------------
 step "I5: reconcile idempotent (2nd run = 'Nothing to reconcile')"
-jail_sb reconcile >"$JAIL_ROOT/rec2" 2>&1
+jail_qd reconcile >"$JAIL_ROOT/rec2" 2>&1
 sed 's/^/    rec2: /' "$JAIL_ROOT/rec2"
 assert I5 "2nd reconcile reports Nothing to reconcile" \
   grep -q "Nothing to reconcile" "$JAIL_ROOT/rec2"

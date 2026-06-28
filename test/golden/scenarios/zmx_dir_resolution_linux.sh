@@ -20,10 +20,10 @@
 # equals the dir resolveZmxDir's rule selects for that tier.
 #
 # HERMETICITY: the recorder runs this with TMPDIR=/run/user/501 so the WHOLE jail
-# roots under the real Linux runtime tmpfs (/run/user/501/sbrg-runs/<runid>). Then
+# roots under the real Linux runtime tmpfs (/run/user/501/qdrg-runs/<runid>). Then
 # the jail's own XDG_RUNTIME_DIR/TMPDIR are genuinely on /run/user/501 — exercising
 # the real Bug-D Linux path — while every resolved socket dir is still UNDER
-# JAIL_ROOT (sbrg-prefixed), so the kill belt passes and teardown leaves zero
+# JAIL_ROOT (qdrg-prefixed), so the kill belt passes and teardown leaves zero
 # leftovers. We do NOT write into the shared /run/user/501 root directly.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_scenario_lib.sh"
 

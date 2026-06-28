@@ -35,8 +35,8 @@
 //! # Jail refusal (a4-spec §5, redesigned per spec-red-team R3)
 //!
 //! Refuse (stderr naming the failed check + exit 13) unless ALL hold: (a) `HOME`
-//! matches `*/sbrg-runs/*/home`; (b) with `root := dirname(HOME)`,
-//! `QD_HOME == root/sb_home`, `ZMX_DIR == root/zmx`, `TMPDIR == root/tmp`. NO
+//! matches `*/qdrg-runs/*/home`; (b) with `root := dirname(HOME)`,
+//! `QD_HOME == root/qd_home`, `ZMX_DIR == root/zmx`, `TMPDIR == root/tmp`. NO
 //! dependence on `JAIL_ROOT`/`JAIL_RUNID`/`JAIL_PREFIX` — those are shell-local in
 //! jail.sh (NO export), so a child across the zmx boundary never sees them. The
 //! belt is derived purely from the EXPORTED isolation set (jail.sh:139-146).

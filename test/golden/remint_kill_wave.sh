@@ -26,12 +26,12 @@ trap 'rm -rf "$STAGE" 2>/dev/null || true' EXIT INT TERM
 one_run() {
     local tag="$1"
     # Subshell: each run gets a fresh jail + fresh scenario sourcing; teardown
-    # inside so run B starts clean. QD_UNDER_TEST/JAIL_SB_CMD -> Rust binary.
+    # inside so run B starts clean. QD_UNDER_TEST/JAIL_QD_CMD -> Rust binary.
     (
         set -u
         . "$HERE/lib/jail.sh"
         . "$HERE/lib/normalize.sh"
-        export QD_UNDER_TEST="$QD_BIN" JAIL_SB_CMD="$QD_BIN"
+        export QD_UNDER_TEST="$QD_BIN" JAIL_QD_CMD="$QD_BIN"
         jail_establish "rmk${tag}$$" || exit 3
         SCN_OUT="$JAIL_ROOT/scn-out.raw"
         # shellcheck source=/dev/null

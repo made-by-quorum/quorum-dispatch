@@ -4,4 +4,4 @@ $ qd reconcile --dry-run (clean — all agree)
 Nothing to reconcile — all sources of truth agree.
 $ qd reconcile --dry-run (forged I1 dead-PID registry → Would repair)
 Would repair 1 drift item(s):
-  tombstone: sbrg-<RUNID>-deadreg (pid <PID> dead)
+  tombstone: qdrg-<RUNID>-deadreg (pid <PID> dead)

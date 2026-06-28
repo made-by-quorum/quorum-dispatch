@@ -42,8 +42,8 @@ allows() {
 # --- 1. Unestablished jail: assert/guard/kill all refuse -------------------
 unset JAIL_ROOT JAIL_RUNID JAIL_PREFIX JAIL_RELAY_PORT
 refuses "unestablished/assert" jail_assert_established
-refuses "unestablished/guard-name" jail_guard_name "sbrg-x-foo"
-refuses "unestablished/jail_sb" jail_sb ls
+refuses "unestablished/guard-name" jail_guard_name "qdrg-x-foo"
+refuses "unestablished/jail_qd" jail_qd ls
 
 # --- 2. Production-path corruption: assert_established must refuse ----------
 # Capture the REAL home BEFORE jail_establish overrides HOME. The belt checks
@@ -52,10 +52,10 @@ _REAL_HOME="$HOME"
 jail_establish >/dev/null 2>&1
 allows "established/assert-clean" jail_assert_established
 # Corrupt QD_HOME to the REAL production registry path.
-_saved_sbhome="$QD_HOME"
+_saved_qdhome="$QD_HOME"
 export QD_HOME="$_REAL_HOME/.quorum/dispatch"
-refuses "corrupt/sbhome-prod-path" jail_assert_established
-export QD_HOME="$_saved_sbhome"
+refuses "corrupt/qdhome-prod-path" jail_assert_established
+export QD_HOME="$_saved_qdhome"
 # Corrupt HOME itself back to the real home — the most dangerous case, since TS
 # qd keys its registry on HOME. Must be refused.
 _saved_home="$HOME"
@@ -125,8 +125,8 @@ jail_teardown >/dev/null 2>&1
 # Re-establish a clean jail for the remaining sections (2b tore down).
 jail_establish >/dev/null 2>&1
 refuses "guard/bare-name" jail_guard_name "work"
-refuses "guard/foreign-prefix" jail_guard_name "sbqa-thing"
-refuses "guard/almost-prefix" jail_guard_name "sbrg-OTHERRUN-x"
+refuses "guard/foreign-prefix" jail_guard_name "qdqa-thing"
+refuses "guard/almost-prefix" jail_guard_name "qdrg-OTHERRUN-x"
 allows  "guard/correct-prefix" jail_guard_name "${JAIL_PREFIX}sess"
 
 # --- 4. PID whitelist: raw-kill refuses unregistered PIDs ------------------
@@ -219,10 +219,10 @@ chmod +x "$_M10_DIR/fake-sut"
 # (a) the full incident chain: collision-failed establish + 1-arg register_pid
 # under set -u + EXIT trap. Fake SUT must record ZERO invocations and the child
 # must reach its end sentinel (no set-u abort at the arity guard).
-mkdir -p "$_M10_DIR/collide/sbrg-runs/m10x"
+mkdir -p "$_M10_DIR/collide/qdrg-runs/m10x"
 cat > "$_M10_DIR/draft-a.sh" << M10EOF
 set -u
-export JAIL_SB_CMD="$_M10_DIR/fake-sut" JAIL_ZMX_CMD="$_M10_DIR/fake-sut"
+export JAIL_QD_CMD="$_M10_DIR/fake-sut" JAIL_ZMX_CMD="$_M10_DIR/fake-sut"
 export TMPDIR="$_M10_DIR/collide"
 . "$HERE/../lib/jail.sh"
 trap 'jail_teardown' EXIT
@@ -245,9 +245,9 @@ esac
 # steps 1-2 (zero SUT invocations) while still being callable.
 : > "$_M10_LOG"
 ( set -u
-  export JAIL_SB_CMD="$_M10_DIR/fake-sut" JAIL_ZMX_CMD="$_M10_DIR/fake-sut"
+  export JAIL_QD_CMD="$_M10_DIR/fake-sut" JAIL_ZMX_CMD="$_M10_DIR/fake-sut"
   . "$HERE/../lib/jail.sh"
-  JAIL_ROOT="$_M10_DIR/collide/sbrg-runs/m10x"
+  JAIL_ROOT="$_M10_DIR/collide/qdrg-runs/m10x"
   jail_teardown ) >/dev/null 2>&1
 if [ ! -s "$_M10_LOG" ]; then
     PASS=$((PASS + 1)); printf 'ok   m10/unestablished-teardown-refuses-env-steps\n'
@@ -259,7 +259,7 @@ fi
 # establish + teardown DOES drive the SUT ls step.
 : > "$_M10_LOG"
 ( set -u
-  export JAIL_SB_CMD="$_M10_DIR/fake-sut" JAIL_ZMX_CMD="$_M10_DIR/fake-sut"
+  export JAIL_QD_CMD="$_M10_DIR/fake-sut" JAIL_ZMX_CMD="$_M10_DIR/fake-sut"
   export TMPDIR="$_M10_DIR/positive-tmp"
   mkdir -p "$TMPDIR"
   . "$HERE/../lib/jail.sh"

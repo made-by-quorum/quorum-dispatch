@@ -85,7 +85,7 @@ cd "$REPO_ROOT" || exit 1
 # shellcheck source=../lib/jail.sh
 . "$HERE/../lib/jail.sh"
 # SHORT runid (a6_routing.sh pattern): zmx caps names at 20 bytes; the default
-# long runid pushes `sbrg-<runid>-negctl` over the cap → the Bug-D error path
+# long runid pushes `qdrg-<runid>-negctl` over the cap → the Bug-D error path
 # (the A4 F2 lesson class). 4 chars keeps the success path live.
 SHORT_RUNID="$(printf '%s' "${RANDOM:-0}${RANDOM:-0}" | tr -cd 'a-z0-9' | cut -c1-4)"
 [ -n "$SHORT_RUNID" ] || SHORT_RUNID="z$$"
@@ -107,7 +107,7 @@ while [ $# -gt 0 ]; do
     *) shift;;
   esac
 done
-[ -n "${SBRG_STUB_NAME:-}" ] && name="$SBRG_STUB_NAME"
+[ -n "${QDRG_STUB_NAME:-}" ] && name="$QDRG_STUB_NAME"
 mkdir -p "$HOME/.claude/sessions"
 printf '{"pid":%d,"name":"%s","status":"idle","sessionId":"negctl-fixed-sid","cwd":"%s","version":"stub","kind":"interactive","entrypoint":"cli","startedAt":1700000000000,"updatedAt":1700000000000}\n' \
   "$$" "$name" "$PWD" > "$HOME/.claude/sessions/$$.json"
@@ -120,7 +120,7 @@ NAME="${JAIL_PREFIX}negctl"
 
 run_row() {
     local row="$1"; shift
-    ( cd "$WORKDIR" && env SBRG_STUB_NAME="$NAME" "$QD_BIN" "$@" ) \
+    ( cd "$WORKDIR" && env QDRG_STUB_NAME="$NAME" "$QD_BIN" "$@" ) \
         > "$CAPTURE_DIR/$row.out" 2> "$CAPTURE_DIR/$row.err"
     echo "exit=$?" > "$CAPTURE_DIR/$row.exit"
 }

@@ -40,7 +40,7 @@ pub struct Jail {
 
     /// Paths within the jail
     pub home: PathBuf,
-    pub sb_home: PathBuf,
+    pub qd_home: PathBuf,
     pub zmx_dir: PathBuf,
     pub xdg_config: PathBuf,
     pub xdg_data: PathBuf,
@@ -110,7 +110,7 @@ impl Jail {
         // Create all subdirectories
         let subdirs = [
             "home",
-            "sb_home",
+            "qd_home",
             "zmx",
             "xdg_config",
             "xdg_data",
@@ -148,7 +148,7 @@ impl Jail {
                     .to_string_lossy()
             ),
             home: jail_root_clone.join("home"),
-            sb_home: jail_root_clone.join("sb_home"),
+            qd_home: jail_root_clone.join("qd_home"),
             zmx_dir: jail_root_clone.join("zmx"),
             xdg_config: jail_root_clone.join("xdg_config"),
             xdg_data: jail_root_clone.join("xdg_data"),
@@ -199,7 +199,7 @@ impl Jail {
         // Each isolation var must be set AND live under JAIL_ROOT
         let vars = [
             ("HOME", &self.home),
-            ("QD_HOME", &self.sb_home),
+            ("QD_HOME", &self.qd_home),
             ("ZMX_DIR", &self.zmx_dir),
             ("XDG_CONFIG_HOME", &self.xdg_config),
             ("XDG_DATA_HOME", &self.xdg_data),
@@ -249,7 +249,7 @@ impl Jail {
             ("HOME".to_string(), self.home.to_string_lossy().to_string()),
             (
                 "QD_HOME".to_string(),
-                self.sb_home.to_string_lossy().to_string(),
+                self.qd_home.to_string_lossy().to_string(),
             ),
             (
                 "ZMX_DIR".to_string(),

@@ -19,7 +19,7 @@ Raw per-op bytes: `a4-boot1-bytes.txt` (soak+exit-contract) and
 
 - Real-home baseline: `~/.claude/sessions` = **728 rows** at start. The REAL-HOME
   BELT (count + grep for leaked prefixed rows) held **728 → 728 on EVERY boot**.
-- Every qd/zmx invocation via jail primitives (`jail_establish` / `jail_sb` /
+- Every qd/zmx invocation via jail primitives (`jail_establish` / `jail_qd` /
   `jail_zmx` / `jail_kill_session` / `jail_teardown`). HOME jailed (ADD-4); no
   real-state mutation. Auth + GrowthBook seeded READ-ONLY from the real home
   (read allowed, write never — same sanction as cachedGrowthBookFeatures).
@@ -181,9 +181,9 @@ cargo test -p qd --test fakerepl_gate  →  10 passed; 0 failed (132s)
 - Every run torn down (trap-protected). Two runs were SIGTERM'd mid-flight (the
   diagnostic boots) — those leaked the detached claude child past the zmx wrapper
   (the known A2 teardown gap); reaped manually by SPECIFIC prefixed PID
-  (`sbrg-<runid>-*`), never by pattern. Post-sweep: zero orphaned `claude`/`zmx`
+  (`qdrg-<runid>-*`), never by pattern. Post-sweep: zero orphaned `claude`/`zmx`
   procs of mine; all my jail roots removed.
-- Lingering `sbrg-runs/*` dirs from OTHER A4 sessions remain (different run-ids);
+- Lingering `qdrg-runs/*` dirs from OTHER A4 sessions remain (different run-ids);
   not mine, not touched.
 
 ## Per-area result

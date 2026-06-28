@@ -37,7 +37,7 @@ scn_run() {
 
     # --- exit 1: info on a missing session (empty jail registry). ------------
     local out1 rc1
-    out1="$(scn_sb info "${JAIL_PREFIX}no-such-session" 2>&1)"
+    out1="$(scn_qd info "${JAIL_PREFIX}no-such-session" 2>&1)"
     rc1=$?
     {
         printf 'cmd=info-missing-session expect_exit=1 got_exit=%s\n' "$rc1"
@@ -47,7 +47,7 @@ scn_run() {
 
     # --- exit 2: usage error — unknown config subcommand. --------------------
     local out2 rc2
-    out2="$(scn_sb config nosuchsub 2>&1)"
+    out2="$(scn_qd config nosuchsub 2>&1)"
     rc2=$?
     {
         printf 'cmd=config-unknown-subcommand expect_exit=2 got_exit=%s\n' "$rc2"

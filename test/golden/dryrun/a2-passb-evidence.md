@@ -12,9 +12,9 @@ jail; claude = committed stub 1.7.0 (provenance belt asserted per row).
 
 Invocation per row (from this worktree's test/golden):
 
-    TMPDIR=/tmp QD_UNDER_TEST=$SB JAIL_SB_CMD=$SB \
+    TMPDIR=/tmp QD_UNDER_TEST=$QD JAIL_QD_CMD=$QD \
       ./verify.sh --scenario scenarios/<row>.sh
-    # $SB = ~/work/wt-a2-passb/target/debug/qd
+    # $QD = ~/work/wt-a2-passb/target/debug/qd
 
 ## Row results (A2-owned corpus rows, verify.sh true exit codes)
 
@@ -94,7 +94,7 @@ auto-globbed, so ticking is matrix-text only.
   6+7 and re-proven by A4 R5-R7).
 - Soak ledger UNCHANGED (no real-claude rows run).
 - Real-home belt: jail.sh per-scenario (fresh jail each row, teardown trap);
-  no sbrg residue checked via jail teardown paths.
+  no qdrg residue checked via jail teardown paths.
 
 ## Verbatim run log (TMPDIR=/tmp, fresh jail per scenario)
 

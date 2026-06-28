@@ -18,17 +18,17 @@
   1d tmo 5 <missing-cmd> -> rc=127 (child exec-fail surfaces as 127, wrapper intact)
 
 === CHECK 2: fakerepl boot + qd wait rows (status-keyed) ===
-  qd new exit=0 : Started detached session "sbrg-92840178063413432593-fr"
-  resolution belt: sbrg-92840178063413432593-fr resolves uniquely in-jail (OK)
-  2a qd wait (idle) rc=0 out=[sbrg-92840178063413432593-fr is idle]
+  qd new exit=0 : Started detached session "qdrg-92840178063413432593-fr"
+  resolution belt: qdrg-92840178063413432593-fr resolves uniquely in-jail (OK)
+  2a qd wait (idle) rc=0 out=[qdrg-92840178063413432593-fr is idle]
     PASS: idle-at-entry -> 'is idle' exit 0
-  2b qd wait (busy->idle) rc=0 out=[Waiting for sbrg-92840178063413432593-fr... done]
+  2b qd wait (busy->idle) rc=0 out=[Waiting for qdrg-92840178063413432593-fr... done]
     PASS: busy -> ' done' exit 0
-  2c qd wait --timeout 5 (kept busy) rc=1 out=[Waiting for sbrg-92840178063413432593-fr... timeout]
+  2c qd wait --timeout 5 (kept busy) rc=1 out=[Waiting for qdrg-92840178063413432593-fr... timeout]
     PASS: kept-busy --timeout 5 -> ' timeout' exit 1
 
 === CHECK 3: send:pty path ===
-  3 send:pty rc=0 out=[Message sent to sbrg-92840178063413432593-fr]
+  3 send:pty rc=0 out=[Message sent to qdrg-92840178063413432593-fr]
     PASS: send path accepted ('Message sent')
 
 === CHECK 4: send:pty --wait documented failure (no conversation JSONL) ===

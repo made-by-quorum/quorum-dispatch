@@ -92,7 +92,7 @@ pub struct IdMap {
     /// for the same session_id are ignored (the lock should prevent them existing).
     pub by_session: HashMap<String, String>,
     /// WP-B5-iii (obl-4 lineage): a FORK's provider session_id → its PARENT
-    /// instance's stable sbId. Recorded by a `lineage` event at fork time
+    /// instance's stable qdId. Recorded by a `lineage` event at fork time
     /// (verb-side, keyed by the fork's pre-minted uuid — works for both the
     /// interactive and headless launch paths with no daemon/protocol change).
     /// First-wins. STRICTLY the parent pointer — never the fork's own id (which
@@ -161,7 +161,7 @@ pub fn fold_str(text: &str) -> IdMap {
                 // unknown id / already-bound id — ignored
             }
             Some("lineage") => {
-                // WP-B5-iii obl-4: a fork's session_id → parent sbId. First-wins.
+                // WP-B5-iii obl-4: a fork's session_id → parent qdId. First-wins.
                 let parent = v.get("parent").and_then(|x| x.as_str()).unwrap_or("");
                 if session_id.is_empty() || parent.is_empty() {
                     continue;
@@ -220,16 +220,16 @@ pub fn holder_display_id(ids_path: &Path, session_id: Option<&str>, pid: Option<
     format!("PID {}", pid.unwrap_or(0))
 }
 
-/// Fill `Session.sb_id` from a fold (the join-layer pass; read-only, no lock).
-pub fn fill_sb_ids(sessions: &mut [Session], map: &IdMap) {
+/// Fill `Session.qd_id` from a fold (the join-layer pass; read-only, no lock).
+pub fn fill_qd_ids(sessions: &mut [Session], map: &IdMap) {
     for s in sessions {
-        if s.sb_id.is_none() && !s.session_id.is_empty() {
-            s.sb_id = map.by_session.get(&s.session_id).cloned();
+        if s.qd_id.is_none() && !s.session_id.is_empty() {
+            s.qd_id = map.by_session.get(&s.session_id).cloned();
         }
     }
 }
 
-/// WP-B5-iii obl-4: fill `Session.lineage` (the fork→PARENT-sbId pointer) from a
+/// WP-B5-iii obl-4: fill `Session.lineage` (the fork→PARENT-qdId pointer) from a
 /// fold — the SAME read-only join pass `qd ls` runs (`common::all_sessions`), so
 /// a fork's parent is discoverable through the live resolver path, not a raw row
 /// assert. Parity-safe: `lineage` is NOT serialized on the `ls --json` surface
@@ -398,19 +398,19 @@ pub fn bind(
 }
 
 /// WP-B5-iii obl-4: record a FORK's lineage pointer — `fork_session_id` (the
-/// fork's pre-minted provider uuid) → `parent_sb_id` (the parent INSTANCE's
-/// stable sbId). Append-only `lineage` event under the store lock; first-wins
+/// fork's pre-minted provider uuid) → `parent_qd_id` (the parent INSTANCE's
+/// stable qdId). Append-only `lineage` event under the store lock; first-wins
 /// (idempotent on a retried fork launch). Called verb-side at fork time for BOTH
 /// the interactive and headless paths (keyed by the uuid both paths know), so no
 /// daemon/protocol plumbing is needed. STRICTLY the parent pointer — the fork's
-/// OWN sbId is minted separately via [`mint_or_get`] and is never touched here.
+/// OWN qdId is minted separately via [`mint_or_get`] and is never touched here.
 pub fn record_lineage(
     path: &Path,
     fork_session_id: &str,
-    parent_sb_id: &str,
+    parent_qd_id: &str,
     clock: &dyn Clock,
 ) -> Result<(), String> {
-    if fork_session_id.is_empty() || parent_sb_id.is_empty() {
+    if fork_session_id.is_empty() || parent_qd_id.is_empty() {
         return Err("idstore: refusing to record lineage with an empty id".to_string());
     }
     let (mut file, map) = open_locked(path)?;
@@ -422,7 +422,7 @@ pub fn record_lineage(
         "ts": crate::render::epoch_ms_to_iso(clock.now_ms()),
         "event": "lineage",
         "session_id": fork_session_id,
-        "parent": parent_sb_id,
+        "parent": parent_qd_id,
     })
     .to_string();
     file.write_all(format!("{line}\n").as_bytes())
@@ -545,7 +545,7 @@ pub fn prefix_map(sessions: &[Session]) -> HashMap<String, String> {
         let mut seen = HashSet::new();
         sessions
             .iter()
-            .filter_map(|s| s.sb_id.clone())
+            .filter_map(|s| s.qd_id.clone())
             .filter(|id| seen.insert(id.clone()))
             .collect()
     };
@@ -1084,7 +1084,7 @@ mod tests {
             user_named: None,
             session_id: session_id.to_string(),
             code: None,
-            sb_id: None,
+            qd_id: None,
             pid: None,
             status: crate::model::SessionStatus::Cold,
             zmx_name: None,
@@ -1108,7 +1108,7 @@ mod tests {
     }
 
     #[test]
-    fn lineage_round_trips_and_fill_surfaces_parent_sbid_not_own() {
+    fn lineage_round_trips_and_fill_surfaces_parent_qdid_not_own() {
         // WP-B5-iii obl-4: record a fork→parent lineage pointer, fold it back, and
         // surface it onto the fork's Session via the SAME `fill_lineage` the live
         // `qd ls` join (`common::all_sessions`) runs — discovery through the
@@ -1117,45 +1117,45 @@ mod tests {
         let path = store(&dir);
         let clock = FixedClock(TS);
         let fork_uuid = "fork-uuid-1111";
-        // The fork has its OWN sbId (minted from its own uuid)…
+        // The fork has its OWN qdId (minted from its own uuid)…
         let fork_own = mint_or_get(&path, fork_uuid, Some("forked"), &clock).unwrap();
-        // …and a lineage pointer to the PARENT instance's sbId.
-        let parent_sb = "parentsb";
-        record_lineage(&path, fork_uuid, parent_sb, &clock).unwrap();
+        // …and a lineage pointer to the PARENT instance's qdId.
+        let parent_qd = "parentqd";
+        record_lineage(&path, fork_uuid, parent_qd, &clock).unwrap();
 
         let map = fold(&path);
         assert_eq!(
             map.by_parent.get(fork_uuid),
-            Some(&parent_sb.to_string()),
+            Some(&parent_qd.to_string()),
             "lineage event folds into by_parent"
         );
         assert_eq!(
             map.by_session.get(fork_uuid),
             Some(&fork_own),
-            "fork keeps its OWN sbId"
+            "fork keeps its OWN qdId"
         );
 
-        // fill_lineage sets lineage = PARENT sbId, NOT the fork's own id (no leak).
+        // fill_lineage sets lineage = PARENT qdId, NOT the fork's own id (no leak).
         let mut rows = vec![sess(fork_uuid)];
-        fill_sb_ids(&mut rows, &map);
+        fill_qd_ids(&mut rows, &map);
         fill_lineage(&mut rows, &map);
         assert_eq!(
-            rows[0].sb_id.as_deref(),
+            rows[0].qd_id.as_deref(),
             Some(fork_own.as_str()),
-            "fork's OWN sbId"
+            "fork's OWN qdId"
         );
         assert_eq!(
             rows[0].lineage.as_deref(),
-            Some(parent_sb),
-            "lineage = PARENT sbId"
+            Some(parent_qd),
+            "lineage = PARENT qdId"
         );
         assert_ne!(
-            rows[0].lineage, rows[0].sb_id,
+            rows[0].lineage, rows[0].qd_id,
             "GUARDRAIL: lineage is the PARENT pointer, never the fork's own id"
         );
 
         // Idempotent: a second record appends nothing (first-wins).
-        record_lineage(&path, fork_uuid, parent_sb, &clock).unwrap();
+        record_lineage(&path, fork_uuid, parent_qd, &clock).unwrap();
         assert_eq!(
             fold(&path).by_parent.len(),
             1,

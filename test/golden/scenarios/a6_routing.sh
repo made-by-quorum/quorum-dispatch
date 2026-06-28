@@ -12,7 +12,7 @@
 # ever appearing in argv (G-A5 hygiene, asserted here too).
 #
 # House pattern: copies a5_lifecycle_live.sh — own hermetic jail (rule 9 + ADD-4),
-# sbrg- names only, PASS/FAIL + SUMMARY, jail_teardown on EXIT. Bash 3.2 floor.
+# qdrg- names only, PASS/FAIL + SUMMARY, jail_teardown on EXIT. Bash 3.2 floor.
 #
 # Usage:  bash test/golden/scenarios/a6_routing.sh
 # Env override: QD_BIN (qd-under-test), ZMX_BIN (zmx). Defaults autodetect.
@@ -28,10 +28,10 @@ ZMX_BIN="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}
 [ -x "$QD_BIN" ]  || { echo "FATAL: qd binary not found/executable: $QD_BIN"; exit 1; }
 [ -x "$ZMX_BIN" ] || { echo "FATAL: zmx binary not found/executable: $ZMX_BIN"; exit 1; }
 
-export JAIL_SB_CMD="$QD_BIN"
+export JAIL_QD_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$ZMX_BIN"
 . test/golden/lib/jail.sh
-# Short runid so prefix `sbrg-XXXX-` (10 chars) leaves room under zmx's 20-byte
+# Short runid so prefix `qdrg-XXXX-` (10 chars) leaves room under zmx's 20-byte
 # name cap for a short suffix (e.g. `a2`,`a3a`).
 SHORT_RUNID="$(printf '%s' "${RANDOM:-0}${RANDOM:-0}" | tr -cd 'a-z0-9' | cut -c1-4)"
 [ -n "$SHORT_RUNID" ] || SHORT_RUNID="z$$"
@@ -65,7 +65,7 @@ while [ $# -gt 0 ]; do
     *) shift;;
   esac
 done
-[ -n "${SBRG_STUB_NAME:-}" ] && name="$SBRG_STUB_NAME"
+[ -n "${QDRG_STUB_NAME:-}" ] && name="$QDRG_STUB_NAME"
 # Dump the env vars of interest (NOT the whole env — keep it focused + readable).
 {
   printf 'ANTHROPIC_BASE_URL=%s\n' "${ANTHROPIC_BASE_URL:-<unset>}"
@@ -104,7 +104,7 @@ new_session() {
   [ -n "$via" ] && args="$args --via $via"
   # The stub must report the same name qd passes as --name (== the session name).
   ( cd "$WORKDIR" \
-    && env SBRG_STUB_NAME="$name" $exports "$QD_BIN" $args ) \
+    && env QDRG_STUB_NAME="$name" $exports "$QD_BIN" $args ) \
     > "$JAIL_ROOT/$name.out" 2> "$JAIL_ROOT/$name.err"
 }
 
@@ -112,7 +112,7 @@ new_session() {
 cleanup_session() {
   local name="$1"
   if jail_assert_resolves_in_jail "$name" 2>/dev/null; then
-    jail_sb kill --force "$name" >/dev/null 2>&1
+    jail_qd kill --force "$name" >/dev/null 2>&1
   else
     "$ZMX_BIN" kill "$name" --force >/dev/null 2>&1 || true
   fi
@@ -225,10 +225,10 @@ echo "--- G-A3: --via routing (two ccr profiles) + loud failures ---"
 # The value is passed as an ARGUMENT (non-TTY stdin is rejected by config set).
 # Obviously-FAKE value (credential hard line: never a real-looking key).
 export QD_SECRET_BACKEND=file
-jail_sb config set openrouter-key "sk-FAKE-ccr-token" >/dev/null 2>&1 \
+jail_qd config set openrouter-key "sk-FAKE-ccr-token" >/dev/null 2>&1 \
   || note_fail "G-A3 could not seed file-backend secret"
 
-# backends.json under <sbHome>/state (QD_HOME-honored; the jail sets QD_HOME).
+# backends.json under <qdHome>/state (QD_HOME-honored; the jail sets QD_HOME).
 STATE_DIR="$QD_HOME/state"; mkdir -p "$STATE_DIR"
 BACKENDS="$STATE_DIR/backends.json"
 cat > "$BACKENDS" <<EOS

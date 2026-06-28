@@ -106,8 +106,8 @@ byte is admitted; with `CONVO_JSONL` unset no transcript is written.
 
 Refuses (stderr naming the failed check + **exit 13**) unless ALL hold:
 
-- (a) `HOME` matches `*/sbrg-runs/*/home` (component-based, not substring);
-- (b) with `root := dirname(HOME)`: `QD_HOME == root/sb_home`,
+- (a) `HOME` matches `*/qdrg-runs/*/home` (component-based, not substring);
+- (b) with `root := dirname(HOME)`: `QD_HOME == root/qd_home`,
   `ZMX_DIR == root/zmx`, `TMPDIR == root/tmp`.
 
 Derived ENTIRELY from the EXPORTED isolation set (`test/golden/lib/jail.sh`

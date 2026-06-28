@@ -70,7 +70,7 @@ fi
 # clone must live OUTSIDE both (so it is never committed, never confused with the
 # source checkout).
 _resolve() { ( cd "$1" 2>/dev/null && pwd ) || printf '%s' "$1"; }
-SBRUST_TOP="$(cd "$PREP_HERE/../.." 2>/dev/null && pwd)"   # repo root of qd-rust
+QDRUST_TOP="$(cd "$PREP_HERE/../.." 2>/dev/null && pwd)"   # repo root of qd-rust
 SRC_TOP="$(_resolve "$SRC")"
 # Resolve dest's existing-parent prefix for the containment check.
 _dest_parent="$DEST"
@@ -79,7 +79,7 @@ while [ ! -d "$_dest_parent" ] && [ "$_dest_parent" != "/" ] && [ "$_dest_parent
 done
 _dest_real="$(_resolve "$_dest_parent")"
 case "$_dest_real/" in
-    "$SBRUST_TOP"/*) _prep_die "dest $DEST is under the qd-rust repo ($SBRUST_TOP) — must be outside" 64 ;;
+    "$QDRUST_TOP"/*) _prep_die "dest $DEST is under the qd-rust repo ($QDRUST_TOP) — must be outside" 64 ;;
     "$SRC_TOP"/*)    _prep_die "dest $DEST is under the org TS checkout ($SRC_TOP) — must be outside" 64 ;;
 esac
 

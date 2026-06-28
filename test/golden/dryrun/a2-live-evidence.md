@@ -18,7 +18,7 @@ $ bash test/golden/selftest/test_jail_refusal.sh
 ```
 
 Rows include: unestablished/assert refused, corrupt/home-real-home refused,
-corrupt/{sbhome,zmxdir}-prod-path refused, guard/bare-name refused,
+corrupt/{qdhome,zmxdir}-prod-path refused, guard/bare-name refused,
 pid/unregistered-raw-kill refused, lima/brano-fail-closed refused,
 killsession/bare-name refused. **PASS** — belt is armed.
 
@@ -301,7 +301,7 @@ The race test is non-vacuous. (Row 10a zero-keystroke mutation re-attested in Ro
 - LIVE jail evidence (rows 2/3/4): the REAL-HOME BELT held on EVERY boot
   (sessions 723→723, zero leaked rows grepped from `$JAIL_REAL_HOME/.claude/sessions`).
   The jail's positive-sandbox belt (refusal selftest 17/17) refuses any var
-  resolving outside `sbrg-runs/`, and HOME is jailed (ADD-4).
+  resolving outside `qdrg-runs/`, and HOME is jailed (ADD-4).
 **PASS** — nothing under test resolved under the real home, offline or live.
 
 ---
@@ -408,7 +408,7 @@ C, and `...-p5d` from an EARLIER lead probe run) were found ALIVE and orphaned
 (kills the zmx WRAPPER) but the boot's detached claude CHILD is NOT in the jail's
 PID registry, so it survives the wrapper and the `rm -rf JAIL_ROOT`. QA reaped
 them manually (SIGTERM left them in state `T`; SIGKILL reaped). All prefixed,
-all under sbrg-runs — no production process touched, real-home belt held 723→723
+all under qdrg-runs — no production process touched, real-home belt held 723→723
 throughout. This is NOT a gate failure (the SESSIONS are correctly killed; zmx
 list goes empty), but it IS a jail-hygiene gap: orphaned claude procs accumulate
 across runs. **Recommendation to lead:** either register the spawned claude PID
@@ -457,6 +457,6 @@ frames.
 
 **Jail-leak note (QA concern 1):** confirmed real for dialog-blocked boots in
 QA's run; post-run sweep 2026-06-04 ~22:3x finds ZERO orphaned `claude --name
-sbrg-*` processes (QA reaped theirs; lead probes 6/7 children died with their
+qdrg-*` processes (QA reaped theirs; lead probes 6/7 children died with their
 wrappers). Carry: gc-phase must close teardown's claude-child gap (specific-PID
 children of the wrapper, never patterns — L10); noted for the orchestrator.

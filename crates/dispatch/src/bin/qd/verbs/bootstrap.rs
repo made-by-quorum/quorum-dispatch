@@ -21,7 +21,7 @@ use dispatch::bootstrap::{
 };
 use dispatch::effects::{Env, RealEnv};
 use dispatch::exec::{Exec, RealExec};
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::relay_http::HttpRelayProbe;
 use dispatch::relay_server::register;
 use dispatch::shell_init::{init_line, rc_path, Shell};
@@ -93,7 +93,7 @@ pub fn run() -> i32 {
     // hermetic gate's relay-ABSENT arm to be deterministic on a shared host,
     // `QRM_RELAY_DISABLE_SCAN=1` suppresses the scan so discovery sees ONLY
     // jailed sidecar files. Default (unset) keeps the production scan.
-    let sb_paths = SbPaths::from_home(&home);
+    let qd_paths = QdPaths::from_home(&home);
     let scan_disabled = env
         .var("QRM_RELAY_DISABLE_SCAN")
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
@@ -104,7 +104,7 @@ pub fn run() -> i32 {
     } else {
         &http_probe
     };
-    let relays = discover_relays(&sb_paths.relay_dir, probe);
+    let relays = discover_relays(&qd_paths.relay_dir, probe);
 
     // Registration is driven through Claude Code's own `claude mcp` CLI — so it
     // requires `claude` on PATH, and detection/registration both shell out.
@@ -194,7 +194,7 @@ pub fn run() -> i32 {
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let ext_interactive = interactive && install_extensions_enabled;
     let pins = dispatch::extensions::pinned();
-    let sbx_pin_label = short_pin(&pins.qb.rev);
+    let qb_pin_label = short_pin(&pins.qb.rev);
     let plugin_pin_label = short_pin(&pins.plugins.rev);
     let install_script = resolve_install_script(&env);
     let run_installer = |sub: &str| -> Result<(), String> {
@@ -215,14 +215,14 @@ pub fn run() -> i32 {
         }
     };
     let e_prompt = |q: &str| tty::prompt_yes_no_default_no(q);
-    let install_sbx = || run_installer("qb");
+    let install_qb = || run_installer("qb");
     let install_plugin = || run_installer("plugin");
     let extensions_deps = ExtensionsDeps {
         interactive: ext_interactive,
-        sbx_pin_label,
+        qb_pin_label,
         plugin_pin_label,
         prompt_yes_no: &e_prompt,
-        install_sbx: &install_sbx,
+        install_qb: &install_qb,
         install_plugin: &install_plugin,
     };
 

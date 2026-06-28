@@ -1,7 +1,7 @@
 # `home-basic` fixture
 
 A frozen `$HOME`-shaped tree for the A1 `ls --json` / `info` golden-parity tests
-(spec §9). The integration tests build an `SbPaths::from_home(<this dir>)`, run
+(spec §9). The integration tests build an `QdPaths::from_home(<this dir>)`, run
 `join::gather` + `join::join_with_strays` + `render::ls_json` / `render::info_text`
 over it, and assert byte-equality with the frozen files under `../../golden/`.
 

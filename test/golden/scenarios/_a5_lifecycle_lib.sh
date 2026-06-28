@@ -5,13 +5,13 @@
 # These scenarios SELF-RECORD the pinned TS engine's output shapes (pin 0d0fa9e)
 # into the golden oracle. record.sh establishes the jail + sets SCN_OUT before
 # sourcing the scenario; each scenario forges its pre-state INSIDE the jail (so
-# every byte is hermetic) and drives the TS qd via scn_sb (QD_UNDER_TEST points
+# every byte is hermetic) and drives the TS qd via scn_qd (QD_UNDER_TEST points
 # at `bun <pinned-clone>/src/index.ts`). Bash 3.2 floor.
 #
 # RECORDING RULES honored here (binding):
 #   - rule 9 + ADD-4: every TS invocation runs under the jail's hermetic
 #     HOME/QD_HOME/ZMX_DIR/XDG_*/TMPDIR (record.sh::jail_establish exports them).
-#   - sbrg- prefixed session names only (JAIL_PREFIX).
+#   - qdrg- prefixed session names only (JAIL_PREFIX).
 #   - QD_SECRET_BACKEND=file for config rows (NO keychain — daytime-deferred).
 #   - NEVER a real secret: the fake OpenRouter placeholder is BELOW the real-key
 #     length anchor so the L11 secret-scan admit gate passes.
@@ -40,7 +40,7 @@ a5_make_fake_claude() {
 #!/bin/bash
 name=""
 while [ $# -gt 0 ]; do case "$1" in --name) name="$2"; shift 2;; *) shift;; esac; done
-[ -n "${SBRG_FAKE_NAME:-}" ] && name="$SBRG_FAKE_NAME"
+[ -n "${QDRG_FAKE_NAME:-}" ] && name="$QDRG_FAKE_NAME"
 mkdir -p "$HOME/.claude/sessions"
 printf '{"pid":%d,"name":"%s","status":"idle","sessionId":"fake-%d","cwd":"%s","version":"fake","kind":"interactive","entrypoint":"cli","startedAt":1700000000000,"updatedAt":1700000000000}\n' \
   "$$" "$name" "$$" "$PWD" > "$HOME/.claude/sessions/$$.json"
@@ -50,7 +50,7 @@ EOS
     printf '%s' "$fake"
 }
 
-# a5_spawn_fake <name> — spawn a live jailed sbrg- session via the REAL zmx + the
+# a5_spawn_fake <name> — spawn a live jailed qdrg- session via the REAL zmx + the
 # fake-claude (NOT `qd new` — ADD-10a banned). Polls until the registry entry +
 # zmx task land (≤8s). Returns 0 on success.
 a5_spawn_fake() {
@@ -58,7 +58,7 @@ a5_spawn_fake() {
     [ -f "$fake" ] || fake="$(a5_make_fake_claude)"
     mkdir -p "$work"
     ( cd "$work" && HOME="$HOME" ZMX_DIR="$ZMX_DIR" TMPDIR="$TMPDIR" \
-        "$A5_ZMX" run "$name" -d bash -lc "SBRG_FAKE_NAME='$name' '$fake' --name '$name'" ) >/dev/null 2>&1
+        "$A5_ZMX" run "$name" -d bash -lc "QDRG_FAKE_NAME='$name' '$fake' --name '$name'" ) >/dev/null 2>&1
     while [ "$i" -lt 40 ]; do
         if [ -n "$(a5_fake_pid_for "$name")" ] \
            && [ "$(HOME="$HOME" ZMX_DIR="$ZMX_DIR" TMPDIR="$TMPDIR" "$A5_ZMX" list 2>/dev/null | grep -c "$name" || true)" -ge 1 ]; then

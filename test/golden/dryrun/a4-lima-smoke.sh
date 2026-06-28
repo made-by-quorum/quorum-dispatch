@@ -13,7 +13,7 @@ set -u
 REPO="${1:-/tmp/wt-a4-lead}"
 QD_BIN="${2:-/tmp/qd-vm-target/debug/qd}"
 cd "$REPO" || { echo "FATAL: no repo at $REPO"; exit 1; }
-export JAIL_SB_CMD="$QD_BIN"
+export JAIL_QD_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$(command -v zmx)"
 . test/golden/lib/jail.sh
 
@@ -60,7 +60,7 @@ NAME="${JAIL_PREFIX}lima"
 echo
 echo "=== CREATE: qd new (fake claude) ==="
 ( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
-    "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) > "$JAIL_ROOT/o" 2> "$JAIL_ROOT/e"
+    "$JAIL_QD_CMD" new "$NAME" --cwd "$WORKDIR" ) > "$JAIL_ROOT/o" 2> "$JAIL_ROOT/e"
 code=$?
 echo "  exit=$code  stdout: $(cat "$JAIL_ROOT/o")"
 echo "  stderr: $(head -3 "$JAIL_ROOT/e")"

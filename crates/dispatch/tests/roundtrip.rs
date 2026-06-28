@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use dispatch::effects::{FixedClock, FixtureProcessTable, FixtureRelayProbe, MapEnv};
 use dispatch::join::{self, JoinOpts};
 use dispatch::mux::FixtureMux;
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::registry::{self, RegistryEntry};
 
 #[test]
@@ -19,7 +19,7 @@ fn registry_write_roundtrip_through_pipeline() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     common::assert_not_real_home(&home);
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
 
     // Write a registry entry WITH the new schema fields.
     let entry = RegistryEntry {

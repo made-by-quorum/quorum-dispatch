@@ -27,7 +27,7 @@
 // (in practice the daemons are already up from `qd start`, so the client only
 // connects).
 //
-// release_sb_bin()/release_qrmux_bin() locate target/release/{qd,qrmux} from the
+// release_qd_bin()/release_qrmux_bin() locate target/release/{qd,qrmux} from the
 // test exe's target dir and PANIC WITH A REMEDY if absent — never a silent skip
 // (the c1_gate qrmux_bin contract).
 //
@@ -44,7 +44,7 @@
 // to what these rows measure: G-SOAK measures the daemon's PTY/render RTT under
 // output+input flood, and per-daemon RSS; G-IDLE measures idle per-daemon RSS.
 // The convo/submit machinery exercises engine transcript paths, not the daemon's
-// PTY/render hot path. The fakerepl jail layout (sbrg-runs convo belt) is a
+// PTY/render hot path. The fakerepl jail layout (qdrg-runs convo belt) is a
 // different jail shape than the c1_gate Jail these rows reuse; wiring it in would
 // fork the harness for zero measurement value. So: claude-shaped at the registry
 // layer (more claude-shaped than the bare-`cat` WS-A probe, which had no row at
@@ -54,7 +54,7 @@
 
 /// Locate `target/release/qd` from the test exe's target dir. PANICS with a build
 /// remedy if absent (house locator pattern; never a silent vacuous skip).
-fn release_sb_bin() -> PathBuf {
+fn release_qd_bin() -> PathBuf {
     release_bin("qd")
 }
 
@@ -91,10 +91,10 @@ fn release_bin(name: &str) -> PathBuf {
 /// threads, AND points QD_EMBEDDED_DAEMON_PROGRAM at the release qd so any
 /// daemon launch (engine or in-process client) is release.
 fn release_jail_env(jail: &Jail) -> Vec<(String, String)> {
-    let rel = release_sb_bin().to_string_lossy().into_owned();
+    let rel = release_qd_bin().to_string_lossy().into_owned();
     vec![
         ("HOME".into(), jail.home.to_string_lossy().into_owned()),
-        ("QD_HOME".into(), jail.root.join("sbhome").to_string_lossy().into_owned()),
+        ("QD_HOME".into(), jail.root.join("qdhome").to_string_lossy().into_owned()),
         ("XDG_RUNTIME_DIR".into(), jail.xdg_runtime.to_string_lossy().into_owned()),
         ("TMPDIR".into(), jail.root.join("tmp").to_string_lossy().into_owned()),
         ("ZMX_DIR".into(), jail.root.join("zmx").to_string_lossy().into_owned()),
@@ -107,7 +107,7 @@ fn release_jail_env(jail: &Jail) -> Vec<(String, String)> {
 /// `qd start <name>` through the RELEASE binary with the claude-shaped fake-claude
 /// shim execing `app`. `extra` adds env (QD_FAKE_NAME, QRMUX_TEST_SHARED, …).
 /// Returns the exit code. The daemon auto-launched is the release `qd qrmux-server`.
-fn release_sb_new(
+fn release_qd_new(
     jail: &Jail,
     fake: &Path,
     name: &str,
@@ -115,7 +115,7 @@ fn release_sb_new(
     extra: &[(String, String)],
 ) -> i32 {
     let _ = app_unused_marker; // app is baked into `fake`; kept for call-site clarity
-    let bin = release_sb_bin();
+    let bin = release_qd_bin();
     let mut cmd = Command::new(bin);
     cmd.args(["start", name]).env_clear();
     for (k, v) in release_jail_env(jail) {
@@ -146,7 +146,7 @@ fn release_sb_new(
 /// same as the split arm's daemons. Returns (DaemonGuard, shared.sock path).
 fn start_release_shared_daemon(jail: &Jail, dir: &Path) -> (DaemonGuard, PathBuf) {
     std::fs::create_dir_all(dir).ok();
-    let bin = release_sb_bin();
+    let bin = release_qd_bin();
     let mut cmd = Command::new(&bin);
     cmd.arg("qrmux-server")
         .arg("--socket-dir")
@@ -278,10 +278,10 @@ fn g_soak() {
     let window = Duration::from_secs(
         std::env::var("SOAK_WINDOW_S").ok().and_then(|s| s.parse().ok()).unwrap_or(60),
     );
-    let rel_sb = release_sb_bin();
+    let rel_qd = release_qd_bin();
     detail.push_str(&format!(
         "BUILD PROFILE: RELEASE (daemon = {})\nCONFIG: N_total={n_total} (quiet={n_quiet} + flooders={n_flood}), blast_threads={n_blast}, window={}s\nCHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat/flood-loop); NOT full fakerepl (delta named in header)\n",
-        rel_sb.display(),
+        rel_qd.display(),
         window.as_secs(),
     ));
 
@@ -375,12 +375,12 @@ fn g_soak() {
             // the realistic, claude-shaped path (the topology under gate).
             for i in 0..n_quiet {
                 let name = format!("q{i}");
-                if release_sb_new(&jail, &quiet_fake, &name, "cat", &[]) == 0 {
+                if release_qd_new(&jail, &quiet_fake, &name, "cat", &[]) == 0 {
                     booted += 1;
                 }
             }
             for f in &flooders {
-                if release_sb_new(&jail, &flood_fake, f, "flood", &[]) == 0 {
+                if release_qd_new(&jail, &flood_fake, f, "flood", &[]) == 0 {
                     booted += 1;
                 }
             }
@@ -581,13 +581,13 @@ fn g_idle() {
         .ok()
         .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![0, 1, 5, 10, 20]);
-    let rel_sb = release_sb_bin();
+    let rel_qd = release_qd_bin();
 
     detail.push_str(&format!(
         "BUILD PROFILE: RELEASE (daemon = {})\nMEASUREMENT: per-session daemon idle RSS at N = {points:?}; settle {}s each point.\n\
          CHILDREN: claude-shaped write_fake_claude shim (registry row + exec cat), NOT full fakerepl (delta: no convo/submit semantics — irrelevant to idle RSS).\n\
          MACOS RSS CAVEAT (spec §8): `ps -o rss` double-counts SHARED TEXT PAGES — N identical release binaries share their text segment, so ΣRSS OVERCOUNTS the true marginal fleet cost. PSS-honest numbers (smaps_rollup) require the Lima/Linux lane. NAMED FOLLOW-UP, not a blocker for this row.\n\n",
-        rel_sb.display(),
+        rel_qd.display(),
         settle.as_secs(),
     ));
 
@@ -605,7 +605,7 @@ fn g_idle() {
         let mut booted = 0usize;
         for i in 0..n {
             let name = format!("idle{i}");
-            let code = release_sb_new(&jail, &quiet_fake, &name, "cat", &[]);
+            let code = release_qd_new(&jail, &quiet_fake, &name, "cat", &[]);
             if code == 0 {
                 booted += 1;
             }

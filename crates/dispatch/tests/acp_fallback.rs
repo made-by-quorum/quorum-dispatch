@@ -8,7 +8,7 @@
 //! structured send was issued (the duplicate-delivery guard). Deterministic — no live bridge.
 
 use dispatch::effects::MapEnv;
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::provider::acp::{degrade_to_pty, derive_tier, on_inject_error, LadderOutcome, Tier};
 use dispatch::provider::{provider_for, InjectError, ProviderFx, SessionKey};
 use tempfile::TempDir;
@@ -16,7 +16,7 @@ use tempfile::TempDir;
 /// Build a minimal `ProviderFx` with `acp_client` set as given (None = ACP unavailable).
 fn fx_with_acp<'a>(
     env: &'a MapEnv,
-    paths: &'a SbPaths,
+    paths: &'a QdPaths,
     socket_dir: std::path::PathBuf,
     acp_client: Option<&'a dyn dispatch::provider::acp::AcpClient>,
 ) -> ProviderFx<'a> {
@@ -39,7 +39,7 @@ fn fx_with_acp<'a>(
 fn acp_unavailable_inject_drops_to_pty_floor_and_latches() {
     let tmp = TempDir::new().unwrap();
     let env = MapEnv::default();
-    let paths = SbPaths::from_home(tmp.path());
+    let paths = QdPaths::from_home(tmp.path());
     // ACP forced unavailable: no connected bridge client on the fx.
     let fx = fx_with_acp(&env, &paths, tmp.path().to_path_buf(), None);
 

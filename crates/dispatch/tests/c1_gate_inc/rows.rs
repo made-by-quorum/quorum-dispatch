@@ -77,7 +77,7 @@ fn g_sel() {
 
     // --- Arm 1: bogus QD_MUX → loud named error, exit code 2 (NOT 1). ---
     let jail = Jail::establish("gsel-bogus");
-    let (code, _out, err) = run_sb_env(&jail, &["ls", "--json"], &[("QD_MUX", "nonsense")]);
+    let (code, _out, err) = run_qd_env(&jail, &["ls", "--json"], &[("QD_MUX", "nonsense")]);
     let bogus_ok = code == 2 && err.contains("nonsense") && err.contains("zmx");
     detail.push_str(&format!(
         "bogus QD_MUX: exit={code} (want 2), stderr contains nonsense+zmx: {}\n  stderr: {}\n",
@@ -121,7 +121,7 @@ fn g_sel() {
     // mux liveness (embedded never scans the zmx universe; zmx-live appears, if at
     // all, only as a COLD/registry row with NO zmxName — never as an embedded mux
     // session).
-    let (c_emb, out_emb, _e) = run_sb(&jail, &["ls", "--json"]);
+    let (c_emb, out_emb, _e) = run_qd(&jail, &["ls", "--json"]);
     let emb_sessions = parse_ls_json(&out_emb);
     let emb_sees_own = emb_sessions.iter().any(|s| {
         s.get("name").and_then(|n| n.as_str()) == Some("emb-live")
@@ -143,7 +143,7 @@ fn g_sel() {
     // CANNOT surface emb-live's embedded mux liveness (the cross-lane invisibility
     // direction we assert positively: emb-live's MUX row is embedded-only). We
     // assert the zmx lane does NOT surface emb-live as a live MUX session.
-    let (c_zmx, out_zmx, _e2) = run_sb_env(&jail, &["ls", "--json"], &[("QD_MUX", "zmx")]);
+    let (c_zmx, out_zmx, _e2) = run_qd_env(&jail, &["ls", "--json"], &[("QD_MUX", "zmx")]);
     let zmx_sessions = parse_ls_json(&out_zmx);
     let zmx_leaks_emb = zmx_sessions.iter().any(|s| {
         s.get("name").and_then(|n| n.as_str()) == Some("emb-live")
@@ -167,7 +167,7 @@ fn g_sel() {
     // Cleanup the zmx-world child (per-target): kill + reap (no zombie).
     let _ = zmx_child.kill();
     let _ = zmx_child.wait();
-    let _ = run_sb(&jail, &["stop", "--force", "emb-live"]);
+    let _ = run_qd(&jail, &["stop", "--force", "emb-live"]);
     drop(_guard);
     jail.teardown();
 
@@ -250,7 +250,7 @@ fn g_e() {
     let path_with_zmx = format!("{}:/usr/bin:/bin", zmx.parent().unwrap().display());
     create_env.push(("PATH", &path_with_zmx));
 
-    let (c_new, o_new, e_new) = run_sb_env(&jail, &["start", "ge-sess"], &create_env);
+    let (c_new, o_new, e_new) = run_qd_env(&jail, &["start", "ge-sess"], &create_env);
     detail.push_str(&format!(
         "qd start (zmx): exit={c_new}\n  stdout: {}\n  stderr: {}\n",
         o_new.trim(),
@@ -261,7 +261,7 @@ fn g_e() {
     let mut q_env = env.to_vec();
     q_env.push(("ZMX_DIR", zmx_dir.to_str().unwrap()));
     q_env.push(("PATH", &path_with_zmx));
-    let (c_ls, o_ls, _e) = run_sb_env(&jail, &["ls", "--json"], &q_env);
+    let (c_ls, o_ls, _e) = run_qd_env(&jail, &["ls", "--json"], &q_env);
     let listed = o_ls.contains("ge-sess");
     detail.push_str(&format!(
         "qd ls (zmx): exit={c_ls}, lists ge-sess={listed}\n"
@@ -321,7 +321,7 @@ fn g_e() {
             })
         })
         .unwrap_or(true); // missing dir = no sockets
-    let no_embedded_daemon = !sb_daemon_present_for(&embedded_dir);
+    let no_embedded_daemon = !qd_daemon_present_for(&embedded_dir);
     detail.push_str(&format!(
         "QRMUX ABSENT IN-LANE: no *.sock leaf at engine embedded dir {} = {no_embedded_socket}; no qd qrmux-server bound to it = {no_embedded_daemon}\n",
         embedded_dir.display()
@@ -330,7 +330,7 @@ fn g_e() {
     let positive_control_ok =
         zmx_socket_present && zmx_proc_present && no_embedded_socket && no_embedded_daemon;
 
-    let (c_kill, _o, e_k) = run_sb_env(&jail, &["stop", "--force", "ge-sess"], &q_env);
+    let (c_kill, _o, e_k) = run_qd_env(&jail, &["stop", "--force", "ge-sess"], &q_env);
     detail.push_str(&format!(
         "qd stop (zmx): exit={c_kill}\n  stderr: {}\n",
         e_k.trim()
@@ -410,7 +410,7 @@ fn g_crud() {
 
     // LIST (verbs 2/3: list + list_raw via `qd ls --json`): coherent JSON, session
     // present with zmxName + socketDir tagged to the engine-resolved dir.
-    let (c_ls, o_ls, e_ls) = run_sb(&jail, &["ls", "--json"]);
+    let (c_ls, o_ls, e_ls) = run_qd(&jail, &["ls", "--json"]);
     let sessions = parse_ls_json(&o_ls);
     let row = sessions
         .iter()
@@ -433,7 +433,7 @@ fn g_crud() {
     // session AND reads history on the wait/extract path. We send a marker and
     // assert the engine send path acks (exit 0). `cat` echoes input to its own
     // stdout, so the marker lands in history.
-    let (c_send, _o_s, e_s) = run_sb(&jail, &["send:pty", name, "CRUD_ECHO_MARKER"]);
+    let (c_send, _o_s, e_s) = run_qd(&jail, &["send:pty", name, "CRUD_ECHO_MARKER"]);
     let send_ok = c_send == 0;
     detail.push_str(&format!(
         "SEND: qd send:pty exit={c_send}\n  stderr: {}\n",
@@ -460,19 +460,19 @@ fn g_crud() {
 
     // ATTACH (verb 6) + DETACH + REATTACH through `qd connect` over a PTY
     // (the attach verb is a retired stub since STATE 22; same attach mechanic).
-    let mut att = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att = QdAttach::spawn(&jail, name, 80, 24);
     let attached = att.wait_for("CRUD_SENTINEL_42", 4000) || att.is_alive();
     detail.push_str(&format!("ATTACH: qd connect alive/replayed={attached}\n"));
     att.detach();
     // The daemon + session survive the detach (reattach must work).
-    let mut att2 = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att2 = QdAttach::spawn(&jail, name, 80, 24);
     let reattached = att2.is_alive();
     detail.push_str(&format!("REATTACH: second qd connect alive={reattached}\n"));
     att2.detach();
     ok &= attached && reattached;
 
     // WAIT (verb 7): `qd wait` on the live idle session reports idle, exit 0.
-    let (c_wait, o_wait, _e) = run_sb(&jail, &["wait", name]);
+    let (c_wait, o_wait, _e) = run_qd(&jail, &["wait", name]);
     let wait_ok = c_wait == 0 && o_wait.contains("idle");
     detail.push_str(&format!(
         "WAIT: qd wait exit={c_wait}, idle reported={wait_ok}\n"
@@ -480,7 +480,7 @@ fn g_crud() {
     ok &= wait_ok;
 
     // KILL (verb 8): `qd stop --force` reaps the session via the engine mux.
-    let (c_kill, _o, e_k) = run_sb(&jail, &["stop", "--force", name]);
+    let (c_kill, _o, e_k) = run_qd(&jail, &["stop", "--force", name]);
     let kill_ok = c_kill == 0;
     detail.push_str(&format!(
         "KILL: qd stop --force exit={c_kill}\n  stderr: {}\n",
@@ -580,7 +580,7 @@ fn g_alt() {
 
     // Attach: drive less to render (altscreen active), then quit less (q) to
     // restore the primary screen, then capture.
-    let mut att = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att = QdAttach::spawn(&jail, name, 80, 24);
     let render_during = att.wait_for("less-line", 4000);
     detail.push_str(&format!(
         "render-during (less content visible while attached)={render_during}\n"
@@ -610,7 +610,7 @@ fn g_alt() {
     // restore-equivalence: after less quits, a FRESH reattach replay must show the
     // primary-screen content (the screen-model snapshot), not stuck in altscreen —
     // and being a main-screen attach, it must carry zero 1049 sequences.
-    let mut att2 = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att2 = QdAttach::spawn(&jail, name, 80, 24);
     let restored = att2.is_alive();
     let raw2 = att2.output_bytes();
     let main_clean = assert_altscreen_replay(&raw2, 0, 0, "g-alt-reattach").is_ok();
@@ -622,7 +622,7 @@ fn g_alt() {
 
     write_artifact("g-alt", "replay.bin", &raw);
 
-    let _ = run_sb(&jail, &["stop", "--force", name]);
+    let _ = run_qd(&jail, &["stop", "--force", name]);
     drop(guard);
     jail.teardown();
 
@@ -659,13 +659,13 @@ fn g_scroll() {
     std::thread::sleep(Duration::from_millis(1500));
 
     // attach → capture replay → detach → reattach → capture again.
-    let mut att = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att = QdAttach::spawn(&jail, name, 80, 24);
     att.wait_for("scroll-mark-", 4000);
     std::thread::sleep(Duration::from_millis(500));
     let raw1 = att.output_bytes();
     att.detach();
 
-    let mut att2 = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att2 = QdAttach::spawn(&jail, name, 80, 24);
     att2.wait_for("scroll-mark-", 4000);
     std::thread::sleep(Duration::from_millis(500));
     let raw2 = att2.output_bytes();
@@ -692,7 +692,7 @@ fn g_scroll() {
     ));
     detail.push_str("NOTE: engine attach yields a SETTLED screen render; this is the order-blind tail check (honestly weaker than qrmux assert_backlog_ordered which needs wire-order History frames — red-team #12). The wire-order ordered comparator is covered at the crate level (qrmux b3_replay).\n");
 
-    let _ = run_sb(&jail, &["stop", "--force", name]);
+    let _ = run_qd(&jail, &["stop", "--force", name]);
     drop(guard);
     jail.teardown();
 
@@ -725,7 +725,7 @@ fn g_uni() {
     forge_registry_row(&jail, name, sess.pid as u32);
     std::thread::sleep(Duration::from_millis(400));
 
-    let mut att = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att = QdAttach::spawn(&jail, name, 80, 24);
     let landed = att.wait_for("UNI_START", 4000) && att.wait_for("UNI_END", 4000);
     std::thread::sleep(Duration::from_millis(300));
     let raw = att.output_bytes();
@@ -745,7 +745,7 @@ fn g_uni() {
     ));
 
     let ok = landed && cjk_ok && glyphs_present;
-    let _ = run_sb(&jail, &["stop", "--force", name]);
+    let _ = run_qd(&jail, &["stop", "--force", name]);
     drop(guard);
     jail.teardown();
 
@@ -778,7 +778,7 @@ fn g_winch() {
     let sess = mux_create(&jail, &dir, name, &cmd);
     forge_registry_row(&jail, name, sess.pid as u32);
 
-    let mut att = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att = QdAttach::spawn(&jail, name, 80, 24);
     // Resize storm: the engine attach inherits the client PTY's winsize; resizing
     // the MASTER triggers SIGWINCH → the client forwards a Resize to the daemon →
     // TIOCSWINSZ on the session PTY. We resize the master repeatedly during the
@@ -816,7 +816,7 @@ fn g_winch() {
     ));
     let ok = done && cjk.is_ok() && main_clean;
 
-    let _ = run_sb(&jail, &["stop", "--force", name]);
+    let _ = run_qd(&jail, &["stop", "--force", name]);
     drop(guard);
     jail.teardown();
 
@@ -848,7 +848,7 @@ fn g_det() {
     forge_registry_row(&jail, name, sess.pid as u32);
 
     // Attach, wait for stream to be flowing, then SIGKILL the client mid-stream.
-    let mut att = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att = QdAttach::spawn(&jail, name, 80, 24);
     let flowing = att.wait_for("det-stream-", 4000);
     detail.push_str(&format!("client attached + stream flowing={flowing}\n"));
     att.kill9();
@@ -879,7 +879,7 @@ fn g_det() {
 
     // REATTACH replay complete: a fresh attach replays the session, carrying the
     // post-stream marker (the session kept producing after the client died).
-    let mut att2 = SbAttach::spawn(&jail, name, 80, 24);
+    let mut att2 = QdAttach::spawn(&jail, name, 80, 24);
     let replay_ok = att2.wait_for("DET_POST", 5000) || att2.is_alive();
     let raw2 = att2.output_bytes();
     att2.detach();
@@ -889,7 +889,7 @@ fn g_det() {
     ));
 
     let ok = flowing && daemon_alive && listed && replay_ok;
-    let _ = run_sb(&jail, &["stop", "--force", name]);
+    let _ = run_qd(&jail, &["stop", "--force", name]);
     drop(guard);
     jail.teardown();
 
@@ -1018,7 +1018,7 @@ fn g_burst() {
         ledger_path.display()
     ));
 
-    let _ = run_sb(&jail, &["stop", "--force", name]);
+    let _ = run_qd(&jail, &["stop", "--force", name]);
     drop(guard);
     jail.teardown();
 
@@ -1069,7 +1069,7 @@ fn g_seam_a() {
     let mut cycles_ok = 0usize;
     let mux = mux_for(&jail);
     for cyc in 0..cycles {
-        let mut att = SbAttach::spawn(&jail, name, 80, 24);
+        let mut att = QdAttach::spawn(&jail, name, 80, 24);
         att.wait_for("seam-line-", 3000);
         std::thread::sleep(Duration::from_millis(120));
         // The "final pre-detach line": read the engine history just before detach
@@ -1085,7 +1085,7 @@ fn g_seam_a() {
         att.detach();
         // Reattach and assert the final-pre-detach line is present in replay (the
         // seam: last-line-loss hunt).
-        let mut att2 = SbAttach::spawn(&jail, name, 80, 24);
+        let mut att2 = QdAttach::spawn(&jail, name, 80, 24);
         let present = if let Some(idx) = last_idx {
             // The reattach replay must carry up to at least last_idx (the stream
             // keeps producing, so we look for the marker AT OR AFTER the detach
@@ -1135,7 +1135,7 @@ fn g_seam_a() {
     }
 
     let ok = cycles_ok == cycles;
-    let _ = run_sb(&jail, &["stop", "--force", name]);
+    let _ = run_qd(&jail, &["stop", "--force", name]);
     drop(guard);
     jail.teardown();
 
@@ -1160,7 +1160,7 @@ fn g_neg() {
 
     // --- (ii) selector bogus arm: QD_MUX=bogus → exit 2 + named error. ---
     let jail = Jail::establish("gneg-bogus");
-    let (code, _o, err) = run_sb_env(&jail, &["ls", "--json"], &[("QD_MUX", "garbage-value")]);
+    let (code, _o, err) = run_qd_env(&jail, &["ls", "--json"], &[("QD_MUX", "garbage-value")]);
     let bogus_ok = code == 2 && err.contains("garbage-value") && err.contains("zmx");
     detail.push_str(&format!(
         "(ii) selector bogus arm: exit={code} (want 2), named error present={}\n  stderr: {}\n",
@@ -1189,7 +1189,7 @@ fn g_neg() {
     // cleaner drop signal than the screen render.
     let hist_h = strip_ansi(&mux_h.history(&dir_h, name).unwrap_or_default());
     let healthy_count = hist_h.lines().filter(|l| l.contains("neg-mark-")).count();
-    let _ = run_sb(&jail_h, &["stop", "--force", name]);
+    let _ = run_qd(&jail_h, &["stop", "--force", name]);
     drop(guard_h);
     jail_h.teardown();
 
@@ -1220,7 +1220,7 @@ fn g_neg() {
                     .unwrap_or(false)
         })
         .count();
-    let _ = run_sb(&jail_b, &["stop", "--force", name]);
+    let _ = run_qd(&jail_b, &["stop", "--force", name]);
     drop(guard_b);
     jail_b.teardown();
 
@@ -1248,7 +1248,7 @@ fn g_neg() {
     let fake_s = fake.to_string_lossy().into_owned();
     let path_no_zmx = emptybin.to_string_lossy().into_owned();
     let zmx_dir_s = zmx_dir.to_string_lossy().into_owned();
-    let (c_z, o_z, e_z) = run_sb_env(
+    let (c_z, o_z, e_z) = run_qd_env(
         &jail_z,
         &["start", "zabsent"],
         &[
@@ -1290,7 +1290,7 @@ fn g_neg() {
 // ===========================================================================
 // G-COLDSTART — NEW (C1 M4fix). The gate hole M4/M6 missed: production embedded
 // `qd start` COLD-START — NO pre-spawned daemon. Drives the real `qd start` under
-// embedded default and asserts SB ITSELF auto-launched the qrmux daemon (via the
+// embedded default and asserts QD ITSELF auto-launched the qrmux daemon (via the
 // hidden `qd qrmux-server` entry, NOT the broken `current_exe() server`). Plus a
 // MUTATION CONTROL: sever the launch wiring (point the daemon program at a
 // nonexistent binary) → the SAME cold-start path MUST RED.
@@ -1303,7 +1303,7 @@ fn g_neg() {
 /// Is an `qd qrmux-server` daemon process bound to `dir` alive? Greps `ps` for
 /// the embedded daemon entry argv carrying this socket dir. (The daemon is the
 /// `qd` binary re-execed as `qd qrmux-server --socket-dir <dir>`.)
-fn sb_daemon_present_for(dir: &Path) -> bool {
+fn qd_daemon_present_for(dir: &Path) -> bool {
     let out = Command::new("/bin/ps").args(["-axo", "args="]).output();
     let Ok(o) = out else { return false };
     let want = dir.to_string_lossy();
@@ -1313,8 +1313,8 @@ fn sb_daemon_present_for(dir: &Path) -> bool {
 }
 
 /// Reap any `qd qrmux-server` daemon bound to `dir` (cold-start teardown: the
-/// daemon SB launched is parented to init via setsid, so no guard owns it).
-fn reap_sb_daemons_for(dir: &Path) {
+/// daemon QD launched is parented to init via setsid, so no guard owns it).
+fn reap_qd_daemons_for(dir: &Path) {
     let out = Command::new("/bin/ps").args(["-axo", "pid=,args="]).output();
     let Ok(o) = out else { return };
     let want = dir.to_string_lossy();
@@ -1349,7 +1349,7 @@ fn g_coldstart() {
     // per-session daemon up (WS-C M3b: it binds `<name>.sock`, not `qrmux.sock`).
     let socket = dir.join(format!("{name}.sock"));
     let pre_no_socket = !socket.exists();
-    let pre_no_daemon = !sb_daemon_present_for(&dir);
+    let pre_no_daemon = !qd_daemon_present_for(&dir);
     detail.push_str(&format!(
         "PRE-SPAWN-FREE: no socket at {} = {pre_no_socket}; no qd daemon bound = {pre_no_daemon}\n",
         socket.display()
@@ -1360,9 +1360,9 @@ fn g_coldstart() {
     let fake_s = fake.to_string_lossy().into_owned();
     let create_env: &[(&str, &str)] = &[("CLAUDE_BIN", &fake_s), ("QD_FAKE_NAME", name)];
 
-    // --- COLD START: the FIRST `qd start` under embedded default. SB must launch
+    // --- COLD START: the FIRST `qd start` under embedded default. QD must launch
     //     the daemon itself (no pre-spawn). End-to-end success = exit 0. --------
-    let (c_new, o_new, e_new) = run_sb_env(&jail, &["start", name], create_env);
+    let (c_new, o_new, e_new) = run_qd_env(&jail, &["start", name], create_env);
     let new_ok = c_new == 0;
     detail.push_str(&format!(
         "COLD-START qd start: exit={c_new} (want 0)\n  stdout: {}\n  stderr: {}\n",
@@ -1371,39 +1371,39 @@ fn g_coldstart() {
     ));
     ok &= new_ok;
 
-    // --- ASSERT SB AUTO-LAUNCHED THE DAEMON ----------------------------------
+    // --- ASSERT QD AUTO-LAUNCHED THE DAEMON ----------------------------------
     // Socket now exists at the engine-resolved dir AND an `qd qrmux-server`
-    // daemon bound to it is alive — proves SB (not the test) stood it up.
+    // daemon bound to it is alive — proves QD (not the test) stood it up.
     let post_socket = socket.exists();
-    let post_daemon = sb_daemon_present_for(&dir);
+    let post_daemon = qd_daemon_present_for(&dir);
     detail.push_str(&format!(
         "AUTO-LAUNCH: socket present at engine dir={post_socket}; qd qrmux-server daemon bound={post_daemon}\n"
     ));
     ok &= post_socket && post_daemon;
 
     // --- CHAIN: the cold-started session is usable (send + history + kill) ----
-    let (c_ls, o_ls, _e) = run_sb(&jail, &["ls", "--json"]);
+    let (c_ls, o_ls, _e) = run_qd(&jail, &["ls", "--json"]);
     let listed = parse_ls_json(&o_ls)
         .iter()
         .any(|s| s.get("name").and_then(|n| n.as_str()) == Some(name));
     detail.push_str(&format!("CHAIN ls: exit={c_ls}, lists {name}={listed}\n"));
     ok &= c_ls == 0 && listed;
 
-    let (c_send, _o_s, e_s) = run_sb(&jail, &["send:pty", name, "COLD_MARKER"]);
+    let (c_send, _o_s, e_s) = run_qd(&jail, &["send:pty", name, "COLD_MARKER"]);
     detail.push_str(&format!(
         "CHAIN send:pty: exit={c_send}\n  stderr: {}\n",
         e_s.trim()
     ));
     ok &= c_send == 0;
 
-    let (c_kill, _o, e_k) = run_sb(&jail, &["stop", "--force", name]);
+    let (c_kill, _o, e_k) = run_qd(&jail, &["stop", "--force", name]);
     detail.push_str(&format!(
         "CHAIN kill: exit={c_kill}\n  stderr: {}\n",
         e_k.trim()
     ));
     ok &= c_kill == 0;
 
-    reap_sb_daemons_for(&dir);
+    reap_qd_daemons_for(&dir);
 
     // --- MUTATION CONTROL: sever the launch wiring → cold start MUST RED ------
     // Point the embedded daemon program at a NONEXISTENT binary. The SAME cold-
@@ -1421,7 +1421,7 @@ fn g_coldstart() {
         ("QD_FAKE_NAME", "mut-sess"),
         ("QD_EMBEDDED_DAEMON_PROGRAM", &bogus_s),
     ];
-    let (c_mut, o_mut, e_mut) = run_sb_env(&jail_m, &["start", "mut-sess"], mut_env);
+    let (c_mut, o_mut, e_mut) = run_qd_env(&jail_m, &["start", "mut-sess"], mut_env);
     // WS-C M3b: the per-session leaf the severed cold-start would have bound.
     let mut_socket = dir_m.join("mut-sess.sock");
     let mut_red = c_mut != 0 && !mut_socket.exists();
@@ -1436,13 +1436,13 @@ fn g_coldstart() {
         e_mut.trim()
     ));
     ok &= mut_red && names_embedded;
-    reap_sb_daemons_for(&dir_m);
+    reap_qd_daemons_for(&dir_m);
     jail_m.teardown();
 
     jail.teardown();
 
     let verdict = if ok {
-        "G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `qd start` cold-start: SB auto-launched the daemon via `qd qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error"
+        "G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `qd start` cold-start: QD auto-launched the daemon via `qd qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error"
     } else {
         "G-COLDSTART VERDICT: FAIL"
     };

@@ -22,7 +22,7 @@
 set -u
 WT="$(cd "$(dirname "$0")/../../.." && pwd -P)"   # worktree root, NOT hardcoded
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/qd"
+export JAIL_QD_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 FAKEREPL_SRC="$WT/target/debug/fakerepl"
 . test/golden/lib/jail.sh
@@ -39,7 +39,7 @@ tmo(){ local s="$1"; shift; perl -e 'my $t=shift; my $pid=fork; if($pid==0){exec
 log "=== A4 BOOT-#6 PHASE A PRE-VERIFICATION (no real claude) ==="
 log "  date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 log "  worktree: $WT"
-log "  qd: $("$JAIL_SB_CMD" --version 2>&1 | head -1)"
+log "  qd: $("$JAIL_QD_CMD" --version 2>&1 | head -1)"
 
 # Prove the driver has NO timeout(1) anywhere (brief: grep it to prove).
 log ""
@@ -106,7 +106,7 @@ log "=== CHECK 2: fakerepl boot + qd wait rows (status-keyed) ==="
 NAME="${JAIL_PREFIX}fr"
 # Long busy hold so a kept-busy --timeout row can observe 'busy' across a 5s wait.
 export QD_FAKEREPL_BUSY_MS=6000
-( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
+( cd "$WORKDIR" && QD_CLAUDE_FLAGS="--dangerously-skip-permissions" "$JAIL_QD_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 code=$?
 log "  qd new exit=$code : $(cat "$JAIL_ROOT/o")"
 [ -s "$JAIL_ROOT/e" ] && { log "  stderr:"; sed 's/^/    /' "$JAIL_ROOT/e" | tee -a "$EV"; }
@@ -115,24 +115,24 @@ jail_assert_resolves_in_jail "$NAME" || { log "  RESOLUTION BELT REFUSED for $NA
 log "  resolution belt: $NAME resolves uniquely in-jail (OK)"
 
 # 2a. qd wait on an IDLE session -> exit 0, 'is idle'
-out="$(tmo 10 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
+out="$(tmo 10 "$JAIL_QD_CMD" wait "$NAME" 2>&1)"; rc=$?
 log "  2a qd wait (idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { [ "$rc" = "0" ] && printf '%s' "$out" | grep -qi "idle"; } && log "    PASS: idle-at-entry -> 'is idle' exit 0" || { log "    FAIL"; FAIL2a=1; }
 
 # 2b. qd wait on a BUSY session -> blocks until busy->idle then exit 0 ' done'.
 #     Drive busy via a submit (send msg, fakerepl goes busy for BUSY_MS).
-"$JAIL_SB_CMD" send:pty "$NAME" "drive a turn 2b" >/dev/null 2>&1
+"$JAIL_QD_CMD" send:pty "$NAME" "drive a turn 2b" >/dev/null 2>&1
 ws "$NAME" busy 5 >/dev/null 2>&1 || log "    WARN: did not observe busy for 2b"
-out="$(tmo 20 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
+out="$(tmo 20 "$JAIL_QD_CMD" wait "$NAME" 2>&1)"; rc=$?
 log "  2b qd wait (busy->idle) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { [ "$rc" = "0" ] && printf '%s' "$out" | grep -qi "done"; } && log "    PASS: busy -> ' done' exit 0" || { log "    FAIL"; FAIL2b=1; }
 ws "$NAME" idle 15 || true
 
 # 2c. qd wait --timeout 5 against a KEPT-BUSY session -> ' timeout' exit 1.
 #     BUSY_MS=6000 > 5s timeout, so the wait must time out while still busy.
-"$JAIL_SB_CMD" send:pty "$NAME" "drive a long turn 2c" >/dev/null 2>&1
+"$JAIL_QD_CMD" send:pty "$NAME" "drive a long turn 2c" >/dev/null 2>&1
 ws "$NAME" busy 5 >/dev/null 2>&1 || log "    WARN: did not observe busy for 2c"
-out="$(tmo 20 "$JAIL_SB_CMD" wait "$NAME" --timeout 5 2>&1)"; rc=$?
+out="$(tmo 20 "$JAIL_QD_CMD" wait "$NAME" --timeout 5 2>&1)"; rc=$?
 log "  2c qd wait --timeout 5 (kept busy) rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { [ "$rc" = "1" ] && printf '%s' "$out" | grep -qi "timeout"; } && log "    PASS: kept-busy --timeout 5 -> ' timeout' exit 1" || { log "    FAIL (rc=$rc)"; FAIL2c=1; }
 ws "$NAME" idle 15 || true
@@ -144,7 +144,7 @@ log ""
 log "=== CHECK 3: send:pty path ==="
 ws "$NAME" idle 10 || true
 jail_assert_resolves_in_jail "$NAME" || { log "  RESOLUTION BELT REFUSED (check3)"; exit 4; }
-out="$("$JAIL_SB_CMD" send:pty "$NAME" "plain send path check" 2>&1)"; rc=$?
+out="$("$JAIL_QD_CMD" send:pty "$NAME" "plain send path check" 2>&1)"; rc=$?
 log "  3 send:pty rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 { printf '%s' "$out" | grep -qi "Message sent"; } && log "    PASS: send path accepted ('Message sent')" || { log "    FAIL"; FAIL3=1; }
 ws "$NAME" idle 15 || true
@@ -158,7 +158,7 @@ ws "$NAME" idle 10 || true
 jail_assert_resolves_in_jail "$NAME" || { log "  RESOLUTION BELT REFUSED (check4)"; exit 4; }
 # fakerepl writes NO conversation JSONL, so --wait must hit the documented
 # precondition failure: "Cannot find conversation JSONL file." + exit 1.
-out="$(tmo 15 "$JAIL_SB_CMD" send:pty "$NAME" "would-wait msg" --wait --timeout 5 2>&1)"; rc=$?
+out="$(tmo 15 "$JAIL_QD_CMD" send:pty "$NAME" "would-wait msg" --wait --timeout 5 2>&1)"; rc=$?
 log "  4 send:pty --wait rc=$rc out=[$(printf '%s' "$out"|tr '\n' '|')]"
 if [ "$rc" = "1" ] && printf '%s' "$out" | grep -qi "Cannot find conversation JSONL"; then
     log "    PASS: --wait fails CLEAN (documented: no JSONL -> exit 1, NOT rc=127)"
@@ -173,7 +173,7 @@ fi
 # ---------------------------------------------------------------------------
 # Teardown + belt
 # ---------------------------------------------------------------------------
-"$JAIL_SB_CMD" ls --all --short 2>/dev/null | grep -q "$NAME" && jail_kill_session "$NAME" >/dev/null 2>&1
+"$JAIL_QD_CMD" ls --all --short 2>/dev/null | grep -q "$NAME" && jail_kill_session "$NAME" >/dev/null 2>&1
 "$JAIL_ZMX_CMD" kill "$NAME" --force >/dev/null 2>&1 || true
 sleep 1
 log ""

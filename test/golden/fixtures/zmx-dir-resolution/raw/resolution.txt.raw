@@ -1,5 +1,5 @@
-Started detached session "sbrg-w41z-zd"
-Waiting for "sbrg-w41z-zd" to be ready. [enter] found ready
-case=ZMX_DIR_explicit expected=/tmp/sbrg-runs/w41z/zmx resolved=/tmp/sbrg-runs/w41z/zmx
+Started detached session "qdrg-w41z-zd"
+Waiting for "qdrg-w41z-zd" to be ready. [enter] found ready
+case=ZMX_DIR_explicit expected=/tmp/qdrg-runs/w41z/zmx resolved=/tmp/qdrg-runs/w41z/zmx
 case=TMPDIR_fallback note=collapse-outcome-Linux-Step3
 case=XDG_RUNTIME_DIR note=Linux-only-Step3

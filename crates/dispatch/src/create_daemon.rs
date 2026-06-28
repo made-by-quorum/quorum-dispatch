@@ -18,7 +18,7 @@
 //!      lesson); ×N retry ladder if the daemon later fails to bind.
 //!   3. spawn DETACHED (§3.2, P-2-proven) — argv = provider launch_plan argv +
 //!      `["--listen", "ws://127.0.0.1:<port>"]`, `process_group(0)`, stdout/stderr
-//!      → `<sb_home>/.quorum/dispatch/log/codex-<name>.log`, cwd = session cwd.
+//!      → `<qd_home>/.quorum/dispatch/log/codex-<name>.log`, cwd = session cwd.
 //!   4. ws connect (bounded retry — the daemon needs a moment to listen) →
 //!      initialize handshake (+ initialized) → thread/start(cwd, FULL-BYPASS
 //!      policy) → the thread id.
@@ -204,7 +204,7 @@ pub struct DaemonDeps<'a> {
     /// The claim is taken BEFORE the spawn loop, held through the row write, and
     /// released on EVERY exit path (RAII), mirroring create.rs exactly.
     pub claims_dir: PathBuf,
-    /// The log dir root for the daemon's stdout/stderr (`<sb_home>/.quorum/dispatch/log`);
+    /// The log dir root for the daemon's stdout/stderr (`<qd_home>/.quorum/dispatch/log`);
     /// the file is `codex-<name>.log` (codex-p2-spec §3.2).
     pub log_dir: PathBuf,
     /// The detached-spawn seam (real spawner in production; a fake in units).
@@ -436,7 +436,7 @@ pub fn run_new_daemon<'a>(
     // the id at spawn time → mint UNBOUND now (ONE id across all retry
     // attempts — the same daemon identity whichever spawn wins), bind to the
     // thread id in finish_create. Fail-closed on a mint error (nothing spawned).
-    let sb_session_id =
+    let qd_session_id =
         crate::idstore::mint_unbound(&deps.ids_path, Some(&params.name), deps.clock)
             .map_err(|detail| DaemonError::IdMintFailed { detail })?;
 
@@ -445,7 +445,7 @@ pub fn run_new_daemon<'a>(
     // failure; we re-roll the port and respawn. A connected rpc breaks the loop.
     let mut last_err: Option<DaemonError> = None;
     for _ in 0..SPAWN_RETRIES {
-        match try_spawn_and_connect(deps, params, &sb_session_id) {
+        match try_spawn_and_connect(deps, params, &qd_session_id) {
             Ok((spawned, endpoint, rpc)) => {
                 // Steps 4b-6 happen with the connected rpc; any failure there
                 // kills the daemon + returns (no further retry — the daemon IS
@@ -456,7 +456,7 @@ pub fn run_new_daemon<'a>(
                     spawned,
                     &endpoint,
                     rpc.as_ref(),
-                    &sb_session_id,
+                    &qd_session_id,
                 );
             }
             Err((err, spawned)) => {
@@ -531,7 +531,7 @@ fn unpinned_override(env: &dyn Env) -> bool {
 fn try_spawn_and_connect<'a>(
     deps: &'a DaemonDeps<'a>,
     params: &DaemonParams,
-    sb_session_id: &str,
+    qd_session_id: &str,
 ) -> Result<(SpawnedDaemon, String, Box<dyn AppServerRpc + 'a>), (DaemonError, Option<SpawnedDaemon>)>
 {
     // Step 2: port allocation (re-roll handled inside the allocator).
@@ -551,7 +551,7 @@ fn try_spawn_and_connect<'a>(
     let fx = ProviderFx {
         env: deps.env,
         // launch_plan reads only env (codex) — paths/socket_dir/mux/etc. unused;
-        // a placeholder SbPaths keeps the borrow valid without a real home.
+        // a placeholder QdPaths keeps the borrow valid without a real home.
         paths: &placeholder_paths(),
         socket_dir: PathBuf::new(),
         mux: None,
@@ -581,7 +581,7 @@ fn try_spawn_and_connect<'a>(
     // pre-minted stable id — an explicit set layered over the launch plan's env,
     // so it overrides anything inherited through the commissioner's subtree.
     let mut spawn_env = plan.env.clone();
-    spawn_env.push(("QD_SESSION_ID".to_string(), sb_session_id.to_string()));
+    spawn_env.push(("QD_SESSION_ID".to_string(), qd_session_id.to_string()));
 
     let log_path = deps.log_dir.join(format!("codex-{}.log", params.name));
     let spawned = match deps
@@ -620,7 +620,7 @@ fn finish_create(
     spawned: SpawnedDaemon,
     endpoint: &str,
     rpc: &dyn AppServerRpc,
-    sb_session_id: &str,
+    qd_session_id: &str,
 ) -> Result<DaemonOutcome, DaemonError> {
     // Step 4b: initialize handshake (readiness) + the bare `initialized`
     // notification the spike follows it with.
@@ -654,9 +654,9 @@ fn finish_create(
     // exists — from here the id in the daemon's env equals the id the
     // registry/ls surface. A bind failure warns (the daemon is up; tearing it
     // down would not help) — never silent.
-    if let Err(e) = crate::idstore::bind(&deps.ids_path, sb_session_id, &thread_id, deps.clock) {
+    if let Err(e) = crate::idstore::bind(&deps.ids_path, qd_session_id, &thread_id, deps.clock) {
         eprintln!(
-            "WARNING: could not bind stable id {sb_session_id} to codex thread \
+            "WARNING: could not bind stable id {qd_session_id} to codex thread \
              {thread_id}: {e} — `qd ls` may surface a different id than the \
              daemon's QD_SESSION_ID."
         );
@@ -749,11 +749,11 @@ fn connect_with_retry<'a>(
     }
 }
 
-/// A throwaway [`crate::paths::SbPaths`] for the launch_plan fx — codex's
+/// A throwaway [`crate::paths::QdPaths`] for the launch_plan fx — codex's
 /// launch_plan reads ONLY env, never paths, so an empty-home layout is a valid
 /// value (the minimal-fx negative control extends to the create sequence).
-fn placeholder_paths() -> crate::paths::SbPaths {
-    crate::paths::SbPaths::from_home(std::path::Path::new(""))
+fn placeholder_paths() -> crate::paths::QdPaths {
+    crate::paths::QdPaths::from_home(std::path::Path::new(""))
 }
 
 /// W9 FIX M-2 + B4 item 10/S4: the O_EXCL claim payload, built by the shared

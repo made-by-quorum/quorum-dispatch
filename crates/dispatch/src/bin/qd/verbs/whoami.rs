@@ -15,7 +15,7 @@ use serde_json::json;
 use dispatch::effects::{Env, RealEnv};
 use dispatch::exec::RealExec;
 use dispatch::idstore::IdMap;
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::registry::RegistryEntry;
 
 /// One resolved identity + which path answered it.
@@ -23,7 +23,7 @@ struct Answer {
     name: Option<String>,
     session_id: String,
     pid: Option<i64>,
-    sb_id: Option<String>,
+    qd_id: Option<String>,
     source: &'static str, // "env" | "ppid"
 }
 
@@ -33,9 +33,9 @@ struct Answer {
 /// Env path: a well-formed `QD_SESSION_ID` that the idstore fold maps to a
 /// provider UUID answers as `source: "env"`; name/pid come from the live
 /// registry row carrying that UUID when one exists (a cold session still
-/// answers — sessionId + sbId are known without a row). Otherwise (unset,
+/// answers — sessionId + qdId are known without a row). Otherwise (unset,
 /// malformed, or unmapped id) fall back to `walk` — the ppid-chain registry
-/// hit — as `source: "ppid"`, with sbId joined read-only from the fold.
+/// hit — as `source: "ppid"`, with qdId joined read-only from the fold.
 fn resolve_identity(
     env_id: Option<String>,
     ids: &IdMap,
@@ -53,14 +53,14 @@ fn resolve_identity(
                 name: row.as_ref().and_then(|r| r.name.clone()),
                 session_id: uuid,
                 pid: row.as_ref().and_then(|r| r.pid),
-                sb_id: Some(dispatch::idstore::normalize(&raw)),
+                qd_id: Some(dispatch::idstore::normalize(&raw)),
                 source: "env",
             });
         }
         // Malformed / unmapped → fall through to the walk (never guess).
     }
     let entry = walk()?;
-    let sb_id = entry
+    let qd_id = entry
         .session_id
         .as_deref()
         .filter(|s| !s.is_empty())
@@ -70,7 +70,7 @@ fn resolve_identity(
         name: entry.name,
         session_id: entry.session_id.unwrap_or_default(),
         pid: entry.pid,
-        sb_id,
+        qd_id,
         source: "ppid",
     })
 }
@@ -86,10 +86,10 @@ pub fn run(m: &ArgMatches) -> i32 {
             return 1;
         }
     };
-    let paths = SbPaths::from_home(std::path::Path::new(&home));
+    let paths = QdPaths::from_home(std::path::Path::new(&home));
 
     // READ-ONLY idstore fold (whoami never mints) — QD_HOME-honoring path.
-    let state_dir = SbPaths::from_home_env(std::path::Path::new(&home), &env).state_dir;
+    let state_dir = QdPaths::from_home_env(std::path::Path::new(&home), &env).state_dir;
     let ids = dispatch::idstore::fold(&dispatch::idstore::ids_path(&state_dir));
 
     let row_for_uuid = |uuid: &str| -> Option<RegistryEntry> {
@@ -108,15 +108,15 @@ pub fn run(m: &ArgMatches) -> i32 {
         Some(ans) => {
             if json {
                 // commands/status.ts:201-206 — {name: name||null, sessionId, pid},
-                // plus the P0 additive keys sbId (when mapped) + identitySource.
+                // plus the P0 additive keys qdId (when mapped) + identitySource.
                 let mut out = json!({
                     "name": ans.name.clone().filter(|n| !n.is_empty()),
                     "sessionId": ans.session_id,
                     "pid": ans.pid,
                     "identitySource": ans.source,
                 });
-                if let Some(id) = &ans.sb_id {
-                    out["sbId"] = json!(id);
+                if let Some(id) = &ans.qd_id {
+                    out["qdId"] = json!(id);
                 }
                 println!("{out}");
             } else {
@@ -170,11 +170,11 @@ mod tests {
         assert_eq!(ans.session_id, "uuid-env");
         assert_eq!(ans.name.as_deref(), Some("wk"));
         assert_eq!(ans.pid, Some(4242));
-        assert_eq!(ans.sb_id.as_deref(), Some("ab3kx9mq"));
+        assert_eq!(ans.qd_id.as_deref(), Some("ab3kx9mq"));
     }
 
     /// A cold session (no registry row) still answers on the env path —
-    /// sessionId + sbId are known without a row; name/pid are absent.
+    /// sessionId + qdId are known without a row; name/pid are absent.
     #[test]
     fn env_id_without_registry_row_still_answers() {
         let ids = ids(STORE);
@@ -195,8 +195,8 @@ mod tests {
         let ans = resolve_identity(None, &ids, &rows, &walk).unwrap();
         assert_eq!(ans.source, "ppid");
         assert_eq!(ans.session_id, "uuid-walk");
-        // sbId joined read-only from the fold on the walk path too.
-        assert_eq!(ans.sb_id.as_deref(), Some("cd47qrst"));
+        // qdId joined read-only from the fold on the walk path too.
+        assert_eq!(ans.qd_id.as_deref(), Some("cd47qrst"));
     }
 
     /// Unresolvable env values (malformed shape, unmapped id, empty) fall back

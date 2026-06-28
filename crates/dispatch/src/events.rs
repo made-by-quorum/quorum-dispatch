@@ -610,7 +610,7 @@ fn build_record_line(env: &Envelope, payload: &Payload, sha_cap: usize) -> Strin
 // ===========================================================================
 
 /// Resolve the engine events file for a session (§4.1). `state_dir` is the
-/// caller-resolved `SbPaths.state_dir` (QD_HOME-honoring via the injected Env
+/// caller-resolved `QdPaths.state_dir` (QD_HOME-honoring via the injected Env
 /// upstream — never literal /tmp, ADD-14). `key` is the sessionId when known,
 /// else `byname-<name>` (the §10 D5 fallback the caller composes via
 /// [`byname_key`]). `byname-` cannot collide with a sessionId (uuid alphabet).

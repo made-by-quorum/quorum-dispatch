@@ -22,7 +22,7 @@ const CLAUDE_BIN: &str = "/home/u/.local/bin/claude";
 const LIVE_CREDS: &str = "/home/u/.claude/.credentials.json";
 
 /// One isolated sandbox: synthetic HOME + CLAUDE_CONFIG_DIR, OAuth credential
-/// copied in, a trusted work cwd. Mirrors `lib.sh` sbx_create. Destroyed on drop.
+/// copied in, a trusted work cwd. Mirrors `lib.sh` qb_create. Destroyed on drop.
 struct Sandbox {
     root: PathBuf,
     config: PathBuf,
@@ -417,7 +417,7 @@ fn all_msg_session_ids_eq(records: &[Value], id: &str) -> bool {
 
 #[test]
 #[ignore = "real-claude; run explicitly with --ignored"]
-fn fidelity_gate_sb_seed_equals_native_fork_session() {
+fn fidelity_gate_qd_seed_equals_native_fork_session() {
     let Some(qb) = Sandbox::create() else {
         eprintln!("SKIP fidelity_gate: claude binary or credentials absent");
         return;

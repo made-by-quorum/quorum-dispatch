@@ -69,7 +69,7 @@ EOF
 EOF
 
     # ONE ls --json read observes the whole noisy registry.
-    scn_sb ls --json 2>/dev/null > "$SCN_OUT.lsjson"
+    scn_qd ls --json 2>/dev/null > "$SCN_OUT.lsjson"
     local ls_rc=$?
 
     python3 - "$SCN_OUT.lsjson" "$ls_rc" "$SCN_DUP_SID" "$SCN_DEAD_SID" > "$SCN_OUT" <<'PY'

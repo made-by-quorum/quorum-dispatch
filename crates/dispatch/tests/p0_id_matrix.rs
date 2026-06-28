@@ -52,7 +52,7 @@ use std::process::Command;
 // the jail-belt dir scaffold, and the jailed runner live in
 // tests/common/p0bins.rs (shared with p0_qafix.rs ONLY).
 use common::p0bins::{
-    establish_jail, fakerepl_bin, run_sb_jailed, sb_bin, qrmux_bin, JailScaffold,
+    establish_jail, fakerepl_bin, run_qd_jailed, qd_bin, qrmux_bin, JailScaffold,
 };
 
 fn require_bins() {
@@ -65,7 +65,7 @@ fn require_bins() {
 // ===========================================================================
 
 struct Jail {
-    /// The shared jail-belt scaffold (root/home/xdg/sb_home) — p0bins.
+    /// The shared jail-belt scaffold (root/home/xdg/qd_home) — p0bins.
     dirs: JailScaffold,
     /// A REAL dir used as the seeded transcripts' cwd (the resume cwd
     /// reality-check refuses a vanished dir).
@@ -158,7 +158,7 @@ impl Jail {
     }
 
     fn ids_path(&self) -> PathBuf {
-        self.dirs.sb_home.join("state").join("ids.jsonl")
+        self.dirs.qd_home.join("state").join("ids.jsonl")
     }
 
     fn ids_fold(&self) -> dispatch::idstore::IdMap {
@@ -173,7 +173,7 @@ impl Drop for Jail {
         // on PANIC too (this is why teardown lives in Drop here).
         let names: Vec<String> = self.created.borrow().clone();
         for name in names {
-            let _ = run_sb_inner(self, None, &["stop", "--force", &name]);
+            let _ = run_qd_inner(self, None, &["stop", "--force", &name]);
         }
         let _ = std::fs::remove_dir_all(&self.dirs.root);
         let _ = std::fs::remove_dir_all(&self.dirs.xdg);
@@ -182,15 +182,15 @@ impl Drop for Jail {
 
 /// Run `qd <args>` under the jail env. `claude_bin: None` ⇒ fakerepl directly
 /// (fine for non-launching verbs).
-fn run_sb_inner(jail: &Jail, claude_bin: Option<&Path>, args: &[&str]) -> (i32, String, String) {
+fn run_qd_inner(jail: &Jail, claude_bin: Option<&Path>, args: &[&str]) -> (i32, String, String) {
     let cb = claude_bin
         .map(Path::to_path_buf)
         .unwrap_or_else(fakerepl_bin);
-    run_sb_jailed(&jail.dirs, &cb, args, &[])
+    run_qd_jailed(&jail.dirs, &cb, args, &[])
 }
 
 /// Run a verb that may LAUNCH a session (start/resume) under `wrapper`.
-fn run_sb(jail: &Jail, wrapper: &Path, args: &[&str]) -> (i32, String, String) {
+fn run_qd(jail: &Jail, wrapper: &Path, args: &[&str]) -> (i32, String, String) {
     // WP-B-CS-1 (D2): force the INTERACTIVE surface for `qd start` — this harness's
     // wrapper is a fake-claude CLAUDE_BIN script, NOT a PTY for `qd`, so a bare start
     // would auto-detect the HEADLESS surface (and the mint/bind identity these tests
@@ -213,12 +213,12 @@ fn run_sb(jail: &Jail, wrapper: &Path, args: &[&str]) -> (i32, String, String) {
     } else {
         args
     };
-    run_sb_inner(jail, Some(wrapper), args)
+    run_qd_inner(jail, Some(wrapper), args)
 }
 
-/// `qd ls --all --json` rows as (name, sbId, sessionId, status) tuples.
+/// `qd ls --all --json` rows as (name, qdId, sessionId, status) tuples.
 fn ls_rows(jail: &Jail) -> Vec<(Option<String>, Option<String>, String, String)> {
-    let (code, out, err) = run_sb_inner(jail, None, &["ls", "--all", "--json"]);
+    let (code, out, err) = run_qd_inner(jail, None, &["ls", "--all", "--json"]);
     assert_eq!(code, 0, "ls --all --json exits 0; stderr: {err}");
     let rows: serde_json::Value = serde_json::from_str(&out).expect("ls --json parses");
     rows.as_array()
@@ -227,7 +227,7 @@ fn ls_rows(jail: &Jail) -> Vec<(Option<String>, Option<String>, String, String)>
         .map(|r| {
             (
                 r.get("name").and_then(|v| v.as_str()).map(str::to_string),
-                r.get("sbId").and_then(|v| v.as_str()).map(str::to_string),
+                r.get("qdId").and_then(|v| v.as_str()).map(str::to_string),
                 r.get("sessionId")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
@@ -241,8 +241,8 @@ fn ls_rows(jail: &Jail) -> Vec<(Option<String>, Option<String>, String, String)>
         .collect()
 }
 
-/// The sbId `ls` surfaces for the row carrying `uuid` (must exist, must be one).
-fn ls_sb_id_for(jail: &Jail, uuid: &str) -> Option<String> {
+/// The qdId `ls` surfaces for the row carrying `uuid` (must exist, must be one).
+fn ls_qd_id_for(jail: &Jail, uuid: &str) -> Option<String> {
     let rows = ls_rows(jail);
     let matched: Vec<_> = rows.iter().filter(|r| r.2 == uuid).collect();
     assert_eq!(
@@ -258,7 +258,7 @@ fn ls_sb_id_for(jail: &Jail, uuid: &str) -> Option<String> {
 /// non-fork case; the field is present ONLY for forks). Read straight off the
 /// machine surface, so this exercises the render OUTPUT path end-to-end.
 fn ls_lineage_for(jail: &Jail, uuid: &str) -> Option<String> {
-    let (code, out, err) = run_sb_inner(jail, None, &["ls", "--all", "--json"]);
+    let (code, out, err) = run_qd_inner(jail, None, &["ls", "--all", "--json"]);
     assert_eq!(code, 0, "ls --all --json exits 0; stderr: {err}");
     let rows: serde_json::Value = serde_json::from_str(&out).expect("ls --json parses");
     let matched: Vec<_> = rows
@@ -306,16 +306,16 @@ const U1: &str = "11111111-2222-3333-4444-555555555555";
 // the child-pid identity row, and the supervisor-10 ruling wired QD_SESSION_ID into
 // the headless resume launch env (daemon_headless.rs, via launch_env_pairs) — the
 // PARITY fix the interactive path always had. Resume now carries the SAME recorded
-// sbId in the child env AND on the ls surface (the row↔env consistency invariant),
+// qdId in the child env AND on the ls surface (the row↔env consistency invariant),
 // so this asserts the REAL D3 behaviour (not re-oracled).
 #[test]
-fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
+fn a1_claude_resume_same_qb_id_env_and_ls_agree() {
     require_bins();
     let jail = Jail::establish("a1");
     let wrap = jail.wrapper("wk", "wk", Some(U1));
 
     // START: mint-unbound → env carries the id → bind at boot-confirm.
-    let (code, _out, err) = run_sb(&jail, &wrap, &["start", "wk"]);
+    let (code, _out, err) = run_qd(&jail, &wrap, &["start", "wk"]);
     assert_eq!(code, 0, "start: {err}");
     let id_at_start = env_id_of(&jail.launches()[0]);
     assert!(
@@ -323,7 +323,7 @@ fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
         "launch env carried a well-formed qb id, got {id_at_start:?}"
     );
     // env AND ls agree at start.
-    assert_eq!(ls_sb_id_for(&jail, U1).as_deref(), Some(&*id_at_start));
+    assert_eq!(ls_qd_id_for(&jail, U1).as_deref(), Some(&*id_at_start));
     // The id is BOUND to the provider UUID in the store.
     assert_eq!(
         jail.ids_fold().by_session.get(U1),
@@ -349,9 +349,9 @@ fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
 
     // STOP → seed the transcript a real session would have → RESUME.
     jail.seed_transcript(U1, "wk");
-    let (code, _o, err) = run_sb(&jail, &wrap, &["stop", "wk"]);
+    let (code, _o, err) = run_qd(&jail, &wrap, &["stop", "wk"]);
     assert_eq!(code, 0, "stop: {err}");
-    let (code, _o, err) = run_sb(&jail, &wrap, &["resume", "wk", "--no-attach"]);
+    let (code, _o, err) = run_qd(&jail, &wrap, &["resume", "wk", "--no-attach"]);
     assert_eq!(code, 0, "resume: {err}");
 
     let launches = jail.launches();
@@ -376,7 +376,7 @@ fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
     );
     // …AND on the ls surface, with no extra mint in the store. Append-only:
     // the resume added NO lines (mint_or_get found the binding and returned).
-    assert_eq!(ls_sb_id_for(&jail, U1).as_deref(), Some(&*id_at_start));
+    assert_eq!(ls_qd_id_for(&jail, U1).as_deref(), Some(&*id_at_start));
     assert_eq!(jail.ids_fold().by_id.len(), 1, "no second id minted");
     let raw_after = std::fs::read_to_string(jail.ids_path()).unwrap();
     assert_eq!(
@@ -393,8 +393,8 @@ fn a1_claude_resume_same_sbx_id_env_and_ls_agree() {
 /// mechanism, not a terminal state). Three consecutive cycles; after each, the
 /// (UUID, name, qb id) triple is unchanged on BOTH the env and ls surfaces.
 // WP-B5-ii-b (PROOF 3) RE-ENABLED: see a1. The headless resume launch now injects
-// the child's OWN recorded sbId as QD_SESSION_ID (daemon_headless.rs), so the
-// (UUID, name, sbId) triple is preserved across every stop/resume cycle on BOTH the
+// the child's OWN recorded qdId as QD_SESSION_ID (daemon_headless.rs), so the
+// (UUID, name, qdId) triple is preserved across every stop/resume cycle on BOTH the
 // env and ls surfaces — the real D3 behaviour, not re-oracled.
 #[test]
 fn a4_claude_stop_resume_three_cycles_identity_stable() {
@@ -402,7 +402,7 @@ fn a4_claude_stop_resume_three_cycles_identity_stable() {
     let jail = Jail::establish("a4");
     let wrap = jail.wrapper("wk", "wk", Some(U1));
 
-    let (code, _o, err) = run_sb(&jail, &wrap, &["start", "wk"]);
+    let (code, _o, err) = run_qd(&jail, &wrap, &["start", "wk"]);
     assert_eq!(code, 0, "start: {err}");
     let id0 = env_id_of(&jail.launches()[0]);
     jail.seed_transcript(U1, "wk");
@@ -417,7 +417,7 @@ fn a4_claude_stop_resume_three_cycles_identity_stable() {
             2 => (id0.clone(), prefix.to_string()),
             _ => (prefix.to_string(), "wk".to_string()),
         };
-        let (code, _o, err) = run_sb(&jail, &wrap, &["stop", &stop_q]);
+        let (code, _o, err) = run_qd(&jail, &wrap, &["stop", &stop_q]);
         assert_eq!(code, 0, "cycle {cycle} stop {stop_q}: {err}");
         // Between stop and resume the session is COLD on the read surface —
         // exactly one row for the UUID, never a live leftover.
@@ -432,7 +432,7 @@ fn a4_claude_stop_resume_three_cycles_identity_stable() {
             u1_rows[0].3, "cold",
             "cycle {cycle}: stopped session reads cold: {rows:?}"
         );
-        let (code, _o, err) = run_sb(&jail, &wrap, &["resume", &resume_q, "--no-attach"]);
+        let (code, _o, err) = run_qd(&jail, &wrap, &["resume", &resume_q, "--no-attach"]);
         assert_eq!(code, 0, "cycle {cycle} resume {resume_q}: {err}");
 
         let launches = jail.launches();
@@ -485,16 +485,16 @@ fn a4_claude_stop_resume_three_cycles_identity_stable() {
 /// asserts; emitting `--fork-session` (native, not Mechanism S) reds the
 /// no-fork-session assert; breaking prefix resolution reds the wk3 arm.
 #[test]
-fn a2_claude_fork_mints_new_sbx_id() {
+fn a2_claude_fork_mints_new_qb_id() {
     require_bins();
     let jail = Jail::establish("a2");
     let wrap1 = jail.wrapper("wk", "wk", Some(U1));
 
-    let (code, _o, err) = run_sb(&jail, &wrap1, &["start", "wk"]);
+    let (code, _o, err) = run_qd(&jail, &wrap1, &["start", "wk"]);
     assert_eq!(code, 0, "start wk: {err}");
     let id1 = env_id_of(&jail.launches()[0]);
     jail.seed_transcript(U1, "wk");
-    let (code, _o, err) = run_sb(&jail, &wrap1, &["stop", "wk"]);
+    let (code, _o, err) = run_qd(&jail, &wrap1, &["stop", "wk"]);
     assert_eq!(code, 0, "stop wk: {err}");
 
     // FORK by NAME off the stopped session, under a new name. WP-B5-iii
@@ -504,7 +504,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
     // pin a session id (uuid:None) so fakerepl adopts the qd-minted uuid via
     // --resume (faithful real-claude behavior).
     let wrap2 = jail.wrapper("wk2", "wk2", None);
-    let (code, _o, err) = run_sb(&jail, &wrap2, &["start", "wk2", "--fork", "wk"]);
+    let (code, _o, err) = run_qd(&jail, &wrap2, &["start", "wk2", "--fork", "wk"]);
     assert_eq!(code, 0, "start wk2 --fork wk: {err}");
 
     let launches = jail.launches();
@@ -534,18 +534,18 @@ fn a2_claude_fork_mints_new_sbx_id() {
         Some(&id2),
         "fork's own qb id bound to its qd-minted uuid (option A: mint_or_get(fork_uuid))"
     );
-    assert_eq!(ls_sb_id_for(&jail, &fork_uuid).as_deref(), Some(&*id2));
-    assert_eq!(ls_sb_id_for(&jail, U1).as_deref(), Some(&*id1));
+    assert_eq!(ls_qd_id_for(&jail, &fork_uuid).as_deref(), Some(&*id2));
+    assert_eq!(ls_qd_id_for(&jail, U1).as_deref(), Some(&*id1));
 
     // WP-B5-iii obl-4: the real fork launch recorded a lineage pointer to the
-    // PARENT's sbId (id1 = wk), keyed by the fork's uuid — and STRICTLY the
+    // PARENT's qdId (id1 = wk), keyed by the fork's uuid — and STRICTLY the
     // parent, never the fork's OWN id (id2). (Surfacing onto Session.lineage via
     // fill_lineage in the live join is unit-proven in idstore.rs.)
     let lineage = jail.ids_fold();
     assert_eq!(
         lineage.by_parent.get(&fork_uuid),
         Some(&id1),
-        "fork lineage → PARENT sbId recorded at launch"
+        "fork lineage → PARENT qdId recorded at launch"
     );
     assert_ne!(
         lineage.by_parent.get(&fork_uuid),
@@ -557,11 +557,11 @@ fn a2_claude_fork_mints_new_sbx_id() {
     // (additive, parent-pointer-only). RED before the render.rs lineage emission:
     // with no `lineage` key on the row, the fork's `ls_lineage_for` is `None` and
     // the `Some(id1)` assert fails. GREEN after. The non-fork PARENT row (U1) emits
-    // NO `lineage` key at all — additive both-ways, the same precedent as `sbId`.
+    // NO `lineage` key at all — additive both-ways, the same precedent as `qdId`.
     assert_eq!(
         ls_lineage_for(&jail, &fork_uuid).as_deref(),
         Some(&*id1),
-        "fork's `ls --json` row emits lineage = PARENT sbId (id1)"
+        "fork's `ls --json` row emits lineage = PARENT qdId (id1)"
     );
     assert_ne!(
         ls_lineage_for(&jail, &fork_uuid).as_deref(),
@@ -586,7 +586,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
         .expect("distinct ids");
     let prefix = &id2[..(split + 1).max(2)];
     let wrap3 = jail.wrapper("wk3", "wk3", None);
-    let (code, _o, err) = run_sb(&jail, &wrap3, &["start", "wk3", "--fork", prefix]);
+    let (code, _o, err) = run_qd(&jail, &wrap3, &["start", "wk3", "--fork", prefix]);
     assert_eq!(code, 0, "start wk3 --fork {prefix}: {err}");
     let launches = jail.launches();
     let fork3 = &launches[2];
@@ -612,7 +612,7 @@ fn a2_claude_fork_mints_new_sbx_id() {
 // ===========================================================================
 // A3 — RETIRED BY RULING (STATE 21, spec-w7-start-surface, 2026-06-10)
 //
-// `a3_claude_branch_without_fork_shares_the_sbx_id` pinned the BRANCH-VIA-START
+// `a3_claude_branch_without_fork_shares_the_qb_id` pinned the BRANCH-VIA-START
 // surface: `start <new-name> --resume <uuid>` (no fork) → the provider KEEPS
 // the UUID ⇒ the engine pre-bound via `mint_or_get(uuid)` → the SAME qb id on
 // a second process. The STATE-21 ruling REMOVED `--resume` from start entirely
@@ -704,7 +704,7 @@ fn codex_start_refuses_fork_loudly() {
     let jail = Jail::establish("cdx");
     // No wrapper: the R2 refusal fires before any codex-on-PATH probe (and
     // before fork-target resolution — "T-1" needn't exist).
-    let (code, _out, err) = run_sb_inner(
+    let (code, _out, err) = run_qd_inner(
         &jail,
         None,
         &["start", "cx", "--provider", "codex", "--fork", "T-1"],
@@ -739,7 +739,7 @@ fn b_bind_residual_unbound_mint_warns_loud() {
     let jail = Jail::establish("bres");
     let wrap = jail.wrapper("wk", "wk", None); // no QD_FAKEREPL_SESSION_ID
 
-    let (code, out, err) = run_sb(&jail, &wrap, &["start", "wk"]);
+    let (code, out, err) = run_qd(&jail, &wrap, &["start", "wk"]);
     assert_eq!(code, 0, "the session is up — exit 0; stderr: {err}");
     assert!(out.contains("Started detached session \"wk\""), "{out}");
 
@@ -765,14 +765,14 @@ fn b_bind_residual_unbound_mint_warns_loud() {
     // The id never surfaces on any session: the row is id-less on every surface.
     let rows = ls_rows(&jail);
     let wk = rows.iter().find(|r| r.0.as_deref() == Some("wk")).unwrap();
-    assert_eq!(wk.1, None, "row carries no sbId: {rows:?}");
+    assert_eq!(wk.1, None, "row carries no qdId: {rows:?}");
     // WP-B7 PIECE 1 adapt: this row asserts the id-less placeholder on the SHORT
     // TEXT surface. Under the table→JSON auto-flip an agent caller's bare `--short`
     // auto-flips to JSON, so we inject `--table` (the surface selector) to keep the
     // short surface — `--table --short` is the ratified agent short-text escape
     // hatch (surface=Table + content=short ⇒ short table). Coverage preserved
     // (still pins `---` + name on the short surface), not masked.
-    let (code, out, _e) = run_sb_inner(&jail, None, &["ls", "--table", "--short"]);
+    let (code, out, _e) = run_qd_inner(&jail, None, &["ls", "--table", "--short"]);
     assert_eq!(code, 0);
     assert!(
         out.lines().any(|l| l.contains("---") && l.contains("wk")),
@@ -797,7 +797,7 @@ fn b_bind_residual_unbound_mint_warns_loud() {
     stamped["sessionId"] = serde_json::Value::String("late-uuid-0001".into());
     std::fs::write(&row_path, serde_json::to_string(&stamped).unwrap()).unwrap();
 
-    let (code, _out, _err) = run_sb_inner(&jail, None, &["ls"]);
+    let (code, _out, _err) = run_qd_inner(&jail, None, &["ls"]);
     assert_eq!(code, 0);
     let ids = jail.ids_fold();
     let late_id = ids
@@ -852,7 +852,7 @@ fn b_ls_lazy_mint_failure_degrades_warned_exit_0() {
     // `--table` (the explicit human-table surface) to keep the table assertion.
     // The stderr-warning assert below is surface-independent; the `--json`
     // degradation is separately pinned at the end of this test.
-    let (code, out, err) = run_sb_inner(&jail, None, &["ls", "--table"]);
+    let (code, out, err) = run_qd_inner(&jail, None, &["ls", "--table"]);
     assert_eq!(
         code, 0,
         "ls exits 0 despite the mint failure; stderr: {err}"
@@ -866,13 +866,13 @@ fn b_ls_lazy_mint_failure_degrades_warned_exit_0() {
         out.lines().any(|l| l.contains("lz") && l.contains("---")),
         "the row shows the id-less placeholder: {out}"
     );
-    // The --json surface degrades the same way: row present, no sbId key.
-    let (code, out, _e) = run_sb_inner(&jail, None, &["ls", "--json"]);
+    // The --json surface degrades the same way: row present, no qdId key.
+    let (code, out, _e) = run_qd_inner(&jail, None, &["ls", "--json"]);
     assert_eq!(code, 0);
     let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
     let row = &rows.as_array().unwrap()[0];
     assert_eq!(row["name"], "lz");
-    assert!(row.get("sbId").is_none(), "no sbId on a failed mint: {row}");
+    assert!(row.get("qdId").is_none(), "no qdId on a failed mint: {row}");
 }
 
 // ===========================================================================
@@ -881,13 +881,13 @@ fn b_ls_lazy_mint_failure_degrades_warned_exit_0() {
 
 /// QD_SESSION_ID resolves through the idstore to a UUID whose only registry
 /// presence is a TOMBSTONE. PINNED ANSWER: the env path still answers (exit 0,
-/// identitySource "env", sessionId + sbId known) but the tombstoned row
+/// identitySource "env", sessionId + qdId known) but the tombstoned row
 /// contributes NOTHING — name/pid are absent (whoami's row lookup excludes
 /// tombstones), so the human surface prints the UUID, not the dead row's name.
 #[test]
 fn b_whoami_env_id_of_tombstoned_row_answers_without_the_dead_name() {
     let jail = Jail::establish("whot");
-    let state = jail.dirs.sb_home.join("state");
+    let state = jail.dirs.qd_home.join("state");
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(
         state.join("ids.jsonl"),
@@ -905,11 +905,11 @@ fn b_whoami_env_id_of_tombstoned_row_answers_without_the_dead_name() {
     .unwrap();
 
     let run_whoami = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(sb_bin())
+        let out = Command::new(qd_bin())
             .args(args)
             .env_clear()
             .env("HOME", &jail.dirs.home)
-            .env("QD_HOME", &jail.dirs.sb_home)
+            .env("QD_HOME", &jail.dirs.qd_home)
             .env("QD_SESSION_ID", "ab3kx9mq")
             .env("PATH", "/usr/bin:/bin")
             .output()
@@ -926,7 +926,7 @@ fn b_whoami_env_id_of_tombstoned_row_answers_without_the_dead_name() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["identitySource"], "env");
     assert_eq!(v["sessionId"], "tomb-uuid-0001");
-    assert_eq!(v["sbId"], "ab3kx9mq");
+    assert_eq!(v["qdId"], "ab3kx9mq");
     assert_eq!(
         v["name"],
         serde_json::Value::Null,
@@ -964,7 +964,7 @@ fn b_retired_stub_help_renders_without_firing_the_stub() {
         ),
     ] {
         for flag in ["--help", "-h"] {
-            let (code, out, err) = run_sb_inner(&jail, None, &[verb, flag]);
+            let (code, out, err) = run_qd_inner(&jail, None, &[verb, flag]);
             assert_eq!(code, 0, "qd {verb} {flag} renders help, exit 0: {err}");
             assert!(
                 out.contains(pointer),
@@ -983,13 +983,13 @@ fn b_retired_stub_help_renders_without_firing_the_stub() {
 // ===========================================================================
 
 /// Two live rows, ids sharing a 2-char prefix, pre-seeded store. Pins:
-/// ls --json sbId/sbIdPrefix; ls --short handles; info "Stable ID:"; full-id +
+/// ls --json qdId/qdIdPrefix; ls --short handles; info "Stable ID:"; full-id +
 /// unique-prefix resolution; ambiguous-prefix LOUD refusal; whoami env path
 /// joining the live row.
 #[test]
 fn b_queryability_surfaces_and_stable_id_resolution() {
     let jail = Jail::establish("query");
-    let state = jail.dirs.sb_home.join("state");
+    let state = jail.dirs.qd_home.join("state");
     std::fs::create_dir_all(&state).unwrap();
     // ab3kx9mq / ab47qrst share the 2-char prefix "ab" → display prefixes ab3/ab4.
     std::fs::write(
@@ -1019,8 +1019,8 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
     )
     .unwrap();
 
-    // ls --json: additive sbId + sbIdPrefix per row.
-    let (code, out, err) = run_sb_inner(&jail, None, &["ls", "--json"]);
+    // ls --json: additive qdId + qdIdPrefix per row.
+    let (code, out, err) = run_qd_inner(&jail, None, &["ls", "--json"]);
     assert_eq!(code, 0, "{err}");
     let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
     let field = |name: &str, key: &str| -> String {
@@ -1033,42 +1033,42 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
             .unwrap_or_default()
             .to_string()
     };
-    assert_eq!(field("wka", "sbId"), "ab3kx9mq");
-    assert_eq!(field("wkb", "sbId"), "ab47qrst");
+    assert_eq!(field("wka", "qdId"), "ab3kx9mq");
+    assert_eq!(field("wkb", "qdId"), "ab47qrst");
     assert_eq!(
-        field("wka", "sbIdPrefix"),
+        field("wka", "qdIdPrefix"),
         "ab3",
         "shared 2-char prefix extends"
     );
-    assert_eq!(field("wkb", "sbIdPrefix"), "ab4");
+    assert_eq!(field("wkb", "qdIdPrefix"), "ab4");
 
     // ls --short: the prefix IS the handle. WP-B7 PIECE 1 adapt: inject `--table`
     // so this exercises the SHORT TEXT surface (the test's intent) rather than
     // silently passing on JSON post-flip — JSON happens to also contain "ab3"/"wka"
-    // (sbIdPrefix/name), so a bare `--short` would VACUOUSLY pass under the agent
+    // (qdIdPrefix/name), so a bare `--short` would VACUOUSLY pass under the agent
     // auto-JSON and erode the --short coverage. `--table --short` = short table.
-    let (_c, out, _e) = run_sb_inner(&jail, None, &["ls", "--table", "--short"]);
+    let (_c, out, _e) = run_qd_inner(&jail, None, &["ls", "--table", "--short"]);
     assert!(out.contains("ab3") && out.contains("wka"), "{out}");
     assert!(out.contains("ab4") && out.contains("wkb"), "{out}");
 
     // info: by full stable id AND by unique 3-char prefix; the Stable ID line.
     for query in ["ab3kx9mq", "ab3"] {
-        let (code, out, err) = run_sb_inner(&jail, None, &["info", query]);
+        let (code, out, err) = run_qd_inner(&jail, None, &["info", query]);
         assert_eq!(code, 0, "info {query}: {err}");
         assert!(out.contains("Stable ID:   ab3kx9mq"), "info {query}: {out}");
         assert!(out.contains("qa-uuid-aaaa-0001"), "info {query}: {out}");
     }
     // Ambiguous 2-char prefix → LOUD refusal, never a guess.
-    let (code, _out, err) = run_sb_inner(&jail, None, &["info", "ab"]);
+    let (code, _out, err) = run_qd_inner(&jail, None, &["info", "ab"]);
     assert_eq!(code, 1, "ambiguous prefix refuses: {err}");
     assert!(err.contains("Ambiguous"), "loud Many: {err}");
 
     // whoami --json on the env path joins the LIVE row (name + pid + source).
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(["whoami", "--json"])
         .env_clear()
         .env("HOME", &jail.dirs.home)
-        .env("QD_HOME", &jail.dirs.sb_home)
+        .env("QD_HOME", &jail.dirs.qd_home)
         .env("QD_SESSION_ID", "AB3KX9MQ") // case-insensitive resolution
         .env("PATH", "/usr/bin:/bin")
         .output()
@@ -1077,17 +1077,17 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert_eq!(v["identitySource"], "env");
     assert_eq!(v["name"], "wka");
-    assert_eq!(v["sbId"], "ab3kx9mq");
+    assert_eq!(v["qdId"], "ab3kx9mq");
 
     // whoami WITHOUT the env var: the ppid-walk fallback answers at the bin
     // level (the forged wka row is keyed by THIS test process's pid — a real
-    // ancestor of the spawned qd), with the sbId joined READ-ONLY from the
+    // ancestor of the spawned qd), with the qdId joined READ-ONLY from the
     // fold and identitySource "ppid".
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(["whoami", "--json"])
         .env_clear()
         .env("HOME", &jail.dirs.home)
-        .env("QD_HOME", &jail.dirs.sb_home)
+        .env("QD_HOME", &jail.dirs.qd_home)
         .env("PATH", "/usr/bin:/bin")
         .output()
         .expect("spawn qd");
@@ -1096,7 +1096,7 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
     assert_eq!(v["identitySource"], "ppid");
     assert_eq!(v["name"], "wka");
     assert_eq!(
-        v["sbId"], "ab3kx9mq",
-        "sbId joined read-only on the walk path"
+        v["qdId"], "ab3kx9mq",
+        "qdId joined read-only on the walk path"
     );
 }

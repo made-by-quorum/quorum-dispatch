@@ -10,7 +10,7 @@
 set -u
 WT=/home/u/work/wt-a4-lead
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/qd"
+export JAIL_QD_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 EV="$WT/test/golden/dryrun/a4-paste-bytes.txt"; : > "$EV"
@@ -52,7 +52,7 @@ for l in open(sys.argv[1]):
 print(n)' "$1"; }
 
 log "=== BOOT 3 (paste investigation) ==="
-( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
+( cd "$WORKDIR" && "$JAIL_QD_CMD" new "$NAME" --cwd "$WORKDIR" ) >"$JAIL_ROOT/o" 2>"$JAIL_ROOT/e"
 log "  qd new exit=$? : $(cat "$JAIL_ROOT/o")"
 ws "$NAME" idle 30||log "  WARN not idle"
 # RESOLUTION BELT (orc-2 ruling): every send/kill-by-name op asserts the name
@@ -60,7 +60,7 @@ ws "$NAME" idle 30||log "  WARN not idle"
 jail_assert_resolves_in_jail "$NAME" || { log "RESOLUTION BELT REFUSED for $NAME"; exit 4; }
 log "  resolution belt: $NAME resolves uniquely in-jail (OK)"
 # warm-up to create transcript + confirm auth
-"$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK" >/dev/null 2>&1
+"$JAIL_QD_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK" >/dev/null 2>&1
 i=0; JP=""; while [ "$i" -lt 90 ]; do JP="$(jp_of)"; [ -n "$JP" ]&&[ "$(urc "$JP")" -ge 1 ]&&break; sleep 0.5; i=$((i+1)); done
 [ -z "$JP" ]&&{ log "AUTH FAILED"; exit 3; }
 log "  authed; JP=$JP"
@@ -75,7 +75,7 @@ probe(){  # size
     P="$(mkp "$sz")"; plen="$(printf '%s' "$P"|wc -c|tr -d ' ')"
     log ""
     log "--- PASTE $plen bytes ---"
-    out="$("$JAIL_SB_CMD" send:pty "$NAME" "$P -- then reply exactly PA_$sz" 2>&1)"
+    out="$("$JAIL_QD_CMD" send:pty "$NAME" "$P -- then reply exactly PA_$sz" 2>&1)"
     log "  send out=[$(printf '%s' "$out"|tr '\n' '|')]"
     ws "$NAME" busy 8 >/dev/null 2>&1||true
     ws "$NAME" idle 60||log "  WARN not idle 60s post-paste"

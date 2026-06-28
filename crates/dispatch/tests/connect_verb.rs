@@ -14,7 +14,7 @@
 use std::path::Path;
 use std::process::Command;
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -22,7 +22,7 @@ fn sb_bin() -> &'static str {
 /// `qd <args...>`. Returns (exit_code, stdout, stderr). HOME → `<dir>/home`,
 /// ZMX_DIR → an EMPTY `<dir>/zmx` (so claude rows are cold). CODEX_HOME points at
 /// an empty codex tree so a codex row resolves without a real daemon.
-fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32, String, String) {
+fn run_qd_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
     let zmx = dir.join("zmx");
     let codex_home = dir.join("codex");
@@ -32,7 +32,7 @@ fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32,
     std::fs::create_dir_all(&codex_home).unwrap();
     std::fs::write(sessions.join(format!("{pid}.json")), row_json).unwrap();
 
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(args)
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
@@ -48,13 +48,13 @@ fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32,
 
 /// Run `qd <args...>` against a freshly-jailed, EMPTY HOME (no rows). Used for the
 /// unknown-name resolve_or_die path + the no-arg clap error.
-fn run_sb_empty(dir: &Path, args: &[&str]) -> (i32, String, String) {
+fn run_qd_empty(dir: &Path, args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
     let zmx = dir.join("zmx");
     let sessions = home.join(".claude").join("sessions");
     std::fs::create_dir_all(&sessions).unwrap();
     std::fs::create_dir_all(&zmx).unwrap();
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(args)
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
@@ -105,7 +105,7 @@ fn claude_row_autonamed(pid: i64) -> String {
 fn connect_codex_is_daemon_redirect_not_attach() {
     let t = tempfile::tempdir().unwrap();
     let (code, out, err) =
-        run_sb_with_row(t.path(), 5050, &codex_row(5050, "cx"), &["connect", "cx"]);
+        run_qd_with_row(t.path(), 5050, &codex_row(5050, "cx"), &["connect", "cx"]);
     assert_eq!(code, 1, "connect on a daemon-hosted row exits 1");
     assert!(
         err.contains("daemon-hosted"),
@@ -148,7 +148,7 @@ fn connect_codex_is_daemon_redirect_not_attach() {
 fn attach_verb_is_retired_erroring_stub() {
     let t = tempfile::tempdir().unwrap();
     let (code, out, err) =
-        run_sb_with_row(t.path(), 5051, &codex_row(5051, "cx"), &["attach", "cx"]);
+        run_qd_with_row(t.path(), 5051, &codex_row(5051, "cx"), &["attach", "cx"]);
     assert_eq!(code, 1, "retired attach exits 1");
     assert!(
         err.contains(
@@ -186,7 +186,7 @@ fn attach_verb_is_retired_erroring_stub() {
 fn cold_claude_connect_attempts_revive_then_fails_loudly() {
     let t = tempfile::tempdir().unwrap();
     let (code, _out, err) =
-        run_sb_with_row(t.path(), 6061, &claude_row(6061, "wk"), &["connect", "wk"]);
+        run_qd_with_row(t.path(), 6061, &claude_row(6061, "wk"), &["connect", "wk"]);
     assert_eq!(
         code, 1,
         "connect on a cold claude row whose revive fails exits 1"
@@ -227,7 +227,7 @@ fn cold_claude_connect_attempts_revive_then_fails_loudly() {
 #[test]
 fn connect_resolves_auto_named_cold_session() {
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_row(
+    let (code, _out, err) = run_qd_with_row(
         t.path(),
         7071,
         &claude_row_autonamed(7071),
@@ -259,7 +259,7 @@ fn connect_resolves_auto_named_cold_session() {
 #[test]
 fn connect_unknown_name_clear_error() {
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_empty(t.path(), &["connect", "nope"]);
+    let (code, _out, err) = run_qd_empty(t.path(), &["connect", "nope"]);
     assert_eq!(code, 1, "unknown name exits 1");
     assert!(
         err.contains(r#"No session matching "nope""#),
@@ -274,7 +274,7 @@ fn connect_unknown_name_clear_error() {
 #[test]
 fn connect_noarg_required_arg_error() {
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_empty(t.path(), &["connect"]);
+    let (code, _out, err) = run_qd_empty(t.path(), &["connect"]);
     assert_eq!(code, 1, "missing required <session> exits 1");
     assert!(
         err.contains("missing required argument 'session'"),
@@ -294,7 +294,7 @@ fn connect_noarg_required_arg_error() {
 #[test]
 fn resume_help_documents_agent_facing_revive_to_drivable() {
     let t = tempfile::tempdir().unwrap();
-    let (code, help, _e) = run_sb_empty(t.path(), &["resume", "--help"]);
+    let (code, help, _e) = run_qd_empty(t.path(), &["resume", "--help"]);
     assert_eq!(code, 0, "resume --help exits 0");
     let lc = help.to_lowercase();
     assert!(
@@ -333,7 +333,7 @@ fn resume_help_documents_agent_facing_revive_to_drivable() {
 fn attach_retired_from_top_help_and_help_marks_retired() {
     let t = tempfile::tempdir().unwrap();
 
-    let (code, top, _e) = run_sb_empty(t.path(), &["--help"]);
+    let (code, top, _e) = run_qd_empty(t.path(), &["--help"]);
     assert_eq!(code, 0, "top help exits 0");
     assert!(
         top.contains("connect <session>"),
@@ -352,7 +352,7 @@ fn attach_retired_from_top_help_and_help_marks_retired() {
         "attach is off the top-level command table, got: {top}"
     );
 
-    let (hc, ahelp, _e2) = run_sb_empty(t.path(), &["attach", "--help"]);
+    let (hc, ahelp, _e2) = run_qd_empty(t.path(), &["attach", "--help"]);
     assert_eq!(hc, 0, "attach --help exits 0 (still dispatchable)");
     assert!(
         ahelp.contains("(retired — use connect)"),

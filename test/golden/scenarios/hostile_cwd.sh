@@ -74,7 +74,7 @@ scn_run() {
     # findJsonlPath at the special-char project dir. Run the send from the hostile
     # cwd too (matches the recorded session cwd).
     local waitout waitrc
-    waitout="$( cd "$hostile_cwd" && scn_sb_target send:pty "$name" "$SCN_MSG" --wait --timeout 30 2>/dev/null )"
+    waitout="$( cd "$hostile_cwd" && scn_qd_target send:pty "$name" "$SCN_MSG" --wait --timeout 30 2>/dev/null )"
     waitrc=$?
 
     # DERIVED booleans (computed on the RAW values, pre-normalization). A wrong

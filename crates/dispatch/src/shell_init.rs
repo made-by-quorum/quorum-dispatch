@@ -164,7 +164,7 @@ export ZMX_DIR="${{ZMX_DIR:-{zmx_dir}}}"
 # QD_CLAUDE_WRAPPER_FLAGS (whitespace-split) is injected on passthrough REAL
 # launches only — never on management subcommands or --version/--help.
 claude() {{
-  local _sb_arg _sb_name
+  local _qd_arg _qd_name
   # Already inside zmx, or zmx explicitly disabled → never nest, passthrough.
   if [ -n "$ZMX_SESSION" ] || [ -n "$CLAUDE_NO_ZMX" ]; then
     command claude {wflags} "$@"; return
@@ -174,8 +174,8 @@ claude() {{
     logout|login|config|mcp|plugin|doctor|update|install|--version|-h|--help)
       command claude "$@"; return ;;
   esac
-  for _sb_arg in "$@"; do
-    case "$_sb_arg" in
+  for _qd_arg in "$@"; do
+    case "$_qd_arg" in
       --version|-h|--help) command claude "$@"; return ;;
       -p|--print) command claude {wflags} "$@"; return ;;
     esac
@@ -189,9 +189,9 @@ claude() {{
   # start-then-connect is the supported path). If create fails — e.g. a first-run
   # folder-trust dialog blocks the boot-to-idle wait — fall back to launching
   # claude directly so `claude` is never worse than running it raw.
-  _sb_name="cc-$(date +%Y%m%d-%H%M%S)-$$"
-  if qd start "$_sb_name" -- "$@"; then
-    qd connect "$_sb_name"
+  _qd_name="cc-$(date +%Y%m%d-%H%M%S)-$$"
+  if qd start "$_qd_name" -- "$@"; then
+    qd connect "$_qd_name"
   else
     command claude {wflags} "$@"
   fi
@@ -211,9 +211,9 @@ end
 # claude wrapper: passthrough by default; only a bare interactive launch
 # OUTSIDE zmx routes through 'qd start'. Escape hatch: 'command claude ...'.
 function claude
-    set -l _sb_wflags (string split -n ' ' -- "$QD_CLAUDE_WRAPPER_FLAGS")
+    set -l _qd_wflags (string split -n ' ' -- "$QD_CLAUDE_WRAPPER_FLAGS")
     if test -n "$ZMX_SESSION"; or test -n "$CLAUDE_NO_ZMX"
-        command claude $_sb_wflags $argv
+        command claude $_qd_wflags $argv
         return
     end
     if test (count $argv) -gt 0
@@ -223,29 +223,29 @@ function claude
                 return
         end
     end
-    for _sb_arg in $argv
-        switch $_sb_arg
+    for _qd_arg in $argv
+        switch $_qd_arg
             case '--version' '-h' '--help'
                 command claude $argv
                 return
             case '-p' '--print'
-                command claude $_sb_wflags $argv
+                command claude $_qd_wflags $argv
                 return
         end
     end
     if not isatty stdout
-        command claude $_sb_wflags $argv
+        command claude $_qd_wflags $argv
         return
     end
     # Create detached, then connect (--attach on `qd start` is engine-deferred;
     # start-then-connect is the supported path). If create fails — e.g. a first-run
     # folder-trust dialog blocks the boot-to-idle wait — fall back to launching
     # claude directly so `claude` is never worse than running it raw.
-    set -l _sb_name cc-(date +%Y%m%d-%H%M%S)-$fish_pid
-    if qd start $_sb_name -- $argv
-        qd connect $_sb_name
+    set -l _qd_name cc-(date +%Y%m%d-%H%M%S)-$fish_pid
+    if qd start $_qd_name -- $argv
+        qd connect $_qd_name
     else
-        command claude $_sb_wflags $argv
+        command claude $_qd_wflags $argv
     end
 end
 "#
@@ -355,8 +355,8 @@ mod tests {
     fn bash_script_invariants() {
         let s = init_script(Shell::Bash, "/run/user/501");
         assert!(
-            s.contains(r#"if qd start "$_sb_name" -- "$@"; then"#)
-                && s.contains(r#"qd connect "$_sb_name""#),
+            s.contains(r#"if qd start "$_qd_name" -- "$@"; then"#)
+                && s.contains(r#"qd connect "$_qd_name""#),
             "route: {s}"
         );
         // Create-fail fallback to a direct claude launch (with wrapper flags).
@@ -393,10 +393,10 @@ mod tests {
     fn fish_script_invariants() {
         let s = init_script(Shell::Fish, "/run/user/501");
         assert!(s.contains("function claude"));
-        assert!(s.contains("if qd start $_sb_name -- $argv"));
-        assert!(s.contains("qd connect $_sb_name"));
+        assert!(s.contains("if qd start $_qd_name -- $argv"));
+        assert!(s.contains("qd connect $_qd_name"));
         // Create-fail fallback to a direct claude launch.
-        assert!(s.contains("command claude $_sb_wflags $argv"));
+        assert!(s.contains("command claude $_qd_wflags $argv"));
         assert!(!s.contains("qd start --attach"));
         assert!(s.contains("case logout login config mcp plugin doctor update install"));
         assert!(s.contains("set -gx ZMX_DIR /run/user/501"));

@@ -172,9 +172,9 @@ fn is_macos(platform: &str) -> bool {
 
 /// Resolve `~/.quorum/dispatch` (QD_HOME -> default `~/.quorum/dispatch`), matching resolveBootstrapPaths.
 /// (`0d0fa9e:src/secrets.ts:80-83`).
-pub fn resolve_sb_home(env: &dyn Env) -> String {
-    if let Some(sb_home) = env.var("QD_HOME") {
-        return sb_home;
+pub fn resolve_qd_home(env: &dyn Env) -> String {
+    if let Some(qd_home) = env.var("QD_HOME") {
+        return qd_home;
     }
     let home = env.var("HOME").unwrap_or_default();
     format!("{home}/.quorum/dispatch")
@@ -182,7 +182,7 @@ pub fn resolve_sb_home(env: &dyn Env) -> String {
 
 /// The config-file path for the file backend. (`0d0fa9e:src/secrets.ts:85-87`).
 pub fn resolve_config_path(env: &dyn Env) -> String {
-    format!("{}/config.toml", resolve_sb_home(env))
+    format!("{}/config.toml", resolve_qd_home(env))
 }
 
 /// Parse the `[secrets]` table out of the config file. A deliberately tiny,
@@ -1188,12 +1188,12 @@ mod tests {
     // --- config path (secrets.test.ts:116-124) ---
 
     #[test]
-    fn config_path_honors_sb_home() {
+    fn config_path_honors_qd_home() {
         let env = map_env(&[("QD_HOME", "/tmp/qb-test")]);
         assert_eq!(resolve_config_path(&env), "/tmp/qb-test/config.toml");
     }
     #[test]
-    fn config_path_defaults_to_dot_sb_under_home() {
+    fn config_path_defaults_to_dot_qd_under_home() {
         let env = map_env(&[("HOME", "/home/x")]);
         assert_eq!(
             resolve_config_path(&env),

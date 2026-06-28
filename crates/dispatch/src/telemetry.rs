@@ -45,7 +45,7 @@ use serde_json::{Map, Value};
 
 use crate::effects::{Clock, Env};
 use crate::exec::Exec;
-use crate::paths::SbPaths;
+use crate::paths::QdPaths;
 use crate::registry::{self, RegistryEntry};
 use crate::render::epoch_ms_to_iso;
 
@@ -63,7 +63,7 @@ use crate::render::epoch_ms_to_iso;
 /// now a parameter (was a hard-coded `RealExec`) so create.rs and unit tests can
 /// inject a fake — a pure signature generalization, no behavior change for the
 /// real-deps caller (`whoami` passes `&RealExec`).
-pub fn find_caller_session(paths: &SbPaths, exec: &dyn Exec) -> Option<RegistryEntry> {
+pub fn find_caller_session(paths: &QdPaths, exec: &dyn Exec) -> Option<RegistryEntry> {
     let mut pid: i32 = unsafe { libc::getppid() };
     for _ in 0..10 {
         if pid <= 1 {
@@ -102,12 +102,12 @@ pub fn ps_ppid(exec: &dyn Exec, pid: i32) -> Option<i32> {
 // Marks path (shared with mark.rs's resolution — QD_HOME-honoring, L9a)
 // ===========================================================================
 
-/// Resolve `<sbHome>/state/marks.jsonl` via `SbPaths::from_home_env` (honors
+/// Resolve `<qdHome>/state/marks.jsonl` via `QdPaths::from_home_env` (honors
 /// QD_HOME through the injected `Env` seam; L9a). `None` if HOME is unset. Same
 /// resolution `mark.rs` uses, hoisted so create/send/wait/mark all agree.
 pub fn marks_path(env: &dyn Env) -> Option<PathBuf> {
     let home = env.var("HOME").filter(|s| !s.is_empty())?;
-    let paths = SbPaths::from_home_env(Path::new(&home), env);
+    let paths = QdPaths::from_home_env(Path::new(&home), env);
     Some(paths.state_dir.join("marks.jsonl"))
 }
 
@@ -408,7 +408,7 @@ mod tests {
         // ps returns 1 (init) → the walk stops; no registry dir → None. Proves the
         // hoisted walk drives through the injected Exec, not a hard-coded RealExec.
         let dir = tempdir().unwrap();
-        let paths = SbPaths::from_home(dir.path());
+        let paths = QdPaths::from_home(dir.path());
         let exec = ScriptedExec::new().on("ps", &["-o"], Some(0), "1", "");
         assert_eq!(find_caller_session(&paths, &exec), None);
     }

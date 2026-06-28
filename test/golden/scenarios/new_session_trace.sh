@@ -97,7 +97,7 @@ EOF
     # field quickly so we catch the busy window (the stub holds busy only for the turn).
     local went_busy=0 saw_idle_after=0
     if [ -n "$pidfile" ]; then
-        scn_sb_target send:pty "$name" "boot-probe-went-busy" >/dev/null 2>&1 &
+        scn_qd_target send:pty "$name" "boot-probe-went-busy" >/dev/null 2>&1 &
         local j=0
         while [ "$j" -lt 60 ]; do
             if grep -q '"status": "busy"' "$pidfile" 2>/dev/null; then

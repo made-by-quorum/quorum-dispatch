@@ -14,7 +14,7 @@
 set -u
 WT=/home/u/work/wt-a4-lead
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/qd"
+export JAIL_QD_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -87,7 +87,7 @@ wait_status() {  # name target timeout_s
 }
 jsonl_path_of() {
     local n="$1" jp
-    jp="$("$JAIL_SB_CMD" ls --json 2>/dev/null | python3 -c '
+    jp="$("$JAIL_QD_CMD" ls --json 2>/dev/null | python3 -c '
 import json,sys
 try: d=json.load(sys.stdin)
 except: sys.exit(0)
@@ -121,7 +121,7 @@ log ""
 log "############################################################"
 log "### BOOT 1 -- qd new (default flags) -- REAL CLAUDE #1   ###"
 log "############################################################"
-( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" ) \
+( cd "$WORKDIR" && "$JAIL_QD_CMD" new "$NAME" --cwd "$WORKDIR" ) \
     > "$JAIL_ROOT/boot1-out.txt" 2> "$JAIL_ROOT/boot1-err.txt"
 code=$?
 log "qd new exit=$code"
@@ -149,7 +149,7 @@ log "  baseline user-record count: $BASE_URC"
 # jail is unauthenticated ("Not logged in") -- STOP, do not burn x20 turns.
 log ""
 log "=== AUTH PROBE: one warm-up turn to confirm the jail is logged in ==="
-"$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK and nothing else." >/dev/null 2>&1
+"$JAIL_QD_CMD" send:pty "$NAME" "Reply with exactly: AUTHOK and nothing else." >/dev/null 2>&1
 authed=0
 i=0
 # The transcript JSONL does not exist until the first turn writes it, so $JP was
@@ -185,7 +185,7 @@ log "=== GROUP (a): 8 x send:pty idle-path short messages ==="
 for i in 1 2 3 4 5 6 7 8; do
     wait_status "$NAME" idle 30 || log "  (a$i) WARN not idle before send (status=$(status_of "$NAME"))"
     MSG="reply with only the word ok (idle-probe $i)"
-    out="$("$JAIL_SB_CMD" send:pty "$NAME" "$MSG" 2>&1)"; rc=$?
+    out="$("$JAIL_QD_CMD" send:pty "$NAME" "$MSG" 2>&1)"; rc=$?
     ATT=$((ATT+1))
     log "  (a$i) send:pty rc=$rc out=[$out]"
     case "$out" in
@@ -201,12 +201,12 @@ log ""
 log "=== GROUP (b): 4 x queue-path (send while busy) ==="
 for i in 1 2 3 4; do
     wait_status "$NAME" idle 40 || log "  (b$i) WARN not idle before long prompt"
-    "$JAIL_SB_CMD" send:pty "$NAME" "Count slowly from 1 to 30, one number per line, then say DONE_$i." >/dev/null 2>&1
+    "$JAIL_QD_CMD" send:pty "$NAME" "Count slowly from 1 to 30, one number per line, then say DONE_$i." >/dev/null 2>&1
     ATT=$((ATT+1)); ACC=$((ACC+1))
     if wait_status "$NAME" busy 12; then
         log "  (b$i) session went busy; sending WHILE busy"
         urc_before="$(user_record_count "$JP")"
-        out="$("$JAIL_SB_CMD" send:pty "$NAME" "queued-while-busy probe $i: say QPROBE_$i" 2>&1)"; rc=$?
+        out="$("$JAIL_QD_CMD" send:pty "$NAME" "queued-while-busy probe $i: say QPROBE_$i" 2>&1)"; rc=$?
         ATT=$((ATT+1))
         log "  (b$i) busy-send rc=$rc out=[$out]"
         case "$out" in
@@ -232,7 +232,7 @@ log ""
 log "=== GROUP (c): 2 x send:pty --wait ==="
 wait_status "$NAME" idle 40 || log "  (c1) WARN not idle before --wait"
 log "  (c1) send:pty --wait on IDLE session"
-out="$(timeout 130 "$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: WAITREPLY_ONE and nothing else." --wait 2>&1)"; rc=$?
+out="$(timeout 130 "$JAIL_QD_CMD" send:pty "$NAME" "Reply with exactly: WAITREPLY_ONE and nothing else." --wait 2>&1)"; rc=$?
 ATT=$((ATT+1)); ACC=$((ACC+1))
 log "  (c1) --wait rc=$rc"
 log "  (c1) reply text:"; printf '%s\n' "$out" | sed 's/^/      /' | tee -a "$EV"
@@ -243,10 +243,10 @@ else
 fi
 
 wait_status "$NAME" idle 40 || log "  (c2) WARN not idle before busy --wait"
-"$JAIL_SB_CMD" send:pty "$NAME" "Count slowly from 1 to 20, one per line, then say BUSYDONE." >/dev/null 2>&1
+"$JAIL_QD_CMD" send:pty "$NAME" "Count slowly from 1 to 20, one per line, then say BUSYDONE." >/dev/null 2>&1
 if wait_status "$NAME" busy 12; then
     log "  (c2) session busy; send:pty --wait WHILE busy (queue then wait)"
-    out="$(timeout 150 "$JAIL_SB_CMD" send:pty "$NAME" "Reply with exactly: WAITREPLY_TWO and nothing else." --wait 2>&1)"; rc=$?
+    out="$(timeout 150 "$JAIL_QD_CMD" send:pty "$NAME" "Reply with exactly: WAITREPLY_TWO and nothing else." --wait 2>&1)"; rc=$?
     ATT=$((ATT+1)); ACC=$((ACC+1))
     log "  (c2) busy --wait rc=$rc"
     log "  (c2) reply text:"; printf '%s\n' "$out" | sed 's/^/      /' | tee -a "$EV"
@@ -275,7 +275,7 @@ for sz in 1100 4200 4500; do
     plen="$(printf '%s' "$PASTE" | wc -c | tr -d ' ')"
     log "  (d$d_idx) pasting $plen bytes; instruct reply PASTEACK_$d_idx"
     FULLMSG="$PASTE -- after reading the above, reply with exactly PASTEACK_$d_idx and nothing else."
-    out="$("$JAIL_SB_CMD" send:pty "$NAME" "$FULLMSG" 2>&1)"; rc=$?
+    out="$("$JAIL_QD_CMD" send:pty "$NAME" "$FULLMSG" 2>&1)"; rc=$?
     ATT=$((ATT+1))
     case "$out" in *"Message sent"*|*"Message queued"*) ACC=$((ACC+1));; *) ANOM=$((ANOM+1)); log "  (d$d_idx) ANOMALY out=[$out]";; esac
     log "  (d$d_idx) send rc=$rc out=[$out]"
@@ -297,11 +297,11 @@ log ""
 log "=== GROUP (e): 3 x qd wait during busy ==="
 for i in 1 2 3; do
     wait_status "$NAME" idle 40 || log "  (e$i) WARN not idle before"
-    "$JAIL_SB_CMD" send:pty "$NAME" "Count slowly from 1 to 15, one per line, then say WAITDONE_$i." >/dev/null 2>&1
+    "$JAIL_QD_CMD" send:pty "$NAME" "Count slowly from 1 to 15, one per line, then say WAITDONE_$i." >/dev/null 2>&1
     ATT=$((ATT+1)); ACC=$((ACC+1))
     if wait_status "$NAME" busy 12; then
         log "  (e$i) session busy; calling qd wait"
-        out="$(timeout 130 "$JAIL_SB_CMD" wait "$NAME" 2>&1)"; rc=$?
+        out="$(timeout 130 "$JAIL_QD_CMD" wait "$NAME" 2>&1)"; rc=$?
         log "  (e$i) qd wait rc=$rc out=[$out]"
         if [ "$rc" = "0" ] && printf '%s' "$out" | grep -qi "done"; then
             log "  (e$i) VERIFIED: qd wait ' done' exit 0 after busy->idle"
@@ -344,7 +344,7 @@ log "############################################################"
 # a4-spec section 3.5 / section 6: qd new -p on REAL claude -> exit 0 (went busy = accepted)
 # + stdout 'Prompt delivered'. Record the exit code EXPLICITLY (echo $?).
 NAME2="${JAIL_PREFIX}exitp"
-( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$NAME2" --cwd "$WORKDIR" -p "say the word ready and nothing else" ) \
+( cd "$WORKDIR" && "$JAIL_QD_CMD" new "$NAME2" --cwd "$WORKDIR" -p "say the word ready and nothing else" ) \
     > "$JAIL_ROOT/ec-out.txt" 2> "$JAIL_ROOT/ec-err.txt"
 EC_CODE=$?
 log "  qd new -p exit code (echo \$?): $EC_CODE"
@@ -358,7 +358,7 @@ else
     log "  EXIT-CONTRACT: code=$EC_CODE -- recorded (see stdout/stderr above)"
 fi
 # kill the exit-contract session in-jail afterwards (mission step 3)
-"$JAIL_SB_CMD" ls --all --short 2>/dev/null | grep -q "$NAME2" && jail_kill_session "$NAME2" >/dev/null 2>&1
+"$JAIL_QD_CMD" ls --all --short 2>/dev/null | grep -q "$NAME2" && jail_kill_session "$NAME2" >/dev/null 2>&1
 "$JAIL_ZMX_CMD" kill "$NAME2" --force >/dev/null 2>&1 || true
 sleep 1
 log "  exit-contract session killed; zmx tasks matching NAME2: $(jail_zmx list 2>/dev/null | grep -c "$NAME2" || echo 0)"
@@ -375,7 +375,7 @@ else
     log "    (no relay sidecar dir -- relay server did not register a sidecar)"
 fi
 log "  ls --json relayPort field:"
-"$JAIL_SB_CMD" ls --json 2>/dev/null | python3 -c '
+"$JAIL_QD_CMD" ls --json 2>/dev/null | python3 -c '
 import json,sys
 try: d=json.load(sys.stdin)
 except: print("    (ls --json parse failed)"); sys.exit(0)
@@ -386,7 +386,7 @@ for r in (rows if isinstance(rows,list) else []):
 log "  channels dir state ($HOME/.claude/channels):"
 ls -la "$HOME/.claude/channels" 2>/dev/null | sed 's/^/    /' | tee -a "$EV"
 log "  trying send:relay (absence is a FINDING not a failure):"
-relay_out="$("$JAIL_SB_CMD" send:relay "$NAME" "ping" 2>&1)"; relay_rc=$?
+relay_out="$("$JAIL_QD_CMD" send:relay "$NAME" "ping" 2>&1)"; relay_rc=$?
 log "    send:relay rc=$relay_rc out=[$relay_out]"
 log "  dev-channels banner in scrollback?"
 jail_zmx history "$NAME" 2>/dev/null | strip | grep -iE "development channels|server:relay|channels \(experimental\)" | head -5 | sed 's/^/    /' | tee -a "$EV"

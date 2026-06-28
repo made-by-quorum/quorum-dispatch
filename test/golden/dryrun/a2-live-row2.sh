@@ -8,12 +8,12 @@
 # task; winner reached ready (PID file in jailed home, status idle). Then REUSE
 # the winner session for send / reattach / kill rows.
 #
-# Bash 3.2. Self-cd. Points JAIL_SB_CMD at the built debug binary + JAIL_ZMX_CMD
+# Bash 3.2. Self-cd. Points JAIL_QD_CMD at the built debug binary + JAIL_ZMX_CMD
 # at the pinned real zmx.
 set -u
 WT=/home/u/work/qd-rust/.claude/worktrees/agent-acfec16fb3b5c3375
 cd "$WT" || exit 1
-export JAIL_SB_CMD="$WT/target/debug/qd"
+export JAIL_QD_CMD="$WT/target/debug/qd"
 export JAIL_ZMX_CMD="/opt/homebrew/bin/zmx"
 . test/golden/lib/jail.sh
 
@@ -47,7 +47,7 @@ while [ "$i" -lt "$N" ]; do
     (
         cd "$WORKDIR" || exit 99
         QD_CLAUDE_FLAGS="--dangerously-skip-permissions" \
-            "$JAIL_SB_CMD" new "$NAME" --cwd "$WORKDIR" \
+            "$JAIL_QD_CMD" new "$NAME" --cwd "$WORKDIR" \
             > "$RDIR/out-$i.txt" 2> "$RDIR/err-$i.txt"
         echo "$?" > "$RDIR/code-$i.txt"
     ) &

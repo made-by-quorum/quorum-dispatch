@@ -31,7 +31,7 @@ use std::process::{Child, Command};
 
 use common::assert_not_real_home;
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
@@ -88,7 +88,7 @@ impl Jail {
     }
 
     fn run(&self, args: &[&str]) -> (i32, String, String) {
-        let out = Command::new(sb_bin())
+        let out = Command::new(qd_bin())
             .args(args)
             .env("HOME", &self.home)
             .env("ZMX_DIR", &self.zmx)

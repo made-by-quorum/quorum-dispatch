@@ -53,7 +53,7 @@ RUST_BIN="${A4_RUST_BIN:-$REPO_ROOT/target/debug/qd}"
 FAKEREPL_BIN="${A4_FAKEREPL_BIN:-$REPO_ROOT/target/debug/fakerepl}"
 ZMX_CMD="${JAIL_ZMX_CMD:-zmx}"
 
-export JAIL_SB_CMD="$RUST_BIN"
+export JAIL_QD_CMD="$RUST_BIN"
 export JAIL_ZMX_CMD="$ZMX_CMD"
 # Capture the REAL home BEFORE the jail rewrites it (the jail's production-path
 # belt keys on this; sibling a3_state_assertions.sh:32-34 does the same).
@@ -87,7 +87,7 @@ command -v "$JAIL_ZMX_CMD" >/dev/null 2>&1 \
 # (a4 journal lesson); this wave's ADD-14 restatement bans literal-/tmp test
 # state, so the compliant fix is a short runid: the jail keeps its hermetic
 # TMPDIR and the socket paths fit. `wb` + 5-digit pid ≤ 7 chars → longest name
-# here (sbrg-<runid>-w8okchunk1) ≈ 23 bytes, comfortably under the cap.
+# here (qdrg-<runid>-w8okchunk1) ≈ 23 bytes, comfortably under the cap.
 jail_establish "wb$$" || { echo "FATAL: jail refused to establish" >&2; exit 3; }
 # Teardown ALWAYS — even on Ctrl-C / SIGTERM mid-scenario. Idempotent.
 trap 'jail_teardown 2>/dev/null || true' EXIT INT TERM
@@ -128,10 +128,10 @@ run_new() {
     # The env prefix is applied to THIS command only (not exported), so the jail's
     # asserted env stays clean. CLAUDE_BIN is already exported (jail-rooted).
     if [ -n "$envk" ]; then
-        ( cd "$WORKDIR" && env "$envk" "$JAIL_SB_CMD" new "$name" --cwd "$WORKDIR" "$@" ) \
+        ( cd "$WORKDIR" && env "$envk" "$JAIL_QD_CMD" new "$name" --cwd "$WORKDIR" "$@" ) \
             > "$OUT_FILE" 2> "$ERR_FILE"
     else
-        ( cd "$WORKDIR" && "$JAIL_SB_CMD" new "$name" --cwd "$WORKDIR" "$@" ) \
+        ( cd "$WORKDIR" && "$JAIL_QD_CMD" new "$name" --cwd "$WORKDIR" "$@" ) \
             > "$OUT_FILE" 2> "$ERR_FILE"
     fi
     RC=$?
@@ -331,14 +331,14 @@ run_new_w8() {
             QD_FAKEREPL_STALL_AFTER_BYTES=1024 \
             QD_FAKEREPL_STALL_MS=800 \
             QD_FAKEREPL_STALL_QUEUE_CAP=1024 \
-            "$JAIL_SB_CMD" new "$name" --cwd "$WORKDIR" -p "$W8_MSG" ) \
+            "$JAIL_QD_CMD" new "$name" --cwd "$WORKDIR" -p "$W8_MSG" ) \
             > "$OUT_FILE" 2> "$ERR_FILE"
     else
         ( cd "$WORKDIR" && env \
             QD_FAKEREPL_BUSY_MS=900 \
             QD_FAKEREPL_SESSION_ID="$sid" \
             QD_FAKEREPL_CONVO_JSONL="$convo" \
-            "$JAIL_SB_CMD" new "$name" --cwd "$WORKDIR" -p "$W8_MSG" ) \
+            "$JAIL_QD_CMD" new "$name" --cwd "$WORKDIR" -p "$W8_MSG" ) \
             > "$OUT_FILE" 2> "$ERR_FILE"
     fi
     RC=$?

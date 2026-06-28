@@ -46,7 +46,7 @@ scn_run() {
 
     # Drive the backlog generator while DETACHED (qd new -d leaves clients=0). The
     # SBLINE rows enter zmx's server-side VT — the retention property under test.
-    scn_sb_target send:pty "$name" "EMIT $SCN_HISTORY_N" >/dev/null 2>&1
+    scn_qd_target send:pty "$name" "EMIT $SCN_HISTORY_N" >/dev/null 2>&1
     sleep 2
 
     # Read the serialized server-side VT scrollback (zmx history, pinned to the

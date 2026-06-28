@@ -28,7 +28,7 @@ use dispatch::effects::{MapEnv, RealClock};
 use dispatch::exec::RealExec;
 use dispatch::launch::RenderMode;
 use dispatch::mux::Mux;
-use dispatch::paths::SbPaths;
+use dispatch::paths::QdPaths;
 use dispatch::zmx_mux::ZmxMux;
 
 /// Bounded poll helper.
@@ -109,7 +109,7 @@ fn ended_same_name_start_lands_in_requested_cwd() {
         uid: 501,
     };
     let clock = RealClock;
-    let paths = SbPaths::from_home(&home);
+    let paths = QdPaths::from_home(&home);
     let deps = NewDeps {
         mux: &mux,
         exec: &exec,
@@ -132,7 +132,7 @@ fn ended_same_name_start_lands_in_requested_cwd() {
         cwd: cwd_b.clone(),
         backend_env: vec![],
         backend_env_unset: vec![],
-        sb_session_id: None,
+        qd_session_id: None,
         render: RenderMode::Inline,
     };
     let out = run_new(&deps, &params).expect("run_new must succeed after the ended-row reap");

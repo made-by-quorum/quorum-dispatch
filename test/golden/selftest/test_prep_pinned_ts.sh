@@ -102,7 +102,7 @@ EOS
 PINNED_TS_COMMIT="$GOOD_PIN" \
 QD_UNDER_TEST="bun $SCRATCH/not-a-clone/index.ts" \
 RECORD_FIXTURES_ROOT="$FXROOT" \
-JAIL_SB_CMD="/bin/true" \
+JAIL_QD_CMD="/bin/true" \
     bash "$RECORD" --scenario "$DET" >/dev/null 2>&1
 rc=$?
 if [ "$rc" -eq 71 ]; then
@@ -120,7 +120,7 @@ OTHER_PIN="abcabcabcabcabcabcabcabcabcabcabcabcabca"
 PINNED_TS_COMMIT="$OTHER_PIN" \
 QD_UNDER_TEST="bun $DEST1/src/index.ts" \
 RECORD_FIXTURES_ROOT="$FXROOT" \
-JAIL_SB_CMD="/bin/true" \
+JAIL_QD_CMD="/bin/true" \
     bash "$RECORD" --scenario "$DET" >/dev/null 2>&1
 rc=$?
 if [ "$rc" -eq 71 ]; then

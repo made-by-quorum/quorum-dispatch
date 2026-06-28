@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 /// The built `qd` binary next to the test exe (`<target>/debug/qd`).
-fn sb_binary() -> PathBuf {
+fn qd_binary() -> PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
     let mut dir = exe
         .parent()
@@ -75,7 +75,7 @@ fn seed_home(n: usize) -> PathBuf {
 /// (exit_code, stderr). Closing the pipe while qd still has bytes to write is
 /// exactly the broken-pipe condition.
 fn run_with_early_close(home: &PathBuf) -> (Option<i32>, String) {
-    let mut child = Command::new(sb_binary())
+    let mut child = Command::new(qd_binary())
         .args(["ls", "--all", "--json"])
         .env("HOME", home)
         .env("QD_HOME", home)

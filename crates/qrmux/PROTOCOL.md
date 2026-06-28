@@ -21,7 +21,7 @@ refusal — never a hang, never a silent drop, never a misparse.
 ```
 client                                daemon
   |-- connect(unix socket) ------------>|
-  |-- preamble: "SBMX" + version (5B) ->|   (frozen shape, see below)
+  |-- preamble: "QRMX" + version (5B) ->|   (frozen shape, see below)
   |                                     |-- version OK? no → framed Error, close
   |-- frame: ClientMsg::Hello ---------->|   (v3 — MUST be the first frame)
   |<-- frame: ServerMsg::Hello ----------|   (v3 — MUST be the server's first frame)
@@ -45,7 +45,7 @@ The first 5 bytes on every connection, client → server:
 
 | bytes | content |
 |-------|---------|
-| 0–3   | magic `SBMX` (`0x53 0x42 0x4D 0x58`) |
+| 0–3   | magic `QRMX` (`0x51 0x52 0x4D 0x58`) |
 | 4     | protocol version (current: `0x03`) |
 
 The preamble's **shape is frozen forever** — it must never grow, shrink, or
@@ -349,7 +349,7 @@ not on echo render. Evidence chain: B1 decision memo divergence #2 + ADD-6.
 Socket dir resolves in **two tiers** (`src/server/socket.rs`):
 
 1. `$XDG_RUNTIME_DIR/qrmux`
-2. `<sbHome>/mux` where `sbHome = $QD_HOME || $HOME/.quorum/dispatch`
+2. `<qdHome>/mux` where `qdHome = $QD_HOME || $HOME/.quorum/dispatch`
 
 Socket file: `<dir>/qrmux.sock`; lockfile `<dir>/qrmux.lock`.
 

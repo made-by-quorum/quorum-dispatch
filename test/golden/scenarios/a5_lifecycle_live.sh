@@ -6,7 +6,7 @@
 # (zero real-Claude boot, ADD-10a — nothing here creates a Claude/agent session).
 #
 # House pattern: self-contained like dryrun/a2-mac-fakeclaude.sh. Establishes its
-# OWN per-run hermetic jail (rule 9 + ADD-4 + L15 belt), sbrg- names only, every
+# OWN per-run hermetic jail (rule 9 + ADD-4 + L15 belt), qdrg- names only, every
 # destructive row pre-asserts jail_assert_resolves_in_jail, jailed assertions key
 # on `jail_zmx list` (never `qd ls`). Bash 3.2 floor (macOS): no assoc arrays,
 # no ${var,,}, no mapfile.
@@ -25,11 +25,11 @@ ZMX_BIN="${ZMX_BIN:-$(command -v zmx 2>/dev/null || echo /opt/homebrew/bin/zmx)}
 [ -x "$QD_BIN" ]  || { echo "FATAL: qd binary not found/executable: $QD_BIN"; exit 1; }
 [ -x "$ZMX_BIN" ] || { echo "FATAL: zmx binary not found/executable: $ZMX_BIN"; exit 1; }
 
-export JAIL_SB_CMD="$QD_BIN"
+export JAIL_QD_CMD="$QD_BIN"
 export JAIL_ZMX_CMD="$ZMX_BIN"
 . test/golden/lib/jail.sh
-# zmx caps session names at 20 bytes. The jail prefix is `sbrg-<runid>-`, so we
-# pass a SHORT 4-char runid → prefix `sbrg-XXXX-` (10 chars), leaving room for a
+# zmx caps session names at 20 bytes. The jail prefix is `qdrg-<runid>-`, so we
+# pass a SHORT 4-char runid → prefix `qdrg-XXXX-` (10 chars), leaving room for a
 # short suffix (e.g. `k1`,`g4`,`r5`) under the 20-byte zmx limit.
 SHORT_RUNID="$(printf '%s' "${RANDOM:-0}${RANDOM:-0}" | tr -cd 'a-z0-9' | cut -c1-4)"
 [ -n "$SHORT_RUNID" ] || SHORT_RUNID="z$$"
@@ -47,7 +47,7 @@ ok()        { echo "  [ok] $1"; }
 
 # The SWEEP BELT (jail_sweep_belt_ok) lives in test/golden/lib/jail.sh — required
 # + wired per the orc-3 ruling. The G-L6 destructive branch (gated OFF on macOS)
-# calls it; the G-L6c negative-control row below proves it BITES on a non-sbrg
+# calls it; the G-L6c negative-control row below proves it BITES on a non-qdrg
 # planned target.
 
 # --- fake-claude: writes a PID-keyed registry entry, then sleeps -------------
@@ -60,7 +60,7 @@ cat > "$FAKE" <<'EOS'
 # Fake claude. Writes a PID-keyed registry entry then sleeps. The registry NAME
 # is what the resume EventBootWaiter (boot.rs scan_for_name) keys on; a real
 # claude knows its own name, so for the resume relaunch the scenario passes the
-# expected zmx name via SBRG_FAKE_NAME (the real-claude knowledge stand-in).
+# expected zmx name via QDRG_FAKE_NAME (the real-claude knowledge stand-in).
 name=""; sid=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -69,7 +69,7 @@ while [ $# -gt 0 ]; do
     *) shift;;
   esac
 done
-[ -n "${SBRG_FAKE_NAME:-}" ] && name="$SBRG_FAKE_NAME"
+[ -n "${QDRG_FAKE_NAME:-}" ] && name="$QDRG_FAKE_NAME"
 mkdir -p "$HOME/.claude/sessions"
 [ -n "$sid" ] || sid="fake-$$"
 printf '{"pid":%d,"name":"%s","status":"idle","sessionId":"%s","cwd":"%s","version":"fake","kind":"interactive","entrypoint":"cli","startedAt":1700000000000,"updatedAt":1700000000000}\n' \
@@ -120,7 +120,7 @@ fake_pid_for() {
 echo "=== A5 G-L live rows (jail=$JAIL_PREFIX root=$JAIL_ROOT) ==="
 
 # ===========================================================================
-# G-L1: kill live — sbrg- session, belt pre-assert, dual-reap, tombstone present,
+# G-L1: kill live — qdrg- session, belt pre-assert, dual-reap, tombstone present,
 #        post-verify clean, exit 0.
 # ===========================================================================
 echo "--- G-L1: kill live (dual-reap + tombstone + post-verify clean) ---"
@@ -133,7 +133,7 @@ pid1="$(fake_pid_for "$GL1")"
 # BELT pre-assert before the destructive kill.
 if jail_assert_resolves_in_jail "$GL1"; then
   ok "G-L1 resolution belt passed"
-  out="$(jail_sb kill --force "$GL1" 2>"$JAIL_ROOT/gl1.err")"; code=$?
+  out="$(jail_qd kill --force "$GL1" 2>"$JAIL_ROOT/gl1.err")"; code=$?
   echo "    kill exit=$code out=[$out]"
   [ -s "$JAIL_ROOT/gl1.err" ] && sed 's/^/    err: /' "$JAIL_ROOT/gl1.err"
   [ "$code" = "0" ] && ok "G-L1 exit 0" || note_fail "G-L1 exit=$code (expect 0)"
@@ -176,7 +176,7 @@ GL2="${JAIL_PREFIX}kill2"
 spawn_fake "$GL2"
 pid2="$(fake_pid_for "$GL2")"
 if jail_assert_resolves_in_jail "$GL2"; then
-  out="$(jail_sb kill "$GL2" </dev/null 2>"$JAIL_ROOT/gl2.err")"; code=$?
+  out="$(jail_qd kill "$GL2" </dev/null 2>"$JAIL_ROOT/gl2.err")"; code=$?
   echo "    kill(no --force) exit=$code out=[$out]"
   [ -s "$JAIL_ROOT/gl2.err" ] && sed 's/^/    err: /' "$JAIL_ROOT/gl2.err"
   [ "$code" = "0" ] && ok "G-L2 exit 0 (direct kill)" || note_fail "G-L2 exit=$code (expect 0)"
@@ -233,7 +233,7 @@ pid3="$(fake_pid_for "$GL3")"
 if jail_assert_resolves_in_jail "$GL3"; then
   ok "G-L3 resolution belt passed"
   # Run the kill with the SHIM zmx on PATH so zmx kill no-ops -> survivor.
-  out="$(PATH="$SHIM_DIR:$PATH" JAIL_ZMX_CMD="$SHIM" jail_sb kill --force "$GL3" 2>"$JAIL_ROOT/gl3.err")"; code=$?
+  out="$(PATH="$SHIM_DIR:$PATH" JAIL_ZMX_CMD="$SHIM" jail_qd kill --force "$GL3" 2>"$JAIL_ROOT/gl3.err")"; code=$?
   echo "    kill(shim) exit=$code out=[$out]"
   sed 's/^/    err: /' "$JAIL_ROOT/gl3.err"
   # The shim keeps the survivor visible to the verify-gone loop, so kill takes the
@@ -260,7 +260,7 @@ if jail_assert_resolves_in_jail "$GL3"; then
     ok "G-L3 advisory carries no 'zmx kill' remediation instruction"
   fi
   # cleanup: now kill for real (real zmx).
-  jail_assert_resolves_in_jail "$GL3" && jail_sb kill --force "$GL3" >/dev/null 2>&1
+  jail_assert_resolves_in_jail "$GL3" && jail_qd kill --force "$GL3" >/dev/null 2>&1
   [ -n "$pid3" ] && kill -9 "$pid3" 2>/dev/null
 else
   note_fail "G-L3 resolution belt FAILED"
@@ -307,7 +307,7 @@ printf '{"type":"summary"}\n' > "$DEADJSONL"
 # (no registry entry references DEADSID, so it is dead by construction).
 touch -t "$(date -v-8d +%Y%m%d%H%M 2>/dev/null || date -d '8 days ago' +%Y%m%d%H%M)" "$DEADJSONL" 2>/dev/null
 # dry-run: lists the candidate, mutates NOTHING.
-out="$(jail_sb gc --dry-run 2>"$JAIL_ROOT/gl4dry.err")"; code=$?
+out="$(jail_qd gc --dry-run 2>"$JAIL_ROOT/gl4dry.err")"; code=$?
 echo "    gc --dry-run exit=$code"
 echo "$out" | sed 's/^/    | /'
 [ "$code" = "0" ] && ok "G-L4 dry-run exit 0" || note_fail "G-L4 dry-run exit=$code"
@@ -315,7 +315,7 @@ echo "$out" | grep -q "$DEADSID" && ok "G-L4 dry-run lists dead jsonl" || note_f
 echo "$out" | grep -q "dry run — no changes made" && ok "G-L4 dry-run banner present" || note_fail "G-L4 dry-run banner missing"
 [ -f "$DEADJSONL" ] && ok "G-L4 dry-run mutated nothing (jsonl still present)" || note_fail "G-L4 dry-run DELETED a file"
 # real run: moves to trash.
-out="$(jail_sb gc 2>"$JAIL_ROOT/gl4real.err")"; code=$?
+out="$(jail_qd gc 2>"$JAIL_ROOT/gl4real.err")"; code=$?
 echo "    gc (real) exit=$code"
 echo "$out" | sed 's/^/    | /'
 [ "$code" = "0" ] && ok "G-L4 real exit 0" || note_fail "G-L4 real exit=$code"
@@ -326,21 +326,21 @@ trashed="$(ls "$TRASH"/*"$DEADSID".jsonl 2>/dev/null | head -1)"
 meta="$(ls "$TRASH"/*"$DEADSID".jsonl_meta.json 2>/dev/null | head -1)"
 [ -n "$meta" ] && ok "G-L4 trash metadata present" || note_fail "G-L4 trash metadata missing"
 # list-trash shows it with the Age line (byte-parity fix).
-out="$(jail_sb gc --list-trash 2>/dev/null)"
+out="$(jail_qd gc --list-trash 2>/dev/null)"
 echo "$out" | grep -q "Age:" && ok "G-L4 list-trash shows Age line" || note_fail "G-L4 list-trash missing Age line"
 # recover: restores the original; refuses if original exists.
 recname="$(basename "$trashed")"      # e.g. <stamp>_<sid>.jsonl
-out="$(jail_sb gc --recover "$DEADSID" 2>"$JAIL_ROOT/gl4rec.err")"; code=$?
+out="$(jail_qd gc --recover "$DEADSID" 2>"$JAIL_ROOT/gl4rec.err")"; code=$?
 echo "    gc --recover exit=$code out=[$out]"
 [ "$code" = "0" ] && ok "G-L4 recover exit 0" || note_fail "G-L4 recover exit=$code"
 [ -f "$DEADJSONL" ] && ok "G-L4 recover restored original" || note_fail "G-L4 recover did not restore"
 case "$out" in "✓ Recovered "*) ok "G-L4 recover output byte-exact" ;; *) note_fail "G-L4 recover output: [$out]" ;; esac
 # recover refusal when original exists: re-trash then recover again with the file
 # present → must exit 1.
-jail_sb gc >/dev/null 2>&1            # re-trash the (recovered) dead jsonl
+jail_qd gc >/dev/null 2>&1            # re-trash the (recovered) dead jsonl
 # put a colliding original back so recover must refuse.
 printf '{"type":"summary"}\n' > "$DEADJSONL"
-out="$(jail_sb gc --recover "$DEADSID" 2>"$JAIL_ROOT/gl4ref.err")"; code=$?
+out="$(jail_qd gc --recover "$DEADSID" 2>"$JAIL_ROOT/gl4ref.err")"; code=$?
 echo "    gc --recover (collision) exit=$code"
 sed 's/^/    err: /' "$JAIL_ROOT/gl4ref.err"
 [ "$code" = "1" ] && ok "G-L4 recover refuses when original exists (exit 1)" || note_fail "G-L4 recover-collision exit=$code"
@@ -351,7 +351,7 @@ if [ -n "$meta2" ]; then
   OLD_ISO="$(date -u -v-31d +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u -d '31 days ago' +%Y-%m-%dT%H:%M:%S.000Z)"
   # rewrite the prunedAt field in the meta json (bash 3.2 sed).
   sed "s/\"prunedAt\":[^,]*/\"prunedAt\": \"$OLD_ISO\"/" "$meta2" > "$meta2.tmp" && mv "$meta2.tmp" "$meta2"
-  out="$(jail_sb gc --purge 2>"$JAIL_ROOT/gl4purge.err")"; code=$?
+  out="$(jail_qd gc --purge 2>"$JAIL_ROOT/gl4purge.err")"; code=$?
   echo "    gc --purge exit=$code"
   echo "$out" | sed 's/^/    | /'
   [ "$code" = "0" ] && ok "G-L4 purge exit 0" || note_fail "G-L4 purge exit=$code"
@@ -369,7 +369,7 @@ echo "--- G-L5: resume cold relaunch + F3 + S2 ---"
 # Build a COLD session as A1 does: a JSONL transcript ONLY (no live <pid>.json,
 # no tombstone — a tombstone would make it Killed, which resume refuses). The
 # recorded cwd is the FIRST user-record `cwd`; the name comes from an agent-name
-# record (sbrg- prefixed). A1 surfaces JSONL-only as status=cold (ColdJsonl).
+# record (qdrg- prefixed). A1 surfaces JSONL-only as status=cold (ColdJsonl).
 COLDSID="coldsess-gl5"
 # Recorded cwd that EXISTS (for the happy relaunch) — slugified project dir.
 COLDCWD="$JAIL_ROOT/tmp/coldcwd"; mkdir -p "$COLDCWD"
@@ -381,7 +381,7 @@ COLDPROJ="$HOME/.claude/projects/$COLDSLUG"; mkdir -p "$COLDPROJ"
 } > "$COLDPROJ/$COLDSID.jsonl"
 
 # --- S2: reject a traversal/injection zmx-name (no spawn). ---
-out="$(jail_sb resume "$COLDSID" --zmx-name '../evil' 2>"$JAIL_ROOT/gl5s2.err")"; code=$?
+out="$(jail_qd resume "$COLDSID" --zmx-name '../evil' 2>"$JAIL_ROOT/gl5s2.err")"; code=$?
 echo "    resume --zmx-name '../evil' exit=$code"
 sed 's/^/    err: /' "$JAIL_ROOT/gl5s2.err"
 [ "$code" = "1" ] && ok "G-L5 S2 rejects bad zmx-name (exit 1)" || note_fail "G-L5 S2 exit=$code (expect 1)"
@@ -395,7 +395,7 @@ GONEPROJ="$HOME/.claude/projects/-gone-proj"; mkdir -p "$GONEPROJ"
   printf '{"type":"agent-name","agentName":"%sgone5"}\n' "$JAIL_PREFIX"
   printf '{"type":"user","cwd":"%s","timestamp":"2026-06-01T10:00:00.000Z","message":{"role":"user","content":"hi"}}\n' "$JAIL_ROOT/tmp/this-dir-was-deleted"
 } > "$GONEPROJ/$GONESID.jsonl"
-out="$(jail_sb resume "$GONESID" 2>"$JAIL_ROOT/gl5f3.err")"; code=$?
+out="$(jail_qd resume "$GONESID" 2>"$JAIL_ROOT/gl5f3.err")"; code=$?
 echo "    resume (missing cwd, no --cwd) exit=$code"
 sed 's/^/    err: /' "$JAIL_ROOT/gl5f3.err"
 [ "$code" = "1" ] && ok "G-L5 F3 exit 1" || note_fail "G-L5 F3 exit=$code (expect 1)"
@@ -412,10 +412,10 @@ export CLAUDE_BIN="$FAKE"
 ZNAME="${JAIL_PREFIX}cold5"
 # resume --no-attach launches detached via zmx, then event-waits for ready
 # (boot.rs scan_for_name keys on the registry NAME == zmx name). The fake writes
-# SBRG_FAKE_NAME as its registry name so the waiter finds it.
-export SBRG_FAKE_NAME="$ZNAME"
-out="$(jail_sb resume "$COLDSID" --no-attach --zmx-name "$ZNAME" 2>"$JAIL_ROOT/gl5ok.err")"; code=$?
-unset SBRG_FAKE_NAME
+# QDRG_FAKE_NAME as its registry name so the waiter finds it.
+export QDRG_FAKE_NAME="$ZNAME"
+out="$(jail_qd resume "$COLDSID" --no-attach --zmx-name "$ZNAME" 2>"$JAIL_ROOT/gl5ok.err")"; code=$?
+unset QDRG_FAKE_NAME
 echo "    resume --no-attach exit=$code out=[$out]"
 sed 's/^/    err: /' "$JAIL_ROOT/gl5ok.err"
 relaunched="$(jail_zmx list 2>/dev/null | grep -c "$ZNAME" || true)"
@@ -426,7 +426,7 @@ else
 fi
 # cleanup the relaunched session (belt + force).
 if jail_assert_resolves_in_jail "$ZNAME" 2>/dev/null; then
-  jail_sb kill --force "$ZNAME" >/dev/null 2>&1
+  jail_qd kill --force "$ZNAME" >/dev/null 2>&1
 else
   "$ZMX_BIN" kill "$ZNAME" --force >/dev/null 2>&1 || true
 fi
@@ -479,9 +479,9 @@ sleep 1
 # unit tests (reconcile.rs i1/i3/i5 + the i5 negative-control harness).
 
 # --dry-run: PLAN MY forged drift, mutate nothing. Assertions key on MY specific
-# forged identities (sbrg- name / DEADPID), NOT a bare "tombstone:"/"reap-wrapper:"
+# forged identities (qdrg- name / DEADPID), NOT a bare "tombstone:"/"reap-wrapper:"
 # line (a real /tmp orphan in the host tier could otherwise false-pass).
-out="$(jail_sb reconcile --dry-run 2>"$JAIL_ROOT/gl6dry.err")"; code=$?
+out="$(jail_qd reconcile --dry-run 2>"$JAIL_ROOT/gl6dry.err")"; code=$?
 echo "    reconcile --dry-run exit=$code"
 echo "$out" | sed 's/^/    | /'
 echo "$out" | grep -q "Would repair" && ok "G-L6 dry-run says 'Would repair'" || note_fail "G-L6 dry-run verb wrong"
@@ -515,29 +515,29 @@ else
 fi
 
 # G-L6c: SWEEP-BELT NEGATIVE CONTROL (orc-3 ruling — the belt MUST demonstrably
-# BITE on a non-sbrg planned target). On brano the reconcile --dry-run plan reaches
-# the literal /tmp tier and surfaces NON-sbrg host orphans (e.g. ended org tasks),
+# BITE on a non-qdrg planned target). On brano the reconcile --dry-run plan reaches
+# the literal /tmp tier and surfaces NON-qdrg host orphans (e.g. ended org tasks),
 # so jail_sweep_belt_ok MUST refuse (return non-zero). To make the control robust
 # even if the host /tmp tier happens to be empty of reapable orphans, we ALSO forge
-# a non-sbrg ended task in the jail's OWN zmx dir so a non-sbrg reap target is
+# a non-qdrg ended task in the jail's OWN zmx dir so a non-qdrg reap target is
 # guaranteed in the plan.
-echo "--- G-L6c: sweep-belt negative control (must BITE on non-sbrg target) ---"
-NONSBRG="intruder-not-jailed"      # deliberately NOT $JAIL_PREFIX-prefixed
+echo "--- G-L6c: sweep-belt negative control (must BITE on non-qdrg target) ---"
+NONQDRG="intruder-not-jailed"      # deliberately NOT $JAIL_PREFIX-prefixed
 # Spawn it in the jail zmx dir, then kill its inner pid so it ends → an ended task
-# with a non-sbrg name appears in the RAW plan as a reap-wrapper target.
-( cd "$WORKDIR" && "$ZMX_BIN" run "$NONSBRG" -d bash -lc "exec sleep 1" ) >/dev/null 2>&1
+# with a non-qdrg name appears in the RAW plan as a reap-wrapper target.
+( cd "$WORKDIR" && "$ZMX_BIN" run "$NONQDRG" -d bash -lc "exec sleep 1" ) >/dev/null 2>&1
 sleep 2   # let the inner `sleep 1` exit so the task is ended/unreachable
 if jail_sweep_belt_ok reconcile 2>"$JAIL_ROOT/gl6c.err"; then
-  note_fail "G-L6c sweep belt did NOT bite (a non-sbrg reap target should refuse)"
+  note_fail "G-L6c sweep belt did NOT bite (a non-qdrg reap target should refuse)"
 else
-  ok "G-L6c sweep belt BIT (refused: non-sbrg reap target present)"
+  ok "G-L6c sweep belt BIT (refused: non-qdrg reap target present)"
   grep -q "is NOT jail-prefixed\|does not resolve in the jailed zmx dir" "$JAIL_ROOT/gl6c.err" \
     && ok "G-L6c refusal names the offending target" \
     || echo "  [info] G-L6c refusal emitted (reason text varies by which host target tripped first)"
 fi
 # Cleanup the forged intruder (guarded raw kill is name-mismatched, so kill the
 # zmx task directly in the jail dir — it is in OUR ZMX_DIR).
-"$ZMX_BIN" kill "$NONSBRG" --force >/dev/null 2>&1 || true
+"$ZMX_BIN" kill "$NONQDRG" --force >/dev/null 2>&1 || true
 
 # Real-reconcile row: OFF on macOS PERMANENTLY (orc-3 standing constraint). It runs
 # ONLY in the Lima lane (G-X1), gated by ALL of: (1) jail_require_destructive_ok —
@@ -548,7 +548,7 @@ if jail_require_destructive_ok 2>/dev/null \
    && [ "${A5_L6_DESTRUCTIVE_OK:-0}" = "1" ] \
    && jail_sweep_belt_ok reconcile; then
   echo "    [Lima + sweep belt + opt-in] running REAL reconcile (Lima lane only)"
-  out="$(jail_sb reconcile 2>"$JAIL_ROOT/gl6real.err")"; code=$?
+  out="$(jail_qd reconcile 2>"$JAIL_ROOT/gl6real.err")"; code=$?
   echo "$out" | sed 's/^/    | /'
   echo "$out" | grep -q "Repaired" && ok "G-L6 real says 'Repaired'" || note_fail "G-L6 real verb wrong"
   if [ ! -f "$HOME/.claude/sessions/$DEADPID.json" ] && [ -f "$HOME/.claude/sessions/$DEADPID.json.tombstoned" ]; then
@@ -570,7 +570,7 @@ fi
 
 # cleanup the live + orphan + any stragglers (belt + force).
 if jail_assert_resolves_in_jail "$GL6LIVE" 2>/dev/null; then
-  jail_sb kill --force "$GL6LIVE" >/dev/null 2>&1
+  jail_qd kill --force "$GL6LIVE" >/dev/null 2>&1
 fi
 [ -n "$livepid" ] && kill -9 "$livepid" 2>/dev/null
 [ -n "$orphpid" ] && kill -9 "$orphpid" 2>/dev/null

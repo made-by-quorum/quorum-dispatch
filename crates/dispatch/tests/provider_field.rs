@@ -15,14 +15,14 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-fn sb_bin() -> &'static str {
+fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
 /// Forge a single registry row `<pid>.json` under a freshly-jailed HOME and run
 /// `qd <args...>`. Returns (exit_code, stdout, stderr). The jail mirrors
 /// verbs_a4.rs: HOME → `<dir>/home`, ZMX_DIR → an empty `<dir>/zmx`.
-fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32, String, String) {
+fn run_qd_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32, String, String) {
     let home = dir.join("home");
     let zmx = dir.join("zmx");
     let sessions = home.join(".claude").join("sessions");
@@ -31,7 +31,7 @@ fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32,
     common::assert_not_real_home(&home);
     std::fs::write(sessions.join(format!("{pid}.json")), row_json).unwrap();
 
-    let out = Command::new(sb_bin())
+    let out = Command::new(qd_bin())
         .args(args)
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
@@ -44,13 +44,13 @@ fn run_sb_with_row(dir: &Path, pid: i64, row_json: &str, args: &[&str]) -> (i32,
     )
 }
 
-/// Strip the P0 wave-1 stable-id lines (`"sbId"` / `"sbIdPrefix"`) before a
+/// Strip the P0 wave-1 stable-id lines (`"qdId"` / `"qdIdPrefix"`) before a
 /// cross-run byte compare: ids are RANDOM at mint, so two separate jails mint
 /// different ids for the same row — the only legitimately-nondeterministic
 /// lines in `ls --json`.
-fn strip_sb_id_lines(json: &str) -> String {
+fn strip_qd_id_lines(json: &str) -> String {
     json.lines()
-        .filter(|l| !l.contains("\"sbId\"") && !l.contains("\"sbIdPrefix\""))
+        .filter(|l| !l.contains("\"qdId\"") && !l.contains("\"qdIdPrefix\""))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -59,7 +59,7 @@ fn strip_sb_id_lines(json: &str) -> String {
 /// `"provider": "claude-code"` produces `ls --json` output BYTE-IDENTICAL to the
 /// SAME row with the field ABSENT — the absent→claude-code default lives in the
 /// join read-back boundary, never on disk. (P0 wave-1: modulo the random
-/// stable-id lines, stripped by `strip_sb_id_lines` — see its doc.)
+/// stable-id lines, stripped by `strip_qd_id_lines` — see its doc.)
 ///
 /// MUTATION EVIDENCE: flipping the join's absent-provider default to any value
 /// other than "claude-code" reds this (the absent-field jail would no longer
@@ -74,16 +74,16 @@ fn explicit_claude_code_is_byte_identical_to_absent_field() {
 
     let t_absent = tempfile::tempdir().unwrap();
     let (c1, absent_json, _e1) =
-        run_sb_with_row(t_absent.path(), 90200, &absent, &["ls", "--json"]);
+        run_qd_with_row(t_absent.path(), 90200, &absent, &["ls", "--json"]);
     let t_explicit = tempfile::tempdir().unwrap();
     let (c2, explicit_json, _e2) =
-        run_sb_with_row(t_explicit.path(), 90200, &explicit, &["ls", "--json"]);
+        run_qd_with_row(t_explicit.path(), 90200, &explicit, &["ls", "--json"]);
 
     assert_eq!(c1, 0, "absent-field ls --json exit 0");
     assert_eq!(c2, 0, "explicit-field ls --json exit 0");
     assert_eq!(
-        strip_sb_id_lines(&absent_json),
-        strip_sb_id_lines(&explicit_json),
+        strip_qd_id_lines(&absent_json),
+        strip_qd_id_lines(&explicit_json),
         "explicit provider:claude-code must render byte-identical to the absent field"
     );
     assert!(
@@ -107,7 +107,7 @@ fn weird_provider_survives_render_but_acting_verb_refuses() {
 
     // Render survival: ls --json shows the value verbatim, row present, exit 0.
     let t1 = tempfile::tempdir().unwrap();
-    let (code, json, _err) = run_sb_with_row(t1.path(), 90201, row, &["ls", "--json"]);
+    let (code, json, _err) = run_qd_with_row(t1.path(), 90201, row, &["ls", "--json"]);
     assert_eq!(code, 0, "unknown provider value never kills the scan");
     assert!(
         json.contains("\"provider\": \"weird-prov\""),
@@ -116,7 +116,7 @@ fn weird_provider_survives_render_but_acting_verb_refuses() {
 
     // Acting-verb refusal: `qd connect` refuses with the EXACT message + exit 1.
     let t2 = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_sb_with_row(t2.path(), 90201, row, &["connect", "wp"]);
+    let (code, _out, err) = run_qd_with_row(t2.path(), 90201, row, &["connect", "wp"]);
     assert_eq!(code, 1, "connect refuses an unknown provider with exit 1");
     assert_eq!(
         err.trim_end(),
@@ -137,7 +137,7 @@ fn weird_provider_survives_render_but_acting_verb_refuses() {
 fn wrong_typed_provider_degrades_to_claude_code() {
     let row = r#"{"pid":90202,"sessionId":"sid-wrong-000","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","name":"wt","version":"0.1.0","kind":"claude-code","entrypoint":"claude","provider":7}"#;
     let t = tempfile::tempdir().unwrap();
-    let (code, json, _err) = run_sb_with_row(t.path(), 90202, row, &["ls", "--json"]);
+    let (code, json, _err) = run_qd_with_row(t.path(), 90202, row, &["ls", "--json"]);
     assert_eq!(
         code, 0,
         "wrong-typed provider degrades, row survives, exit 0"

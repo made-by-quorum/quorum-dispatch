@@ -66,8 +66,8 @@ run_one() {
         printf '[dryrun] jail refused for %s\n' "$scn_base" >&2
         return 3
     fi
-    # Point the qd-under-test at the TS entrypoint via bun. JAIL_SB_CMD must be a
-    # single executable (jail_sb/jail_kill_session/teardown invoke "$JAIL_SB_CMD"
+    # Point the qd-under-test at the TS entrypoint via bun. JAIL_QD_CMD must be a
+    # single executable (jail_qd/jail_kill_session/teardown invoke "$JAIL_QD_CMD"
     # <args>), so wrap `bun <entry>` in a tiny shim inside the jail.
     local shim="$JAIL_ROOT/qd-shim"
     {
@@ -76,7 +76,7 @@ run_one() {
     } > "$shim"
     chmod +x "$shim"
     export QD_UNDER_TEST="$shim"
-    export JAIL_SB_CMD="$shim"
+    export JAIL_QD_CMD="$shim"
 
     local out="$JAIL_ROOT/dryrun-out.raw"
     SCN_OUT="$out"

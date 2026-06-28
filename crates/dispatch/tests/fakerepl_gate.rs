@@ -113,7 +113,7 @@ fn mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
 // Jail-shaped tempdir.
 //
 // Constructs the EXACT exported isolation layout the fakerepl belt requires
-// (a4-spec §5): HOME=<root>/sbrg-runs/<id>/home, QD_HOME=<root>/.../sb_home,
+// (a4-spec §5): HOME=<root>/qdrg-runs/<id>/home, QD_HOME=<root>/.../qd_home,
 // ZMX_DIR=.../zmx, TMPDIR=.../tmp. This doubles as a positive control that the
 // belt ACCEPTS a valid jail (every non-refusal row proves it).
 // ===========================================================================
@@ -121,7 +121,7 @@ fn mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
 struct Jail {
     _tmp: tempfile::TempDir,
     home: PathBuf,
-    sb_home: PathBuf,
+    qd_home: PathBuf,
     zmx: PathBuf,
     tmp: PathBuf,
     sessions_dir: PathBuf,
@@ -130,20 +130,20 @@ struct Jail {
 impl Jail {
     fn new(id: &str) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir");
-        // Layout: <tempdir>/sbrg-runs/<id>/{home,sb_home,zmx,tmp}
-        let root = tmp.path().join("sbrg-runs").join(id);
+        // Layout: <tempdir>/qdrg-runs/<id>/{home,qd_home,zmx,tmp}
+        let root = tmp.path().join("qdrg-runs").join(id);
         let home = root.join("home");
-        let sb_home = root.join("sb_home");
+        let qd_home = root.join("qd_home");
         let zmx = root.join("zmx");
         let tmpd = root.join("tmp");
-        for d in [&home, &sb_home, &zmx, &tmpd] {
+        for d in [&home, &qd_home, &zmx, &tmpd] {
             std::fs::create_dir_all(d).expect("mkdir jail subtree");
         }
         let sessions_dir = home.join(".claude").join("sessions");
         Self {
             _tmp: tmp,
             home,
-            sb_home,
+            qd_home,
             zmx,
             tmp: tmpd,
             sessions_dir,
@@ -154,7 +154,7 @@ impl Jail {
     fn apply(&self, cmd: &mut CommandBuilder) {
         cmd.env_clear();
         cmd.env("HOME", &self.home);
-        cmd.env("QD_HOME", &self.sb_home);
+        cmd.env("QD_HOME", &self.qd_home);
         cmd.env("ZMX_DIR", &self.zmx);
         cmd.env("TMPDIR", &self.tmp);
         // PATH kept minimal but present so the child can exec (it execs nothing,
@@ -1386,7 +1386,7 @@ fn jail_refusal_partial_spoof_exits_13() {
     let jail = Jail::new("spoof");
     let env = [
         ("HOME", jail.home.to_str().unwrap()),
-        ("QD_HOME", "/elsewhere/sb_home"),
+        ("QD_HOME", "/elsewhere/qd_home"),
         ("ZMX_DIR", jail.zmx.to_str().unwrap()),
         ("TMPDIR", jail.tmp.to_str().unwrap()),
     ];

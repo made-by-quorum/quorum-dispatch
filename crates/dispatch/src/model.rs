@@ -75,7 +75,7 @@ pub struct Session {
     /// session UUID — filled post-join from a read-only `idstore::fold`. `None`
     /// when the session has no provider session id (ZmxOnly rows) or no mint
     /// yet (`qd ls` lazily backfills).
-    pub sb_id: Option<String>,
+    pub qd_id: Option<String>,
     pub pid: Option<i64>,
     pub status: SessionStatus,
     pub zmx_name: Option<String>,
@@ -115,14 +115,14 @@ pub struct Session {
     /// `liveness::gated_ls_status_headless`) to scope the gate to headless rows.
     pub entrypoint: Option<String>,
     /// WP-B5-iii obl-4: a FORK's lineage pointer — the PARENT instance's stable
-    /// sbId. Filled post-join by `idstore::fill_lineage` from the `lineage` event
+    /// qdId. Filled post-join by `idstore::fill_lineage` from the `lineage` event
     /// the fork recorded (keyed by the fork's provider session_id), via the SAME
     /// read-only fold pass `qd ls` runs (`common::all_sessions`) — so a fork's
     /// parent is discoverable through the live resolver path. `None` for every
     /// non-fork row. NOT serialized on `ls --json` (render.rs builds JSON
     /// explicitly — parity-safe, exactly like `entrypoint`; an output lineage
     /// field is a B7-owned golden-delta, deferred). STRICTLY the parent pointer —
-    /// never the fork's own sbId (that stays `sb_id`).
+    /// never the fork's own qdId (that stays `qd_id`).
     pub lineage: Option<String>,
     pub which_branch: SessionBranch,
 }

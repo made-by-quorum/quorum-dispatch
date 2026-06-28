@@ -1,7 +1,7 @@
 //! M3: JSONL stats/scan, ported from TS src/session.ts:431-605.
 //!
 //! All functions take injected **root paths** (`&Path`) — NOTHING here resolves
-//! the real home (lesson L9a; see [`crate::paths::SbPaths`]). Permissive parse
+//! the real home (lesson L9a; see [`crate::paths::QdPaths`]). Permissive parse
 //! throughout (L8): a bad JSON line is skipped, never fatal; a partial trailing
 //! line must not discard the good records already accumulated.
 

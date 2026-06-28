@@ -42,7 +42,7 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 RUST_BIN="${A3_RUST_BIN:-$REPO_ROOT/target/debug/qd}"
-export JAIL_SB_CMD="$RUST_BIN"
+export JAIL_QD_CMD="$RUST_BIN"
 
 A3_REAL_HOME="$HOME"
 A3_REAL_TMPDIR="${TMPDIR:-/tmp}"
@@ -85,9 +85,9 @@ fresh_jail() {
     seed_sessions
 }
 
-# run_sb <args...> : run the Rust binary under an 8s alarm, stdin from /dev/null.
+# run_qd <args...> : run the Rust binary under an 8s alarm, stdin from /dev/null.
 # Sets RC / OUT_FILE / ERR_FILE.
-run_sb() {
+run_qd() {
     OUT_FILE="$JAIL_ROOT/tmp/o"; ERR_FILE="$JAIL_ROOT/tmp/e"
     jail_assert_established || { echo "FATAL: jail lost" >&2; exit 3; }
     perl -e 'alarm shift; exec @ARGV' 8 "$RUST_BIN" "$@" \
@@ -107,7 +107,7 @@ ro_no_mutation() {
     fresh_jail
     local before after
     before="$(dir_sha "$HOME")"
-    run_sb "$@"
+    run_qd "$@"
     after="$(dir_sha "$HOME")"
     if [ "$before" = "$after" ]; then
         pass "$id" "exit=$RC HOME-sha unchanged ($before)"
@@ -129,13 +129,13 @@ ro_no_mutation SA-live-1        live
 # ---- mark: appends EXACTLY one well-formed line; round-trips identical -------
 # NB: jail.sh exports QD_HOME, and mark honors it (H4) — so under the jail the
 # marks file lives at <QD_HOME>/state, NOT <HOME>/.quorum/dispatch/state. Derive the path the
-# same way the engine does (sbHome = QD_HOME || <HOME>/.quorum/dispatch).
+# same way the engine does (qdHome = QD_HOME || <HOME>/.quorum/dispatch).
 fresh_jail
 QD_DATA="${QD_HOME:-$HOME/.quorum/dispatch}"
 MARKS="$QD_DATA/state/marks.jsonl"
 [ -f "$MARKS" ] && fail SA-mark-pre "marks.jsonl exists before mark" || pass SA-mark-pre "no marks.jsonl before first mark"
 PAYLOAD='{"k1":"v1","nested":{"a":[1,2,3]},"u":"café ☕"}'
-run_sb mark alpha-worker "$PAYLOAD"
+run_qd mark alpha-worker "$PAYLOAD"
 if [ "$RC" = "0" ] && [ -f "$MARKS" ]; then
     # A7 ratchet fix (2026-06-05): A6 telemetry (merge-ruled 13:20) appends a
     # USAGE event line at every mark verb — `qd mark` now writes 2 lines (the
@@ -180,7 +180,7 @@ fi
 
 # rider 1: org-vocabulary payload passes through UNINTERPRETED (no key behavior).
 ORG_PAYLOAD='{"on_behalf_of":"x","role_claimed":"y","reports_to":"z","succeeds":"w"}'
-run_sb mark alpha-worker "$ORG_PAYLOAD"
+run_qd mark alpha-worker "$ORG_PAYLOAD"
 # A7 ratchet fix: 2 marks × (mark line + A6 usage line) = 4 lines; the second
 # mark's PAYLOAD line is line 3 (tail -1 would grab its usage event).
 nlines2="$(wc -l < "$MARKS" | tr -d ' ')"
@@ -204,9 +204,9 @@ fi
 
 # mark failure cases leave the file UNCHANGED.
 mark_sha_before="$(dir_sha "$QD_DATA")"
-run_sb mark alpha-worker '[1,2,3]'           # non-object payload
+run_qd mark alpha-worker '[1,2,3]'           # non-object payload
 rc_nonobj=$RC
-run_sb mark nosuch-session-xyz '{"k":1}'      # unresolvable session
+run_qd mark nosuch-session-xyz '{"k":1}'      # unresolvable session
 rc_nosess=$RC
 mark_sha_after="$(dir_sha "$QD_DATA")"
 if [ "$rc_nonobj" = "1" ] && [ "$rc_nosess" = "1" ] && [ "$mark_sha_before" = "$mark_sha_after" ]; then
@@ -217,31 +217,31 @@ fi
 jail_teardown
 
 # ---- H4: mark HONORS QD_HOME for the state dir (commands/bootstrap.ts:88-96) --
-# Contract: marks land at <sbHome>/state/marks.jsonl where sbHome = QD_HOME ||
+# Contract: marks land at <qdHome>/state/marks.jsonl where qdHome = QD_HOME ||
 # <HOME>/.quorum/dispatch. (a) QD_HOME set → under <QD_HOME>/state, NOT <HOME>/.quorum/dispatch/state.
 # (b) QD_HOME unset → under <HOME>/.quorum/dispatch/state. QD_HOME flows ONLY through the
 # injected Env seam (L9a).
 
 # (a) QD_HOME set to a dir OUTSIDE the default ~/.quorum/dispatch.
 fresh_jail
-SBH="$JAIL_ROOT/tmp/sbdata_override"
-mkdir -p "$SBH"
-# run_sb with an QD_HOME env override (custom, mirrors run_sb's alarm+stdin).
+QDH="$JAIL_ROOT/tmp/qddata_override"
+mkdir -p "$QDH"
+# run_qd with an QD_HOME env override (custom, mirrors run_qd's alarm+stdin).
 OUT_FILE="$JAIL_ROOT/tmp/o"; ERR_FILE="$JAIL_ROOT/tmp/e"
 jail_assert_established || { echo "FATAL: jail lost" >&2; exit 3; }
-QD_HOME="$SBH" perl -e 'alarm shift; exec @ARGV' 8 "$RUST_BIN" mark alpha-worker '{"k":"v"}' \
+QD_HOME="$QDH" perl -e 'alarm shift; exec @ARGV' 8 "$RUST_BIN" mark alpha-worker '{"k":"v"}' \
     < /dev/null > "$OUT_FILE" 2> "$ERR_FILE"
 RC=$?
-sbhome_marks="$SBH/state/marks.jsonl"
+qdhome_marks="$QDH/state/marks.jsonl"
 default_marks="$HOME/.quorum/dispatch/state/marks.jsonl"
-if [ "$RC" = "0" ] && [ -f "$sbhome_marks" ] && [ ! -f "$default_marks" ]; then
-    nlsb="$(wc -l < "$sbhome_marks" | tr -d ' ')"
+if [ "$RC" = "0" ] && [ -f "$qdhome_marks" ] && [ ! -f "$default_marks" ]; then
+    nlqd="$(wc -l < "$qdhome_marks" | tr -d ' ')"
     # A7 ratchet fix: mark line + A6 usage line (see SA-mark-1).
-    [ "$nlsb" = "2" ] \
-        && pass SA-mark-sbhome-set "QD_HOME set → marks under <QD_HOME>/state (mark + usage), NOT <HOME>/.quorum/dispatch/state" \
-        || fail SA-mark-sbhome-set "QD_HOME marks present but $nlsb lines (expected 2: mark + A6 usage)"
+    [ "$nlqd" = "2" ] \
+        && pass SA-mark-qdhome-set "QD_HOME set → marks under <QD_HOME>/state (mark + usage), NOT <HOME>/.quorum/dispatch/state" \
+        || fail SA-mark-qdhome-set "QD_HOME marks present but $nlqd lines (expected 2: mark + A6 usage)"
 else
-    fail SA-mark-sbhome-set "exit=$RC sbhome_marks=$( [ -f "$sbhome_marks" ] && echo yes || echo no ) default_marks=$( [ -f "$default_marks" ] && echo yes || echo no )"
+    fail SA-mark-qdhome-set "exit=$RC qdhome_marks=$( [ -f "$qdhome_marks" ] && echo yes || echo no ) default_marks=$( [ -f "$default_marks" ] && echo yes || echo no )"
 fi
 jail_teardown
 
@@ -255,9 +255,9 @@ env -u QD_HOME perl -e 'alarm shift; exec @ARGV' 8 "$RUST_BIN" mark alpha-worker
 RC=$?
 default_marks="$HOME/.quorum/dispatch/state/marks.jsonl"
 if [ "$RC" = "0" ] && [ -f "$default_marks" ]; then
-    pass SA-mark-sbhome-default "QD_HOME unset → marks default to <HOME>/.quorum/dispatch/state"
+    pass SA-mark-qdhome-default "QD_HOME unset → marks default to <HOME>/.quorum/dispatch/state"
 else
-    fail SA-mark-sbhome-default "exit=$RC default_marks=$( [ -f "$default_marks" ] && echo yes || echo no )"
+    fail SA-mark-qdhome-default "exit=$RC default_marks=$( [ -f "$default_marks" ] && echo yes || echo no )"
 fi
 jail_teardown
 
@@ -272,7 +272,7 @@ SESS_DIR="$HOME/.claude/sessions"
 reg_before="$(dir_sha "$SESS_DIR")"
 # Use a jail-prefixed name (L10 discipline) + an agent that cannot resolve.
 NEWNAME="${JAIL_PREFIX}newtest"
-run_sb new "$NEWNAME" --agent nonexistent-agent-xyz
+run_qd new "$NEWNAME" --agent nonexistent-agent-xyz
 rc_new=$RC
 reg_after="$(dir_sha "$SESS_DIR")"
 # NEW registry json files mentioning our name (a claimed session would appear here).
@@ -293,7 +293,7 @@ jail_teardown
 # ---- attach: unresolvable session → exit 1, no state change -----------------
 fresh_jail
 asha_before="$(dir_sha "$HOME")"
-run_sb attach nosuch-session-xyz
+run_qd attach nosuch-session-xyz
 rc_attach=$RC
 asha_after="$(dir_sha "$HOME")"
 if [ "$rc_attach" = "1" ] && [ "$asha_before" = "$asha_after" ]; then
@@ -306,8 +306,8 @@ jail_teardown
 # ---- send / relay moved-stubs: exit 1, no state change ----------------------
 fresh_jail
 ssha_before="$(dir_sha "$HOME")"
-run_sb send; rc_send=$RC
-run_sb relay; rc_relay=$RC
+run_qd send; rc_send=$RC
+run_qd relay; rc_relay=$RC
 ssha_after="$(dir_sha "$HOME")"
 if [ "$rc_send" = "1" ] && [ "$rc_relay" = "1" ] && [ "$ssha_before" = "$ssha_after" ]; then
     pass SA-moved-stubs "send(exit1)+relay(exit1) moved-stubs, HOME unchanged"
@@ -332,7 +332,7 @@ realverb_no_mutation() {
     fresh_jail
     local before after
     before="$(dir_sha "$HOME")"
-    run_sb "$@"
+    run_qd "$@"
     after="$(dir_sha "$HOME")"
     local rc_ok=0 nomut=0
     [ "$RC" = "$exp_rc" ] && rc_ok=1
@@ -353,7 +353,7 @@ real_fail_no_mutation() {
     fresh_jail
     local before after
     before="$(dir_sha "$HOME")"
-    run_sb "$@"
+    run_qd "$@"
     after="$(dir_sha "$HOME")"
     local rc_ok=0 msg_ok=0 nomut=0
     [ "$RC" = "1" ] && rc_ok=1
@@ -389,7 +389,7 @@ realverb_no_mutation SA-update-nochan   1 update
 # no-mutation row; the destructive path is covered live/jailed in a5_lifecycle_live.)
 fresh_jail
 before="$(dir_sha "$HOME")"
-run_sb reconcile --dry-run
+run_qd reconcile --dry-run
 after="$(dir_sha "$HOME")"
 if [ "$RC" = "0" ] && grep -q "Would repair" "$OUT_FILE" && [ "$before" = "$after" ]; then
     pass SA-reconcile-dryrun "reconcile --dry-run plans I1 repair (dead-PID drift) exit=0, NO mutation"
@@ -402,7 +402,7 @@ jail_teardown
 # guarantees the original no-mutation intent for the destructive verb).
 fresh_jail
 before="$(dir_sha "$HOME")"
-run_sb gc --dry-run
+run_qd gc --dry-run
 after="$(dir_sha "$HOME")"
 if [ "$RC" = "0" ] && grep -q "GC candidates" "$OUT_FILE" && [ "$before" = "$after" ]; then
     pass SA-gc-dryrun "gc --dry-run exit=0 scanned, NO mutation"
@@ -417,9 +417,9 @@ jail_teardown
 # first run's (a no-op apart from re-checks), both exit 0. This is the same
 # property G-B1 asserts; here it closes the reconciled stub row.
 fresh_jail
-run_sb bootstrap; rc_b1=$RC
+run_qd bootstrap; rc_b1=$RC
 sha_after1="$(dir_sha "$HOME")"
-run_sb bootstrap; rc_b2=$RC
+run_qd bootstrap; rc_b2=$RC
 sha_after2="$(dir_sha "$HOME")"
 if [ "$rc_b1" = "0" ] && [ "$rc_b2" = "0" ] && [ "$sha_after1" = "$sha_after2" ]; then
     pass SA-bootstrap-idem "bootstrap idempotent: exit 0 ×2, HOME stable across re-run"
@@ -434,7 +434,7 @@ jail_teardown
 # classification exit, NOT the old stub-1, and it mutates NOTHING (read-only verb).
 fresh_jail
 before="$(dir_sha "$HOME")"
-run_sb ping alpha-worker
+run_qd ping alpha-worker
 after="$(dir_sha "$HOME")"
 # Frozen ping band: 0 (done) / 1 (stuck) / 2 (active) / 4 (ambiguous). Any of these
 # is a valid REAL classification; the old stub returned 1 with the impl-stub line.

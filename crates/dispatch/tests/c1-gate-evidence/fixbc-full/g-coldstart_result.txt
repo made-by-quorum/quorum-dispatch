@@ -1,4 +1,4 @@
-G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `qd new` cold-start: SB auto-launched the daemon via `qd qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error
+G-COLDSTART VERDICT: PASS — pre-spawn-free embedded `qd new` cold-start: QD auto-launched the daemon via `qd qrmux-server` (socket@engine-dir + daemon bound), chain works; MUTATION CONTROL (severed launch program) reds with embedded-named error
 
 PRE-SPAWN-FREE: no socket at /tmp/qd-c1gate-runs/coldstart-1780716379354431000/x/qrmux/qrmux.sock = true; no qd daemon bound = true
 COLD-START qd new: exit=0 (want 0)

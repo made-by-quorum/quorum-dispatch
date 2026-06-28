@@ -17,10 +17,10 @@
 //! test a genuine end-to-end adapter→protocol→daemon exercise, not a mock.
 //!
 //! **COLD-START coverage (C1 M4fix):** because these crate-level tests pre-spawn,
-//! they do NOT exercise the PRODUCTION cold-start path where SB ITSELF must launch
+//! they do NOT exercise the PRODUCTION cold-start path where QD ITSELF must launch
 //! the daemon (the Lima a6 bug: `current_exe() server` failed for the `qd` binary).
 //! That path is covered at GATE level by `tests/c1_gate.rs::g_coldstart`, which
-//! drives the real `qd new` with NO pre-spawned daemon and asserts SB stood the
+//! drives the real `qd new` with NO pre-spawned daemon and asserts QD stood the
 //! daemon up via its hidden `qd qrmux-server` entry (+ a severed-launch mutation
 //! control). Do not "fix" this file to cold-start — the cross-crate binary
 //! constraint is real; the gate arm owns cold-start.
@@ -80,7 +80,7 @@ impl Jail {
     fn embedded_env(&self) -> EmbeddedEnv {
         EmbeddedEnv {
             xdg_runtime_dir: Some(self.xdg_runtime.to_string_lossy().into_owned()),
-            sb_home: None,
+            qd_home: None,
             uid: 501,
         }
     }
@@ -357,7 +357,7 @@ fn keystone_engine_dir_equals_daemon_bound_dir() {
 fn adapter_verb_mapping_against_real_daemon() {
     let jail = Jail::establish("verbs");
     let dir = jail.resolved_dir();
-    let name = "sbtest-verbs";
+    let name = "qdtest-verbs";
     // WS-C M3b: pre-spawn the PER-SESSION daemon for THIS session name. The
     // adapter's run_detached then short-circuits its own cold-start onto this live
     // `<name>.sock` (cross-crate binary constraint — file header).
@@ -482,7 +482,7 @@ fn add14_no_new_literal_tmp_qrmux_paths() {
     // sun_path budget — that's test infra, not an engine /tmp write.)
     let env2 = EmbeddedEnv {
         xdg_runtime_dir: None,
-        sb_home: None,
+        qd_home: None,
         uid: 501,
     };
     let dir2 = resolve_qrmux_dir(&jail.home, &env2).unwrap();
@@ -507,7 +507,7 @@ fn add14_negative_control_belt_trips_when_pointed_at_tmp() {
     // Artificially point XDG at literal /tmp — tier 1 → /tmp/qrmux.
     let env = EmbeddedEnv {
         xdg_runtime_dir: Some("/tmp".to_string()),
-        sb_home: None,
+        qd_home: None,
         uid: 501,
     };
     let dir = resolve_qrmux_dir(Path::new("/jail/home"), &env).unwrap();

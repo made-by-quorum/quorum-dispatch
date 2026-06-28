@@ -22,7 +22,7 @@ const SOCK_SUFFIX_LEN: usize = 5; // ".sock"
 ///
 /// Two tiers, NO literal `/tmp` (ADD-14; checkpoint rider R-B):
 /// 1. `$XDG_RUNTIME_DIR/qrmux` (per-user, mode 0700, systemd-managed), else
-/// 2. `<sbHome>/mux` where `sbHome = $QD_HOME || $HOME/.quorum/dispatch`.
+/// 2. `<qdHome>/mux` where `qdHome = $QD_HOME || $HOME/.quorum/dispatch`.
 ///
 /// **QD_HOME is honored** (implementer choice, recommended by the spec and named
 /// in ADR 0008): the standalone fallback mirrors the engine's `resolve_qrmux_dir`
@@ -31,9 +31,9 @@ const SOCK_SUFFIX_LEN: usize = 5; // ".sock"
 /// QD_HOME is unset, and to the user's home dir when HOME is unset as well.
 pub fn socket_dir() -> anyhow::Result<PathBuf> {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok().map(PathBuf::from);
-    let sb_home = std::env::var("QD_HOME").ok().map(PathBuf::from);
+    let qd_home = std::env::var("QD_HOME").ok().map(PathBuf::from);
     let home = std::env::var("HOME").ok().map(PathBuf::from);
-    socket_dir_impl_env(runtime_dir.as_deref(), sb_home.as_deref(), home.as_deref())
+    socket_dir_impl_env(runtime_dir.as_deref(), qd_home.as_deref(), home.as_deref())
 }
 
 /// Resolve the socket directory *path* from explicit env inputs, applying the
@@ -41,14 +41,14 @@ pub fn socket_dir() -> anyhow::Result<PathBuf> {
 /// Pure (no filesystem, no process env) so it is unit-testable.
 fn resolve_socket_dir(
     runtime_dir: Option<&Path>,
-    sb_home: Option<&Path>,
+    qd_home: Option<&Path>,
     home: Option<&Path>,
 ) -> anyhow::Result<PathBuf> {
     let dir = if let Some(xdg) = runtime_dir {
         xdg.join("qrmux")
     } else {
-        // Tier 2: <sbHome>/mux, sbHome = QD_HOME || HOME/.quorum/dispatch.
-        let sb_home: PathBuf = if let Some(sh) = sb_home {
+        // Tier 2: <qdHome>/mux, qdHome = QD_HOME || HOME/.quorum/dispatch.
+        let qd_home: PathBuf = if let Some(sh) = qd_home {
             sh.to_path_buf()
         } else if let Some(h) = home {
             h.join(".quorum").join("dispatch")
@@ -57,7 +57,7 @@ fn resolve_socket_dir(
                 "cannot resolve qrmux socket dir: neither XDG_RUNTIME_DIR, QD_HOME, nor HOME is set"
             );
         };
-        sb_home.join("mux")
+        qd_home.join("mux")
     };
 
     // sun_path guard: bind() against `<dir>/qrmux.sock` must fit the platform
@@ -79,10 +79,10 @@ fn resolve_socket_dir(
 /// symlink/ownership/permission belts as before.
 fn socket_dir_impl_env(
     runtime_dir: Option<&Path>,
-    sb_home: Option<&Path>,
+    qd_home: Option<&Path>,
     home: Option<&Path>,
 ) -> anyhow::Result<PathBuf> {
-    let dir = resolve_socket_dir(runtime_dir, sb_home, home)?;
+    let dir = resolve_socket_dir(runtime_dir, qd_home, home)?;
     create_socket_dir(&dir)?;
     Ok(dir)
 }
@@ -92,9 +92,9 @@ fn socket_dir_impl_env(
 /// tests, which exercise tier 1 with an explicit override.
 #[cfg(test)]
 fn socket_dir_impl(runtime_dir: Option<&Path>) -> anyhow::Result<PathBuf> {
-    let sb_home = std::env::var("QD_HOME").ok().map(PathBuf::from);
+    let qd_home = std::env::var("QD_HOME").ok().map(PathBuf::from);
     let home = std::env::var("HOME").ok().map(PathBuf::from);
-    socket_dir_impl_env(runtime_dir, sb_home.as_deref(), home.as_deref())
+    socket_dir_impl_env(runtime_dir, qd_home.as_deref(), home.as_deref())
 }
 
 /// Create the socket directory with 0o700 atomically and run the symlink /
@@ -103,7 +103,7 @@ fn create_socket_dir(dir: &Path) -> anyhow::Result<()> {
     let uid = nix::unistd::getuid();
     // Create directory with 0o700 atomically — no TOCTOU window
     if let Some(parent) = dir.parent() {
-        // Tier-2 (<sbHome>/mux) parent may not exist yet; XDG tier-1 parent
+        // Tier-2 (<qdHome>/mux) parent may not exist yet; XDG tier-1 parent
         // always does. Best-effort create of the parent chain so the final
         // 0o700 create can succeed.
         let _ = std::fs::create_dir_all(parent);
@@ -311,7 +311,7 @@ mod tests {
     use super::*;
 
     /// De-/tmp'd fallback (checkpoint rider R-B): tier 1 = `$XDG_RUNTIME_DIR/qrmux`,
-    /// tier 2 = `<sbHome>/mux` (`sbHome = QD_HOME || $HOME/.quorum/dispatch`). The literal
+    /// tier 2 = `<qdHome>/mux` (`qdHome = QD_HOME || $HOME/.quorum/dispatch`). The literal
     /// `/tmp/qrmux-{uid}` fallback is GONE (ADD-14). Asserted via the pure
     /// resolver so it doesn't depend on the runner's process env.
     #[test]
@@ -322,9 +322,9 @@ mod tests {
         assert_eq!(dir, xdg.join("qrmux"));
 
         // Tier 2a: no XDG, QD_HOME present → <QD_HOME>/mux.
-        let sb_home = Path::new("/home/u/.quorum/dispatch");
-        let dir = resolve_socket_dir(None, Some(sb_home), Some(Path::new("/home/u"))).unwrap();
-        assert_eq!(dir, sb_home.join("mux"));
+        let qd_home = Path::new("/home/u/.quorum/dispatch");
+        let dir = resolve_socket_dir(None, Some(qd_home), Some(Path::new("/home/u"))).unwrap();
+        assert_eq!(dir, qd_home.join("mux"));
 
         // Tier 2b: no XDG, no QD_HOME, HOME present → <HOME>/.quorum/dispatch/mux.
         let dir = resolve_socket_dir(None, None, Some(Path::new("/home/u"))).unwrap();
@@ -333,7 +333,7 @@ mod tests {
         // No literal /tmp tier anywhere.
         for d in [
             resolve_socket_dir(Some(xdg), None, None).unwrap(),
-            resolve_socket_dir(None, Some(sb_home), None).unwrap(),
+            resolve_socket_dir(None, Some(qd_home), None).unwrap(),
         ] {
             assert!(
                 !d.to_string_lossy().starts_with("/tmp/"),
@@ -345,7 +345,7 @@ mod tests {
 
     /// QD_HOME wins over HOME for tier 2 (engine-mirroring choice, ADR 0008).
     #[test]
-    fn socket_dir_honors_sb_home_over_home() {
+    fn socket_dir_honors_qd_home_over_home() {
         let dir = resolve_socket_dir(
             None,
             Some(Path::new("/relocated/state")),

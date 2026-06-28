@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn valid_names_accepted() {
         assert_eq!(validate_session_name("my-sess_1.2"), None);
-        assert_eq!(validate_session_name("sbrg-abc-kill1"), None);
+        assert_eq!(validate_session_name("qdrg-abc-kill1"), None);
     }
 
     #[test]
