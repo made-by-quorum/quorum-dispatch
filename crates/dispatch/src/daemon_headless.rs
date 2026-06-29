@@ -112,6 +112,22 @@ impl HeadlessFactory for DaemonHeadlessFactory {
         // byte-stability the B2a addendum established; `HeadlessLaunch::argv` keeps
         // these ahead of `-p PROMPT`).
         let mut flags = self.flags.clone();
+        // H9 guard (Effort A / Reading B, atomic2-impl-plan.md §4): the wire-reachable
+        // backstop. A hand-crafted/rogue `LaunchHeadless` frame that never passed the
+        // E2 chokepoint reaches here; REFUSE (framed) any forbidden claude flag in the
+        // passthrough so the daemon never spawns a `claude --print`/output-format run.
+        // `resolve` already returns `anyhow::Result`; this `Err` is mapped to
+        // `ServerMsg::Error` by the existing LaunchHeadless dispatch arm (no session
+        // created, no new error plumbing). Purely additive — the daemon's OWN required
+        // `-p PROMPT --output-format stream-json` are hardcoded later in
+        // `HeadlessLaunch::argv()`, so this gate never touches the tracked launch.
+        let forbidden = crate::launch::forbidden_in(claude_args);
+        if !forbidden.is_empty() {
+            anyhow::bail!(
+                "LaunchHeadless rejected: forbidden flag {forbidden:?} (dispatch does not spawn \
+                 claude --print/output-format runs)"
+            );
+        }
         flags.extend(claude_args.iter().cloned());
         // WP-B5-ii-b PROOF 3 (headless QD_SESSION_ID parity, qd-supervisor-10
         // ruling): a headless agent must self-identify via `$QD_SESSION_ID` exactly
@@ -269,6 +285,48 @@ mod tests {
             posture_at < model_at && model_at < dash_p_at,
             "flags-first ordering: posture < claude_args < -p; got {argv:?}"
         );
+    }
+
+    /// H9 guard (Effort A / Reading B, atomic2-impl-plan.md §4): a forbidden claude
+    /// flag in the wire-reachable `claude_args` passthrough makes `resolve` return
+    /// `Err` (the framed `ServerMsg::Error` backstop) — NO launch plan, no session. A
+    /// clean (benign) passthrough still resolves `Ok`. This is the faithful unit-level
+    /// proof of the wire backstop: `resolve` is the exact fn the LaunchHeadless
+    /// dispatch arm calls and maps `Err` → `ServerMsg::Error`.
+    #[test]
+    fn resolve_rejects_forbidden_claude_args_framed() {
+        let f = factory(Some("/daemon/cwd"), &["--posture"]);
+        // Every F-class variant + a cluster reaching p must be refused.
+        for bad in [
+            vec!["--print".to_string()],
+            vec!["--output-format".to_string(), "json".to_string()],
+            vec!["--input-format".to_string()],
+            vec!["-p".to_string()],
+            vec!["-cp".to_string()],
+            vec!["--model".to_string(), "opus".to_string(), "--print".to_string()],
+        ] {
+            let res = f.resolve("sess", "the prompt", None, Some("/session/cwd"), &bad);
+            let err = match res {
+                Ok(_) => panic!("forbidden claude_args {bad:?} must make resolve Err (framed refuse)"),
+                Err(e) => e,
+            };
+            assert!(
+                err.to_string().contains("forbidden flag"),
+                "framed refuse names the forbidden flag; got: {err}"
+            );
+        }
+        // Benign passthrough (incl. a session-name payload with a `p`) still resolves.
+        for good in [
+            vec!["--model".to_string(), "opus".to_string()],
+            vec!["--add-dir".to_string(), "/x".to_string()],
+            vec!["-nProp".to_string()],
+        ] {
+            assert!(
+                f.resolve("sess", "the prompt", None, Some("/session/cwd"), &good)
+                    .is_ok(),
+                "benign claude_args must still resolve Ok: {good:?}"
+            );
+        }
     }
 
     /// WP-B5-ii-b PROOF 2 (cheap default-floor mirror of the `#[ignore]`

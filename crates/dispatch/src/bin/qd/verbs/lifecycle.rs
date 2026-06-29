@@ -674,6 +674,23 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         .get_many::<String>("claudeArgs")
         .map(|v| v.cloned().collect())
         .unwrap_or_default();
+    // E2 guard (Effort A / Reading B, atomic2-impl-plan.md §4): the SINGLE
+    // production `claudeArgs` chokepoint. REFUSE (loud, fail-closed) any forbidden
+    // claude flag {-p, --print, --output-format, --input-format} in the trailing
+    // positional — dispatch only creates tracked, attachable sessions, never a
+    // one-off `claude --print` run. This fires BEFORE the provider/codex/acp early
+    // returns and the headless/interactive lane split, so it covers EVERY lane and
+    // provider with one check, before anything is minted/claimed/spawned. It
+    // inspects ONLY `claude_args` — never qd's own `--prompt` (the two-`-p` trap
+    // boundary: `qd start <name> -p <prompt>` stays a valid tracked agent turn).
+    let forbidden = dispatch::launch::forbidden_in(&claude_args);
+    if !forbidden.is_empty() {
+        eprintln!(
+            "{}",
+            dispatch::launch::forbidden_flag_teaching_error(&forbidden[0])
+        );
+        return 1;
+    }
     // --via <name> (spec §3.2): now LIVE (no longer a no-op). Resolved against
     // backends.json below; threads the composed backend env into create.
     let via = m.get_one::<String>("via").cloned();

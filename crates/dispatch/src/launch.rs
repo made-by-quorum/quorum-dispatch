@@ -14,6 +14,79 @@ const DEFAULT_FLAGS: &[&str] = &[
     "server:relay",
 ];
 
+// --- Effort A / Reading B: the forbidden-claude-flag matcher --------------------
+//
+// THE no-dispatch-spawned-`claude --print` guard (atomic2-impl-plan.md §3). The
+// forbidden set F = { -p, --print, --output-format, --input-format } (and their
+// value/attached/cluster forms) defines whether a run is a one-off headless/print
+// turn and what I/O contract claude uses — exactly what dispatch must never inject
+// into its OWN spawns. This is the SINGLE source of truth shared by all 3 guard
+// loci: E2 (`lifecycle.rs run_start`, REFUSE), H9 (`daemon_headless.rs resolve`,
+// REFUSE-framed), and CF ([`claude_flags`] below, STRIP+warn). A 4th forward site
+// that bypasses it is caught by the structural source-canary + the behavioral
+// surface matrix (atomic2-impl-plan.md §5/§6).
+
+/// Long forbidden flags (exact, no abbreviation in claude). Effort A / Reading B.
+const FORBIDDEN_LONG: &[&str] = &["--print", "--output-format", "--input-format"];
+
+/// Is `tok` a forbidden claude flag (CLUSTER-AWARE, fail-closed)? Verified against
+/// live claude v2.1.195 short-flag grammar (atomic2-impl-plan.md §3.1/§3.2):
+///   - long form → strip `--`, split on `=`, EXACT name match (no abbreviation).
+///   - short cluster → walk chars: `p` (== --print) trips; `n` (--name, REQUIRED
+///     value) stops the walk (the rest of the token is the name, e.g. `-nProp`);
+///     every other char (c/d/h/r/v/w + unknowns) is treated NON-consuming so a
+///     later `p` still trips (a safe over-refusal for `-dp`/`-rp`/`-wp`, and
+///     fail-closed against grammar drift — see §3.2 rationale).
+pub fn is_forbidden_claude_flag(tok: &str) -> bool {
+    if let Some(rest) = tok.strip_prefix("--") {
+        // long form
+        let name = rest.split('=').next().unwrap_or(rest); // --output-format=json -> output-format
+        return FORBIDDEN_LONG.iter().any(|f| &f[2..] == name);
+    }
+    if let Some(short) = tok.strip_prefix('-') {
+        // short cluster (single dash, len>1)
+        if short.is_empty() {
+            return false; // bare "-" = stdin, not a flag
+        }
+        for ch in short.chars() {
+            match ch {
+                'p' => return true,  // standalone -p == --print
+                'n' => return false, // -n (--name, REQUIRED value): rest is the name, stop walking
+                _ => continue,       // c/d/h/r/v/w + unknowns: NON-consuming (fail-closed)
+            }
+        }
+    }
+    false // positional / value (no leading dash) is not a flag
+}
+
+/// Every offending token in `args` (for the E2/H9 teaching messages). Empty ⇒ clean.
+pub fn forbidden_in(args: &[String]) -> Vec<String> {
+    args.iter()
+        .filter(|a| is_forbidden_claude_flag(a))
+        .cloned()
+        .collect()
+}
+
+/// CF partition: split `flags` into `(kept, dropped)` — `dropped` is every forbidden
+/// token, `kept` is everything else (preserves order within each partition).
+pub fn strip_forbidden(flags: Vec<String>) -> (Vec<String>, Vec<String>) {
+    flags
+        .into_iter()
+        .partition(|f| !is_forbidden_claude_flag(f))
+}
+
+/// The E2 teaching error (atomic2-impl-plan.md §2.1) for a forbidden flag refused at
+/// `qd start`. Disambiguates the two-`-p` trap (qd's `--prompt` vs claude's `--print`).
+pub fn forbidden_flag_teaching_error(flag: &str) -> String {
+    format!(
+        "qd start: cannot forward \"{flag}\" to a dispatch-launched session. dispatch only \
+         creates tracked, attachable sessions; -p/--print/--output-format/--input-format would \
+         make a one-off headless run.\n\
+         • For a one-off print run: use `claude -p …` directly. • For a tracked agent turn: \
+         `qd start <name> -p <prompt>` (that -p is qd's prompt flag, not claude's)."
+    )
+}
+
 /// Resolve the claude binary dynamically — NEVER a per-machine absolute path.
 /// (Port of `CLAUDE_BIN`, utils.ts:181-185.)
 ///
@@ -36,6 +109,29 @@ pub fn claude_bin(env: &impl Env) -> String {
 /// Permissive (L8): a missing file or missing key simply falls through; a config
 /// read never hard-fails the launch.
 pub fn claude_flags(env: &impl Env, config_toml_path: &Path) -> Vec<String> {
+    // CF guard (atomic2-impl-plan.md §4): resolve the base/operator flag vector by
+    // precedence, then STRIP the forbidden injections ONCE before returning at every
+    // path. STRIP (not refuse) here — a stale env/config entry must not turn into a
+    // launch outage; the security property (the forbidden flag never reaches argv) is
+    // unconditional. `DEFAULT_FLAGS` contains no member of F, so the default path is
+    // byte-unchanged in behavior. The launcher's OWN required `-p`/`--output-format`
+    // are hardcoded in `headless.rs HeadlessLaunch::argv()` AFTER these flags, so
+    // stripping here cannot break the tracked headless launch (separability proof).
+    let resolved = resolve_claude_flags(env, config_toml_path);
+    let (kept, dropped) = strip_forbidden(resolved);
+    if !dropped.is_empty() {
+        eprintln!(
+            "qd: ignoring forbidden claude flag(s) {dropped:?} from QD_CLAUDE_FLAGS/config.toml \
+             — dispatch does not inject --print/output-format into its own spawns"
+        );
+    }
+    kept
+}
+
+/// Resolve the base claude flags by precedence — BEFORE the CF forbidden-flag strip
+/// applied in [`claude_flags`]. Split out so the strip runs ONCE over every return
+/// path (env / config / default), not duplicated per branch.
+fn resolve_claude_flags(env: &impl Env, config_toml_path: &Path) -> Vec<String> {
     // 1. env override.
     if let Some(raw) = env.var("QD_CLAUDE_FLAGS") {
         let flags = split_ws(&raw);
@@ -565,6 +661,145 @@ mod tests {
         assert_eq!(parse_claude_flags_key("# claude_flags = \"--x\"\n"), None);
         // Absent key.
         assert_eq!(parse_claude_flags_key("foo = 1\n"), None);
+    }
+
+    // --- Effort A / Reading B: forbidden-flag matcher (atomic2-impl-plan.md §6) ---
+
+    /// Long forms TRIP: exact name AND attached `=value` (the name still matches;
+    /// `--print=x` trips on the name even though claude itself rejects it).
+    #[test]
+    fn matcher_long_forms_trip() {
+        for t in [
+            "--print",
+            "--output-format",
+            "--input-format",
+            "--output-format=json",
+            "--input-format=stream-json",
+            "--print=x",
+        ] {
+            assert!(is_forbidden_claude_flag(t), "long form must trip: {t}");
+        }
+    }
+
+    /// Short bare/attached TRIP: `-p` (boolean) and `-pHELLO` (a cluster starting p).
+    #[test]
+    fn matcher_short_bare_and_attached_trip() {
+        assert!(is_forbidden_claude_flag("-p"));
+        assert!(is_forbidden_claude_flag("-pHELLO"));
+    }
+
+    /// Short CLUSTERS reaching `p` TRIP — incl. the review-BLOCKER class (`-cp` etc.)
+    /// and the safe over-refusals (`-dp`/`-rp`/`-wp`, live `--debug/--resume/
+    /// --worktree "p"` but conservatively refused, §3.2).
+    #[test]
+    fn matcher_clusters_reaching_p_trip() {
+        for t in [
+            "-cp", "-pc", "-pd", "-vp", "-hp", "-dp", "-rp", "-wp",
+        ] {
+            assert!(is_forbidden_claude_flag(t), "cluster must trip: {t}");
+        }
+    }
+
+    /// Value-payload NEGATIVES must NOT trip: `-n` (--name, required value) swallows
+    /// the rest, so a session name carrying a lowercase `p` still launches.
+    #[test]
+    fn matcher_name_value_payloads_do_not_trip() {
+        for t in ["-nProp", "-nPxyz", "-nmyProp", "-npipeline"] {
+            assert!(!is_forbidden_claude_flag(t), "name payload must NOT trip: {t}");
+        }
+    }
+
+    /// Benign tokens must NOT trip: known booleans, value flags, names, positionals.
+    #[test]
+    fn matcher_benign_tokens_do_not_trip() {
+        for t in [
+            "--model", "opus", "--add-dir", "/tmp/x", "-c", "-n", "name", "-", "",
+            "--mcp-config", "--include-partial-messages", "--replay-user-messages",
+        ] {
+            assert!(!is_forbidden_claude_flag(t), "benign token must NOT trip: {t}");
+        }
+    }
+
+    /// Documented SAFE over-refusal (Minor #1): a VALUE token that itself starts
+    /// `-p`/`--print` (e.g. an `--mcp-config -profile.json` path value) trips the
+    /// matcher — it scans tokens, not flag-vs-value position. Over-refusal in the
+    /// safe direction; pinned so the behavior is intentional, not accidental.
+    #[test]
+    fn matcher_value_position_over_refuses_documented() {
+        // A SHORT value token starting `-p` (a `-profile.json` path value) trips —
+        // the matcher scans tokens, not flag-vs-value position. Safe over-refusal.
+        assert!(is_forbidden_claude_flag("-profile.json"));
+        // A LONG token is EXACT-name-matched only (no abbreviation/prefix), so an
+        // unrelated `--print-ish-path` does NOT trip — the long arm stays precise.
+        assert!(!is_forbidden_claude_flag("--print-ish-path"));
+    }
+
+    /// `forbidden_in` collects EVERY offending token (for the teaching message),
+    /// and is empty for a clean arg vector.
+    #[test]
+    fn forbidden_in_collects_all_offenders() {
+        let args: Vec<String> = ["--model", "opus", "--print", "-cp", "--add-dir", "/x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(forbidden_in(&args), vec!["--print", "-cp"]);
+        let clean: Vec<String> = ["--model", "opus", "-nProp"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(forbidden_in(&clean).is_empty());
+    }
+
+    /// `strip_forbidden` partitions into (kept, dropped), preserving order.
+    #[test]
+    fn strip_forbidden_partitions_kept_and_dropped() {
+        let flags: Vec<String> = ["--model", "opus", "--output-format", "json", "-vp", "--add-dir"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (kept, dropped) = strip_forbidden(flags);
+        // `json` is a positional value (no leading dash) → kept (a known safe
+        // orphan; CF documents the value-orphan limitation).
+        assert_eq!(kept, vec!["--model", "opus", "json", "--add-dir"]);
+        assert_eq!(dropped, vec!["--output-format", "-vp"]);
+    }
+
+    /// CF guard: `claude_flags` STRIPS a forbidden flag injected via QD_CLAUDE_FLAGS,
+    /// keeping the benign ones — the session still launches with a clean vector.
+    #[test]
+    fn claude_flags_strips_forbidden_from_env() {
+        let nonexistent = Path::new("/tmp/does-not-exist-qd-config.toml");
+        let e = env(&[("QD_CLAUDE_FLAGS", "--model opus --output-format json --print")]);
+        // `--output-format` and `--print` dropped; `--model opus json` kept
+        // (`json` is an orphaned value, the documented CF limitation).
+        assert_eq!(
+            claude_flags(&e, nonexistent),
+            vec!["--model", "opus", "json"]
+        );
+    }
+
+    /// CF guard: `claude_flags` STRIPS a forbidden flag from config.toml `claude_flags`.
+    #[test]
+    fn claude_flags_strips_forbidden_from_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, "claude_flags = \"--add-dir /x -p\"\n").unwrap();
+        // `-p` dropped; `--add-dir /x` survives.
+        assert_eq!(
+            claude_flags(&MapEnv::default(), &cfg),
+            vec!["--add-dir", "/x"]
+        );
+    }
+
+    /// CF guard: the DEFAULT path is byte-unchanged — `DEFAULT_FLAGS` has no member
+    /// of F, so a clean default resolve passes through untouched.
+    #[test]
+    fn claude_flags_default_path_unchanged_by_strip() {
+        let nonexistent = Path::new("/tmp/does-not-exist-qd-config.toml");
+        assert_eq!(
+            claude_flags(&MapEnv::default(), nonexistent),
+            default_flags()
+        );
     }
 
     #[test]
