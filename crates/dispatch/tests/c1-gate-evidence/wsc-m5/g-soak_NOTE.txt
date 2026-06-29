@@ -63,8 +63,8 @@ siblings) is decisively met.
 
 ## Reproduce:
 
-  scripts/build-lock.sh cargo build --release -p qd --bin qd -p qrmux --bin qrmux
-  C1_GATE_RUNID=<id> scripts/build-lock.sh cargo test -p qd --test c1_gate \
+  scripts/build-lock.sh cargo build --release -p quorum-dispatch --bin qd -p qrmux --bin qrmux
+  C1_GATE_RUNID=<id> scripts/build-lock.sh cargo test -p quorum-dispatch --test c1_gate \
     -- --ignored --exact g_soak --nocapture
 
 Knobs (env): SOAK_WINDOW_S (default 60), SOAK_N_QUIET (7), SOAK_N_FLOOD (3),

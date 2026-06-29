@@ -7,7 +7,7 @@ Cargo.lock.orig
 .a3_build.err
 *.build.err
 
-# transient c1_gate per-run output (every `cargo test -p qd` writes these; NAMED
+# transient c1_gate per-run output (every `cargo test -p quorum-dispatch` writes these; NAMED
 # evidence dirs like c1-final-remint/ stay tracked — only the run-<nanos> debris
 # is ignored; ACK-2 hygiene fix, flagged by the M5 row work)
 crates/dispatch/tests/c1-gate-evidence/run-*

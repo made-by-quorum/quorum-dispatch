@@ -63,7 +63,7 @@ no blob. Pin = zmx 0.6.0.
 ## Row 7 — Preflight unit matrix (L3)
 
 ```
-$ QD_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p qd preflight
+$ QD_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p quorum-dispatch preflight
   real_060_help_advertises_send ........... ok
   old_05x_shaped_help_lacks_send_is_no .... ok
   garbage_output_is_unknown ............... ok
@@ -95,7 +95,7 @@ Workspace suite (covers 0a normalize + A1 registry/jsonl/zmx_dir) = 241/241 (row
 ## Row 10a — Mutation evidence: zero-keystroke assert has TEETH (offline)
 
 ```
-$ QD_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p qd boot::
+$ QD_RUST_LOCK_TIMEOUT=3600 scripts/build-lock.sh cargo test -p quorum-dispatch boot::
   boot::tests::stock_boot_zero_keystrokes ............................. ok
   boot::tests::mutation_evidence_injected_enter_fails_zero_keystroke_assert ok
   boot::tests::unmatched_dialog_fails_immediately_zero_keystrokes ..... ok
@@ -237,7 +237,7 @@ opened) — it is "answerer live-exercise deferred for boot-budget".
 
 ### Row 4 / Row 5 answerer — OFFLINE re-attestation (the M3 dialog coverage)
 ```
-$ cargo test -p qd boot::
+$ cargo test -p quorum-dispatch boot::
   dev_channels_dialog_answered_once_then_boots ....... ok  (matched dialog → ONE \r → boots)
   dev_channels_dialog_persists_two_sends_then_fail ... ok  (≤2 sends then loud FAIL)
   detect_dialog_matched_dev_channels ................. ok  (verbatim captured dialog text)
@@ -252,7 +252,7 @@ local development" / "2. Exit"). **PASS** — answerer content-match + single-sh
 ## Row 5 — unmatched-dialog loud-fail (OFFLINE attestation)
 
 ```
-$ cargo test -p qd boot::
+$ cargo test -p quorum-dispatch boot::
   unmatched_dialog_fails_immediately_zero_keystrokes ... ok
   detect_dialog_unmatched_folder_trust ................. ok
   stock_boot_zero_keystrokes ........................... ok
@@ -276,7 +276,7 @@ collides → every racer "wins" (the claim is effectively disabled).
 
 ```
 # MUTATED:
-$ cargo test -p qd --test create_claim_race create_path_claim_race_...
+$ cargo test -p quorum-dispatch --test create_claim_race create_path_claim_race_...
   thread '...' panicked at crates/qd/tests/create_claim_race.rs:219:5:
   assertion `left == right` failed: exactly ONE process must win the claim (got 6)
   test result: FAILED. 0 passed; 1 failed
@@ -284,7 +284,7 @@ $ cargo test -p qd --test create_claim_race create_path_claim_race_...
 $ git checkout crates/qd/src/create.rs    # REVERTED
 
 # REVERTED:
-$ cargo test -p qd --test create_claim_race
+$ cargo test -p quorum-dispatch --test create_claim_race
   create_path_claim_race_exactly_one_winner_across_processes ... ok
   claims_dir_is_under_claude_root ... ok
   test result: ok. 2 passed; 0 failed

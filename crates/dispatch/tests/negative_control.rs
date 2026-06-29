@@ -5,7 +5,7 @@
 //! mutated render != the golden) — so a green run here is evidence the comparator
 //! catches the mutation. Run:
 //!
-//!   scripts/build-lock.sh cargo test -p qd --features mutation-evidence
+//!   scripts/build-lock.sh cargo test -p quorum-dispatch --features mutation-evidence
 //!
 //! Three mutation classes:
 //!   1. status mapping (busy → idle)     — a value mutation.

@@ -190,7 +190,7 @@ multibyte sequence across chunks).
 ADD-10). **Tip:** `37881b1` — **PR #13 chunked delivery merged** (verified
 `git log -1` before booting; the chunking fix is commit `60fe8a7`). **Host:**
 brano, arm64/Darwin. **claude (macOS jail):** 2.1.165. **qd binary:** built from
-this worktree via `scripts/build-lock.sh cargo build -p qd` (0.1.0, debug).
+this worktree via `scripts/build-lock.sh cargo build -p quorum-dispatch` (0.1.0, debug).
 
 Raw per-row bytes: `a4-r7-bytes.txt`. Driver: `a4-r7-probe.sh` (ported EXACTLY
 from `a4-r6-probe.sh` sendpty mode; hardcoded to the two R6-failure sizes 12KB +

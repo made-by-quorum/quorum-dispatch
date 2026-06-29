@@ -166,7 +166,7 @@ raw zmx primitive, A2 row-8 idiom. went-busy is observed live on macOS, boot #4.
 ## fakerepl Level-1 gate re-run (the real oracle, offline, 0 boots)
 
 ```
-cargo test -p qd --test fakerepl_gate  →  10 passed; 0 failed (132s)
+cargo test -p quorum-dispatch --test fakerepl_gate  →  10 passed; 0 failed (132s)
   l1_paste_large_single_write_lands_exactly_one_turn ........ ok
   l1_fragmented_paste_across_stall_lands_exactly_one_turn ... ok
   l1_soak_zero_dropped_zero_double (≥100 iters, load-varied) . ok

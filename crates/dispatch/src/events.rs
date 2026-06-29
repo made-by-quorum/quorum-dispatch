@@ -3785,7 +3785,7 @@ mod tests {
     // the committed, re-runnable form of the gate report's "live-fired → RED"
     // claims. Run:
     //
-    //   scripts/build-lock.sh cargo test -p qd --features mutation-evidence
+    //   scripts/build-lock.sh cargo test -p quorum-dispatch --features mutation-evidence
     //
     // The two claims needing PRIVATE access (build_record_line) live here; the
     // stream-shape claims live in tests/ack2_mutation_evidence.rs.

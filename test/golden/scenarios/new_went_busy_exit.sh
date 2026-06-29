@@ -70,8 +70,8 @@ scn_name() { printf '%s%s%s' "${JAIL_PREFIX:?jail not established}" "$1" "$2"; }
 
 # --- Build the two binaries ONCE, through the build lock (B2). ---------------
 if [ "${A4_SKIP_BUILD:-0}" != "1" ]; then
-    "$REPO_ROOT/scripts/build-lock.sh" cargo build -p fakerepl -p qd >/dev/null 2>&1 \
-        || { echo "FATAL: build failed (cargo build -p fakerepl -p qd)" >&2; exit 3; }
+    "$REPO_ROOT/scripts/build-lock.sh" cargo build -p fakerepl -p quorum-dispatch >/dev/null 2>&1 \
+        || { echo "FATAL: build failed (cargo build -p fakerepl -p quorum-dispatch)" >&2; exit 3; }
 fi
 [ -x "$RUST_BIN" ]     || { echo "FATAL: qd binary missing: $RUST_BIN" >&2; exit 3; }
 [ -x "$FAKEREPL_BIN" ] || { echo "FATAL: fakerepl binary missing: $FAKEREPL_BIN" >&2; exit 3; }

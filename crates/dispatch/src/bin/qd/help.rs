@@ -425,8 +425,8 @@ Options:
 
 // Engine-truthful (A5 §4.3 + named divergence §9 item 3): the Rust engine ships
 // via cargo or Homebrew, NOT `bun install -g`. `qd update` detects the install
-// channel from the running exe path (Cellar/brew prefix → `brew upgrade qd`;
-// ~/.cargo/bin → `cargo install --git <repo> --locked qd`) and re-runs it.
+// channel from the running exe path (Cellar/brew prefix → `brew upgrade quorum-dispatch`;
+// ~/.cargo/bin → `cargo install --git <repo> --locked quorum-dispatch`) and re-runs it.
 pub const UPDATE: &str = r####"Usage: qd update [options]
 
 Self-update qd via the detected install channel (Homebrew or cargo). The channel

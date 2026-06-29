@@ -641,7 +641,7 @@ fn a2_claude_fork_mints_new_qb_id() {
 /// `#[ignore]`: drives the REAL binary against the REAL HOME (auth/keychain +
 /// network + ~30s and a few cents of spend). Scripted runner:
 ///
-///   cargo test -p qd --test p0_id_matrix -- --ignored a3_real_claude
+///   cargo test -p quorum-dispatch --test p0_id_matrix -- --ignored a3_real_claude
 ///
 /// Last run 2026-06-10 (claude 2.1.170): PASS — resume kept
 /// 863cbef7-…, fork minted 27ea36f0-… (recorded in the P0 QA report).

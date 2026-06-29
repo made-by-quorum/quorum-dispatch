@@ -1,5 +1,5 @@
 # ACK-3 mutation-evidence run (ADD-17 / CR-3) | 0d4b6c5 | 2026-06-06 12:55 EDT
-# Command: scripts/build-lock.sh cargo test -p qd --features mutation-evidence
+# Command: scripts/build-lock.sh cargo test -p quorum-dispatch --features mutation-evidence
 
      Running unittests src/lib.rs (target/debug/deps/qd-9b6baa9dc17fbf4f)
 test backends::tests::unknown_name_message_carries_no_values ... ok

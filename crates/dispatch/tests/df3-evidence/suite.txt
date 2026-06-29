@@ -1,7 +1,7 @@
 # DF-3 fix evidence (ADD-17) | branch fix/df3-ps-parse off main 3ea647c | 2026-06-06 ~14:45 EDT
-# Prebuild: scripts/build-lock.sh cargo build -p qrmux --bin qrmux -p fakerepl -p qd
-# Command: scripts/build-lock.sh cargo test -p qd   (21 suite-result lines, all ok, zero failures)
-# Lint: cargo fmt --check CLEAN; cargo clippy -p qd --all-targets --all-features -D warnings CLEAN
+# Prebuild: scripts/build-lock.sh cargo build -p qrmux --bin qrmux -p fakerepl -p quorum-dispatch
+# Command: scripts/build-lock.sh cargo test -p quorum-dispatch   (21 suite-result lines, all ok, zero failures)
+# Lint: cargo fmt --check CLEAN; cargo clippy -p quorum-dispatch --all-targets --all-features -D warnings CLEAN
 # Differential (lead-run, pre-commit): old splitn parser spliced back -> the 3 new
 # parse_ps_rows_df3_* rows RED, legacy single-space row green (vacuity demonstrated); fix restored -> all green.
 

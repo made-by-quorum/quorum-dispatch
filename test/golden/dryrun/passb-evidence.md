@@ -2,7 +2,7 @@
 
 Date: Fri Jun 5 08:53 EDT 2026 (system `date`; see journal note on the clock
 anomaly vs prior entry stamps). SUT: Rust `qd` built from main @ 959dcbd
-(debug, `scripts/build-lock.sh cargo build -p qd -p fakerepl`, worktree
+(debug, `scripts/build-lock.sh cargo build -p quorum-dispatch -p fakerepl`, worktree
 `~/work/wt-a4-passb`). Verification basis: LOCAL runs only (GitHub Actions
 down — billing; Pete ruled keep-going). All replays serial (host memory
 pressure WARN). Jail: rule 9 + ADD-4 hermetic env via lib/jail.sh throughout.

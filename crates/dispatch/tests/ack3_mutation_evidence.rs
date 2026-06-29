@@ -3,7 +3,7 @@
 //! PURE PREDICATE would FAIL under the named mutation shape — the committed,
 //! re-runnable form of the "would RED under deletion/perturbation" claims. Run:
 //!
-//!   scripts/build-lock.sh cargo test -p qd --features mutation-evidence
+//!   scripts/build-lock.sh cargo test -p quorum-dispatch --features mutation-evidence
 //!
 //! The predicates here DUPLICATE the live-row predicates in ack3_matrix.rs by
 //! shape (test binaries cannot import each other; ack3-spec §2 / §3.1 sanctions

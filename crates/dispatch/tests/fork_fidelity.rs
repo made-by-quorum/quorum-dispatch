@@ -10,7 +10,7 @@
 //!
 //! Real-claude, isolated HOME (the `engine-research/harness/lib.sh` `env -i`
 //! contract — live `~/.claude*` NEVER written). `#[ignore]` — run explicitly:
-//!   cargo test -p qd --test fork_fidelity -- --ignored --nocapture
+//!   cargo test -p quorum-dispatch --test fork_fidelity -- --ignored --nocapture
 //! Skips (not fails) if the claude binary or credentials are absent.
 
 use serde_json::Value;

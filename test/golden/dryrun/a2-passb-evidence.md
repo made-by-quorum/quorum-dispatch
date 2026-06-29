@@ -2,7 +2,7 @@
 
 Date: Fri Jun 5 10:23-10:29 EDT 2026 (system `date`). SUT: Rust `qd` built from
 main @ 7c8482d11f18300d993bf4dfdc62fb748952d2f1 (debug,
-`scripts/build-lock.sh cargo build -p qd`, worktree `~/work/wt-a2-passb`,
+`scripts/build-lock.sh cargo build -p quorum-dispatch`, worktree `~/work/wt-a2-passb`,
 binary sha256 783ea96436210322…). Verification basis: post-merge CI on main
 @ 7c8482d = run 27019996043 (success) + the local verify.sh replays below.
 All replays serial (host memory WARN-2). Jail: rule 9 + ADD-4 hermetic env via
@@ -146,7 +146,7 @@ fix, NOT version drift: the Cellar binary mtime is 2026-05-16 — unchanged
 since before the original 2026-06-04 capture, which had frozen only the first
 ~20 lines AND encoded one backslash on the detach line where live zmx emits
 two (`ctrl+\\`, zmx's own help-string escaping — the named escaping artifact).
-Test-only diff. Proof: `cargo test -p qd` full suite green post-change (incl.
+Test-only diff. Proof: `cargo test -p quorum-dispatch` full suite green post-change (incl.
 `real_060_help_advertises_send` now parsing the full help, 14/14 preflight
 tests); fmt + clippy -D warnings clean.
 

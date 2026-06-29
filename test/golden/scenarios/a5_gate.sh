@@ -42,8 +42,8 @@ hdr() { printf '\n========== %s ==========\n' "$1"; }
 # ---------------------------------------------------------------------------
 # Build once (serial via build-lock).
 # ---------------------------------------------------------------------------
-hdr "BUILD (build-lock cargo build -p qd --bin qd)"
-"$BUILD_LOCK" cargo build -p qd --bin qd 2>&1 | tail -2
+hdr "BUILD (build-lock cargo build -p quorum-dispatch --bin qd)"
+"$BUILD_LOCK" cargo build -p quorum-dispatch --bin qd 2>&1 | tail -2
 [ -x "$QD_BIN" ] || { echo "FATAL: qd binary missing: $QD_BIN"; exit 2; }
 
 # ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ scratch_done
 hdr "Unit suites (build-lock cargo test)"
 unit_row() {
     local id="$1" filt="$2" min="$3"
-    local out; out="$("$BUILD_LOCK" cargo test -p qd "$filt" 2>&1 | grep -E 'test result: ok\.' | head -1)"
+    local out; out="$("$BUILD_LOCK" cargo test -p quorum-dispatch "$filt" 2>&1 | grep -E 'test result: ok\.' | head -1)"
     local n; n="$(printf '%s' "$out" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')"
     printf '    %-8s %s\n' "$id" "$out"
     if printf '%s' "$out" | grep -q '0 failed' && [ "${n:-0}" -ge "$min" ]; then
@@ -179,7 +179,7 @@ unit_row "GCu"     "gc::"        12    # candidate scan + trash + recover + purg
 # token. We assert the named test exists and passes (it encodes the would-fail
 # assertion). The active teeth (mutate to argv) is journaled by the QA agent.
 hdr "G-S2 teeth (argv-hygiene negative control present + green)"
-s2="$("$BUILD_LOCK" cargo test -p qd 'survey::tests::negative_control_argv_token_variant_would_fail_the_hygiene_assert' 2>&1 | grep -E 'test result: ok\.' | head -1)"
+s2="$("$BUILD_LOCK" cargo test -p quorum-dispatch 'survey::tests::negative_control_argv_token_variant_would_fail_the_hygiene_assert' 2>&1 | grep -E 'test result: ok\.' | head -1)"
 printf '    %s\n' "$s2"
 if printf '%s' "$s2" | grep -q '1 passed; 0 failed'; then
     row_pass "G-S2" "argv-token negative control present + green (would-red if secret tokenized)"

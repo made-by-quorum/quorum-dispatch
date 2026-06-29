@@ -7,20 +7,23 @@
 #     from a LOCAL source tarball:
 #       cd <repo> && git archive --prefix=qd-rust/ -o /tmp/qd-rust-local.tar.gz HEAD
 #       QD_FORMULA_LOCAL=/tmp/qd-rust-local.tar.gz \
-#         brew install --build-from-source --formula packaging/homebrew/qd.rb
+#         brew install --build-from-source --formula packaging/homebrew/quorum-dispatch.rb
 #     (the formula prefers $QD_FORMULA_LOCAL when set; the canonical url is the
 #     placeholder the D-phase release will make real).
 #   - zmx 0.6.0 is installed from the IN-REPO pinned mirror (vendor/zmx), sha256
 #     pin-verified — the same fail-closed pin scripts/fetch-zmx.sh enforces
 #     (selftested in CI: test_fetch_zmx.sh). No network fetch of zmx, ever.
-#   - Single binary: `cargo build --release -p qd --bin qd`; no bun, no node.
+#   - Single binary: `cargo build --release -p quorum-dispatch --bin qd`; no bun, no node.
 #     Success criterion #1's "no external zmx" half is Stage-2-conditional
 #     (B-track); Stage 1 deliberately pins and ships zmx alongside.
 #
-# NOTE: the deployed-artifact identity is `qd` (⟨PETE:#2⟩) — package `qd`, binary
-# `qd`, formula `qd`. The internal lib crate stays `dispatch` (preserved subsystem);
-# the `-p qd` package selector resolves because the package is renamed to `qd`.
-class Qd < Formula
+# NOTE: deployed-artifact identity (⟨PETE:#2⟩, gate-2 correction) — package
+# `quorum-dispatch`, formula `quorum-dispatch` (Pete-ruled for coherence with the
+# crate), binary/command `qd` (unchanged). The internal lib crate stays
+# `dispatch` (preserved subsystem); the `-p quorum-dispatch` package selector
+# resolves because the package is named `quorum-dispatch`. Homebrew derives the
+# class name from the file name `quorum-dispatch.rb` → `QuorumDispatch`.
+class QuorumDispatch < Formula
   desc "Session engine for orchestrating Claude Code sessions (Rust port)"
   homepage "https://github.com/private-org/qd-rust"
   url ENV.fetch("QD_FORMULA_LOCAL", "https://github.com/private-org/qd-rust/archive/refs/tags/phase-a7.tar.gz")
@@ -31,7 +34,7 @@ class Qd < Formula
   depends_on "rust" => :build
 
   def install
-    system "cargo", "build", "--release", "-p", "qd", "--bin", "qd"
+    system "cargo", "build", "--release", "-p", "quorum-dispatch", "--bin", "qd"
     bin.install "target/release/qd"
 
     # Pinned zmx 0.6.0: the in-repo mirror is SOURCE (a zig project), verified

@@ -80,7 +80,7 @@ fn release_bin(name: &str) -> PathBuf {
     assert!(
         bin.exists(),
         "RELEASE binary not found at {bin:?} — these M5 gates measure the RELEASE \
-         daemon. Build first: scripts/build-lock.sh cargo build --release -p qd \
+         daemon. Build first: scripts/build-lock.sh cargo build --release -p quorum-dispatch \
          --bin qd -p qrmux --bin qrmux"
     );
     bin
@@ -237,8 +237,8 @@ while :; do i=$((i+1)); echo "FLOOD $i {pad}"; done
 // G-SOAK (R-1(5)) — release-build many-session soak, probe caveats CLOSED.
 //
 // RUN:
-//   scripts/build-lock.sh cargo build --release -p qd --bin qd -p qrmux --bin qrmux
-//   scripts/build-lock.sh cargo test -p qd --test c1_gate -- --ignored --exact g_soak --nocapture
+//   scripts/build-lock.sh cargo build --release -p quorum-dispatch --bin qd -p qrmux --bin qrmux
+//   scripts/build-lock.sh cargo test -p quorum-dispatch --test c1_gate -- --ignored --exact g_soak --nocapture
 //
 // SHAPE (spec §7): RELEASE build; N≥10 per-session daemons (claude-shaped quiet
 // children + flooders); ≥3 flooders (unbounded changing output w/ liveness
@@ -556,8 +556,8 @@ fn g_soak() {
 // G-IDLE (R-1(6)) — release-build idle-footprint MEASUREMENT row (spec §7, §8).
 //
 // RUN:
-//   scripts/build-lock.sh cargo build --release -p qd --bin qd -p qrmux --bin qrmux
-//   scripts/build-lock.sh cargo test -p qd --test c1_gate -- --ignored --exact g_idle --nocapture
+//   scripts/build-lock.sh cargo build --release -p quorum-dispatch --bin qd -p qrmux --bin qrmux
+//   scripts/build-lock.sh cargo test -p quorum-dispatch --test c1_gate -- --ignored --exact g_idle --nocapture
 //
 // N = 0, 1, 5, 10, 20 idle per-session daemons (quiet claude-shaped children),
 // settled ≥60s at each point. Record per-daemon RSS (ps -o rss=) + the macOS

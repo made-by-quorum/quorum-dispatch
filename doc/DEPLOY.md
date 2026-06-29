@@ -27,7 +27,7 @@ Known live paths:
 ```sh
 # 1. Build release from the merged main.
 cd <repo> && git checkout main && git merge --ff-only origin/main
-./scripts/build-lock.sh cargo build --release -p qd     # -> target/release/qd
+./scripts/build-lock.sh cargo build --release -p quorum-dispatch     # -> target/release/qd
 
 # 2. Resolve the live path and sanity-check the fresh binary against the LIVE fleet.
 LIVE="$(command -v qd)"

@@ -55,7 +55,7 @@ fail() { FAIL=$((FAIL+1)); FAILED="$FAILED $1"; printf '  [FAIL] %-28s %s\n' "$1
 
 # Build once.
 if [ "${A3_SKIP_BUILD:-0}" != "1" ]; then
-    "$REPO_ROOT/scripts/build-lock.sh" cargo build -p qd --bin qd >/dev/null 2>&1 \
+    "$REPO_ROOT/scripts/build-lock.sh" cargo build -p quorum-dispatch --bin qd >/dev/null 2>&1 \
         || { echo "FATAL: build failed" >&2; exit 3; }
 fi
 [ -x "$RUST_BIN" ] || { echo "FATAL: rust binary missing: $RUST_BIN" >&2; exit 3; }

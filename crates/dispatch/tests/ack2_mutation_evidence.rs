@@ -5,7 +5,7 @@
 //! mutation — the committed, re-runnable form of the gate report's "live-fired →
 //! RED → reverted" claims. Run:
 //!
-//!   scripts/build-lock.sh cargo test -p qd --features mutation-evidence
+//!   scripts/build-lock.sh cargo test -p quorum-dispatch --features mutation-evidence
 //!
 //! These two claims operate on EVENT-STREAM SHAPES through the public events API
 //! (the row predicates from ack2_gate.rs applied to emitted-vs-deletion-shaped

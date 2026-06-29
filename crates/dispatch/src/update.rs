@@ -4,10 +4,11 @@
 //! (0d0fa9e:src/commands/update.ts). The Rust engine ships via cargo or
 //! Homebrew, so the update mechanism is rebuilt around those two channels:
 //!
-//!   - exe under a Homebrew prefix (`*/Cellar/*` ancestry) → `brew upgrade qd`
-//!     (argv-level only until A7 lands the formula).
+//!   - exe under a Homebrew prefix (`*/Cellar/*` ancestry) → `brew upgrade
+//!     quorum-dispatch` (argv-level only until A7 lands the formula).
 //!   - exe under `~/.cargo/bin`                            → `cargo install
-//!     --git <repo> --locked qd` (repo = the workspace Cargo.toml `repository`).
+//!     --git <repo> --locked quorum-dispatch` (repo = the workspace Cargo.toml
+//!     `repository`).
 //!   - neither                                            → guidance + exit 1.
 //!
 //! Library-first (spec §2): [`decide_update_action`] is PURE over the resolved
@@ -26,18 +27,22 @@ use std::path::Path;
 pub const REPO_URL: &str = "https://github.com/private-org/qd-rust";
 
 /// The Homebrew formula name (A7 lands the real formula; until then the
-/// `brew upgrade` path is argv-level only).
-pub const BREW_FORMULA: &str = "qd";
+/// `brew upgrade` path is argv-level only). Pete-ruled `quorum-dispatch` for
+/// coherence with the cargo crate; the BINARY/command stays `qd`.
+pub const BREW_FORMULA: &str = "quorum-dispatch";
 
-/// The cargo crate name installed via `cargo install`.
-pub const CARGO_CRATE: &str = "qd";
+/// The cargo crate name installed via `cargo install`. Must equal the package
+/// name in Cargo.toml (gate-2 correction: package = `quorum-dispatch`, binary
+/// stays `qd`). BREW_FORMULA above = `quorum-dispatch` too (Pete-ruled for
+/// coherence with the crate); the BINARY/command stays `qd`.
+pub const CARGO_CRATE: &str = "quorum-dispatch";
 
 /// The resolved update channel + the argv to run, OR a hard error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// `brew upgrade qd`.
+    /// `brew upgrade quorum-dispatch`.
     Brew { argv: Vec<String> },
-    /// `cargo install --git <repo> --locked qd`.
+    /// `cargo install --git <repo> --locked quorum-dispatch`.
     Cargo { argv: Vec<String> },
     /// Could not determine the channel → guidance + exit 1.
     Unknown { message: String },
@@ -207,7 +212,7 @@ mod tests {
         assert_eq!(
             a,
             UpdateAction::Brew {
-                argv: vec!["brew".into(), "upgrade".into(), "dispatch".into()]
+                argv: vec!["brew".into(), "upgrade".into(), "quorum-dispatch".into()]
             }
         );
     }
@@ -241,7 +246,7 @@ mod tests {
                     "--git".into(),
                     REPO_URL.into(),
                     "--locked".into(),
-                    "dispatch".into(),
+                    "quorum-dispatch".into(),
                 ]
             }
         );
@@ -282,7 +287,7 @@ mod tests {
         assert_eq!(out.exit_code, 0);
         assert_eq!(
             s.ran.borrow().as_deref(),
-            Some(["brew", "upgrade", "dispatch"].map(String::from).as_slice())
+            Some(["brew", "upgrade", "quorum-dispatch"].map(String::from).as_slice())
         );
         assert!(out.report.iter().any(|l| l.contains("Homebrew")));
     }

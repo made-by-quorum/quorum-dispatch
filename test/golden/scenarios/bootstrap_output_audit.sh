@@ -44,7 +44,7 @@ REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 QD_BIN="${QD_BIN:-$REPO_ROOT/target/debug/qd}"
 if [ ! -x "$QD_BIN" ]; then
     echo "bootstrap-audit: building qd (no binary at $QD_BIN)..." >&2
-    ( cd "$REPO_ROOT" && ./scripts/build-lock.sh cargo build -p qd --bin qd >/dev/null 2>&1 ) \
+    ( cd "$REPO_ROOT" && ./scripts/build-lock.sh cargo build -p quorum-dispatch --bin qd >/dev/null 2>&1 ) \
         || { echo "FAIL: could not build qd" >&2; exit 2; }
 fi
 export JAIL_QD_CMD="$QD_BIN"

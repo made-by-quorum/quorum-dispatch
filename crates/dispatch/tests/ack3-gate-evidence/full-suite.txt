@@ -1,7 +1,7 @@
 # ACK-3 full-suite evidence (ADD-17 local-gate protocol)
 # Lead: sbr-ack3-lead | 2026-06-06 12:48-12:54 EDT | worktree: wt-ack3-lead
 # Tip: 0d4b6c5 (phase/ack-3) | base: main c1d96a3
-# Prebuild: scripts/build-lock.sh cargo build -p qrmux --bin qrmux -p fakerepl -p qd
+# Prebuild: scripts/build-lock.sh cargo build -p qrmux --bin qrmux -p fakerepl -p quorum-dispatch
 # Command: scripts/build-lock.sh cargo test --workspace   (exit code 0)
 # Note: one interleaved-output artifact at the g2 multi-process re-exec child
 # (events_test_child re-execs the lib test binary with a filter; its result line
@@ -80,7 +80,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 # ANNOTATION: the qd lib line above was mangled by the g2 re-exec child's
 # interleaved output ('okok… 692 filtered out'). Clean re-run of that one
 # suite (same tip, 12:57 EDT):
-# Command: scripts/build-lock.sh cargo test -p qd --lib
+# Command: scripts/build-lock.sh cargo test -p quorum-dispatch --lib
 test result: test sendpty::tests::wait_loop_timeout_anchored_vs_unanchored ... okok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out; finished in 0.02s
 test result: ok. 693 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s

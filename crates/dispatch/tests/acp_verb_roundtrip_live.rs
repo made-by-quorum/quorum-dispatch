@@ -12,7 +12,7 @@
 //! Jailed HOME (a tempdir with the real CC creds copied in) so the dispatch registry +
 //! bridge JSONL stay inside the jail — NO real-registry pollution. Gated `QD_ACP_LIVE=1`
 //! (real bridge + ~2 model turns). Run:
-//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p qd --test acp_verb_roundtrip_live -- --nocapture --test-threads=1
+//!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p quorum-dispatch --test acp_verb_roundtrip_live -- --nocapture --test-threads=1
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
