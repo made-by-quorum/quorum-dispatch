@@ -533,6 +533,10 @@ pub fn apply_outcome(consecutive_failures: u32, outcome: RecoveryOutcome) -> (u3
 /// binding to THIS pid is the reuse-safety guarantee; the `(pid, start_ms)` ownership
 /// gate is a SEPARATE check done before any registry WRITE, never between open and
 /// send — no TOCTOU). `ESRCH` from `pidfd_open` ⇒ the target is already dead.
+///
+/// Linux uses the raw `pidfd` syscalls (reuse-safe). Non-Linux targets (macOS dev
+/// boxes) have no `pidfd`; see the `cfg(not(target_os = "linux"))` fallback below.
+#[cfg(target_os = "linux")]
 pub fn rung1_pidfd_signal(pid: i32, sig: i32) -> io::Result<()> {
     // SAFETY: raw pidfd syscalls. `pidfd_open` returns an fd bound to THIS pid
     // (reuse-safe); we close it after the send on every path.
@@ -557,6 +561,22 @@ pub fn rung1_pidfd_signal(pid: i32, sig: i32) -> io::Result<()> {
     }
     if rc < 0 {
         return Err(send_err);
+    }
+    Ok(())
+}
+
+/// Non-Linux (macOS) Rung-1 fallback: there is no `pidfd`, so signal by pid via
+/// `kill(2)`. The pidfd reuse-safety guarantee is unavailable, but the caller's
+/// `(pid, start_ms)` ownership gate (performed before any registry WRITE, never
+/// between open and send) is the actual reuse fence — so a plain `kill` of a
+/// SIGCONT liveness-nudge is equivalent in practice here. `ESRCH` ⇒ already-dead,
+/// matching the Linux `pidfd_open` ESRCH path.
+#[cfg(not(target_os = "linux"))]
+pub fn rung1_pidfd_signal(pid: i32, sig: i32) -> io::Result<()> {
+    // SAFETY: kill(2) takes a pid + signal by value; no memory effects.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, sig as libc::c_int) };
+    if rc < 0 {
+        return Err(io::Error::last_os_error()); // ESRCH = already-dead
     }
     Ok(())
 }
