@@ -215,15 +215,17 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
         .map(String::as_str)
         .unwrap_or("120");
 
-    // Resolve (getAllSessions + resolveOrDie, send.ts:101-103).
-    let sessions = match common::all_sessions(dispatch::join::JoinOpts::default()) {
+    // Resolve through the sealed uncapped entry (was getAllSessions + resolveOrDie,
+    // send.ts:101-103). D-2 reject-set: a stopped pane can't receive a send, so a
+    // tombstone is FOUND then rejected with the clear "resume it first" message.
+    let session = match common::resolve_session_uncapped(query) {
         Ok(s) => s,
         Err(code) => return code,
     };
-    let session = match common::resolve_or_die(query, &sessions) {
-        Ok(s) => s,
-        Err(code) => return code,
-    };
+    if let Err(code) = common::reject_if_tombstoned(query, &session) {
+        return code;
+    }
+    let session = &session;
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
     if let Some(code) = common::refuse_unknown_provider("send:pty", session) {
         return code;
@@ -1261,14 +1263,18 @@ pub fn run_send_http(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
     let _message = m.get_one::<String>("message").expect("required by clap");
 
-    let sessions = match common::all_sessions(dispatch::join::JoinOpts::default()) {
+    // Resolve through the sealed uncapped entry. D-2 reject-set: a stopped session
+    // can't receive a send, so a tombstone is rejected post-resolve with the clear
+    // "resume it first" message (even though this verb then always takes the
+    // not-opencode error path — resolution stays uniform with the other verbs).
+    let session = match common::resolve_session_uncapped(query) {
         Ok(s) => s,
         Err(code) => return code,
     };
-    let session = match common::resolve_or_die(query, &sessions) {
-        Ok(s) => s,
-        Err(code) => return code,
-    };
+    if let Err(code) = common::reject_if_tombstoned(query, &session) {
+        return code;
+    }
+    let session = &session;
 
     // Engine sessions are never opencode → the exact TS ERROR block
     // (send.ts:512-520), exit 1.

@@ -100,14 +100,17 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
         .unwrap_or(0)
         .saturating_mul(1000);
 
-    let sessions = match common::all_sessions(dispatch::join::JoinOpts::default()) {
+    // Resolve through the sealed uncapped entry. D-2 reject-set: can't wait on a
+    // stopped session, so a tombstone is FOUND then rejected post-resolve with the
+    // clear "resume it first" message.
+    let session = match common::resolve_session_uncapped(query) {
         Ok(s) => s,
         Err(code) => return code,
     };
-    let session = match common::resolve_or_die(query, &sessions) {
-        Ok(s) => s,
-        Err(code) => return code,
-    };
+    if let Err(code) = common::reject_if_tombstoned(query, &session) {
+        return code;
+    }
+    let session = &session;
 
     // label = name || truncateId(sessionId) (status.ts:223).
     let label = session

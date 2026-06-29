@@ -18,7 +18,6 @@ use clap::ArgMatches;
 
 use dispatch::effects::{Env, RealClock, RealEnv, RealProcessTable};
 use dispatch::exec::RealExec;
-use dispatch::join::{resolve_session, JoinOpts, Resolution};
 use dispatch::model::Session;
 use dispatch::relay::{self, FastRelayMatch, PidEntryRef, RelayContract, RelayError, RelayReply};
 use dispatch::relay_http::CcRelay;
@@ -676,9 +675,16 @@ fn resolve_relay_port(query: &str) -> Result<(Option<u16>, String, String, Optio
         return Ok((Some(fast.port), fast.name, "claude-code".to_string(), None));
     }
 
-    // Fallback: full session scan → resolveOrDie → session.relayPort.
-    let sessions = common::all_sessions(JoinOpts::default())?;
-    let session = resolve_or_die(query, &sessions)?;
+    // Fallback: cold / out-of-cap / tombstoned targets carry no live relay port, so
+    // they always reach here. Resolve through the sealed uncapped entry. This is the
+    // INTENTIONAL behavior change super13 named: it routes send:relay's resolution
+    // through common::resolve_or_die's PID-AWARE live-over-stale dedup, REVERSING the
+    // file-local status-only path this verb used (the old send_relay-local resolver
+    // wrapping the pure resolve.rs matcher). Noted in the commit body. D-2 reject-set:
+    // a stopped session can't receive a relay send → reject post-resolve.
+    let session = common::resolve_session_uncapped(query)?;
+    common::reject_if_tombstoned(query, &session)?;
+    let session = &session;
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
     // NOTE (premise correction): the send:relay FAST PATH (above) resolves only a
     // name+port from the registry/relay scan and never constructs a `Session`, so
@@ -845,34 +851,6 @@ fn finish_reply(reply: RelayReply) -> i32 {
 /// TS interpolates `err.message`; our errors carry a class-derived string.
 fn send_err_text(e: &RelayError) -> String {
     e.to_string()
-}
-
-/// `resolveOrDie` (utils.ts:482-502) — same shape the lifecycle verbs use.
-fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Session, i32> {
-    match resolve_session(query, sessions) {
-        Resolution::One(s) => Ok(s),
-        Resolution::None => {
-            eprintln!("No session matching \"{query}\"");
-            Err(1)
-        }
-        Resolution::Many(v) => {
-            eprintln!("Ambiguous — \"{query}\" matches {} sessions:", v.len());
-            for s in v {
-                // P0 wave-2 addendum: the handle is the STABLE id (codes are
-                // retired from display); id-less rows show "---" as before.
-                let qd_id = s.qd_id.as_deref().unwrap_or("---");
-                let name = s.name.as_deref().unwrap_or("(unnamed)");
-                let id = dispatch::fmt::truncate_id_default(&s.session_id);
-                let pid = s
-                    .pid
-                    .filter(|&p| p != 0)
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "-".to_string());
-                eprintln!("  [{qd_id}] {name}\t{id}\tPID {pid}");
-            }
-            Err(1)
-        }
-    }
 }
 
 /// `parseInt(opts.timeout)` leading-integer parse (send.ts:440). A non-integer

@@ -28,7 +28,6 @@ use dispatch::effects::{
     RealProcessTable,
 };
 use dispatch::exec::RealExec;
-use dispatch::join::JoinOpts;
 use dispatch::kill::{have_kill_target, resolve_zmx_target};
 use dispatch::launch::remove_session_env_file;
 use dispatch::mux::{Mux, MuxSession};
@@ -38,7 +37,6 @@ use dispatch::registry::{ensure_tombstone, read_entries, read_entry, tombstone, 
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 
 use super::common;
-use super::common::resolve_or_die;
 
 /// `qd stop <session>` — provider split, then the claude/zmx dual-reap core.
 pub fn run(m: &ArgMatches) -> i32 {
@@ -62,14 +60,15 @@ pub fn run(m: &ArgMatches) -> i32 {
     };
     let paths = QdPaths::from_home(&home);
 
-    let sessions = match common::all_sessions(JoinOpts::default()) {
+    // Resolve through the sealed uncapped entry. D-2 accept-set: stop may target a
+    // tombstone (idempotent re-stop / cleanup, C-1), so no post-resolve rejection.
+    // Uncapped also fixes stop's prior inability to even FIND a tombstone or an
+    // out-of-cap session — it used JoinOpts::default() (20 named, no tombstones).
+    let session = match common::resolve_session_uncapped(query) {
         Ok(s) => s,
         Err(code) => return code,
     };
-    let session = match resolve_or_die(query, &sessions) {
-        Ok(s) => s,
-        Err(code) => return code,
-    };
+    let session = &session;
 
     // OpenCode kill (lifecycle.ts:542-577) — parked: the A1 join design only ever
     // constructs provider:"claude-code" rows (see model.rs:92 + join.rs construction

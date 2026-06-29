@@ -80,9 +80,12 @@ pub enum Resolution<'a> {
 /// tiers miss, `None`.
 pub fn resolve_session<'a>(query: &str, sessions: &'a [Session]) -> Resolution<'a> {
     // Default (pure) liveness: the on-disk status ENUM only — exactly the behavior
-    // before the pid-aware refinement landed. Pure callers (ping / mark / send:relay)
-    // keep this status-only view; acting verbs call
-    // [`resolve_session_with_liveness`] with a real `is_pid_alive`-backed predicate.
+    // before the pid-aware refinement landed. Pure callers (ping / mark) keep this
+    // status-only view. NOTE: send:relay USED to be a pure caller too, but as of the
+    // resolver-cap fix it resolves through the sealed common::resolve_session_uncapped
+    // (→ common::resolve_or_die), so it now gets the PID-AWARE live-over-stale dedup
+    // like the other acting verbs — which call [`resolve_session_with_liveness`] with
+    // a real `is_pid_alive`-backed predicate.
     resolve_session_with_liveness(query, sessions, |s| is_live_status(s.status))
 }
 

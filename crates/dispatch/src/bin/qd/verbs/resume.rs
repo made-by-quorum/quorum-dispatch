@@ -22,7 +22,6 @@ use dispatch::boot::{EventBootWaiter, RealSleeper};
 use dispatch::create::BootWaiter;
 use dispatch::effects::{Env, RealClock, RealEnv};
 use dispatch::exec::RealExec;
-use dispatch::join::JoinOpts;
 use dispatch::launch::{
     build_claude_cmd, capture_backend_env, claude_bin, claude_flags, launch_env_pairs,
     session_env_prefix, write_session_env_file_with_unsets, RenderMode,
@@ -34,7 +33,6 @@ use dispatch::resume::{derive_zmx_name, resolve_resume_cwd, validate_session_nam
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 
 use super::common;
-use super::common::resolve_or_die;
 
 /// The `--no-attach` boot-confirm-failure stderr line (NAMED DIVERGENCE, ADD-9a).
 /// Factored so the EXACT wording is pinned by a unit test: m-4 (ack3-spec §8)
@@ -98,19 +96,12 @@ pub fn run(m: &ArgMatches) -> i32 {
     };
     let paths = QdPaths::from_home(&home);
 
-    // Resolve via A1 (includeAll so a cold session resolves).
-    let opts = JoinOpts {
-        include_all: true,
-        include_tombstoned: true,
-        include_preview: false,
-        limit: Some(50),
-    };
-    let sessions = match common::all_sessions(opts) {
+    // Resolve through the sealed uncapped entry. D-2 accept-set: resume IS the
+    // remedy the "it is stopped — resume it first" message names, so it acts on a
+    // tombstone directly (no post-resolve rejection). Uncapped + include_all so a
+    // cold / auto-named session far outside the `ls` display cap resolves.
+    let session = match common::resolve_session_uncapped(query) {
         Ok(s) => s,
-        Err(code) => return code,
-    };
-    let session = match resolve_or_die(query, &sessions) {
-        Ok(s) => s.clone(),
         Err(code) => return code,
     };
 

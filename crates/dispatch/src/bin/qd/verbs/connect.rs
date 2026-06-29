@@ -19,10 +19,7 @@ use std::path::PathBuf;
 
 use clap::ArgMatches;
 
-use dispatch::join::JoinOpts;
-
 use super::common;
-use super::common::resolve_or_die;
 use super::lifecycle;
 use super::lifecycle::AttachOutcome;
 use super::resume;
@@ -44,20 +41,23 @@ pub fn run(m: &ArgMatches) -> i32 {
     // revive. include_all=true lifts that filter. Tombstoned rows stay EXCLUDED
     // (connect's pre-existing posture — Pete: don't widen connect to killed
     // sessions; resume's include_tombstoned is resume's own call).
-    let opts = JoinOpts {
-        include_all: true,
-        include_tombstoned: false,
-        include_preview: false,
-        limit: Some(50),
-    };
-    let sessions = match common::all_sessions(opts) {
+    // D-2: resolve against the FULL universe through the sealed uncapped entry, so
+    // connect targets anything resume can — incl. a COLD / auto-named session far
+    // outside the `ls` display cap. Tombstones resolve too; connect then REJECTS a
+    // stopped session post-resolve with the clear "resume it first" message. (This
+    // REVERSES connect's pre-existing "tombstones excluded" posture — D-2 makes it
+    // resolve-then-reject so the error teaches, never a phantom `No session matching`.)
+    let session = match common::resolve_session_uncapped(query) {
         Ok(s) => s,
         Err(code) => return code,
     };
-    let session = match resolve_or_die(query, &sessions) {
-        Ok(s) => s,
-        Err(code) => return code,
-    };
+    if let Err(code) = common::reject_if_tombstoned(query, &session) {
+        return code;
+    }
+    // The sealed entry returns an OWNED Session; the attach/revive pipeline below is
+    // borrow-shaped (it took `&Session` from the old slice-borrowing resolver), so
+    // re-borrow here — the mechanical owned→ref tweak the plan flagged.
+    let session = &session;
 
     match lifecycle::attach_resolved("connect", session) {
         AttachOutcome::Done(code) => code,

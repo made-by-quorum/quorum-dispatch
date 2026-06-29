@@ -9,7 +9,7 @@ use std::path::Path;
 use dispatch::effects::{is_pid_alive, Env, RealClock, RealEnv, RealProcessTable};
 use dispatch::exec::RealExec;
 use dispatch::join::{self, JoinOpts, MuxDirs};
-use dispatch::model::Session;
+use dispatch::model::{Session, SessionStatus};
 use dispatch::mux::Mux;
 use dispatch::mux_selector::{self, Backend};
 use dispatch::paths::QdPaths;
@@ -290,10 +290,15 @@ pub fn daemon_redirect(name: &str) -> i32 {
 }
 
 /// `resolveOrDie` (utils.ts:482-502): One → the session; None → `No session
-/// matching "<q>"` exit 1; Many → ambiguous list exit 1. Shared by every verb
-/// that resolves a `<session>` query (attach/info/live already; send:pty/
-/// send:http/wait in A4).
-pub fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Session, i32> {
+/// matching "<q>"` exit 1; Many → ambiguous list exit 1.
+///
+/// PRIVATE by design (resolver-cap fix, Option B): the slice-taking form is the
+/// footgun that let a DISPLAY cap leak into RESOLUTION — a caller could hand it a
+/// capped slice. It is no longer callable from any verb. The ONLY entry points are
+/// the sealed [`resolve_session_uncapped`] / [`resolve_session_uncapped_in_list`]
+/// below, which own their uncapped gather and make a capped resolution
+/// UNEXPRESSIBLE by construction.
+fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Session, i32> {
     // PID-AWARE liveness for the live-refinement (dup-session fix): a row counts as
     // "live" only when its status is live AND its process is genuinely alive. A
     // stale leftover whose on-disk status still says idle/busy but whose pid is DEAD
@@ -333,6 +338,66 @@ pub fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Se
             Err(1)
         }
     }
+}
+
+/// THE sealed, uncapped resolution entry point for the ACTION verbs (connect /
+/// resume / fork / stop / send:pty / send:http / send:relay / wait). Resolves a
+/// `<session>` handle (name | full UUID | qdId | prefix) against the FULL session
+/// universe — resolution is NEVER subject to the `ls`/`live` DISPLAY cap.
+///
+/// Tombstones are always eligible, so a stopped session is FOUND, then rejected
+/// post-resolve by the caller via [`reject_if_tombstoned`] with a clear "it is
+/// stopped — resume it first" message instead of a misleading phantom miss (D-2).
+/// The accept-set verbs (stop / resume / fork) skip that rejection and act on the
+/// tombstone directly.
+///
+/// Returns an OWNED `Session`: the matcher borrows the gathered slice, which is
+/// dropped here. This is the SEALED door — `include_all` / `include_tombstoned` /
+/// `limit` are hardcoded (preview off), so a capped resolution is UNEXPRESSIBLE by
+/// construction and the cap-leaks-into-resolution class cannot return through it.
+pub fn resolve_session_uncapped(query: &str) -> Result<Session, i32> {
+    Ok(resolve_session_uncapped_in_list(query, false)?.0)
+}
+
+/// [`resolve_session_uncapped`] that ALSO returns the full gathered list the
+/// resolution ran against, plus a caller-chosen `include_preview`. `info` is the
+/// only caller: it needs both the resolved row AND the list, to compute the `qdId`
+/// shortest-unique prefix (`idstore::prefix_map`) for `--json` exactly as `ls`
+/// does, and it passes `include_preview = true` to render the preview turns. Cap
+/// axes hardcoded here too — `include_preview` is the SOLE knob; the list is
+/// uncapped and a cap stays unexpressible.
+pub fn resolve_session_uncapped_in_list(
+    query: &str,
+    include_preview: bool,
+) -> Result<(Session, Vec<Session>), i32> {
+    let opts = JoinOpts {
+        include_all: true,
+        include_tombstoned: true,
+        include_preview,
+        limit: None,
+    };
+    let sessions = all_sessions(opts)?;
+    let session = resolve_or_die(query, &sessions)?.clone();
+    Ok((session, sessions))
+}
+
+/// D-2 post-resolve tombstone rejection. A resolved session whose status is
+/// `Killed` (a tombstone) is FOUND but not actionable for the reject-set verbs
+/// (connect / send:pty / send:http / send:relay / wait): print the clear
+/// "found it, but it is stopped — resume it first" message and return `Err(1)`,
+/// never the misleading `No session matching`. The accept-set verbs (stop /
+/// resume / fork) do NOT call this — a tombstone is a legitimate target for them.
+pub fn reject_if_tombstoned(query: &str, session: &Session) -> Result<(), i32> {
+    if session.status == SessionStatus::Killed {
+        let id = session
+            .qd_id
+            .clone()
+            .unwrap_or_else(|| dispatch::fmt::truncate_id_default(&session.session_id));
+        let label = session.name.as_deref().unwrap_or(query);
+        eprintln!("found \"{label}\" ({id}) but it is stopped — resume it first");
+        return Err(1);
+    }
+    Ok(())
 }
 
 /// Gather the ALIVE registry rows (RAW, pre-dedup) whose `session_id == target_id`

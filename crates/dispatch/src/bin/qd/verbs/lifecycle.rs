@@ -18,7 +18,6 @@ use dispatch::mux::Mux;
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 
 use super::common;
-use super::common::resolve_or_die;
 
 // --- attach mechanic (commands/lifecycle.ts:355-395) ---
 // P0 start-surface rework (STATE 22): the `attach` VERB is a retired erroring
@@ -777,20 +776,16 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     {
         None => (None, None),
         Some(query) => {
-            let opts = JoinOpts {
-                include_all: true,
-                include_tombstoned: true,
-                include_preview: false,
-                limit: Some(50),
-            };
-            let sessions = match common::all_sessions(opts) {
+            // Resolve through the sealed uncapped entry. D-2 accept-set: forking a
+            // stopped session's transcript is a primary revival use (fork mints a
+            // NEW session from the dead one's history), so no post-resolve
+            // rejection — fork acts on a tombstone directly. Uncapped + include_all
+            // so an auto-named / cold target far outside the display cap resolves.
+            let target = match common::resolve_session_uncapped(query) {
                 Ok(s) => s,
                 Err(code) => return code,
             };
-            let target = match resolve_or_die(query, &sessions) {
-                Ok(s) => s,
-                Err(code) => return code,
-            };
+            let target = &target;
             // A ZmxOnly row (pane with no registry/transcript identity) carries
             // an EMPTY session_id — there is no transcript to fork.
             if target.session_id.is_empty() {
@@ -2136,21 +2131,16 @@ pub fn run_info(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
     let json = m.get_flag("json");
 
-    // info uses includeAll + includePreview (commands/status.ts:564-567).
-    let opts = JoinOpts {
-        include_all: true,
-        include_tombstoned: true,
-        include_preview: true,
-        limit: None,
-    };
-    let sessions = match common::all_sessions(opts) {
-        Ok(s) => s,
+    // info resolves through the sealed uncapped entry (include_preview=true to
+    // render the preview turns, commands/status.ts:564-567) and reuses the gathered
+    // LIST for the qdId shortest-unique prefix below — exactly as ls does. As a READ
+    // verb it never rejects a tombstone: showing info about a stopped session is its
+    // job (the cap axes stay hardcoded in the sealed entry, so info stays uncapped).
+    let (session, sessions) = match common::resolve_session_uncapped_in_list(query, true) {
+        Ok(pair) => pair,
         Err(code) => return code,
     };
-    let session = match resolve_or_die(query, &sessions) {
-        Ok(s) => s,
-        Err(code) => return code,
-    };
+    let session = &session;
 
     if json {
         // qdIdPrefix: shortest-unique among the resolved session LIST, the
