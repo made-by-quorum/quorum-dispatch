@@ -33,7 +33,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// normative on every connection — a Hello-semantics change, hence the bump.
 /// The 5-byte preamble shape and `ServerMsg::Error`'s variant index 4 are
 /// FROZEN and unchanged. See PROTOCOL.md "Versioning rule".
-pub const PROTOCOL_VERSION: u8 = 3;
+///
+/// **v4 (P4DB drive-burn):** removed `ClientMsg::LaunchHeadless` (the one-off
+/// `claude -p` stream-json drive verb). It sat in the MIDDLE of `ClientMsg`
+/// (immediately before `SubscribeRepublish`), so removing it SHIFTS
+/// `SubscribeRepublish`'s positional bincode index (12 → 11) — a layout-mutating
+/// BREAKING change, hence the bump from 3. The 5-byte preamble and
+/// `ServerMsg::Error` variant index 4 stay FROZEN. With the bump, a pre-burn (v3)
+/// and post-burn (v4) peer REFUSE CLEANLY at the version gate (→ the surviving
+/// caller's documented fallback, e.g. `qd wait`'s disk-poll / the per-session
+/// "stale qrmux daemon — restart THAT session" surfacing) instead of SILENTLY
+/// misframing `SubscribeRepublish` as the removed verb.
+pub const PROTOCOL_VERSION: u8 = 4;
 
 /// Magic bytes identifying an qrmux client connection. Frozen forever.
 pub const PREAMBLE_MAGIC: [u8; 4] = *b"QRMX";
@@ -184,33 +195,34 @@ mod tests {
         }
     }
 
-    /// v3 negotiation arm (spec §3.4; updated from the prior v2 pin on the WS-C
-    /// bump): this server is now v3, so a v2 client's preamble must be reported
-    /// as a mismatch carrying the v2 client byte — the dev-daemon skew window
-    /// the spec calls out (stale qrmux daemon ↔ new client). The adapter
+    /// v4 negotiation arm (P4DB drive-burn bump; updated from the prior v3 pin):
+    /// this server is now v4 (LaunchHeadless removed → SubscribeRepublish's index
+    /// shifted), so a stale v3 (pre-burn) client's preamble must be reported as a
+    /// mismatch carrying the v3 client byte — the deploy skew window the spec calls
+    /// out (stale pre-burn qrmux daemon ↔ new post-burn client). The adapter
     /// surfaces this PER-SESSION as "stale qrmux daemon for session '<name>';
     /// kill or restart THAT session".
     #[tokio::test]
-    async fn preamble_v2_client_refused_by_v3_server() {
+    async fn preamble_v3_client_refused_by_v4_server() {
         assert_eq!(
-            PROTOCOL_VERSION, 3,
-            "this test pins the v3 bump; update it on the next bump"
+            PROTOCOL_VERSION, 4,
+            "this test pins the v4 bump; update it on the next bump"
         );
         let (mut w, mut r) = tokio::io::duplex(64);
         let mut buf = [0u8; PREAMBLE_LEN];
         buf[..4].copy_from_slice(&PREAMBLE_MAGIC);
-        buf[4] = 2; // a stale v2 client/daemon
+        buf[4] = 3; // a stale v3 (pre-burn) client/daemon
         w.write_all(&buf).await.unwrap();
         match read_preamble(&mut r).await.unwrap() {
-            PreambleCheck::VersionMismatch { client } => assert_eq!(client, 2),
+            PreambleCheck::VersionMismatch { client } => assert_eq!(client, 3),
             other => panic!("expected VersionMismatch, got {:?}", other),
         }
     }
 
-    /// v3 negotiation arm: a current (v3) client preamble is accepted by a v3
+    /// v4 negotiation arm: a current (v4) client preamble is accepted by a v4
     /// server — the positive twin of the skew refusal above.
     #[tokio::test]
-    async fn preamble_v3_client_accepted_by_v3_server() {
+    async fn preamble_v4_client_accepted_by_v4_server() {
         let (mut w, mut r) = tokio::io::duplex(64);
         write_preamble(&mut w).await.unwrap();
         assert_eq!(read_preamble(&mut r).await.unwrap(), PreambleCheck::Ok);

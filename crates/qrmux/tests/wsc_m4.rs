@@ -187,7 +187,8 @@ fn g_skew_live_v2_preamble_refused_exact() -> Result<(), Box<dyn Error>> {
     let socket = daemon.socket.clone();
 
     let mut stream = connect_live_std(&socket)?;
-    // A v2 client: same magic, version byte 2 (one below the server's v3).
+    // A v2 client: same magic, version byte 2 (a stale client below the server's
+    // current PROTOCOL_VERSION; the framed refusal interpolates the live version).
     let mut preamble = [0u8; 5];
     preamble[..4].copy_from_slice(&PREAMBLE_MAGIC);
     preamble[4] = 2;

@@ -23,6 +23,15 @@ pub enum ConnectMode {
 /// fixint variant indices are positional — appending is layout-safe for the
 /// frozen `ServerMsg::Error` index, inserting would not be). It is the
 /// capability-exchange frame the v2 versioning rule reserved (PROTOCOL.md §3).
+///
+/// **Protocol-version note (v4):** `LaunchHeadless` (the one-off `claude -p`
+/// stream-json drive verb) was REMOVED from the MIDDLE of this enum (P4DB
+/// drive-burn) — it sat immediately before `SubscribeRepublish`. Removing a
+/// middle variant shifts `SubscribeRepublish`'s positional bincode index
+/// (12 → 11), a layout-MUTATING change, so [`crate::protocol::PROTOCOL_VERSION`]
+/// was bumped to 4: a skewed peer now refuses cleanly at the version gate rather
+/// than misframing `SubscribeRepublish` as the removed verb. The frozen
+/// `ServerMsg::Error` index 4 and the 5-byte preamble are untouched.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum ClientMsg {
     /// Keyboard input from client
