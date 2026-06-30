@@ -63,11 +63,30 @@ fn version_pin_present_and_semver_shaped() {
     let pin = fs::read_to_string(fixture_dir().join("VERSION.pin"))
         .expect("VERSION.pin must exist (spec section 3.4: single pin source)");
     let pin = pin.trim();
-    let parts: Vec<&str> = pin.split('.').collect();
-    assert_eq!(parts.len(), 3, "pin must be MAJOR.MINOR.PATCH, got {pin:?}");
+    // The pin may carry a SemVer pre-release / build tag — the codex pin tracks a
+    // PRE-RELEASE binary (`0.143.0-alpha.14`). Accept a VALID tag but still REJECT
+    // a malformed pin (this is NOT a no-op skip): assert the (M,m,p) CORE is three
+    // numeric components, AND that any tag is a well-formed SemVer pre-release/build.
+    let (core, tag) = match pin.find(['-', '+']) {
+        Some(i) => (&pin[..i], Some(&pin[i + 1..])),
+        None => (pin, None),
+    };
+    let parts: Vec<&str> = core.split('.').collect();
+    assert_eq!(parts.len(), 3, "pin core must be MAJOR.MINOR.PATCH, got {pin:?}");
     for p in parts {
         p.parse::<u64>()
-            .unwrap_or_else(|_| panic!("non-numeric pin component {p:?} in {pin:?}"));
+            .unwrap_or_else(|_| panic!("non-numeric pin core component {p:?} in {pin:?}"));
+    }
+    if let Some(tag) = tag {
+        // A SemVer pre-release/build tag is non-empty, ASCII, and limited to
+        // alphanumerics + `.`/`-`/`+`. A garbage or empty tag still REDS lane 1.
+        assert!(
+            !tag.is_empty()
+                && tag
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+')),
+            "malformed SemVer pre-release/build tag {tag:?} in {pin:?}"
+        );
     }
 }
 

@@ -1058,9 +1058,15 @@ mod tests {
         }
     }
 
-    /// codex --version sniff EXACT (the pinned 0.134.0 binary).
+    /// codex --version sniff EXACT (the pinned 0.143.0-alpha.14 pre-release binary).
     fn exact_exec() -> ScriptedExec {
-        ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.134.0\n", "")
+        ScriptedExec::new().on(
+            "codex",
+            &["--version"],
+            Some(0),
+            "codex-cli 0.143.0-alpha.14\n",
+            "",
+        )
     }
 
     struct Harness {
@@ -1183,14 +1189,14 @@ mod tests {
         match &err {
             DaemonError::VersionBreaking { found, pin } => {
                 assert_eq!((found.major, found.minor), (0, 140));
-                assert_eq!((pin.major, pin.minor), (0, 134));
+                assert_eq!((pin.major, pin.minor), (0, 143));
             }
             other => panic!("expected VersionBreaking, got {other:?}"),
         }
         // The named text mentions found, pin, and the override knob.
         let msg = err.to_string();
         assert!(msg.contains("0.140.0"), "msg: {msg}");
-        assert!(msg.contains("0.134"), "msg: {msg}");
+        assert!(msg.contains("0.143"), "msg: {msg}");
         assert!(msg.contains("QD_CODEX_UNPINNED=1"), "msg: {msg}");
         // NOTHING was spawned (version gate is BEFORE the spawn loop).
         assert_eq!(spawner.spawn_count(), 0, "version gate blocks before spawn");
@@ -1236,7 +1242,7 @@ mod tests {
     fn version_patch_drift_proceeds() {
         let h = harness();
         let exec =
-            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.134.7\n", "");
+            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.143.7\n", "");
         let rpc = FixtureRpc::happy("T-PATCH");
         let connect =
             |_url: &str| -> Result<Box<dyn AppServerRpc>, RpcError> { Ok(Box::new(RpcRef(&rpc))) };

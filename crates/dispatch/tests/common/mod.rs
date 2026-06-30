@@ -6,6 +6,7 @@
 
 #![allow(dead_code)]
 
+pub mod live;
 pub mod p0bins;
 
 use std::collections::{HashMap, HashSet};

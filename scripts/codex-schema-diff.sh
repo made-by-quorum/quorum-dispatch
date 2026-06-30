@@ -1,7 +1,7 @@
 #!/bin/bash
 # codex-schema-diff.sh — Codex P2 W1 schema fixture-diff harness (spec section 5).
 #
-# The committed fixture (crates/qd/tests/fixtures/codex-schema/) is the
+# The committed fixture (crates/dispatch/tests/fixtures/codex-schema/) is the
 # `codex app-server generate-json-schema` dump of the PINNED codex version
 # (VERSION.pin), stored in CANONICAL form (sorted keys, 2-space indent — the
 # python3 round-trip below). This script regenerates from the installed
@@ -25,7 +25,7 @@
 # error; 3 = installed codex version != VERSION.pin (named, before any diff).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-FIXTURE="${QD_CODEX_SCHEMA_FIXTURE:-$ROOT/crates/qd/tests/fixtures/codex-schema}"
+FIXTURE="${QD_CODEX_SCHEMA_FIXTURE:-$ROOT/crates/dispatch/tests/fixtures/codex-schema}"
 [ -d "$FIXTURE" ] || { echo "codex-schema-diff: FAIL — fixture dir missing: $FIXTURE" >&2; exit 2; }
 
 REGEN=""
@@ -47,7 +47,11 @@ else
   CLEANUP="$JAILROOT"
   REGEN="$JAILROOT/regen"
   mkdir -p "$JAILROOT"/{home,codex-home,xdg-config,xdg-data,xdg-cache,tmp} "$REGEN" || exit 2
-  env -i PATH="/opt/homebrew/bin:/usr/bin:/bin" HOME="$JAILROOT/home" \
+  # Derive the dir holding `codex` from the CALLER's PATH so the jailed `env -i`
+  # can still find it (the binary may live in ~/.local/bin etc., not a hardcoded
+  # system path — the original macOS-only PATH failed on Linux installs).
+  CODEX_DIR=$(dirname "$(command -v codex 2>/dev/null || echo /usr/bin/codex)")
+  env -i PATH="$CODEX_DIR:/opt/homebrew/bin:/usr/bin:/bin" HOME="$JAILROOT/home" \
     CODEX_HOME="$JAILROOT/codex-home" XDG_CONFIG_HOME="$JAILROOT/xdg-config" \
     XDG_DATA_HOME="$JAILROOT/xdg-data" XDG_CACHE_HOME="$JAILROOT/xdg-cache" \
     TMPDIR="$JAILROOT/tmp" \

@@ -1,8 +1,9 @@
 //! Codex version pin + drift policy (codex-p2-spec section 3.4).
 //!
 //! Single source of truth for the pinned version: the W1 fixture
-//! `tests/fixtures/codex-schema/VERSION.pin` (the spike/probe binary,
-//! `0.134.0`), `include_str!`'d so the pin lives in EXACTLY one place — the
+//! `tests/fixtures/codex-schema/VERSION.pin` (the installed binary,
+//! `0.143.0-alpha.14` — a PRE-RELEASE pin; see [`Version::parse`]),
+//! `include_str!`'d so the pin lives in EXACTLY one place — the
 //! schema harness and this drift check read the same byte string.
 //!
 //! This module is PURE: it sniffs `codex --version`, parses the version, and
@@ -29,8 +30,8 @@ const fn include_pin() -> &'static str {
     trim_ascii_end(raw)
 }
 
-/// const-compatible trailing-whitespace trim (so `PINNED` is `"0.134.0"`, not
-/// `"0.134.0\n"`). `str::trim` is not const on this toolchain.
+/// const-compatible trailing-whitespace trim (so `PINNED` is `"0.143.0-alpha.14"`,
+/// not `"0.143.0-alpha.14\n"`). `str::trim` is not const on this toolchain.
 const fn trim_ascii_end(s: &str) -> &str {
     let mut bytes = s.as_bytes();
     while let [rest @ .., last] = bytes {
@@ -57,15 +58,24 @@ pub struct Version {
 }
 
 impl Version {
-    /// Parse `"MAJOR.MINOR.PATCH"` (exactly three numeric components). Returns
-    /// `None` on any shape that is not three dotted integers.
+    /// Parse `"MAJOR.MINOR.PATCH"` (exactly three numeric components), tolerating
+    /// a trailing SemVer pre-release / build tag (`-alpha.14`, `+build`). The codex
+    /// pin tracks a PRE-RELEASE binary (`0.143.0-alpha.14`), so we parse its
+    /// `(major, minor, patch)` CORE and ignore the tag; the schema-diff harness is
+    /// the fine-grained drift guard, `(M,m,p)` is the pin granularity. Returns
+    /// `None` on any core that is not three dotted integers.
     pub fn parse(s: &str) -> Option<Version> {
-        let mut it = s.trim().split('.');
+        // Strip a SemVer pre-release (`-…`) / build (`+…`) suffix before the strict
+        // 3-component parse, so `0.143.0-alpha.14` → (0,143,0). Without this, the
+        // patch token `0-alpha` fails `u64::parse` → None → SniffOutcome::Unparseable
+        // → DaemonError::VersionUnknown → create BLOCKED (the create-path landmine).
+        let core = s.trim().split(['-', '+']).next().unwrap_or("");
+        let mut it = core.split('.');
         let major = it.next()?.parse().ok()?;
         let minor = it.next()?.parse().ok()?;
         let patch = it.next()?.parse().ok()?;
         if it.next().is_some() {
-            return None; // more than 3 components is not a pinned-shape version
+            return None; // more than 3 numeric components is not a pinned-shape version
         }
         Some(Version {
             major,
@@ -180,8 +190,9 @@ mod tests {
     #[test]
     fn pinned_is_the_fixture_version() {
         // The single-source pin is exactly the W1 fixture's VERSION.pin, trimmed.
-        assert_eq!(PINNED, "0.134.0");
-        assert_eq!(Version::parse(PINNED), Some(v(0, 134, 0)));
+        // It is the PRE-RELEASE binary string; parse yields its (M,m,p) core.
+        assert_eq!(PINNED, "0.143.0-alpha.14");
+        assert_eq!(Version::parse(PINNED), Some(v(0, 143, 0)));
     }
 
     #[test]
@@ -205,6 +216,24 @@ mod tests {
             Some(v(0, 140, 2))
         );
         assert_eq!(parse_version_stdout("no version here"), None);
+    }
+
+    // MUTATION EVIDENCE (the create-blocking landmine fix): a SemVer pre-release /
+    // build tag must be STRIPPED to the (M,m,p) core, not rejected. If `parse`
+    // stopped stripping the suffix, `0.143.0-alpha.14` → None → Unparseable →
+    // VersionUnknown → create BLOCKED, and these red. NAMED: parse_strips_prerelease.
+    #[test]
+    fn parse_strips_prerelease() {
+        assert_eq!(Version::parse("0.143.0-alpha.14"), Some(v(0, 143, 0)));
+        assert_eq!(Version::parse("1.2.3+build.7"), Some(v(1, 2, 3)));
+        assert_eq!(Version::parse("0.143.0-rc.1+exp"), Some(v(0, 143, 0)));
+        // The installed-binary line parses through the stdout sniff too.
+        assert_eq!(
+            parse_version_stdout("codex-cli 0.143.0-alpha.14"),
+            Some(v(0, 143, 0))
+        );
+        // A non-numeric core is still rejected, tag or not.
+        assert_eq!(Version::parse("0.x.0-alpha"), None);
     }
 
     // === Verdict truth table (codex-p2-spec section 3.4) ===
@@ -263,8 +292,16 @@ mod tests {
 
     #[test]
     fn sniff_exact_against_pinned_binary() {
-        let exec =
-            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.134.0\n", "");
+        // The pinned binary IS the pre-release `0.143.0-alpha.14`; its core (0,143,0)
+        // equals the pin core → Exact. THIS is the create-unblock evidence: pre-fix,
+        // this string sniffed Unparseable → VersionUnknown → create blocked.
+        let exec = ScriptedExec::new().on(
+            "codex",
+            &["--version"],
+            Some(0),
+            "codex-cli 0.143.0-alpha.14\n",
+            "",
+        );
         assert_eq!(sniff(&exec), SniffOutcome::Verdict(VersionVerdict::Exact));
     }
 
@@ -278,7 +315,7 @@ mod tests {
             sniff(&exec),
             SniffOutcome::Verdict(VersionVerdict::Breaking {
                 found: v(0, 140, 0),
-                pin: v(0, 134, 0),
+                pin: v(0, 143, 0),
             }),
             "a drifted codex binary must sniff as Breaking (the launch-path loud error)"
         );
@@ -287,11 +324,11 @@ mod tests {
     #[test]
     fn sniff_patch_drift() {
         let exec =
-            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.134.7\n", "");
+            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.143.7\n", "");
         assert_eq!(
             sniff(&exec),
             SniffOutcome::Verdict(VersionVerdict::PatchDrift {
-                found: v(0, 134, 7)
+                found: v(0, 143, 7)
             })
         );
     }

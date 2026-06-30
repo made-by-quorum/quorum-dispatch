@@ -1126,9 +1126,15 @@ mod tests {
         }
     }
 
-    /// codex --version sniff EXACT (the pinned binary).
+    /// codex --version sniff EXACT (the pinned 0.143.0-alpha.14 pre-release binary).
     fn exact_exec() -> ScriptedExec {
-        ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.134.0\n", "")
+        ScriptedExec::new().on(
+            "codex",
+            &["--version"],
+            Some(0),
+            "codex-cli 0.143.0-alpha.14\n",
+            "",
+        )
     }
 
     struct Harness {
