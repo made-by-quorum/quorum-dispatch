@@ -144,8 +144,15 @@ struct GroupReaper(Arc<Mutex<Vec<i64>>>);
 impl Drop for GroupReaper {
     fn drop(&mut self) {
         for &pid in self.0.lock().unwrap().iter() {
-            let _ = Command::new("kill").args(["-9", &format!("-{pid}")]).status();
-            let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+            // SAFETY: `--` forces `-{pid}` to be a process-group OPERAND, never an
+            // option-misparse → `kill(-1)` (kill-all). Guard pid>1 so we can never
+            // target pgid 0 (caller's own group) or -1 (everything). See the audit-
+            // proven 2026-06-30 outage: `kill -9 -<pid>` (no `--`) executed kill(-1)
+            // and SIGKILLed the entire user slice.
+            if pid > 1 {
+                let _ = Command::new("kill").args(["-9", "--", &format!("-{pid}")]).status();
+                let _ = Command::new("kill").args(["-9", "--", &pid.to_string()]).status();
+            }
         }
     }
 }
@@ -642,8 +649,11 @@ fn chaos_pgid_escape_reach_boundary_characterization() {
     );
 
     // Cleanup — reap the escapee (the GroupReaper belt also covers a panic).
-    let _ = Command::new("kill").args(["-9", &format!("-{escapee_pid}")]).status();
-    let _ = Command::new("kill").args(["-9", &escapee_pid.to_string()]).status();
+    // `--` + pid>1 guard: never let `-{escapee_pid}` misparse into kill(-1) (kill-all).
+    if escapee_pid > 1 {
+        let _ = Command::new("kill").args(["-9", "--", &format!("-{escapee_pid}")]).status();
+        let _ = Command::new("kill").args(["-9", "--", &escapee_pid.to_string()]).status();
+    }
     wait_dead(escapee_pid);
     *reap_pids.lock().unwrap() = Vec::new();
 }
