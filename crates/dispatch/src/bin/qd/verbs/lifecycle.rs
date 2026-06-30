@@ -80,35 +80,13 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
         return AttachOutcome::Done(code);
     }
 
-    // WP-B5-i — the LIVE connect resolver (the deferred B-CS-2 wiring). A headless
-    // (agent-driven) claude session has NO mux pane, so the cold check below would
-    // misread a LIVE one as Cold and try to revive it. Resolve the row's mode from
-    // its `entrypoint` discriminant + liveness FIRST: a live headless target →
-    // `ConnectAction::Observe` (read-only dashboard). Interactive/cold targets fall
-    // through to today's pane-attach / cold-revive unchanged.
-    {
-        let env = RealEnv;
-        if let Ok(paths) = common::paths_from_home(&env) {
-            let entrypoint = session
-                .pid
-                .and_then(|p| dispatch::registry::read_entry(&paths.sessions_dir, p))
-                .and_then(|e| e.entrypoint);
-            let pid_alive = session
-                .pid
-                .is_some_and(|p| p != 0 && dispatch::effects::is_pid_alive(p as i32));
-            let has_live_pane = session.zmx_name.is_some();
-            let mode = dispatch::observe::resolve_target_mode(
-                entrypoint.as_deref(),
-                pid_alive,
-                has_live_pane,
-            );
-            if dispatch::observe::connect_dispatch(mode)
-                == dispatch::observe::ConnectAction::Observe
-            {
-                return AttachOutcome::Done(run_headless_observe(session));
-            }
-        }
-    }
+    // P4DB drive-burn (C2): the drive-coupled WP-B5-i headless-observe resolver
+    // (read the `entrypoint` discriminant → `run_headless_observe` for a live
+    // headless target) is REMOVED with the `claude -p` drive. No row resolves to a
+    // live headless agent anymore (the HEADLESS_ENTRYPOINT mint writer is gone), so
+    // a claude session is either a live interactive pane (attach below) or cold
+    // (returned to the caller for auto-revive-then-attach via the surviving
+    // `revive_claude` seam).
 
     // MuxPane (claude) cold → return Cold to the CALLER (W1 phase 2): no business
     // branch on the `verb` string here. connect → auto-revive-then-attach.
@@ -139,316 +117,6 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
             1
         }
     })
-}
-
-/// WP-B-CS-2-LIVE — the live OBSERVE run-loop `qd connect` lands on for a live
-/// headless target (replacing B5-i's one-shot snapshot). The full interactive
-/// surface, wired to the banked `observe.rs` primitives:
-///   1. LIVE RE-RENDER of the read-only dashboard — CONTROL FACTS ONLY (§2a): each
-///      `Republish*` control fact off the SAME socket-republish stream `qd wait`
-///      reads (the observe-armed [`ChannelSubscriber`]) folds into
-///      [`DashboardState`] and re-renders. No content path exists, so §2a holds by
-///      construction.
-///   2. THE 1/2/3 MENU — relay (async, non-disruptive) / cut-over-to-drive (with an
-///      optional buffered input) / just-watch.
-///   3. TURN-BOUNDARY CUTOVER EXECUTION — choice 2 arms the [`CutoverGate`]; the
-///      run-loop drives `gate.observe` per frame (via [`observe_tick`]) and fires
-///      EXACTLY at a turn boundary (never mid-turn), then runs the ordered
-///      execution: tear down the headless session → `revive_claude` the SAME claude
-///      session into a native TUI → deliver the buffered input FIRST → attach.
-fn run_headless_observe(session: &Session) -> i32 {
-    use dispatch::observe::{
-        execute_cutover, menu_action, menu_text, observe_tick, parse_menu_choice, CutoverDecision,
-        CutoverGate, MenuChoice, ObserveAction,
-    };
-    use std::io::BufRead;
-    use std::sync::mpsc::TryRecvError;
-    use std::time::Duration;
-
-    let env = RealEnv;
-    let name = session.name.as_deref().unwrap_or(&session.session_id);
-    let paths = match common::paths_from_home(&env) {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    let dir = match dispatch::qrmux_dir::resolve_qrmux_dir(&paths.home, &env) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("qd connect: {e}");
-            return 1;
-        }
-    };
-    let socket_path = match qrmux::server::session_socket_path_for(Some(&dir), name) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("qd connect: {e}");
-            return 1;
-        }
-    };
-    println!("Observing headless session \"{name}\" (read-only — CONTROL FACTS ONLY).");
-    println!("{}", menu_text());
-
-    // Subscribe with the observe-armed TAP so the run-loop can drive the cutover
-    // gate from the live `Republish*` stream (the SAME path `qd wait` reads).
-    let sub =
-        dispatch::wait_channel::ChannelSubscriber::connect_observing(socket_path, name.to_string());
-    // Settle the channel (subscribe + first frame) before the first render.
-    let _ = sub.await_status(Duration::from_secs(2));
-
-    // SEAM (b) — seed the in-flight busy baseline from the AUTHORITATIVE
-    // daemon-written ROW STATUS (a control fact). A subscriber that connects DURING
-    // a busy turn receives NO replayed in-flight frame (the republish hub forwards
-    // only NEW frames; the turn-start `Ready` already fired before we subscribed),
-    // so `dashboard_snapshot().in_turn` reads FALSE mid-turn — the busy render would
-    // be missed and a choice-2 cutover would mis-fire immediately instead of
-    // deferring. The row's `status` is the SAME control fact the resolver already
-    // read to route here; we fold it as a synthetic `RepublishStatus{busy}` through
-    // the control-facts-only path (§2a-safe by construction — busy/idle is never
-    // assistant text), seeding BOTH the rendered dashboard AND the cutover gate.
-    // Live frames off the tap then keep both authoritative (the real `TurnEnd` flips
-    // in-turn off and IS the boundary the deferred cutover fires at).
-    let row_busy = session
-        .pid
-        .and_then(|p| dispatch::registry::read_entry(&paths.sessions_dir, p))
-        .and_then(|e| e.status)
-        .is_some_and(|s| s.eq_ignore_ascii_case("busy"));
-
-    let mut dash = dispatch::observe::DashboardState::default();
-    let mut gate = CutoverGate::default();
-    if row_busy {
-        let busy = qrmux::protocol::ServerMsg::RepublishStatus {
-            status: "busy".to_string(),
-        };
-        dash.apply(&busy);
-        gate.observe(&busy);
-    }
-    let mut last_render = String::new();
-    let render_if_changed = |dash: &dispatch::observe::DashboardState, last: &mut String| {
-        let out = dash.render(None);
-        if out != *last {
-            println!("{out}");
-            *last = out;
-        }
-    };
-    render_if_changed(&dash, &mut last_render);
-
-    // Operator stdin on a background thread, polled non-blocking from the loop so a
-    // blocking read never stalls the live re-render / cutover firing.
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
-            match line {
-                Ok(l) => {
-                    if tx.send(l).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        // EOF: dropping `tx` disconnects the channel (the loop sees Disconnected).
-    });
-
-    // Two-line stdin protocol: a menu digit, then (after "2") the optional buffer.
-    let mut awaiting_buffer = false;
-    let mut stdin_open = true;
-    let mut exec = RealCutoverExec { session };
-
-    loop {
-        // (1) Drain new control facts → re-render + drive the cutover gate. The
-        //     cutover fires EXACTLY at a turn boundary (observe_tick IS the gate).
-        for frame in sub.drain_control_frames() {
-            // Fold each live control fact into BOTH the rendered dashboard and the
-            // cutover gate (§2a: the tap carries control facts only).
-            dash.apply(&frame);
-            if let Some(fire) = observe_tick(&mut gate, &frame) {
-                // Render the boundary state (the turn going idle) BEFORE handing the
-                // wheel over, so the operator sees the turn complete at the moment of
-                // cutover (the boundary frame both flips in-turn off AND fires).
-                render_if_changed(&dash, &mut last_render);
-                println!("Turn boundary reached — cutting over to drive...");
-                return into_code(execute_cutover(fire, &mut exec));
-            }
-        }
-        render_if_changed(&dash, &mut last_render);
-
-        // (2) Operator input (non-blocking).
-        match rx.try_recv() {
-            Ok(line) if awaiting_buffer => {
-                awaiting_buffer = false;
-                let buffered = {
-                    let t = line.trim();
-                    (!t.is_empty()).then(|| t.to_string())
-                };
-                match menu_action(MenuChoice::CutOverToDrive, &mut gate, buffered) {
-                    ObserveAction::CutOver(CutoverDecision::FireNow) => {
-                        let fire = gate.poll_fire().expect("FireNow yields a fire");
-                        println!("At a boundary — cutting over to drive now...");
-                        return into_code(execute_cutover(fire, &mut exec));
-                    }
-                    ObserveAction::CutOver(CutoverDecision::DeferredToBoundary) => {
-                        println!(
-                            "Cutover queued — it fires at the next turn boundary (never mid-turn)."
-                        );
-                    }
-                    _ => {}
-                }
-            }
-            Ok(line) => match parse_menu_choice(&line) {
-                Some(MenuChoice::RelayMessage) => {
-                    println!(
-                        "To message this agent WITHOUT disrupting it (async; it keeps working), \
-                         run:\n  qd send:relay {name} \"<your message>\""
-                    );
-                }
-                Some(MenuChoice::CutOverToDrive) => {
-                    awaiting_buffer = true;
-                    println!(
-                        "Enter input to BUFFER for the cutover (delivered first when you take \
-                         the wheel), or press Enter to cut over with none:"
-                    );
-                }
-                Some(MenuChoice::JustWatch) => {
-                    println!("Watching (read-only). Press 2 to cut over, 1 to relay.");
-                }
-                None => {
-                    println!("Unrecognized choice.");
-                    println!("{}", menu_text());
-                }
-            },
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => stdin_open = false,
-        }
-
-        // (3) Termination: the stream ended or the operator detached, and no cutover
-        //     is outstanding (a pending cutover fires above at the boundary / End).
-        if (dash.ended.is_some() || !stdin_open) && !gate.is_pending() {
-            if let Some(outcome) = &dash.ended {
-                println!("Session stream ended: {outcome}.");
-            }
-            return 0;
-        }
-
-        std::thread::sleep(Duration::from_millis(80));
-    }
-}
-
-/// Collapse [`execute_cutover`]'s `Result<i32, i32>` (Ok=attach exit code, Err=the
-/// loud-printed failure code) to the verb's process exit code.
-fn into_code(r: Result<i32, i32>) -> i32 {
-    match r {
-        Ok(code) => code,
-        Err(code) => code,
-    }
-}
-
-/// The PRODUCTION [`dispatch::observe::CutoverExec`] — the real teardown + revive +
-/// buffered-input delivery + attach a fired cutover performs. The ORDERING and the
-/// never-mid-turn gate are proven deterministically against a fake exec in
-/// `observe.rs`; THIS wires the steps to real effects (the seam the real-claude
-/// seed drives end-to-end).
-struct RealCutoverExec<'a> {
-    session: &'a Session,
-}
-
-impl dispatch::observe::CutoverExec for RealCutoverExec<'_> {
-    type Handle = super::resume::ReviveHandle;
-    type Err = i32;
-
-    fn teardown_headless(&mut self) -> Result<(), i32> {
-        // Reap the live headless claude child (and its descendant subtree) so the
-        // SAME claude session can be revived natively without two producers racing
-        // the one transcript. The B5-i row is CHILD-PID-keyed, so `session.pid` IS
-        // the live claude child (proven by `headless_cli_addressability`).
-        let pid = self.session.pid.unwrap_or(0);
-        if pid > 0 {
-            reap_process_subtree(pid as i32);
-        }
-        Ok(())
-    }
-
-    fn revive_to_drive(&mut self) -> Result<Self::Handle, i32> {
-        // Resume the SAME claude session id into a detached, drivable native pane
-        // (the shared cold→drivable revive; resumes by the row's recorded id).
-        super::resume::revive_claude(self.session, None, dispatch::launch::RenderMode::Inline)
-    }
-
-    fn deliver_buffered_input(
-        &mut self,
-        handle: &Self::Handle,
-        input: Option<&str>,
-    ) -> Result<(), i32> {
-        // Buffered-input-FIRST: deliver the queued text to the revived pane BEFORE
-        // the human takes the wheel. A `None` buffer is a no-op (the slot still runs
-        // ahead of attach — the ordering the `execute_cutover` test pins).
-        let Some(text) = input else { return Ok(()) };
-        let env = RealEnv;
-        let paths = common::paths_from_home(&env)?;
-        let mux = common::real_mux()?;
-        let clock = RealClock;
-        let sleeper = RealSleeper;
-        let deps = dispatch::submit::RealDeliverDeps {
-            mux: mux.as_ref(),
-            clock: &clock,
-            sleeper: &sleeper,
-            zmx_name: handle.zmx_name.clone(),
-            session_name: handle.zmx_name.clone(),
-            sessions_dir: paths.sessions_dir.clone(),
-            dir: handle.socket_dir.clone(),
-        };
-        let _ = dispatch::submit::deliver_prompt(&deps, text, dispatch::submit::DELIVER_TIMEOUT_S);
-        Ok(())
-    }
-
-    fn attach(&mut self, handle: Self::Handle) -> Result<i32, i32> {
-        // Hand the human the wheel: attach the now-live native pane (a plain
-        // mux.attach — the session is already up). This is the step whose physical
-        // native-TUI/terminal attach the real-claude seed probes for the env
-        // boundary (Q2b) — the LOGIC above is all proven on-box.
-        let mux = common::real_mux()?;
-        match mux.attach(&handle.socket_dir, &handle.zmx_name) {
-            Ok(code) => Ok(code),
-            Err(e) => {
-                eprintln!("qd connect: {e}");
-                Err(1)
-            }
-        }
-    }
-}
-
-/// Best-effort reap of a live headless session's process subtree: the recorded
-/// claude child `pid` and its descendants, each `(pid, start-time)`-verified by
-/// [`dispatch::effects::kill_pid_tree`]. Scoped mirror of `qd stop`'s descendant sweep —
-/// the child MUST be dead before `revive_claude` resumes the SAME claude session,
-/// or two claude processes race the one transcript. Self is excluded
-/// (`descendant_kill_list` never sweeps toward the caller).
-fn reap_process_subtree(pid: i32) {
-    use dispatch::exec::Exec;
-    let exec = RealExec;
-    let rows = exec
-        .run(
-            "ps",
-            &["-eo".to_string(), "pid=,ppid=,command=".to_string()],
-            &[],
-            None,
-            None,
-        )
-        .ok()
-        .map(|r| dispatch::effects::parse_ps_rows(&r.stdout));
-    let self_pid = std::process::id() as i32;
-    let victims: Vec<(i32, i64)> = rows
-        .as_ref()
-        .map(|rows| {
-            dispatch::kill::descendant_kill_list(pid, self_pid, rows)
-                .into_iter()
-                .filter_map(|p| dispatch::effects::proc_start_ms(p).map(|s| (p, s)))
-                .collect()
-        })
-        .unwrap_or_default();
-    // Descendants first, then the child root (SIGTERM→SIGKILL with a short grace).
-    dispatch::effects::kill_pid_tree(&victims, 1500);
-    dispatch::effects::kill_pid(pid, 1500);
 }
 
 // --- new (A2 run_new path, commands/lifecycle.ts:707-809) ---
@@ -892,45 +560,22 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             );
             return 1;
         }
-        // Agent + prompt → headless launch via the per-session qrmux daemon.
+        // Agent + prompt → P4DB drive-burn (§6): the vestigial `qd start`→headless
+        // lane spawned a one-off `claude -p … --output-format stream-json` run. That
+        // drive is REMOVED. Refuse at the routing level with a teaching error,
+        // consistent with A5PW's refuse-one-off-print philosophy (the E2 chokepoint
+        // at the top of this fn already refuses `-p`/`--print` in the trailing
+        // claudeArgs; this closes the remaining auto-detected agent-launch path).
+        // Nothing is spawned; nonzero exit.
         crate::driver::StartRoute::Headless => {
-            // WP-B5-iii (Q4 ruling): headless `--fork` is REQUIRED (use cases 1&2
-            // are agent-self-fork — no TTY → headless only). The earlier
-            // interactive-only refusal is LIFTED. Mechanism S already seeded the
-            // forked transcript at `fork_uuid` above; the headless launch resumes
-            // THAT (additive on the proven headless spine — zero daemon/qrmux/
-            // protocol/argv change). The daemon mints the fork's OWN qdId via
-            // `mint_or_get(resume_session_id=fork_uuid)` (B5-ii-b parity, never the
-            // parent's) + the daemon-minted child-pid row (`provider=None`). A
-            // headless fork still requires `-p` (the agent's first subtask;
-            // RefuseNoPrompt above) — the engine stays goal-agnostic (INERT: no
-            // goal/Stop-hook injected, so no auto-continue), and Mechanism S
-            // seeds a SAFE `end_turn` boundary so no in-flight tool auto-executes.
-            let prompt = prompt
-                .as_deref()
-                .expect("start_route Headless implies prompt.is_some()");
-            // WP-B5-i: the headless launch MINTS a child-pid-keyed registry row
-            // (addressable) AND threads the per-session `cwd` + `claudeArgs`
-            // end-to-end. WP-B5-iii: `resume_session_id` = the seeded `fork_uuid`
-            // for a fork (`None` for a fresh start — byte-identical to today).
-            return match dispatch::embedded_mux::launch_headless_embedded(
-                &home,
-                &env,
-                &name,
-                prompt,
-                fork_uuid.as_deref(),
-                cwd.to_str(),
-                &claude_args,
-            ) {
-                Ok(()) => {
-                    println!("Launched headless session \"{name}\".");
-                    0
-                }
-                Err(e) => {
-                    eprintln!("qd start: {e}");
-                    1
-                }
-            };
+            eprintln!(
+                "qd start: dispatch does not spawn one-off `claude -p` stream-json runs. \
+                 For a one-off print run, invoke `claude -p \"<prompt>\"` directly. To start a \
+                 tracked, attachable session use an interactive start (`qd start <name> \
+                 --interactive`); to re-enter an existing session use `qd resume <name>` or \
+                 `qd connect <name>`."
+            );
+            return 1;
         }
     }
 

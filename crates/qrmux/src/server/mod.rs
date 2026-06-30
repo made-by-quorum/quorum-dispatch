@@ -89,13 +89,12 @@ async fn recv_ctrl(ctrl: &Option<tokio::net::UnixDatagram>) -> Option<u8> {
 /// `manager` lock, RELEASE the lock, then wake OUTSIDE it — the PTY write can block
 /// on a full buffer, so it must never run while holding the lock, or a real wedge
 /// would starve the select loop. Interactive → PTY nudge (off the runtime via
-/// `spawn_blocking`); headless → a non-blocking `Republish::Wake` enqueue.
+/// `spawn_blocking`).
 async fn handle_ctrl_op(op: u8, session: &str, manager: &Arc<Mutex<SessionManager>>) {
     match op {
         ctrl_op::WAKE_INBOX => {
             enum Wake {
                 Pty(crate::pty::SharedPtyWriter),
-                Headless(crate::headless::HeadlessWake),
                 None,
             }
             // Lock ONLY to clone the wake handle — mirrors the accept arm's
@@ -104,8 +103,6 @@ async fn handle_ctrl_op(op: u8, session: &str, manager: &Arc<Mutex<SessionManage
                 let mgr = manager.lock().await;
                 if let Some(s) = mgr.get(session) {
                     Wake::Pty(s.pty_writer_arc())
-                } else if let Some(hs) = mgr.get_headless(session) {
-                    Wake::Headless(hs.wake_handle())
                 } else {
                     Wake::None
                 }
@@ -124,7 +121,6 @@ async fn handle_ctrl_op(op: u8, session: &str, manager: &Arc<Mutex<SessionManage
                         }
                     });
                 }
-                Wake::Headless(h) => h.wake(),
                 Wake::None => {
                     warn!(session, "WakeInbox for an unknown session; ignored");
                 }
@@ -270,12 +266,11 @@ fn cleanup_interval_from_env() -> std::time::Duration {
 pub async fn run_server(
     socket_dir: Option<std::path::PathBuf>,
     session: String,
-    headless: Option<Arc<dyn crate::headless_session::HeadlessFactory>>,
 ) -> anyhow::Result<()> {
-    // Additive forwarder (R3c-Step-1): the legacy 3-arg entry keeps EVERY existing
-    // caller (bare qrmux main.rs, the b2b2b tests) byte-unchanged. Only the dispatch
-    // daemon entry adopts [`run_server_ctrl`] to bind the per-session control socket.
-    run_server_ctrl(socket_dir, session, headless, None).await
+    // Additive forwarder (R3c-Step-1): the legacy 2-arg entry keeps the bare qrmux
+    // main.rs caller byte-unchanged. Only the dispatch daemon entry adopts
+    // [`run_server_ctrl`] to bind the per-session control socket.
+    run_server_ctrl(socket_dir, session, None).await
 }
 
 /// As [`run_server`], plus the R3c-Step-1 per-session control socket. `ctrl_sock`
@@ -287,7 +282,6 @@ pub async fn run_server(
 pub async fn run_server_ctrl(
     socket_dir: Option<std::path::PathBuf>,
     session: String,
-    headless: Option<Arc<dyn crate::headless_session::HeadlessFactory>>,
     ctrl_sock: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     // Ignore SIGHUP so SSH disconnects don't kill us
@@ -389,9 +383,6 @@ pub async fn run_server_ctrl(
         claim_reset: Some(claim_reset.clone()),
         ended: Some(ended.clone()),
         in_flight: Some(in_flight.clone()),
-        // WP-B2b-2b: the injected headless launch factory (qd daemon entry → Some;
-        // bare qrmux → None). `LaunchHeadless` is refused when None.
-        headless: headless.clone(),
     };
 
     // WS-C M2 (§4.1): single-session lifecycle task.
@@ -509,17 +500,10 @@ pub async fn run_server_ctrl(
         let mut interval = tokio::time::interval(cleanup_interval);
         loop {
             interval.tick().await;
-            let (dead_sessions, dead_headless) = {
+            let dead_sessions = {
                 let mut mgr = cleanup_manager.lock().await;
-                (mgr.take_dead_sessions(), mgr.take_dead_headless())
+                mgr.take_dead_sessions()
             };
-            // WP-B2b-2b: reap finished headless sessions. Dropping each joins its
-            // pump (delivering the terminal `RepublishEnd` to any remaining
-            // subscriber first), then joins the reader. Done OUTSIDE the manager
-            // lock — like the PTY drop — so a slow join never stalls the lock.
-            if !dead_headless.is_empty() {
-                drop_blocking_with_timeout(dead_headless, "dead headless cleanup").await;
-            }
             if !dead_sessions.is_empty() {
                 // ACK-1 close bookend (spec §2 C2): the reaper found the PTY
                 // child dead — emit BEFORE the blocking drop (the Drop belt
@@ -671,22 +655,6 @@ pub async fn run_server_ctrl(
     if let Some(h) = heartbeat_handle {
         h.abort();
         let _ = h.await;
-    }
-
-    // WP-B2b-2b: drop any still-running headless sessions on a bounded blocking
-    // thread (a mid-turn child that never EOFs would hang the reader-thread join;
-    // the timeout keeps shutdown bounded, leaking only the blocked thread of an
-    // exiting process). Normal completion already reaped them via take_dead_headless.
-    let all_headless = {
-        let mut mgr = manager.lock().await;
-        mgr.drain_headless()
-    };
-    if !all_headless.is_empty() {
-        info!(
-            count = all_headless.len(),
-            "cleaning up headless sessions on shutdown"
-        );
-        drop_blocking_with_timeout(all_headless, "shutdown headless cleanup").await;
     }
 
     // Explicitly drop all sessions on a blocking thread with a timeout,

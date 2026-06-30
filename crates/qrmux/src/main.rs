@@ -70,7 +70,7 @@ fn main() -> anyhow::Result<()> {
         Command::Server {
             socket_dir,
             session,
-        } => rt.block_on(server::run_server(socket_dir, session, None)),
+        } => rt.block_on(server::run_server(socket_dir, session)),
     };
 
     // Shut down runtime with timeout to avoid hanging on blocked stdin thread

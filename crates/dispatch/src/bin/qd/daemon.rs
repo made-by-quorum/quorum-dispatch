@@ -64,30 +64,11 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
         }
     };
 
-    // WP-B2b-2b: the embedded daemon injects the headless launch factory (the
-    // qd-side `RegistryStatusSink` + the daemon-resolved launch posture — design
-    // §D-2b) so a `LaunchHeadless` can spawn a `claude -p` turn and write the
-    // registry status row in real time. Resolved best-effort from the daemon's
-    // env; if HOME is unset the factory is omitted (headless then refused) rather
-    // than failing the daemon bind. The PRODUCTION trigger (`qd start` →
-    // LaunchHeadless) lands in WP-B-CS — this populates the seam the design names.
+    // P4DB drive-burn: the headless launch factory (DaemonHeadlessFactory →
+    // `claude -p` stream-json) is removed. The daemon no longer spawns one-off
+    // print runs; `qd start` for an agent now refuses at the routing level, and the
+    // surviving spawn surface is the interactive PTY create + the revive seam.
     use dispatch::effects::Env as _;
-    let headless: Option<std::sync::Arc<dyn qrmux::headless_session::HeadlessFactory>> =
-        dispatch::effects::RealEnv
-            .var("HOME")
-            .filter(|s| !s.is_empty())
-            .map(|home| {
-                let paths = dispatch::paths::QdPaths::from_home_env(
-                    std::path::Path::new(&home),
-                    &dispatch::effects::RealEnv,
-                );
-                std::sync::Arc::new(
-                    dispatch::daemon_headless::DaemonHeadlessFactory::from_daemon_env(
-                        &dispatch::effects::RealEnv,
-                        &paths,
-                    ),
-                ) as std::sync::Arc<dyn qrmux::headless_session::HeadlessFactory>
-            });
 
     // R3c-Step-1: resolve the per-session control socket path the daemon binds.
     // It MUST rendezvous with the relay server's `send_control` target, which keys
@@ -164,7 +145,6 @@ pub fn run_qrmux_server(args: &[String]) -> i32 {
     match rt.block_on(qrmux::server::run_server_ctrl(
         parsed.socket_dir,
         session,
-        headless,
         ctrl_sock,
     )) {
         Ok(()) => 0,

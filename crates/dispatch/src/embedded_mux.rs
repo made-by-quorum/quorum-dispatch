@@ -94,7 +94,7 @@ use qrmux::client::discovery::scan_sessions;
 use qrmux::client::server_launcher::{ensure_session_server_running, ServerLaunchSpec};
 use qrmux::client::session_client::{
     attach_session, create_detached_session, get_history_session, kill_session_session,
-    launch_headless_session, send_input_session,
+    send_input_session,
 };
 use qrmux::protocol::{ConnectMode, SessionInfo};
 use qrmux::server::socket::{session_socket_path_for, validate_session_identity};
@@ -438,60 +438,6 @@ pub fn ensure_session_daemon(
     let spec = embedder_launch_spec()?;
     rt.block_on(ensure_session_server_running(Some(dir), name, Some(&spec)))
         .map_err(|e| io::Error::other(format!("embedded mux: ensure_session_daemon: {e}")))
-}
-
-/// WP-B-CS-1 (D2 `qd start` agent caller / D3 `qd resume`): launch (or resume) a
-/// headless `claude -p` stream-json turn for `name` via the per-session qrmux
-/// daemon's `LaunchHeadless` verb (the D-LH client helper). Headless is inherently
-/// the qrmux-daemon path (there is no PTY/pane to render), so it resolves the
-/// embedded qrmux dir directly and cold-starts the session's OWN daemon with the
-/// embedder launch spec — exactly the spawn `run_detached`/`attach` trigger above,
-/// re-execing `qd qrmux-server --socket-dir <dir> --session <name>`.
-/// `resume_session_id = Some(id)` continues an existing claude session
-/// (`--resume`); `None` is a fresh launch.
-///
-/// A free helper (not a `Mux` trait method) on purpose: headless is embedded-only,
-/// so this stays additive and does not perturb the zmx lane or the frozen `Mux`
-/// fixtures. A one-shot current-thread runtime drives the single async send (this
-/// is a terminal verb act, not a long-lived adapter — no shared runtime needed).
-///
-/// **IDENTITY / ADDRESSABILITY DEFERRED** (Fork C escape hatch, lead +
-/// supervisor-ratified → folds into B5): this LAUNCHES the headless session but
-/// does NOT yet mint/bind a registry identity or guarantee a daemon-flipped status
-/// row. The daemon's `RegistryStatusSink` keys status on its own pid and
-/// `registry::set_status` never CREATES a row, so the addressable-identity +
-/// status-row wiring (option B: claude child-pid key + `FORCE_SESSION_PERSISTENCE`)
-/// is a daemon-side fork, not B-CS-1. The session is launched-but-not-yet-addressable
-/// until B5 lands it.
-pub fn launch_headless_embedded(
-    home: &Path,
-    env: &dyn crate::effects::Env,
-    name: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    cwd: Option<&str>,
-    claude_args: &[String],
-) -> io::Result<()> {
-    let dir = resolve_qrmux_dir(home, env)
-        .map_err(|msg| io::Error::other(format!("embedded mux: {msg}")))?;
-    // Engine-side name belt (§2) BEFORE any spawn — verbatim remedy-naming error
-    // first, not an opaque cold-start failure (mirrors `pre_validate`).
-    validate_session_identity(name).map_err(|e| io::Error::other(format!("embedded mux: {e}")))?;
-    let spec = embedder_launch_spec()?;
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| io::Error::other(format!("embedded mux: failed to build runtime: {e}")))?;
-    rt.block_on(launch_headless_session(
-        Some(&dir),
-        Some(&spec),
-        name,
-        prompt,
-        resume_session_id,
-        cwd,
-        claude_args,
-    ))
-    .map_err(|e| io::Error::other(format!("embedded mux: launch_headless: {e}")))
 }
 
 #[cfg(test)]

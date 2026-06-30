@@ -76,36 +76,19 @@ pub enum ClientMsg {
     ///
     /// APPENDED at the tail — see the enum-level v3 note.
     Hello { caps: Vec<String> },
-    /// **WP-B2b.** Launch a HEADLESS `claude -p` turn for session `name` (the
-    /// daemon's single-session identity), spawning the stream-json child + reader
-    /// and republishing its facts. `prompt` is the single `-p PROMPT`;
-    /// `resume_session_id` continues an existing claude session (`--resume`), else
-    /// a fresh launch. A dedicated verb (NOT an overload of `Connect`/`ConnectMode`,
-    /// which carry PTY attach semantics) so the PTY paths stay byte-unchanged.
-    /// APPENDED at the tail (bincode positional indices — see the v3 note; the
-    /// frozen `ServerMsg::Error` index 4 is untouched).
+    /// **WP-B2b.** Subscribe to session `name`'s republish stream: after the v3
+    /// Hello handshake the daemon registers this connection as a socket subscriber
+    /// and relays `ServerMsg::Republish*` frames (Ready/TurnEnd/Status/End) until
+    /// the turn ends or the subscriber lags. A long-lived relay (like `Connect`),
+    /// session-addressed (capacity-1 identity + claim-reset).
     ///
-    /// **WP-B5-i.** `cwd` + `claude_args` are APPENDED at the TAIL of this struct
-    /// variant (positional bincode fields — appending after `resume_session_id`
-    /// keeps byte-stability; the frozen `ServerMsg::Error` index-4 contract is
-    /// untouched). `cwd` is the per-session working directory the daemon spawns
-    /// the child in (`None` = inherit the daemon's own cwd, today's behaviour);
-    /// `claude_args` are extra passthrough flags appended AFTER the daemon's
-    /// resolved posture flags (flags-first byte-stability). Threaded end-to-end
-    /// from `qd start` so the daemon stops resolving cwd/posture entirely itself.
-    LaunchHeadless {
-        name: String,
-        prompt: String,
-        resume_session_id: Option<String>,
-        cwd: Option<String>,
-        claude_args: Vec<String>,
-    },
-    /// **WP-B2b.** Subscribe to session `name`'s headless republish stream: after
-    /// the v3 Hello handshake the daemon registers this connection as a socket
-    /// subscriber and relays `ServerMsg::Republish*` frames (Ready/TurnEnd/Status/
-    /// End) until the turn ends or the subscriber lags. A long-lived relay (like
-    /// `Connect`), session-addressed (capacity-1 identity + claim-reset). APPENDED
-    /// at the tail.
+    /// P4DB drive-burn: the one-off `claude -p` stream-json producer that fed this
+    /// stream was removed (the `LaunchHeadless` verb + the daemon-side headless
+    /// session map). The verb is RETAINED because the load-bearing `qd wait` channel
+    /// (`dispatch::wait_channel::ChannelSubscriber`) still sends it; with no producer
+    /// the daemon answers "no session to subscribe to", and `qd wait` falls back to
+    /// its documented disk-poll (channel-DOWN) path. See the surviving consumers in
+    /// `dispatch::observe` (the dashboard fold) and `dispatch::wait_channel`.
     SubscribeRepublish { name: String },
 }
 

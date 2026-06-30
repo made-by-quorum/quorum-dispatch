@@ -399,39 +399,28 @@ pub fn connect_dispatch(mode: TargetMode) -> ConnectAction {
     }
 }
 
-/// The `entrypoint` discriminant a headless `qd start` stamps on its registry row
-/// (WP-B5-i). This is the row field [`resolve_target_mode`] keys on to route a
-/// live agent-driven session into observe; the daemon-mint side
-/// (`daemon_status::MintIdentity`) writes it. Interactive rows leave `entrypoint`
-/// absent. Canonical home is HERE (with the dispatch it feeds), so the minter and
-/// the resolver cannot drift.
-pub const HEADLESS_ENTRYPOINT: &str = "headless";
-
-/// WP-B5-i — the LIVE `qd connect` resolver (the deferred B-CS-2 wiring): map a
-/// resolved registry row to its [`TargetMode`] from the row's hosting/mode
-/// discriminant + liveness, so `connect` routes a target by what it actually is.
+/// The `qd connect` target-mode resolver: map a resolved registry row to its
+/// [`TargetMode`] from liveness, so `connect` routes a target by what it actually
+/// is.
 ///
-/// - a LIVE headless agent (the [`HEADLESS_ENTRYPOINT`] marker + an alive pid) →
-///   [`TargetMode::HeadlessAgent`] (→ [`ConnectAction::Observe`]). Headless
-///   sessions have no mux pane, so the pre-B5 `attach_resolved` misread them as
-///   Cold (revive); this arm is what makes them observe instead.
-/// - a live interactive pane (no headless marker, a live pane) →
-///   [`TargetMode::InteractiveTui`] (→ attach-drive).
-/// - anything not live → [`TargetMode::Cold`] (→ revive-then-attach), INCLUDING a
-///   headless row whose pid is dead (revive owns the cold path; a dead headless
-///   row is not observable).
+/// P4DB drive-burn (T1/T2): the `claude -p` stream-json drive — and the
+/// `HEADLESS_ENTRYPOINT` marker its daemon-mint writer stamped — are removed. No
+/// row resolves to a live headless agent anymore, so the `entrypoint ==
+/// HEADLESS_ENTRYPOINT && pid_alive → HeadlessAgent` arm is gone and the surviving
+/// behavior is the non-headless fall-through:
+/// - a live interactive pane → [`TargetMode::InteractiveTui`] (→ attach-drive);
+/// - anything not live → [`TargetMode::Cold`] (→ revive-then-attach via the
+///   surviving `revive_claude` seam).
 ///
-/// Fix-shaped mutation: drop the `entrypoint == Some(HEADLESS_ENTRYPOINT)` guard
-/// and a live headless row falls through to `Cold` — `connect` would try to revive
-/// a session that is already live, the exact regression the test pins.
+/// `_entrypoint` / `_pid_alive` are retained in the signature (the row carries the
+/// generic `entrypoint` field, always `None` post-burn) so callers need not change,
+/// but no longer gate the decision.
 pub fn resolve_target_mode(
-    entrypoint: Option<&str>,
-    pid_alive: bool,
+    _entrypoint: Option<&str>,
+    _pid_alive: bool,
     has_live_pane: bool,
 ) -> TargetMode {
-    if entrypoint == Some(HEADLESS_ENTRYPOINT) && pid_alive {
-        TargetMode::HeadlessAgent
-    } else if has_live_pane {
+    if has_live_pane {
         TargetMode::InteractiveTui
     } else {
         TargetMode::Cold
@@ -777,48 +766,24 @@ mod tests {
         );
     }
 
-    /// WP-B5-i — the LIVE resolver end-to-end (row discriminant → mode → action),
-    /// the §6 DoD line. A live headless row OBSERVES; a live interactive pane
-    /// attach-drives; a dead headless row falls to revive (cold). This is the
-    /// decision `attach_resolved` runs over the real registry row.
+    /// P4DB drive-burn (T1/T2): the headless-marker routing arm is removed with the
+    /// `claude -p` drive. The SURVIVING resolver behavior: a live interactive pane
+    /// attach-drives; anything not live falls to Cold (revive-then-attach). The
+    /// `entrypoint`/`pid_alive` inputs no longer gate the decision (always-None row
+    /// field post-burn), so a "headless"-stringed entrypoint no longer routes to a
+    /// (removed) observe path — a live pane attach-drives, a dead row revives.
     #[test]
-    fn resolve_target_mode_routes_headless_to_observe() {
-        // Live headless agent → HeadlessAgent → Observe (the headline).
-        let m = resolve_target_mode(Some(HEADLESS_ENTRYPOINT), true, false);
-        assert_eq!(m, TargetMode::HeadlessAgent);
-        assert_eq!(connect_dispatch(m), ConnectAction::Observe);
-
-        // Live interactive pane (no headless marker) → InteractiveTui → AttachDrive.
+    fn resolve_target_mode_routes_live_pane_and_cold() {
+        // Live interactive pane → InteractiveTui → AttachDrive.
         let m = resolve_target_mode(None, true, true);
         assert_eq!(m, TargetMode::InteractiveTui);
         assert_eq!(connect_dispatch(m), ConnectAction::AttachDrive);
 
-        // A DEAD headless row → Cold (revive owns it; not observable).
-        assert_eq!(
-            resolve_target_mode(Some(HEADLESS_ENTRYPOINT), false, false),
-            TargetMode::Cold
-        );
-        // No marker, no live pane → Cold.
+        // No live pane → Cold (revive-then-attach), regardless of the (now-ignored)
+        // entrypoint / pid_alive inputs.
         assert_eq!(resolve_target_mode(None, false, false), TargetMode::Cold);
-    }
-
-    /// Fix-shaped mutation guard: the headless arm REQUIRES the marker. A row with
-    /// NO marker but a live pid+pane must NOT observe — it attach-drives. (Dropping
-    /// the `entrypoint == headless` guard would flip a marker-less live row, or send
-    /// a live headless row to Cold — both regressions this pins.)
-    #[test]
-    fn resolve_target_mode_marker_is_load_bearing() {
-        // marker-less but live with a pane → interactive, NEVER observe.
-        assert_ne!(
-            resolve_target_mode(None, true, true),
-            TargetMode::HeadlessAgent
-        );
-        // the headless marker is what selects observe.
-        assert_eq!(
-            resolve_target_mode(Some(HEADLESS_ENTRYPOINT), true, true),
-            TargetMode::HeadlessAgent,
-            "the marker wins over a (spurious) pane — an agent target observes"
-        );
+        assert_eq!(resolve_target_mode(Some("headless"), true, false), TargetMode::Cold);
+        assert_eq!(connect_dispatch(TargetMode::Cold), ConnectAction::ReviveThenAttach);
     }
 
     // --- concurrency / latency on the fold (DoD #5) -------------------------

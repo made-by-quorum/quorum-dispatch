@@ -737,12 +737,6 @@ pub fn validate_session_name(name: &str) -> anyhow::Result<()> {
 /// Registry of named sessions with create, lookup, and cleanup operations.
 pub struct SessionManager {
     sessions: HashMap<String, Session>,
-    /// WP-B2b-2b (design §A): the PARALLEL headless-session map, kept ALONGSIDE
-    /// `sessions` so the deeply PTY-shaped [`Session`] never grows a kind-enum.
-    /// A `claude -p` stream-json turn lives here; the LOAD-BEARING `len()`/
-    /// `is_empty()`/`all_sessions_ended()` edits include it so `run_server` does
-    /// not exit mid-headless-turn.
-    headless: HashMap<String, crate::headless_session::HeadlessSession>,
     /// ACK-1 events context (dir + cap), threaded from `run_server`. `None`
     /// when events are disabled — every Session is then created unlogged.
     events_ctx: Option<crate::events::EventsCtx>,
@@ -765,7 +759,6 @@ impl SessionManager {
     pub fn with_events(events_ctx: Option<crate::events::EventsCtx>) -> Self {
         Self {
             sessions: HashMap::new(),
-            headless: HashMap::new(),
             events_ctx,
         }
     }
@@ -913,33 +906,18 @@ impl SessionManager {
         self.sessions.drain().map(|(_, s)| s).collect()
     }
 
-    /// WP-B2b-2b: remove and return all headless sessions (graceful shutdown).
-    /// Dropped on a bounded blocking thread by the caller — a mid-turn child that
-    /// never EOFs would otherwise hang the reader-thread join on a `claude` still
-    /// producing output (the §H.1/B5 daemon-death taxonomy owns the richer kill;
-    /// here a bounded drop keeps shutdown from hanging).
-    pub fn drain_headless(&mut self) -> Vec<crate::headless_session::HeadlessSession> {
-        self.headless.drain().map(|(_, s)| s).collect()
-    }
-
     /// Number of sessions currently in the map (live or not-yet-reaped).
     /// WS-C M2 (§4.1): the single-session lifecycle uses this to detect a CLAIM
     /// (0 → ≥1).
-    ///
-    /// **LOAD-BEARING (WP-B2b-2b):** counts BOTH PTY sessions AND headless
-    /// sessions. A headless turn is a real claim on the daemon; omitting it would
-    /// let `run_server`'s lifecycle observe `len()==0` and exit mid-headless-turn.
     pub fn len(&self) -> usize {
-        self.sessions.len() + self.headless.len()
+        self.sessions.len()
     }
 
     /// True when the manager holds no sessions.
     ///
-    /// **LOAD-BEARING (WP-B2b-2b):** false while EITHER map is non-empty. The
-    /// single-session lifecycle's claim/end-watch both key on this — a live
-    /// headless turn must keep the daemon up exactly like a PTY session.
+    /// The single-session lifecycle's claim/end-watch both key on this.
     pub fn is_empty(&self) -> bool {
-        self.sessions.is_empty() && self.headless.is_empty()
+        self.sessions.is_empty()
     }
 
     /// WS-C M2 (§4.1): true when every session in the map has ENDED — i.e. the
@@ -950,62 +928,8 @@ impl SessionManager {
     /// preserved: the reader drains to EOF before `is_alive()` flips false, and
     /// the events close-bookend is emitted by the cleanup/kill paths — this check
     /// only TRIGGERS the daemon exit, it does not itself emit or drop anything.
-    ///
-    /// **LOAD-BEARING (WP-B2b-2b):** a headless session is "ended" only once its
-    /// reader has run to EOF/breaker (`!is_alive()`). The daemon must not treat
-    /// the map as ended while a headless turn is still draining.
     pub fn all_sessions_ended(&self) -> bool {
         self.sessions.values().all(|s| !s.is_alive())
-            && self.headless.values().all(|h| !h.is_alive())
-    }
-
-    /// WP-B2b-2b: create a headless `claude -p` session from a resolved launch
-    /// plan, spawning the child + reader/pump and inserting it into the parallel
-    /// `headless` map. Fails (no insert) if the name is taken (in either map) or
-    /// the child spawn fails. The plan's `status_sink` (the registry-write half)
-    /// is composed with the socket fan-out inside [`HeadlessSession::start`].
-    pub fn create_headless(
-        &mut self,
-        name: String,
-        plan: crate::headless_session::HeadlessLaunchPlan,
-    ) -> anyhow::Result<()> {
-        validate_session_name(&name)?;
-        if self.sessions.contains_key(&name) || self.headless.contains_key(&name) {
-            anyhow::bail!("session '{}' already exists", name);
-        }
-        let session = crate::headless_session::HeadlessSession::start(name.clone(), plan)?;
-        self.headless.insert(name, session);
-        Ok(())
-    }
-
-    /// Get a headless session by name (read-only).
-    pub fn get_headless(&self, name: &str) -> Option<&crate::headless_session::HeadlessSession> {
-        self.headless.get(name)
-    }
-
-    /// Subscribe to a headless session's republish stream, returning the receiver
-    /// half for the relay task. `None` if no headless session by that name.
-    pub fn subscribe_headless(
-        &self,
-        name: &str,
-    ) -> Option<tokio::sync::mpsc::Receiver<crate::protocol::messages::ServerMsg>> {
-        self.headless.get(name).map(|h| h.subscribe())
-    }
-
-    /// Remove and return all headless sessions whose turn has ended (reader run to
-    /// EOF/breaker), for cleanup outside the lock. Dropping each joins its pump —
-    /// delivering the terminal `RepublishEnd` to any remaining subscriber first.
-    /// Called from the daemon cleanup tick alongside [`Self::take_dead_sessions`].
-    pub fn take_dead_headless(&mut self) -> Vec<crate::headless_session::HeadlessSession> {
-        let dead: Vec<String> = self
-            .headless
-            .iter()
-            .filter(|(_, h)| !h.is_alive())
-            .map(|(name, _)| name.clone())
-            .collect();
-        dead.into_iter()
-            .filter_map(|name| self.headless.remove(&name))
-            .collect()
     }
 
     /// Remove dead sessions and return them for cleanup outside the lock.
@@ -1416,109 +1340,6 @@ mod tests {
             dead.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
         assert_eq!(mgr.list().len(), 2);
-    }
-
-    // ---- WP-B2b-2b: the LOAD-BEARING headless-map edits (the one real PTY-path
-    //      hazard: len()/is_empty()/all_sessions_ended() must include self.headless,
-    //      else run_server exits the daemon mid-headless-turn). ----
-
-    /// Write an executable fixture that sleeps `secs` then exits (ignoring the
-    /// `-p PROMPT --output-format ...` args `HeadlessLaunch` appends). Models a
-    /// `claude -p` turn in flight for the liveness assertions.
-    fn sleep_fixture(secs: &str) -> (tempfile::TempDir, String) {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("fixture.sh");
-        std::fs::write(&p, format!("#!/bin/bash\nsleep {secs}\n")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (dir, p.to_string_lossy().into_owned())
-    }
-
-    fn sleep_plan(bin: String) -> crate::headless_session::HeadlessLaunchPlan {
-        crate::headless_session::HeadlessLaunchPlan {
-            launch: crate::headless::HeadlessLaunch {
-                claude_bin: bin,
-                prompt: "hi".into(),
-                resume_session_id: None,
-                cwd: None,
-                env: Vec::new(),
-                clear_env: false,
-                flags: Vec::new(),
-            },
-            status_sink_factory: None,
-        }
-    }
-
-    #[test]
-    fn headless_keeps_manager_nonempty_until_turn_ends() {
-        // LOAD-BEARING (red-before: revert `+ self.headless.len()` in `len()`,
-        // `&& self.headless.is_empty()` in `is_empty()`, or the `self.headless`
-        // clause in `all_sessions_ended()` → this test REDS, and the daemon's
-        // lifecycle would exit mid-turn).
-        let (_dir, bin) = sleep_fixture("0.5");
-        let mut mgr = SessionManager::new();
-        mgr.create_headless("hl".into(), sleep_plan(bin)).unwrap();
-
-        // A live headless turn makes the manager non-empty by every measure the
-        // single-session lifecycle reads.
-        assert_eq!(mgr.len(), 1, "headless session counts in len()");
-        assert!(!mgr.is_empty(), "headless session makes is_empty() false");
-        assert!(
-            !mgr.all_sessions_ended(),
-            "a live headless turn is NOT ended"
-        );
-        assert!(
-            mgr.take_dead_headless().is_empty(),
-            "an alive headless turn is not reaped"
-        );
-
-        // Wait for the fixture to exit (stdout EOF → reader thread finishes).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while mgr.get_headless("hl").is_some_and(|h| h.is_alive())
-            && std::time::Instant::now() < deadline
-        {
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-
-        // Turn ended → the manager reports ended, and the reaper removes it.
-        assert!(
-            mgr.all_sessions_ended(),
-            "after EOF the headless turn is ended"
-        );
-        let dead = mgr.take_dead_headless();
-        assert_eq!(dead.len(), 1, "the finished headless session is reaped");
-        assert!(mgr.is_empty(), "manager empty after reap");
-        assert_eq!(mgr.len(), 0);
-    }
-
-    #[test]
-    fn headless_and_pty_coexist_in_counts() {
-        // The two maps are parallel: a PTY session + a headless session both count.
-        let (_dir, bin) = sleep_fixture("0.5");
-        let mut mgr = SessionManager::new();
-        mgr.create("pty".into(), 80, 24, 100).unwrap();
-        mgr.create_headless("hl".into(), sleep_plan(bin)).unwrap();
-        assert_eq!(mgr.len(), 2, "PTY + headless both counted");
-        assert!(!mgr.is_empty());
-        // Reaping the headless does not touch the PTY map.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while mgr.get_headless("hl").is_some_and(|h| h.is_alive())
-            && std::time::Instant::now() < deadline
-        {
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        let _ = mgr.take_dead_headless();
-        assert_eq!(mgr.len(), 1, "PTY session remains after headless reap");
-        assert!(mgr.get("pty").is_some());
-    }
-
-    #[test]
-    fn create_headless_duplicate_name_across_maps_fails() {
-        let (_dir, bin) = sleep_fixture("0.5");
-        let mut mgr = SessionManager::new();
-        mgr.create("dup".into(), 80, 24, 100).unwrap();
-        // A headless launch cannot reuse a live PTY session's name (capacity-1).
-        assert!(mgr.create_headless("dup".into(), sleep_plan(bin)).is_err());
     }
 
     #[test]

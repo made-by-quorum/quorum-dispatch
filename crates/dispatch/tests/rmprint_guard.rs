@@ -2,11 +2,14 @@
 //! reopen matrix (atomic2-impl-plan.md §5/§6/§7).
 //!
 //! Closes the 4 forbidden flags F = { -p, --print, --output-format, --input-format }
-//! (and their value/attached/cluster forms) on all 3 dispatch-spawn surfaces via the
+//! (and their value/attached/cluster forms) on the dispatch-spawn surfaces via the
 //! ONE shared cluster-aware matcher in `launch.rs`:
 //!   - E2 (`lifecycle.rs run_start`)   — REFUSE, loud teaching error, nothing spawned.
-//!   - H9 (`daemon_headless.rs resolve`) — REFUSE, framed (unit-tested in that module).
 //!   - CF (`launch.rs claude_flags`)    — STRIP+warn (unit-tested there; argv golden here).
+//!
+//! H9 (`daemon_headless.rs resolve`) RETIRED with the P4DB drive-burn — its file is
+//! deleted because the `LaunchHeadless` wire verb it backstopped is burned (A2 §4/§8).
+//! E2 + CF cover every surviving spawn surface (interactive create + revive).
 //!
 //! This file holds: the E2 behavioral surface matrix (driving the REAL `qd` bin
 //! against a jailed HOME — refusal is PRE-spawn so no real claude is needed), the CF
@@ -287,11 +290,14 @@ fn crate_src(rel: &str) -> String {
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {p:?}: {e}"))
 }
 
-/// §5 layer-2: each of the 3 KNOWN forward/source sites references the SHARED
-/// predicate, positioned at the gate. A refactor that moves/drops a guard REDs here
-/// (structural) AND the behavioral matrix above REDs (belt-and-suspenders).
+/// §5 layer-2: each SURVIVING forward/source site references the SHARED predicate,
+/// positioned at the gate. After the P4DB drive-burn the two surviving sites are E2
+/// (`lifecycle.rs run_start`) and CF (`launch.rs claude_flags`); H9
+/// (`daemon_headless.rs resolve`) retired with its deleted file (A2 §4/§8). A
+/// refactor that moves/drops a surviving guard REDs here (structural) AND the
+/// behavioral matrix above REDs (belt-and-suspenders).
 #[test]
-fn structural_canary_three_sites_reference_shared_predicate() {
+fn structural_canary_surviving_sites_reference_shared_predicate() {
     // E2: lifecycle.rs run_start — `forbidden_in(` between the claudeArgs parse and
     // the provider split.
     let life = crate_src("src/bin/qd/verbs/lifecycle.rs");
@@ -309,20 +315,13 @@ fn structural_canary_three_sites_reference_shared_predicate() {
         "E2 guard must sit between the claudeArgs parse and the provider split"
     );
 
-    // H9: daemon_headless.rs resolve — `forbidden_in(` + `bail!` BEFORE
-    // `flags.extend(claude_args`.
-    let dh = crate_src("src/daemon_headless.rs");
-    let guard_at = dh
-        .find("forbidden_in(")
-        .expect("daemon_headless.rs resolve must reference forbidden_in");
-    let bail_at = dh.find("bail!").expect("H9 must framed-bail on a forbidden flag");
-    let extend_at = dh
-        .find("flags.extend(claude_args")
-        .expect("the claude_args append site");
-    assert!(
-        guard_at < extend_at && bail_at < extend_at,
-        "H9 guard (forbidden_in + bail!) must precede flags.extend(claude_args)"
-    );
+    // H9 (daemon_headless.rs resolve) is RETIRED with the P4DB drive-burn: the
+    // `DaemonHeadlessFactory` file is deleted because the `LaunchHeadless` wire verb
+    // it backstopped is itself burned (no `LaunchHeadless { claude_args }` frame can
+    // reach a `resolve()` anymore). E2 + CF still cover every SURVIVING spawn surface
+    // (interactive create + revive), so there is nothing left for H9 to guard — and
+    // no `src/daemon_headless.rs` source to canary. See A2 §4 (H9 retires with its
+    // file) / §8 (the H9 framed-error test moves to the delete class).
 
     // CF: launch.rs claude_flags — `strip_forbidden(` before the return, inside the
     // claude_flags body (above the split-out resolver).

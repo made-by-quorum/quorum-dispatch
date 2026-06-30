@@ -158,7 +158,6 @@ pub(super) async fn client_to_pty(
                 | ClientMsg::SendInput { .. }
                 | ClientMsg::GetHistory { .. }
                 | ClientMsg::CreateDetached { .. }
-                | ClientMsg::LaunchHeadless { .. }
                 | ClientMsg::SubscribeRepublish { .. }
                 | ClientMsg::Hello { .. } => {
                     tracing::debug!("ignoring unexpected client message in session relay");

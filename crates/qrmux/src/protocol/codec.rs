@@ -231,37 +231,6 @@ mod tests {
         }
     }
 
-    /// WP-B5-i: `LaunchHeadless` carries `cwd` + `claude_args` APPENDED at the
-    /// tail. A POPULATED frame round-trips byte-for-byte (the appended fields are
-    /// serialized positionally after `resume_session_id`), AND a DEFAULTED frame
-    /// (`cwd: None`, `claude_args: []`) round-trips to those same defaults — the
-    /// protocol-additive byte-stability the (C) DoD requires. Fix-shaped mutation:
-    /// inserting the new fields BEFORE `resume_session_id` (not at the tail) would
-    /// shift the positional layout and break this round-trip.
-    #[test]
-    fn launch_headless_appended_tail_round_trips() {
-        for (cwd, args) in [
-            (
-                Some("/work/proj".to_string()),
-                vec!["--model".to_string(), "opus".to_string()],
-            ),
-            (None, vec![]),
-        ] {
-            let msg = ClientMsg::LaunchHeadless {
-                name: "alpha".into(),
-                prompt: "do it".into(),
-                resume_session_id: Some("sid-9".into()),
-                cwd: cwd.clone(),
-                claude_args: args.clone(),
-            };
-            let encoded = encode(&msg).unwrap();
-            let (data, consumed) = decode_frame(&encoded).unwrap().unwrap();
-            assert_eq!(consumed, encoded.len());
-            let decoded: ClientMsg = decode(data).unwrap();
-            assert_eq!(decoded, msg, "LaunchHeadless must round-trip (cwd={cwd:?})");
-        }
-    }
-
     #[test]
     fn encode_decode_server_msg() {
         let msg = ServerMsg::SessionList(vec![SessionInfo {

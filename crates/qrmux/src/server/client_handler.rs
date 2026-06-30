@@ -122,12 +122,6 @@ pub struct DaemonCtx {
     /// always `Some` in production. `None` means the guard is a no-op (the
     /// handler unit tests don't drive the lifecycle wait).
     pub in_flight: Option<InFlight>,
-    /// WP-B2b-2b (design §D-2b, the injected "DaemonCtx factory"): resolves a
-    /// `LaunchHeadless` into a spawn plan + the registry-status sink. `None` for
-    /// the bare-qrmux binary / the test fixture (no headless support → the verb is
-    /// refused). Populated by `qd`'s daemon entry. `Arc<dyn ..>` so the per-
-    /// connection `DaemonCtx` stays cheaply `Clone`.
-    pub headless: Option<Arc<dyn crate::headless_session::HeadlessFactory>>,
 }
 
 impl DaemonCtx {
@@ -142,7 +136,6 @@ impl DaemonCtx {
             claim_reset: None,
             ended: None,
             in_flight: None,
-            headless: None,
         }
     }
 
@@ -213,7 +206,6 @@ fn session_addressed_name(msg: &ClientMsg) -> Option<&str> {
         | ClientMsg::GetHistory { name }
         | ClientMsg::KillSession { name }
         | ClientMsg::CreateDetached { name, .. }
-        | ClientMsg::LaunchHeadless { name, .. }
         | ClientMsg::SubscribeRepublish { name } => Some(name),
         _ => None,
     }
@@ -619,96 +611,25 @@ pub async fn handle_client(
                     stream.write_all(&encoded).await?;
                     return Ok(());
                 }
-                ClientMsg::LaunchHeadless {
-                    name,
-                    prompt,
-                    resume_session_id,
-                    cwd,
-                    claude_args,
-                } => {
-                    if let Err(e) = crate::session::validate_session_name(&name) {
-                        let resp = protocol::encode(&ServerMsg::Error(format!("{}", e)))?;
-                        stream.write_all(&resp).await?;
-                        return Ok(());
-                    }
-                    // WP-B2b-2b: the daemon resolves the launch posture + the
-                    // registry-status sink via the injected factory (design §D-2b).
-                    // `None` = a daemon with no headless support (bare qrmux) →
-                    // refuse with a framed error, never a silent no-op.
-                    let factory = match &ctx.headless {
-                        Some(f) => f.clone(),
-                        None => {
-                            let resp = protocol::encode(&ServerMsg::Error(
-                                "headless launch not supported by this daemon".into(),
-                            ))?;
-                            stream.write_all(&resp).await?;
-                            return Ok(());
-                        }
-                    };
-                    let resp = match factory.resolve(
-                        &name,
-                        &prompt,
-                        resume_session_id.as_deref(),
-                        cwd.as_deref(),
-                        &claude_args,
-                    ) {
-                        Ok(plan) => {
-                            let mut mgr = manager.lock().await;
-                            match mgr.create_headless(name.clone(), plan) {
-                                Ok(()) => {
-                                    info!(session = %name, "launched headless session");
-                                    // Reuse the Connected ack (as CreateDetached
-                                    // does) — no new ServerMsg variant, so the
-                                    // protocol-append surface stays the two
-                                    // ClientMsg verbs + the 2a Republish* frames.
-                                    ServerMsg::Connected {
-                                        name,
-                                        new_session: true,
-                                    }
-                                }
-                                Err(e) => ServerMsg::Error(format!("{}", e)),
-                            }
-                        }
-                        Err(e) => ServerMsg::Error(format!(
-                            "headless launch resolve failed for '{}': {}",
-                            name, e
-                        )),
-                    };
-                    let encoded = protocol::encode(&resp)?;
-                    stream.write_all(&encoded).await?;
-                    return Ok(());
-                }
                 ClientMsg::SubscribeRepublish { name } => {
                     if let Err(e) = crate::session::validate_session_name(&name) {
                         let resp = protocol::encode(&ServerMsg::Error(format!("{}", e)))?;
                         stream.write_all(&resp).await?;
                         return Ok(());
                     }
-                    // Register as a socket subscriber of the named headless session.
-                    let rx = {
-                        let mgr = manager.lock().await;
-                        mgr.subscribe_headless(&name)
-                    };
-                    match rx {
-                        Some(rx) => {
-                            // Long-lived relay (like Connect): DROP the in-flight
-                            // guard BEFORE streaming so a detached subscriber cannot
-                            // hold the daemon open past its session's death ([F4]).
-                            // The republish frames stream until the turn ends
-                            // (terminal `RepublishEnd`) or the subscriber lags.
-                            drop(in_flight_guard.take());
-                            crate::republish_hub::relay_subscriber(rx, stream).await?;
-                            return Ok(());
-                        }
-                        None => {
-                            let resp = protocol::encode(&ServerMsg::Error(format!(
-                                "no headless session '{}' to subscribe to",
-                                name
-                            )))?;
-                            stream.write_all(&resp).await?;
-                            return Ok(());
-                        }
-                    }
+                    // P4DB drive-burn: the one-off `claude -p` stream-json producer
+                    // (the headless session map + its republish hub) was removed. No
+                    // daemon hosts a headless republish stream anymore, so this verb
+                    // always answers "no session to subscribe to". The verb is
+                    // RETAINED (not dropped) because the load-bearing `qd wait`
+                    // channel still sends it; on this framed refusal `qd wait` falls
+                    // back to its documented disk-poll (channel-DOWN) path.
+                    let resp = protocol::encode(&ServerMsg::Error(format!(
+                        "no headless session '{}' to subscribe to",
+                        name
+                    )))?;
+                    stream.write_all(&resp).await?;
+                    return Ok(());
                 }
                 _ => {
                     let resp = protocol::encode(&ServerMsg::Error(
@@ -1344,7 +1265,6 @@ mod tests {
             claim_reset: None,
             ended: None,
             in_flight: None,
-            headless: None,
         }
     }
 
@@ -1576,7 +1496,6 @@ mod tests {
             claim_reset: None,
             ended: Some(ended),
             in_flight: None,
-            headless: None,
         };
         let (mut client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
         let manager = Arc::new(Mutex::new(SessionManager::new()));
@@ -1608,7 +1527,6 @@ mod tests {
             claim_reset: Some(claim_reset.clone()),
             ended: None,
             in_flight: None,
-            headless: None,
         };
 
         // Watcher: record whether a pulse arrives within a short window.

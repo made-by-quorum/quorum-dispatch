@@ -106,8 +106,11 @@ pub enum StartRoute {
     /// Human driver → today's interactive native-TUI create path, byte-unchanged.
     /// (No prompt is required — the TUI is driven live.)
     Interactive,
-    /// Agent driver WITH a prompt → the headless stream-json launch (the
-    /// `LaunchHeadless` client helper).
+    /// Agent driver WITH a prompt → P4DB drive-burn: the one-off `claude -p`
+    /// stream-json launch this route once took is REMOVED. The route survives so the
+    /// {driver × prompt} matrix is unchanged, but `run_start` now answers it with a
+    /// routing-level teaching refusal (dispatch does not spawn one-off `-p`
+    /// stream-json runs).
     Headless,
     /// Agent driver with NO prompt → Fork B teaching-error refusal: a headless
     /// `claude -p ""` is a degenerate no-op turn, so a bare agent start with no
@@ -158,16 +161,6 @@ pub fn ls_render_mode(json_flag: bool, driver: Driver) -> LsRender {
         Driver::Agent => LsRender::Json,  // pipe / agent → machine surface
         Driver::Human => LsRender::Table, // TTY human → table
     }
-}
-
-/// `qd resume` is an AGENT verb: **ALWAYS headless** (Fork A full replacement). The
-/// driver is accepted only to PROVE the decision ignores it — even a Human/TTY
-/// context resumes headless (a human re-entering a session is `qd connect`
-/// (WP-B-CS-2), NOT `qd resume`, so there is no `--interactive` escape on resume).
-/// A regression that re-introduces a driver-keyed interactive branch flips one of
-/// these rows and REDs [`tests::resume_is_always_headless_even_at_a_tty`].
-pub fn resume_is_headless(_driver: Driver) -> bool {
-    true
 }
 
 #[cfg(test)]
@@ -354,15 +347,4 @@ mod tests {
         assert_eq!(ls_render_mode(false, Driver::Agent), LsRender::Json);
     }
 
-    // --- D3: resume is ALWAYS headless (Fork A) -----------------------------
-
-    /// Resume ignores the driver: even a Human driver at a TTY resumes headless
-    /// (no `--interactive` escape — a human re-entering is `qd connect`). FIX-SHAPED
-    /// MUTATION: re-introducing a driver-keyed interactive branch (e.g.
-    /// `matches!(driver, Driver::Agent)`) flips the Human row to false and REDs.
-    #[test]
-    fn resume_is_always_headless_even_at_a_tty() {
-        assert!(resume_is_headless(Driver::Human));
-        assert!(resume_is_headless(Driver::Agent));
-    }
 }

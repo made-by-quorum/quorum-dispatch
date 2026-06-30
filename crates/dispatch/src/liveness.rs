@@ -490,11 +490,11 @@ pub trait DaemonLivenessSource {
 /// orphan claude child is still alive renders stale `busy` → the test reds.
 pub fn gated_ls_status_headless(
     status: crate::model::SessionStatus,
-    entrypoint: Option<&str>,
-    name: Option<&str>,
+    _entrypoint: Option<&str>,
+    _name: Option<&str>,
     pid: Option<i64>,
     recorded_start_ms: Option<i64>,
-    daemon_src: &dyn DaemonLivenessSource,
+    _daemon_src: &dyn DaemonLivenessSource,
     src: &dyn LivenessSource,
 ) -> crate::model::SessionStatus {
     use crate::model::SessionStatus;
@@ -506,17 +506,12 @@ pub fn gated_ls_status_headless(
     ) {
         return status;
     }
-    // (ii) headless daemon-down gate FIRST, taking precedence over the claude-pid
-    // classifier. Scoped to headless rows we can name (the socket leaf is the name).
-    if entrypoint == Some(crate::observe::HEADLESS_ENTRYPOINT) {
-        if let Some(name) = name {
-            if daemon_src.daemon_liveness(name) == DaemonLiveness::Down {
-                return SessionStatus::Cold;
-            }
-        }
-    }
-    // Daemon LIVE, or a non-headless / unnameable row: the existing claude-pid
-    // downgrade, unchanged.
+    // P4DB drive-burn (T3): the headless daemon-down gate (the `entrypoint ==
+    // HEADLESS_ENTRYPOINT && daemon Down → Cold` arm) is removed with the
+    // `claude -p` drive — no row is stamped headless anymore. The surviving
+    // behavior is the existing claude-pid downgrade for every row. `_entrypoint`/
+    // `_name`/`_daemon_src` are retained in the signature so callers (e.g.
+    // `qd ls`) need not change.
     gated_ls_status(status, pid, recorded_start_ms, src)
 }
 
@@ -1237,116 +1232,48 @@ mod tests {
         }
     }
 
-    /// (ii) THE DISEASE CURED — red-before/green-after at the gate's pure core.
-    /// The exact stale-busy shape: a HEADLESS row whose owning daemon is DOWN but
-    /// whose orphaned claude child is STILL ALIVE (`AliveSilentValid`, so the
-    /// claude-pid `gated_ls_status` alone would KEEP `busy`). The daemon-down gate
-    /// must take precedence → `Cold`.
-    ///
-    /// FIX-SHAPED MUTATION (red-before): delete the daemon-liveness branch in
-    /// `gated_ls_status_headless` (trust the row unconditionally) → this returns
-    /// the stale `SessionStatus::Busy` and the assert below reds with
-    /// `left: Busy, right: Cold`. Restoring the gate makes it green.
+    /// P4DB drive-burn (T3): the headless daemon-down gate is removed with the
+    /// `claude -p` drive. `gated_ls_status_headless` now ALWAYS delegates to the
+    /// claude-pid `gated_ls_status` — the `entrypoint`/`name`/`daemon_src` inputs no
+    /// longer gate anything. A daemon-DOWN headless-stringed row with a live orphan
+    /// pid therefore KEEPS its claude-pid classification (no longer forced to Cold),
+    /// exactly like every other row; a dead orphan still downgrades to Cold.
     #[test]
-    fn headless_gate_daemon_down_with_live_orphan_is_cold() {
-        let g = gated_ls_status_headless(
-            SessionStatus::Busy,
-            Some(crate::observe::HEADLESS_ENTRYPOINT),
-            Some("hl"),
-            Some(4242),
-            Some(1000),
-            &FakeDaemon(DaemonLiveness::Down),
-            &ConstSrc(LifecycleState::AliveSilentValid), // orphan claude STILL alive
-        );
-        assert_eq!(
-            g,
-            SessionStatus::Cold,
-            "headless + daemon DOWN → Cold even though the orphan claude pid is alive \
-             (not stale-busy)"
-        );
-    }
-
-    /// (ii) DAEMON-LIVE PATH UNCHANGED: a headless row whose daemon is UP keeps the
-    /// EXISTING claude-pid behavior — alive orphan keeps `busy`; dead orphan still
-    /// downgrades to `Cold` via the unchanged `gated_ls_status` leg.
-    #[test]
-    fn headless_gate_daemon_up_delegates_to_claude_pid() {
-        // daemon UP + orphan alive → busy preserved (the daemon-live path).
+    fn gated_ls_status_headless_delegates_to_claude_pid() {
+        // daemon DOWN + "headless" entrypoint + live orphan → delegated busy (the
+        // burned gate would have forced Cold; the surviving behavior keeps busy).
         assert_eq!(
             gated_ls_status_headless(
                 SessionStatus::Busy,
-                Some(crate::observe::HEADLESS_ENTRYPOINT),
+                Some("headless"),
                 Some("hl"),
-                Some(7),
+                Some(4242),
                 Some(1000),
-                &FakeDaemon(DaemonLiveness::Up),
+                &FakeDaemon(DaemonLiveness::Down),
                 &ConstSrc(LifecycleState::AliveSilentValid),
             ),
             SessionStatus::Busy,
-            "daemon UP + live orphan → unchanged busy",
+            "post-burn: always delegates to the claude-pid gate (live orphan keeps busy)",
         );
-        // daemon UP + orphan dead → the existing claude-pid gate still downgrades.
+        // dead orphan → the claude-pid gate downgrades (unchanged delegation).
         assert_eq!(
             gated_ls_status_headless(
                 SessionStatus::Busy,
-                Some(crate::observe::HEADLESS_ENTRYPOINT),
+                Some("headless"),
                 Some("hl"),
                 Some(7),
                 Some(1000),
-                &FakeDaemon(DaemonLiveness::Up),
+                &FakeDaemon(DaemonLiveness::Down),
                 &ConstSrc(LifecycleState::Gone),
             ),
             SessionStatus::Cold,
-            "daemon UP + dead orphan → claude-pid gate downgrades (unchanged)",
+            "dead orphan → claude-pid gate downgrades to Cold",
         );
-    }
-
-    /// (ii) SCOPE: a NON-headless (interactive) row is NEVER daemon-down-gated —
-    /// even with the daemon DOWN it delegates straight to the claude-pid gate, so a
-    /// live interactive pid keeps its status. (Interactive liveness is the mux-pane
-    /// signal, not this per-session socket — lead RULING.)
-    #[test]
-    fn non_headless_row_skips_daemon_gate() {
-        assert_eq!(
-            gated_ls_status_headless(
-                SessionStatus::Busy,
-                None, // interactive — no headless entrypoint
-                Some("tui"),
-                Some(7),
-                Some(1000),
-                &FakeDaemon(DaemonLiveness::Down),
-                &ConstSrc(LifecycleState::AliveSilentValid),
-            ),
-            SessionStatus::Busy,
-            "non-headless row is not daemon-gated (live pid keeps busy)",
-        );
-    }
-
-    /// (ii) FAIL-OPEN guards: a headless row with NO name (cannot form the socket
-    /// leaf) falls through to the claude-pid gate (never hidden on an unprobeable
-    /// daemon); a non-live status is never re-probed/resurrected.
-    #[test]
-    fn headless_gate_fail_open_and_nonlive() {
-        // headless + daemon DOWN but NO name → cannot probe → claude-pid gate (alive
-        // orphan keeps busy).
-        assert_eq!(
-            gated_ls_status_headless(
-                SessionStatus::Busy,
-                Some(crate::observe::HEADLESS_ENTRYPOINT),
-                None,
-                Some(7),
-                Some(1000),
-                &FakeDaemon(DaemonLiveness::Down),
-                &ConstSrc(LifecycleState::AliveSilentValid),
-            ),
-            SessionStatus::Busy,
-            "no name → fail-open to the claude-pid gate",
-        );
-        // already cold → never probed/resurrected even with daemon DOWN.
+        // already non-live → returned unchanged (never re-probed).
         assert_eq!(
             gated_ls_status_headless(
                 SessionStatus::Cold,
-                Some(crate::observe::HEADLESS_ENTRYPOINT),
+                None,
                 Some("hl"),
                 Some(7),
                 Some(1000),
