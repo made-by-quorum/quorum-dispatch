@@ -23,9 +23,12 @@
 //!      vacuous "zero survivors" (the mirror of the vacuous green). The tier-a
 //!      oracle rules whether an escaped descendant is in/out of threat model.
 //!
-//! Real-daemon classes (1,2,4a) gate on `QD_CODEX_LIVE=1` (they spawn `codex
-//! app-server`); the connectionless classes (3, 4b) are always-on. Evidence per
-//! class under `$CCONF_EVIDENCE_DIR/<class>/` (round dir set by the cargo).
+//! ALL chaos tests are `#[ignore]` — they NEVER run under a plain `cargo test`.
+//! Run them deliberately only: `cargo test -- --ignored` (real-daemon classes
+//! 1,2,4a additionally gate on `QD_CODEX_LIVE=1` since they spawn `codex
+//! app-server`). This hard-gate (Pete, 2026-06-30) keeps the destructive
+//! group-reaping path off any acceptance/zero-NEW run. Evidence per class under
+//! `$CCONF_EVIDENCE_DIR/<class>/` (round dir set by the cargo).
 
 mod common;
 use common::live::*;
@@ -164,6 +167,7 @@ impl Drop for GroupReaper {
 // ===========================================================================
 
 #[test]
+#[ignore = "destructive chaos — never auto-run; deliberate only: cargo test -- --ignored (+ QD_CODEX_LIVE=1)"]
 fn chaos_reconnect_across_invocations() {
     if !live() {
         eprintln!("QD_CODEX_LIVE != 1 — skipping class-1 reconnect (needs a live daemon)");
@@ -251,6 +255,7 @@ fn chaos_reconnect_across_invocations() {
 // ===========================================================================
 
 #[test]
+#[ignore = "destructive chaos — never auto-run; deliberate only: cargo test -- --ignored (+ QD_CODEX_LIVE=1)"]
 fn chaos_crash_rebind_no_stale_endpoint_latch() {
     if !live() {
         eprintln!("QD_CODEX_LIVE != 1 — skipping class-2 crash+rebind (needs a live daemon)");
@@ -373,6 +378,7 @@ fn chaos_crash_rebind_no_stale_endpoint_latch() {
 // ===========================================================================
 
 #[test]
+#[ignore = "destructive chaos — never auto-run; deliberate only: cargo test -- --ignored (+ QD_CODEX_LIVE=1)"]
 fn chaos_daemon_gone_wait_fallback() {
     let jail = make_jail("chaos3");
     let codex_home = jail.join("codex-home");
@@ -496,6 +502,7 @@ fn chaos_daemon_gone_wait_fallback() {
 // ===========================================================================
 
 #[test]
+#[ignore = "destructive chaos — never auto-run; deliberate only: cargo test -- --ignored (+ QD_CODEX_LIVE=1)"]
 fn chaos_pgid_teardown_reaps_ingroup_child() {
     if !live() {
         eprintln!("QD_CODEX_LIVE != 1 — skipping class-4a in-group teardown (needs a live daemon)");
@@ -565,6 +572,7 @@ fn chaos_pgid_teardown_reaps_ingroup_child() {
 // ===========================================================================
 
 #[test]
+#[ignore = "destructive chaos — never auto-run; deliberate only: cargo test -- --ignored (+ QD_CODEX_LIVE=1)"]
 fn chaos_pgid_escape_reach_boundary_characterization() {
     let bundle = chaos_bundle("class4b-pgid-escape");
     let reap_pids = Arc::new(Mutex::new(Vec::<i64>::new()));
