@@ -77,13 +77,13 @@ fn acp_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
 /// `qd resume <session>` — cold-session relaunch.
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
-    // D3 (Fork A): `--no-zmx` / `--no-attach` are the dropped interactive/PTY
-    // escapes — resume is ALWAYS headless now, so they are no longer read here
-    // (the flags stay PARSE-ACCEPTED in cli.rs so scripted callers don't break;
-    // they are inert on the headless route). `--alt-screen`/`--inline` (render) and
-    // the zmx render mode are likewise interactive-TUI concerns, not consulted on
-    // the headless path.
-    let zmx_name_opt = m.get_one::<String>("zmx-name").map(|s| s.as_str());
+    // P4DB Phase A: `--no-zmx` / `--no-attach` / `--zmx-name` are the dropped
+    // interactive/PTY escapes — they stay PARSE-ACCEPTED in cli.rs so scripted
+    // callers don't break, but `qd resume` now revives DETACHED through the shared
+    // `revive_claude` seam (which derives its own zmx name), so they are inert here.
+    // `--alt-screen`/`--inline` (render) ARE consulted: the seam launches a native
+    // claude pane whose render mode is a launch-time birth property, resolved via the
+    // shared `common::resolve_render_mode` below (identical to `qd connect`/`qd start`).
     let cwd_override = m.get_one::<String>("cwd").map(|s| s.as_str());
 
     let env = RealEnv;
@@ -213,76 +213,40 @@ pub fn run(m: &ArgMatches) -> i32 {
         return 1;
     }
 
-    // --- D3 (WP-B-CS-1, Fork A): qd resume is an AGENT verb — ALWAYS headless. ---
-    // FULL REPLACEMENT of the zmx/PTY relaunch + interactive attach: route to the
-    // per-session qrmux daemon's LaunchHeadless with resume_session_id = the
-    // session's provider id, so the revived session rides the headless stream-json
-    // channel (the §6.0 intent — an agent-driven session is NOT on a PTY/zmx
-    // surface). The live-ownership lock / id-collision / must-be-cold / cwd
-    // preflight ABOVE is preserved (non-negotiable). There is NO `--interactive`
-    // escape here, even at a TTY: a human re-entering a session is `qd connect`
-    // (WP-B-CS-2), not `qd resume` (`driver::resume_is_headless` documents the
-    // always-headless decision; the resolver is intentionally not consulted).
+    // --- P4DB Phase A: RE-POINT qd resume onto the shared long-lived revive seam. ---
+    // Re-home off the one-off `-p` stream-json drive (`launch_headless_embedded` with
+    // prompt `""` + cwd `None`) ONTO `revive_claude`, the SAME seam `qd connect`'s
+    // cold arm (connect.rs:65) and WP-B-CS-2's `revive_to_drive` (lifecycle.rs:371)
+    // already ride. It relaunches a native-TUI `claude --resume <id>` (provider seam,
+    // NO `-p`/stream-json), detached + ready-gated (EventBootWaiter::wait_ready) so a
+    // boot that never confirms FAILS LOUD (nonzero + actionable) — the silent-success
+    // bug is closed by construction, and the fail-loud already lives inside the seam.
     //
-    // GUARDRAIL 1 (do not orphan-rot): the native-interactive zmx/PTY revive
-    // helpers (`prepare_claude_resume_env` / `run_detached_revive` / `revive_claude`)
-    // are NOT dead and need NO `#[allow(dead_code)]` — `qd connect` already calls
-    // `revive_claude` (connect.rs:65 → it uses both other helpers), and WP-B-CS-2's
-    // turn-boundary cutover reuses exactly that native-TUI revive+attach. They are
-    // KEPT in place (+ their unit tests stay green), never deleted.
+    // REVIVE DETACHED (A3 §4 clause 5): `qd resume` does NOT attach a TTY — `qd
+    // connect` is the attach path. The seam returns a `ReviveHandle`; resume reports
+    // the addressable session and leaves attach to the human (do NOT mux.attach here).
     //
-    // GUARDRAIL 2 (golden delta): the a5_lifecycle / a5rec_resume SUBPROCESS goldens
-    // (separate harness, NOT the cargo floor) encode resume's OLD zmx/attach
-    // behavior; this (B) spec deliberately changes it. The delta is recorded in the
-    // WP-B-CS-1 response for the red-team + WP-B7 integration; the cargo floor stays
-    // green (the gated helpers keep their unit tests live).
+    // cwd (A3 clause 4): pass the parsed `--cwd` override; the seam resolves the
+    // recorded `session.cwd` + the override via `resolve_resume_cwd` and threads the
+    // result all the way to `mux.run_detached` — fixing the old `-p` path's cwd `None`
+    // (which silently inherited the daemon cwd). render: the shared `resolve_render_mode`
+    // (flag > config > inline), identical to `qd connect`/`qd start`.
     //
-    // IDENTITY/ADDRESSABILITY DEFERRED (Fork C escape hatch, lead + supervisor-
-    // ratified → B5): this launches the resumed headless session but does not yet
-    // mint/bind a registry identity or a daemon-flipped status row, and the prompt
-    // is empty (revive-to-headless; the resumed turn's input + per-session cwd are
-    // daemon-side, deferred). Launched-but-not-yet-addressable until B5.
-    // Consult the single source of resume's I/O policy (driver::resume_is_headless),
-    // which ignores the driver — wiring it HERE (not hard-coding `true`) means a
-    // regression that makes resume driver-conditional is caught at this call site,
-    // not just in the unit test. resolve_driver_real may read Human at a TTY; the
-    // policy overrides it (resume is never interactive — that is `qd connect`).
-    if !crate::driver::resume_is_headless(crate::driver::resolve_driver_real(
-        crate::driver::DriverOverride::None,
-        &env,
-    )) {
-        // Structurally unreachable today; the honest fall-through if the policy ever
-        // flips — refuse rather than silently mis-route to a retired interactive path.
-        eprintln!("qd resume: internal: resume I/O policy is not headless — use \"qd connect\".");
-        return 1;
-    }
-
-    let name = derive_zmx_name(zmx_name_opt, session.name.as_deref(), &session.session_id);
-    if let Some(err) = validate_session_name(&name) {
-        eprintln!("ERROR: {err}");
-        return 1;
-    }
-    println!(
-        "Resuming session \"{name}\" (headless) from {}...",
-        dispatch::fmt::truncate_id_default(&session.session_id)
-    );
-    match dispatch::embedded_mux::launch_headless_embedded(
-        &home,
-        &env,
-        &name,
-        "",
-        Some(&session.session_id),
-        // WP-B5-i threads per-session cwd/claudeArgs on the START path only; resume
-        // keeps today's behaviour (the revived headless turn inherits the daemon's
-        // cwd, no extra passthrough flags) — `None`/empty preserve it byte-for-byte.
-        None,
-        &[],
-    ) {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("qd resume: {e}");
-            1
+    // The always-headless policy (`driver::resume_is_headless`, driver.rs:169) is no
+    // longer a router to the drive; its removal is gated to a later phase, so it is
+    // simply no longer consulted here.
+    let render = common::resolve_render_mode(m, &env);
+    match revive_claude(&session, cwd_override, render) {
+        Ok(handle) => {
+            println!(
+                "Resumed session \"{}\" from {} (detached); attach with \"qd connect {}\".",
+                handle.zmx_name,
+                dispatch::fmt::truncate_id_default(&session.session_id),
+                handle.zmx_name
+            );
+            0
         }
+        Err(code) => code,
     }
 }
 
