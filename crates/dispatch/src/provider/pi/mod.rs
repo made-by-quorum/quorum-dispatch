@@ -34,6 +34,7 @@ use crate::provider::{
     Hosting, InjectError, LaunchPlan, LaunchRequest, Provider, ProviderFx, SessionKey,
 };
 
+pub mod chaos;
 pub mod conformance;
 pub mod daemon;
 pub mod pin;
