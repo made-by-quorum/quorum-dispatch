@@ -60,6 +60,8 @@ session prints how to revive it (`qd resume <session>`). A codex session is
 daemon-hosted (no terminal): it points you at `qd send:relay` / `qd resume`.
 
 Options:
+  --no-attach   Revive a cold session to a persistent daemon and return 0
+                WITHOUT attaching a TTY (headless — e.g. a systemd ExecStart)
   --alt-screen  Fullscreen (alt-screen) rendering if this connect revives the
                 session (default: inline, so phone/SSH attach can scroll)
   --inline      Force inline rendering (overrides `render-default = alt-screen`)

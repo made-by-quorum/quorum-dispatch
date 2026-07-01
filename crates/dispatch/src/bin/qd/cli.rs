@@ -143,6 +143,12 @@ fn cmd_connect() -> Command {
         .about("Get into a session (live Claude → terminal; cold/codex → how to revive)")
         .override_help(help::CONNECT)
         .arg(positional("session"))
+        // Revive a cold session into a PERSISTENT, relay-serving daemon and return
+        // 0 WITHOUT attaching a TTY — the headless entry a systemd ExecStart calls.
+        .arg(long_flag(
+            "no-attach",
+            "Revive to a persistent daemon without attaching a TTY (headless)",
+        ))
         .args(render_mode_flags())
 }
 

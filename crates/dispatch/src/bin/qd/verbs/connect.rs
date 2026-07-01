@@ -19,6 +19,8 @@ use std::path::PathBuf;
 
 use clap::ArgMatches;
 
+use dispatch::model::SessionStatus;
+
 use super::common;
 use super::lifecycle;
 use super::lifecycle::AttachOutcome;
@@ -28,6 +30,11 @@ use super::resume;
 /// mechanic (provider dispatch + cold-vs-live). No `--json` (interactive verb).
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
+    // --no-attach (headless revive): revive a COLD session into a PERSISTENT,
+    // relay-serving daemon and return 0 WITHOUT attaching a TTY — the entry a
+    // systemd ExecStart calls. UNSET ⇒ the block below is skipped entirely and the
+    // interactive attach path stays byte-identical to today.
+    let no_attach = m.get_flag("no-attach");
     // punch item 7: per-session render mode for the auto-revive path (flag >
     // render-default config > inline). A LIVE attach is unaffected — the
     // property is launch-time only.
@@ -58,6 +65,52 @@ pub fn run(m: &ArgMatches) -> i32 {
     // borrow-shaped (it took `&Session` from the old slice-borrowing resolver), so
     // re-borrow here — the mechanical owned→ref tweak the plan flagged.
     let session = &session;
+
+    // --no-attach: revive-to-persistent-daemon (or report already-live) and return
+    // 0 WITHOUT ever attaching a TTY. We branch BEFORE `attach_resolved` because
+    // that shared mechanic attaches a live pane INTERNALLY before returning — so
+    // honoring "do not attach" means never entering it for a live row. A COLD row
+    // (status Cold; Killed rows were rejected above) routes to the SAME
+    // `revive_claude` seam connect uses today, then we SKIP `mux.attach`.
+    if no_attach {
+        // PROVIDER GUARD: the --no-attach revive/report logic is claude-code-SHAPED
+        // — `revive_claude` builds a `claude … server:relay --resume <sid>` argv, and
+        // the already-live branch below assumes a mux pane serving the relay. A
+        // codex / acp/* / opencode / daemon-hosted (non-claude-code) row would
+        // MIS-ROUTE: a Cold row fed into `revive_claude` (wrong argv shape), a live
+        // one falsely reported "already live". Every claude-code row carries the
+        // literal provider "claude-code" (model.rs: the join defaults absent-on-disk
+        // to it); codex ("codex"), acp ("acp/*"), opencode, and unknown are all a
+        // DIFFERENT provider/hosting (see lifecycle::attach_resolved / kill.rs
+        // dispatch). Refuse LOUDLY and return non-zero BEFORE the revive/report
+        // logic — never proceed for a non-claude-code session.
+        if session.provider != "claude-code" {
+            let name = session.name.as_deref().unwrap_or(&session.session_id);
+            eprintln!(
+                "qd connect --no-attach: \"{name}\" is a {} session; --no-attach supports only claude-code sessions.",
+                session.provider
+            );
+            return 1;
+        }
+        // Already-live claude pane already serves the relay — report and stop; do
+        // NOT attach (idle/busy/shell are the live states; cold falls through).
+        if matches!(
+            session.status,
+            SessionStatus::Idle | SessionStatus::Busy | SessionStatus::Shell
+        ) {
+            let name = session.name.as_deref().unwrap_or(&session.session_id);
+            println!("\"{name}\" is already live (persistent); not attaching.");
+            return 0;
+        }
+        return match resume::revive_claude(session, None, render) {
+            Ok(handle) => {
+                println!("Revived \"{}\" (persistent, no attach)", handle.zmx_name);
+                0
+            }
+            // revive_claude already printed its own loud `qd connect:`-prefixed error.
+            Err(code) => code,
+        };
+    }
 
     match lifecycle::attach_resolved("connect", session) {
         AttachOutcome::Done(code) => code,
