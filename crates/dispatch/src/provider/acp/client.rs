@@ -1,343 +1,438 @@
-//! `provider/acp/client.rs` — [`AcpHost`], the LIVE headless ACP driver: the real
-//! `claude-code-acp` bridge subprocess + the SC-5 single-reader demux + the SC-1
-//! outbound queue + the Pete's-view transcript tee. It IMPLEMENTS the
-//! [`AcpClient`](super::rpc::AcpClient) transport CONTRACT (the verb layer hands a
-//! connected `&AcpHost` into [`crate::provider::ProviderFx::acp_client`], ADD-5) and
-//! provides the [`AcpTurnObserver`](super::completion::AcpTurnObserver) the
-//! `--wait` loop wraps in an [`AcpTurnCompletion`](super::completion::AcpTurnCompletion).
+//! `provider/acp/client.rs` — [`AcpHost`], the LIVE headless ACP driver, now built on the
+//! **official `agent-client-protocol` crate (=1.0.1)** as the inner ACP client, strictly
+//! BEHIND the retained [`AcpClient`](super::rpc::AcpClient) provider seam. The hand-rolled
+//! spawn + SC-5 single-reader demux + JSON-RPC framing + response correlation +
+//! reverse-request answering are REPLACED by the crate; the SC-1 outbound queue, the SC-2c
+//! progress classifier, the Pete's-view transcript tee, and the SC-2a terminal observation
+//! are RETAINED, sitting above the crate exactly as they sat above the old reader thread.
+//! The seam (`rpc.rs` trait + normalized `AcpEvent`/`AcpError`/`StopReason`/`InitializeResult`)
+//! is unchanged, so `wire.rs`/`queue.rs`/`completion.rs`/`ladder.rs` and every consumer above
+//! `AcpClient` are untouched.
 //!
-//! **Why a reader THREAD (the one structural divergence from the codex
-//! `WsAppServer` precedent).** Codex reads inline because a `TcpStream` honors
-//! `set_read_timeout`, so a verb can block-read-with-deadline on the one socket.
-//! The ACP bridge speaks over a stdio PIPE, and a pipe has no portable read
-//! deadline — so the SC-5 single reader is a dedicated background TASK that owns
-//! `ChildStdout`, parses each ndjson line into a [`RawFrame`], and republishes it
-//! onto an `mpsc` BUS (exactly the spec's "single-reader demux task republishing
-//! `AcpEvent` onto a per-session bus"). The host stays single-threaded / `!Sync`
-//! (its mutable state is one [`RefCell`]); the reader thread touches NO host state
-//! — it only pumps `stdout → channel`. The host (on its own thread) drains the bus
-//! in [`AcpClient::next_update`], doing all the queue/progress/transcript bookkeeping
-//! and the rpc-id→turn correlation there, so the SC-2b release ordering is preserved:
-//! because notifications and the `session/prompt` response travel IN ORDER on the one
-//! stdout stream (STEP-0), the single reader necessarily enqueues a turn's trailing
-//! `session/update`s before its terminal response, and `next_update` processes them
-//! in that order.
+//! **Structure — a background connection thread bridged to a sync `!Sync` host.** The retained
+//! `AcpClient` contract is synchronous and blocking (`&self`, `next_update(timeout)`), but the
+//! crate's connection is async (`Client::builder()…connect_with(transport, main_fn)` — one
+//! self-contained future; the crate is runtime-agnostic, using `async-process` + `futures`, so
+//! we drive it with `futures::executor::block_on` on a dedicated thread, NO tokio). So:
+//!   * a **connection thread** spawns the bridge child ITSELF (via `async-process`) — keeping
+//!     `env_remove(BRIDGE_ENV_STRIP)` expressible (MF1; a no-op for opencode which has no
+//!     nesting guard, load-bearing for the downstream claude atomic) and `.stderr(inherit)` →
+//!     the daemon's `acp-<name>.log` (MF3; the crate's convenience `AcpAgent` pipes+hides it) —
+//!     hands the child's byte streams to the crate's custom `ByteStreams` transport, and runs
+//!     `connect_with`. Its `main_fn` is a command loop owning the `ConnectionTo`.
+//!   * the **sync host** marshals `initialize`/`new_session`/`load_session`/`prompt`/`cancel`
+//!     to the connection thread over a `futures` mpsc, and reads normalized `AcpEvent`s back off
+//!     a single ordered `std::sync::mpsc` **bus**. It owns the SC-1 queue, the progress
+//!     classifier, the transcript tee, and `last_obs` — single-threaded behind one `RefCell`.
 //!
-//! Wire law (STEP-0, `~/work/acp-cc-coord/STEP0-FINDING.md`): newline-delimited
-//! JSON-RPC **2.0** (carries `"jsonrpc":"2.0"`, UNLIKE the codex bare frames) over
-//! stdio. Methods `initialize`, `session/new`, `session/prompt`, `session/cancel`,
-//! `session/load`; `session/update` notifications; reverse requests
-//! (`session/request_permission`, `fs/*`, `terminal/*`) the client MUST answer or a
-//! turn that needs one wedges.
+//! **SC-2b terminal ordering (SRT-2/MF2), re-established above the crate.** The crate delivers
+//! `session/update`s via `on_receive_notification` callbacks AND the `session/prompt` result via
+//! the awaited request — two sources. We funnel BOTH into the ONE ordered bus: the notification
+//! callback pushes each `Update` **synchronously, inline** in the crate's dispatch loop (the loop
+//! blocks on the callback before reading the next frame — verified in the 1.0.1 dispatch actor),
+//! and the prompt result — routed via `on_receiving_result`, which can only fire AFTER the
+//! response frame is dispatched, i.e. after every notification frame that preceded it on the wire
+//! — pushes `Terminal` onto the SAME bus. FIFO on the bus therefore equals wire order: a turn's
+//! trailing `agent_message_chunk`s are drained before its terminal `StopReason`, so Pete's view
+//! is never truncated. (Proven by the fixture-forced ordering test, NOT by opencode's incidental
+//! timing.)
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self as std_mpsc, RecvTimeoutError};
+use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use serde_json::{json, Value};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::executor::block_on;
+use futures::StreamExt;
+use serde_json::Value;
+
+use agent_client_protocol::schema::v1::{
+    CancelNotification, ClientCapabilities, ContentBlock, Implementation, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, NewSessionRequest, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SessionNotification, StopReason as CrateStopReason,
+};
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
 
 use super::completion::{AcpTurnObservation, AcpTurnObserver, TurnProgress};
 use super::queue::OutboundQueue;
-use super::rpc::{
-    AcpClient, AcpError, AcpEvent, InitializeResult, SessionId, StopReason, TurnId,
-};
+use super::rpc::{AcpClient, AcpError, AcpEvent, InitializeResult, SessionId, StopReason, TurnId};
 use super::BRIDGE_ENV_STRIP;
 
 /// Default SC-1 outbound-queue depth (waiting backlog, excluding the in-flight turn).
 const DEFAULT_QUEUE_CAPACITY: usize = 16;
 
-/// The ACP protocol version this client speaks (STEP-0: the bridge negotiates v1).
-const PROTOCOL_VERSION: i64 = 1;
+// ===========================================================================
+// sync host <-> connection thread messages
+// ===========================================================================
 
-/// One classified inbound line off the bridge's stdout, produced by the reader
-/// thread and consumed on the host thread. Lower-level than [`AcpEvent`]: the host
-/// owns the rpc-id→turn mapping, so the reader emits the raw rpc id and the host
-/// translates a [`Self::Response`]/[`Self::ErrorResponse`] into an
-/// [`AcpEvent::Terminal`]/[`AcpEvent::TerminalError`] after correlating it.
-#[derive(Debug)]
-enum RawFrame {
-    /// A `session/update` notification (`method == "session/update"`, no id).
-    Update {
-        session: String,
-        kind: String,
-        update: Value,
+/// A command marshalled from a sync `AcpClient` method to the connection thread's command
+/// loop (which owns the crate `ConnectionTo`). Handshake commands carry a reply channel the
+/// sync side blocks on; `Prompt`/`Cancel` are fire-and-forget (their results surface as
+/// [`BusEvent`]s / are best-effort notifications).
+enum Command {
+    Initialize(std_mpsc::Sender<Result<InitializeResult, String>>),
+    NewSession {
+        cwd: String,
+        reply: std_mpsc::Sender<Result<String, String>>,
     },
-    /// A JSON-RPC response `{"id":N,"result":..}` (no `method`).
-    Response { id: u64, result: Value },
-    /// A JSON-RPC error response `{"id":N,"error":{..}}` (no `method`).
-    ErrorResponse { id: u64, message: String },
-    /// A reverse REQUEST from the agent (`method` + `id`) — e.g.
-    /// `session/request_permission` — which the host MUST answer.
-    ReverseRequest { id: Value, method: String },
-    /// stdout reached EOF / a fatal read error — the bridge child is gone.
+    LoadSession {
+        session_id: String,
+        cwd: String,
+        reply: std_mpsc::Sender<Result<(), String>>,
+    },
+    /// Issue `session/prompt` for the already-attributed `turn`. Its terminal surfaces as a
+    /// [`BusEvent::Terminal`]/[`BusEvent::TerminalError`] carrying the SAME `turn`.
+    Prompt {
+        session: String,
+        turn: TurnId,
+        text: String,
+    },
+    Cancel {
+        session: String,
+    },
+    /// Clean teardown: the command loop returns, the crate connection tears down, the child
+    /// is killed, the thread exits.
+    Shutdown,
+}
+
+/// One normalized event off the crate connection, pushed onto the single ordered bus the sync
+/// host drains in [`AcpClient::next_update`]. The crate-backed analog of the old reader thread's
+/// `RawFrame`, but already normalized (the crate owns framing + response correlation, and the
+/// turn id is carried on the terminal so no rpc-id map is needed).
+enum BusEvent {
+    Update {
+        session: SessionId,
+        kind: String,
+        payload: Value,
+    },
+    Terminal {
+        session: SessionId,
+        turn: TurnId,
+        stop: StopReason,
+    },
+    TerminalError {
+        session: SessionId,
+        turn: TurnId,
+        message: String,
+    },
+    /// The crate connection ended abnormally (transport lost / child gone). Surfaced as
+    /// `AcpError::Closed` + a `TransportLost` observation.
     Closed(String),
 }
 
-/// Classify one parsed inbound JSON value into a [`RawFrame`]. `None` = a frame we
-/// deliberately ignore (an unknown notification: not part of the CC ACP surface).
-fn classify(v: Value) -> Option<RawFrame> {
-    let obj = v.as_object()?;
-    let has_method = obj.contains_key("method");
-    let id = obj.get("id").cloned();
-
-    // No `method` → it is a response (success or error) to one of OUR requests.
-    if !has_method {
-        let idn = id.as_ref().and_then(Value::as_u64)?;
-        if let Some(err) = obj.get("error") {
-            let message = err
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown jsonrpc error")
-                .to_string();
-            return Some(RawFrame::ErrorResponse { id: idn, message });
-        }
-        let result = obj.get("result").cloned().unwrap_or(Value::Null);
-        return Some(RawFrame::Response { id: idn, result });
+/// Map the crate wire `StopReason` to the retained seam [`StopReason`]. Unknown (the crate enum
+/// is `#[non_exhaustive]`) → `None`: an unmappable terminal is a degraded/failed turn, never a
+/// clean completion.
+fn map_stop(s: CrateStopReason) -> Option<StopReason> {
+    match s {
+        CrateStopReason::EndTurn => Some(StopReason::EndTurn),
+        CrateStopReason::MaxTokens => Some(StopReason::MaxTokens),
+        CrateStopReason::MaxTurnRequests => Some(StopReason::MaxTurnRequests),
+        CrateStopReason::Refusal => Some(StopReason::Refusal),
+        CrateStopReason::Cancelled => Some(StopReason::Cancelled),
+        _ => None,
     }
-
-    let method = obj.get("method").and_then(Value::as_str)?.to_string();
-
-    // `method` + `id` → a server-initiated REQUEST awaiting our response.
-    if let Some(id) = id {
-        return Some(RawFrame::ReverseRequest { id, method });
-    }
-
-    // `method`, no id → a notification. Only `session/update` is in our surface.
-    if method == "session/update" {
-        let params = obj.get("params")?;
-        let session = params
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let update = params.get("update").cloned().unwrap_or(Value::Null);
-        let kind = update
-            .get("sessionUpdate")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        return Some(RawFrame::Update {
-            session,
-            kind,
-            update,
-        });
-    }
-    None
 }
 
-/// The reader thread body: own `stdout`, parse each ndjson line, republish onto the
-/// bus. The ONE consumer of the bridge's stdout (SC-5). Exits on EOF, a read error,
-/// or the host dropping the receiver.
-fn reader_loop(stdout: ChildStdout, tx: Sender<RawFrame>) {
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                let _ = tx.send(RawFrame::Closed("stdout eof".to_string()));
-                return;
-            }
-            Ok(_) => {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let value: Value = match serde_json::from_str(trimmed) {
-                    Ok(v) => v,
-                    // Tolerate a non-JSON line (a stray bridge log on stdout) rather
-                    // than wedging the stream.
-                    Err(_) => continue,
-                };
-                if let Some(frame) = classify(value) {
-                    if tx.send(frame).is_err() {
-                        return; // host dropped the receiver
+/// Map the crate `initialize` response to the retained [`InitializeResult`]. `auth_required` is
+/// always `false` (STEP-0 / the opencode probe: `authMethods` is advertised even when a usable
+/// credential is present — a real auth failure surfaces later as a JSON-RPC error to
+/// `session/new`/`session/prompt`, i.e. a `TerminalError`, not here).
+fn map_initialize(r: InitializeResponse) -> InitializeResult {
+    InitializeResult {
+        protocol_version: r.protocol_version.as_u16() as i64,
+        agent_name: r.agent_info.as_ref().map(|i| i.name.clone()),
+        agent_version: r.agent_info.as_ref().map(|i| i.version.clone()),
+        auth_required: false,
+    }
+}
+
+// ===========================================================================
+// the connection thread
+// ===========================================================================
+
+/// Why the connection thread ended — drives the (W) confirmed-dead signal.
+enum DeadCause {
+    /// A clean `Command::Shutdown` (the command loop returned Ok) — NOT dead.
+    CleanShutdown,
+    /// The bridge child process EXITED (the authoritative confirmed-dead signal — the async
+    /// analog of the old `child.try_wait()`).
+    ChildExited,
+    /// The spawn failed, or the crate connection errored (transport lost) — treated as dead.
+    Error(String),
+}
+
+/// The connection thread body: spawn the bridge child, hand its byte streams to the crate's
+/// `ByteStreams` transport, register the reverse-request + notification handlers, and run the
+/// command loop as `connect_with`'s `main_fn`. It RACES the connection future against the child's
+/// actual process exit (`child.status()`): a child exit is the authoritative (W) confirmed-dead
+/// signal even if `connect_with` does not return promptly when the child EOFs while the command
+/// loop idles. On child-exit / connection-error it flags `dead` and posts `Closed` so the sync
+/// host + the `serve` self-terminate guard see the death; a clean shutdown does neither.
+fn run_connection(
+    program: String,
+    args: Vec<String>,
+    cwd: PathBuf,
+    cmd_rx: UnboundedReceiver<Command>,
+    bus_tx: std_mpsc::Sender<BusEvent>,
+    dead: Arc<AtomicBool>,
+) {
+    let bus_end = bus_tx.clone();
+    let cause: DeadCause = block_on(async move {
+        // Spawn the bridge child OURSELVES (as the old `AcpHost::spawn` did) so the nesting-guard
+        // strip stays expressible (MF1) and stderr routes to the daemon log (MF3) — NOT the
+        // crate's convenience `AcpAgent`, which can only ADD env and pipes+hides stderr.
+        let mut cmd = async_process::Command::new(&program);
+        cmd.args(&args)
+            .current_dir(&cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            // Bridge stderr → our stderr (the daemon's acp-<name>.log): visible diagnostics,
+            // never on the protocol stream. The crate reads only the byte streams we hand it.
+            .stderr(Stdio::inherit());
+        for var in BRIDGE_ENV_STRIP {
+            cmd.env_remove(var);
+        }
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return DeadCause::Error(format!("spawn {program}: {e}")),
+        };
+        let stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => return DeadCause::Error("bridge stdin not piped".to_string()),
+        };
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => return DeadCause::Error("bridge stdout not piped".to_string()),
+        };
+        // ByteStreams::new(outgoing = child stdin (AsyncWrite), incoming = child stdout (AsyncRead));
+        // it does the ndjson line-framing internally.
+        let transport = ByteStreams::new(stdin, stdout);
+
+        let bus_notif = bus_tx.clone();
+        let conn_fut = Client
+            .builder()
+            .name("dispatch-acp")
+            // session/update → push an Update onto the bus, INLINE (the dispatch loop blocks on
+            // this callback before reading the next frame → SC-2b ordering). We serialize the
+            // crate's typed `SessionUpdate` back to the raw `update` JSON the retained
+            // AcpEvent/transcript/assistant_text expect (keeps the seam types unchanged).
+            .on_receive_notification(
+                move |notif: SessionNotification, _cx| {
+                    let bus = bus_notif.clone();
+                    async move {
+                        let payload = serde_json::to_value(&notif.update).unwrap_or(Value::Null);
+                        let kind = payload
+                            .get("sessionUpdate")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let session = notif.session_id.to_string();
+                        let _ = bus.send(BusEvent::Update {
+                            session,
+                            kind,
+                            payload,
+                        });
+                        Ok(())
                     }
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            // Reverse-request policy — behaviorally identical to the old `answer_reverse`:
+            // permission → `cancelled` outcome (the headless host never interactively grants a
+            // tool permission; a turn that needs one terminates rather than wedging). fs/* and
+            // terminal/* are declared OFF in clientCapabilities and left unregistered → the crate
+            // responds method-not-found (design-checked; RUN-verified by gate (a) with a
+            // tool-forcing prompt — opencode no-tool turns raise none, per the wire probe).
+            .on_receive_request(
+                |_req: RequestPermissionRequest,
+                 responder: Responder<RequestPermissionResponse>,
+                 _cx| async move {
+                    responder.respond(RequestPermissionResponse::new(
+                        RequestPermissionOutcome::Cancelled,
+                    ))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .connect_with(transport, move |cx| command_loop(cx, cmd_rx, bus_tx));
+
+        // RACE the connection against the child's real process exit. A child exit is the
+        // authoritative confirmed-dead signal (the old `try_wait` semantics), robust even if
+        // `connect_with` does not return promptly when the child EOFs while the loop idles.
+        let conn_fut = Box::pin(conn_fut);
+        let child_exit = Box::pin(child.status());
+        let cause = match futures::future::select(conn_fut, child_exit).await {
+            futures::future::Either::Left((conn_result, child_exit)) => {
+                drop(child_exit); // release the &mut child borrow before kill()
+                match conn_result {
+                    Ok(()) => DeadCause::CleanShutdown,
+                    Err(e) => DeadCause::Error(e.to_string()),
                 }
             }
-            Err(_) => {
-                let _ = tx.send(RawFrame::Closed("stdout read error".to_string()));
-                return;
+            futures::future::Either::Right((_exit_status, conn_fut)) => {
+                drop(conn_fut); // tear the connection down
+                DeadCause::ChildExited
             }
+        };
+        // Teardown: kill the child (async-process does not kill on drop). Harmless no-op if it
+        // already exited.
+        let _ = child.kill();
+        cause
+    });
+
+    match cause {
+        DeadCause::CleanShutdown => {}
+        DeadCause::ChildExited => {
+            dead.store(true, Ordering::SeqCst);
+            let _ = bus_end.send(BusEvent::Closed("bridge child exited".to_string()));
+        }
+        DeadCause::Error(why) => {
+            dead.store(true, Ordering::SeqCst);
+            let _ = bus_end.send(BusEvent::Closed(why));
         }
     }
 }
 
-/// The host's mutable state, single-threaded behind one [`RefCell`].
+/// `connect_with`'s `main_fn`: own the `ConnectionTo` and translate commands into crate calls.
+/// Handshakes block here (one-in-flight, no queue) via `block_task` — legal in `main_fn` (never
+/// inside a handler, which would deadlock the dispatch loop). `Prompt` is fire-and-forget:
+/// `on_receiving_result` posts the terminal to the bus after the response frame is dispatched
+/// (SC-2b), WITHOUT blocking the loop, so a `Cancel` can be processed mid-turn.
+async fn command_loop(
+    cx: ConnectionTo<Agent>,
+    mut cmd_rx: UnboundedReceiver<Command>,
+    bus_tx: std_mpsc::Sender<BusEvent>,
+) -> Result<(), agent_client_protocol::Error> {
+    while let Some(cmd) = cmd_rx.next().await {
+        match cmd {
+            Command::Initialize(reply) => {
+                let req = InitializeRequest::new(ProtocolVersion::V1)
+                    .client_capabilities(ClientCapabilities::default())
+                    .client_info(Implementation::new("dispatch-acp", env!("CARGO_PKG_VERSION")));
+                let res = cx.send_request(req).block_task().await;
+                let _ = reply.send(res.map(map_initialize).map_err(|e| e.to_string()));
+            }
+            Command::NewSession { cwd, reply } => {
+                let res = cx.send_request(NewSessionRequest::new(cwd)).block_task().await;
+                let _ = reply.send(
+                    res.map(|r| r.session_id.to_string())
+                        .map_err(|e| e.to_string()),
+                );
+            }
+            Command::LoadSession {
+                session_id,
+                cwd,
+                reply,
+            } => {
+                let res = cx
+                    .send_request(LoadSessionRequest::new(session_id, cwd))
+                    .block_task()
+                    .await;
+                let _ = reply.send(res.map(|_| ()).map_err(|e| e.to_string()));
+            }
+            Command::Prompt {
+                session,
+                turn,
+                text,
+            } => {
+                let block: ContentBlock = text.into();
+                let sent = cx.send_request(PromptRequest::new(session.clone(), vec![block]));
+                let bus = bus_tx.clone();
+                let session_id = SessionId::from(session);
+                let _ = sent.on_receiving_result(move |result| async move {
+                    match result {
+                        Ok(resp) => match map_stop(resp.stop_reason) {
+                            Some(stop) => {
+                                let _ = bus.send(BusEvent::Terminal {
+                                    session: session_id,
+                                    turn,
+                                    stop,
+                                });
+                            }
+                            None => {
+                                let _ = bus.send(BusEvent::TerminalError {
+                                    session: session_id,
+                                    turn,
+                                    message: "session/prompt response had no mappable stopReason"
+                                        .to_string(),
+                                });
+                            }
+                        },
+                        Err(e) => {
+                            let _ = bus.send(BusEvent::TerminalError {
+                                session: session_id,
+                                turn,
+                                message: e.to_string(),
+                            });
+                        }
+                    }
+                    Ok(())
+                });
+            }
+            Command::Cancel { session } => {
+                // Best-effort interrupt (a notification): the bridge resolves the in-flight prompt
+                // with `cancelled`; a wedged bridge may ignore it (teardown is the guaranteed unblock).
+                let _ = cx.send_notification(CancelNotification::new(session));
+            }
+            Command::Shutdown => break,
+        }
+    }
+    Ok(())
+}
+
+// ===========================================================================
+// the sync host
+// ===========================================================================
+
+/// The host's mutable state, single-threaded behind one [`RefCell`]. The connection thread
+/// never touches it — they communicate only over `cmd_tx`/`bus_rx`.
 struct HostInner {
-    child: Child,
-    stdin: ChildStdin,
-    rx: Receiver<RawFrame>,
-    reader: Option<JoinHandle<()>>,
-    /// JSON-RPC request-id counter.
-    next_id: u64,
-    /// The established ACP session id (`None` before `session/new`).
+    /// Sync → connection-thread command channel.
+    cmd_tx: UnboundedSender<Command>,
+    /// Connection-thread → sync ordered event bus (the SC-2b ordering guarantee lives in the
+    /// FIFO of this channel; see the module doc).
+    bus_rx: std_mpsc::Receiver<BusEvent>,
+    /// The connection thread handle (joined on teardown).
+    thread: Option<JoinHandle<()>>,
+    /// Set by the connection thread when the connection ends abnormally (transport lost / child
+    /// gone) — the (W) confirmed-dead signal the `serve` self-terminate guard reads.
+    dead: Arc<AtomicBool>,
+    /// The established ACP session id (`None` before `session/new`/`session/load`).
     session: Option<SessionId>,
-    /// The SC-1a CONFIGURED outbound-queue bound (A2 SC-1a: "configurable N"), set at
-    /// spawn and PRESERVED across `session/new`/`session/load` so the queue is rebuilt
-    /// at the host's real capacity, not silently reset to the default.
+    /// The SC-1a CONFIGURED outbound-queue bound, set at spawn and preserved across
+    /// `session/new`/`session/load` so the queue rebuilds at the host's real capacity.
     capacity: usize,
-    /// The SC-1 outbound queue (created at `session/new`, keyed by the ACP session).
+    /// The SC-1 outbound queue (keyed by the ACP session).
     queue: Option<OutboundQueue>,
     /// The SC-2c started→streaming classifier for the in-flight turn.
     progress: TurnProgress,
-    /// rpc-id → turn-id, for correlating a `session/prompt` response to its turn.
-    inflight: HashMap<u64, TurnId>,
-    /// `AcpEvent`s read while a blocking handshake was correlating its response —
-    /// served FIRST by [`AcpClient::next_update`] so nothing is lost.
-    pending: VecDeque<AcpEvent>,
-    /// The latest terminal observation, for the [`AcpTurnObserver`] the completion
-    /// probe reads (SC-2a). Starts `Pending`.
+    /// The latest terminal observation, for the [`AcpTurnObserver`] the completion probe reads.
     last_obs: AcpTurnObservation,
-    /// The Pete's-view transcript tee: every `session/update`'s raw `update` object,
-    /// in arrival order (A2 §5 — the headless engine has no TUI, so the demux tees
-    /// the full content feed to a transcript Pete watches).
+    /// The Pete's-view transcript tee: every `session/update`'s raw `update` object, in arrival order.
     transcript: Vec<Value>,
 }
 
-impl HostInner {
-    /// Mint the next JSON-RPC request id.
-    fn mint_id(&mut self) -> u64 {
-        self.next_id += 1;
-        self.next_id
-    }
-
-    /// Write one JSON-RPC frame (request or notification) + a newline (ndjson).
-    fn write_frame(&mut self, frame: &Value) -> Result<(), AcpError> {
-        let mut text = serde_json::to_string(frame)
-            .map_err(|e| AcpError::Transport(format!("serialize: {e}")))?;
-        text.push('\n');
-        self.stdin
-            .write_all(text.as_bytes())
-            .and_then(|_| self.stdin.flush())
-            .map_err(|e| AcpError::Transport(format!("write: {e}")))
-    }
-
-    /// Send a JSON-RPC REQUEST and return its id (correlate the response later).
-    fn send_request(&mut self, method: &str, params: Value) -> Result<u64, AcpError> {
-        let id = self.mint_id();
-        let frame = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        self.write_frame(&frame)?;
-        Ok(id)
-    }
-
-    /// Send a JSON-RPC NOTIFICATION (no id, no response).
-    fn send_notification(&mut self, method: &str, params: Value) -> Result<(), AcpError> {
-        let frame = json!({"jsonrpc": "2.0", "method": method, "params": params});
-        self.write_frame(&frame)
-    }
-
-    /// Answer a reverse request. `session/request_permission` → cancel the requested
-    /// permission (the headless host does not interactively grant tool permissions;
-    /// a turn that needs one terminates rather than wedging — STEP-0 §8 / §5). Any
-    /// other reverse request (`fs/*`, `terminal/*` — which we declared OFF in
-    /// `clientCapabilities`) → a JSON-RPC method-not-found error so the bridge does
-    /// not block on a response.
-    fn answer_reverse(&mut self, id: Value, method: &str) -> Result<(), AcpError> {
-        let reply = if method == "session/request_permission" {
-            json!({"jsonrpc":"2.0","id": id, "result": {"outcome": {"outcome": "cancelled"}}})
-        } else {
-            json!({"jsonrpc":"2.0","id": id, "error": {"code": -32601, "message": format!("method {method} not supported by this client")}})
-        };
-        self.write_frame(&reply)
-    }
-
-    /// Block until the response to `want_id` arrives, buffering `session/update`s
-    /// into `pending` (served later by `next_update`) and answering reverse requests
-    /// inline. Used by the synchronous handshake verbs (`initialize`/`session/new`/
-    /// `session/load`), which are one-in-flight with no queue involvement.
-    fn pump_until_response(&mut self, want_id: u64, timeout: Duration) -> Result<Value, AcpError> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(AcpError::Protocol(format!(
-                    "timed out waiting for response to request {want_id}"
-                )));
-            }
-            match self.rx.recv_timeout(deadline - now) {
-                Ok(RawFrame::Response { id, result }) if id == want_id => return Ok(result),
-                Ok(RawFrame::ErrorResponse { id, message }) if id == want_id => {
-                    return Err(AcpError::Protocol(message))
-                }
-                Ok(RawFrame::Update {
-                    session,
-                    kind,
-                    update,
-                }) => {
-                    self.transcript.push(update.clone());
-                    self.pending.push_back(AcpEvent::Update {
-                        session,
-                        kind,
-                        payload: update,
-                    });
-                }
-                Ok(RawFrame::ReverseRequest { id, method, .. }) => {
-                    self.answer_reverse(id, &method)?;
-                }
-                // A stray response for a different id (no other request in flight
-                // during a handshake) — drop.
-                Ok(RawFrame::Response { .. }) | Ok(RawFrame::ErrorResponse { .. }) => continue,
-                Ok(RawFrame::Closed(why)) => {
-                    self.last_obs = AcpTurnObservation::TransportLost(why);
-                    return Err(AcpError::Closed);
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(AcpError::Protocol(format!(
-                        "timed out waiting for response to request {want_id}"
-                    )))
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    self.last_obs = AcpTurnObservation::TransportLost("reader gone".to_string());
-                    return Err(AcpError::Closed);
-                }
-            }
-        }
-    }
-
-    /// If the session is turn-idle and an item waits, make it in-flight and issue it
-    /// as `session/prompt` (the SC-1 release → send). Records the rpc-id→turn map so
-    /// the correlated terminal releases the slot.
-    fn release_next(&mut self) -> Result<(), AcpError> {
-        let session = match &self.session {
-            Some(s) => s.clone(),
-            None => return Ok(()),
-        };
-        let item = match self.queue.as_mut().and_then(OutboundQueue::try_release) {
-            Some(item) => item,
-            None => return Ok(()),
-        };
-        // A new turn begins → reset the started/streaming classifier.
-        self.progress = TurnProgress::new();
-        let params = json!({
-            "sessionId": session,
-            "prompt": [{"type": "text", "text": item.message}],
-        });
-        let id = self.send_request("session/prompt", params)?;
-        self.inflight.insert(id, item.turn);
-        Ok(())
-    }
-}
-
-/// The live ACP host: a `claude-code-acp` bridge subprocess + its SC-5 reader + the
-/// SC-1 queue + the transcript tee. `!Sync` by design (one [`RefCell`]); the `&self`
-/// methods are callable through the shared `&dyn AcpClient` out of `ProviderFx`.
+/// The live ACP host: a crate connection thread + the SC-1 queue + the transcript tee. `!Sync`
+/// by design (one [`RefCell`]); the `&self` methods are callable through the shared
+/// `&dyn AcpClient` out of `ProviderFx`.
 pub struct AcpHost {
     inner: RefCell<HostInner>,
 }
 
 impl AcpHost {
-    /// Spawn the bridge `program args…` (e.g. `("claude-code-acp", [])` in prod, or
-    /// `("node", ["…/dist/index.js"])` against a local install) with the working dir
-    /// `cwd`, **stripping [`BRIDGE_ENV_STRIP`] from the child env** (STEP-0 nesting
-    /// guard — dispatch runs as a CC child, so `session/new` fails without this) and
-    /// starting the SC-5 reader thread. Does NOT handshake — call [`Self::initialize`]
-    /// then [`Self::new_session`] (the boot waiter drives `initialize`).
+    /// Spawn the bridge `program args…` (e.g. `("opencode", ["acp"])` for the opencode harness,
+    /// or `("claude-code-acp", [])` for claude) with working dir `cwd`, **stripping
+    /// [`BRIDGE_ENV_STRIP`] from the child env** (the STEP-0 nesting guard — a no-op for opencode,
+    /// load-bearing for claude), starting the crate connection on a background thread. Does NOT
+    /// handshake — call [`Self::initialize`] then [`Self::new_session`] (the boot waiter drives
+    /// `initialize`).
     pub fn spawn(program: &str, args: &[String], cwd: &Path) -> Result<AcpHost, AcpError> {
         Self::spawn_with_capacity(program, args, cwd, DEFAULT_QUEUE_CAPACITY)
     }
@@ -349,51 +444,32 @@ impl AcpHost {
         cwd: &Path,
         capacity: usize,
     ) -> Result<AcpHost, AcpError> {
-        let mut cmd = Command::new(program);
-        cmd.args(args)
-            .current_dir(cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // Bridge stderr → our stderr: visible diagnostics, never on the protocol
-            // stream. The reader only ever reads stdout (SC-5).
-            .stderr(Stdio::inherit());
-        // The nesting guard (STEP-0 load-bearing finding #1): remove the CC env vars
-        // so the bridge's Agent SDK does not refuse to launch "inside another Claude
-        // Code session". `LaunchPlan.env` can only ADD, so this STRIP is a spawn-time
-        // concern, applied here and pinned by `spawn_strips_nesting_env`.
-        for var in BRIDGE_ENV_STRIP {
-            cmd.env_remove(var);
-        }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| AcpError::Transport(format!("spawn {program}: {e}")))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| AcpError::Transport("bridge stdin not piped".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| AcpError::Transport("bridge stdout not piped".to_string()))?;
-        let (tx, rx) = mpsc::channel();
-        let reader = std::thread::Builder::new()
-            .name("acp-reader".to_string())
-            .spawn(move || reader_loop(stdout, tx))
-            .map_err(|e| AcpError::Transport(format!("reader thread: {e}")))?;
+        let (cmd_tx, cmd_rx) = unbounded::<Command>();
+        let (bus_tx, bus_rx) = std_mpsc::channel::<BusEvent>();
+        let dead = Arc::new(AtomicBool::new(false));
+
+        let program = program.to_string();
+        let args = args.to_vec();
+        let cwd = cwd.to_path_buf();
+        let bus_for_thread = bus_tx;
+        let dead_for_thread = dead.clone();
+        let thread = std::thread::Builder::new()
+            .name("acp-crate-conn".to_string())
+            .spawn(move || {
+                run_connection(program, args, cwd, cmd_rx, bus_for_thread, dead_for_thread)
+            })
+            .map_err(|e| AcpError::Transport(format!("connection thread: {e}")))?;
 
         Ok(AcpHost {
             inner: RefCell::new(HostInner {
-                child,
-                stdin,
-                rx,
-                reader: Some(reader),
-                next_id: 0,
+                cmd_tx,
+                bus_rx,
+                thread: Some(thread),
+                dead,
                 session: None,
                 capacity,
                 queue: Some(OutboundQueue::new("pending-session", capacity)),
                 progress: TurnProgress::new(),
-                inflight: HashMap::new(),
-                pending: VecDeque::new(),
                 last_obs: AcpTurnObservation::Pending,
                 transcript: Vec::new(),
             }),
@@ -406,8 +482,8 @@ impl AcpHost {
     }
 
     /// (N-idle, Item 3) Is a turn IN FLIGHT? Reads the SC-1 [`OutboundQueue`]'s primary
-    /// `is_idle` truth (the in-flight turn is released only on its REAL terminal), so a
-    /// `wait` can short-circuit a genuinely-idle session yet never false-idle mid-turn.
+    /// `is_idle` truth, so a `wait` can short-circuit a genuinely-idle session yet never
+    /// false-idle mid-turn.
     pub fn in_flight(&self) -> bool {
         self.inner
             .borrow()
@@ -417,71 +493,106 @@ impl AcpHost {
             .unwrap_or(false)
     }
 
-    /// (W) WEDGED-BUT-ALIVE (Item 3, red-team round-1 #1) — is the bridge child CONFIRMED
-    /// DEAD? A non-blocking `try_wait`: `Ok(Some(_))` = the child exited (and is REAPED
-    /// here — no zombie left), so the bridge is genuinely gone; `Ok(None)` = STILL ALIVE;
-    /// `Err(_)` = indeterminate → treated as NOT dead (conservative — never self-terminate
-    /// a possibly-recoverable session). This is the silent-loss guard: it is a CONFIRMED
-    /// child-death check, NOT the transport-loss observation — a TRANSIENT transport blip
-    /// with the child still alive returns `false` here, so the adapter SURVIVES it. A
-    /// reaped child necessarily closed its stdout (transport loss), so child-death
-    /// subsumes "transport-loss AND child-dead" while being race-free.
+    /// (W) WEDGED-BUT-ALIVE (Item 3) — is the bridge CONFIRMED gone? True once the crate
+    /// connection has ended abnormally (transport lost / child exited → the connection future
+    /// returned `Err`), which necessarily means the bridge child's stdout closed. A clean
+    /// shutdown does NOT set this. Conservative: a transient blip that does not end the
+    /// connection returns `false`, so the adapter survives it.
     pub fn bridge_confirmed_dead(&self) -> bool {
-        matches!(self.inner.borrow_mut().child.try_wait(), Ok(Some(_)))
+        self.inner.borrow().dead.load(Ordering::SeqCst)
     }
 
-    /// `session/load` (resume): re-establish a prior session by id on this bridge.
-    /// The bridge replays the session's history as `session/update`s (buffered into
-    /// `pending`). Proves the resume verb on the LIVE bridge (pillar 2).
+    /// `session/load` (resume): re-establish a prior session by id on this bridge. The bridge
+    /// replays the session's history as `session/update`s (drained via [`Self::next_update`]).
+    /// Proves the resume verb on the LIVE bridge (pillar 2 / gate b).
     pub fn load_session(&self, session_id: &str, cwd: &str) -> Result<(), AcpError> {
+        let cmd_tx = self.inner.borrow().cmd_tx.clone();
+        let (tx, rx) = std_mpsc::channel();
+        cmd_tx
+            .unbounded_send(Command::LoadSession {
+                session_id: session_id.to_string(),
+                cwd: cwd.to_string(),
+                reply: tx,
+            })
+            .map_err(|_| AcpError::Closed)?;
+        match rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(AcpError::Protocol(e)),
+            Err(_) => return Err(AcpError::Closed),
+        }
         let mut inner = self.inner.borrow_mut();
-        let params = json!({"sessionId": session_id, "cwd": cwd, "mcpServers": []});
-        let id = inner.send_request("session/load", params)?;
-        inner.pump_until_response(id, Duration::from_secs(60))?;
         inner.session = Some(session_id.to_string());
         let capacity = inner.capacity;
         inner.queue = Some(OutboundQueue::new(session_id.to_string(), capacity));
         Ok(())
     }
 
-    /// The full Pete's-view transcript tee: every `session/update`'s raw `update`
-    /// object in arrival order (the live-view feed; A2 §5).
+    /// The full Pete's-view transcript tee: every `session/update`'s raw `update` object in
+    /// arrival order (the live-view feed; A2 §5).
     pub fn transcript(&self) -> Vec<Value> {
         self.inner.borrow().transcript.clone()
     }
 
-    /// The accumulated assistant TEXT across all `agent_message_chunk` updates (what
-    /// Pete reads as the model's reply). Convenience over [`Self::transcript`].
+    /// The accumulated assistant TEXT across all `agent_message_chunk` updates (what Pete reads
+    /// as the model's reply). Convenience over [`Self::transcript`].
     pub fn assistant_text(&self) -> String {
         self.inner
             .borrow()
             .transcript
             .iter()
-            .filter(|u| u.get("sessionUpdate").and_then(Value::as_str) == Some("agent_message_chunk"))
-            .filter_map(|u| u.get("content").and_then(|c| c.get("text")).and_then(Value::as_str))
+            .filter(|u| {
+                u.get("sessionUpdate").and_then(Value::as_str) == Some("agent_message_chunk")
+            })
+            .filter_map(|u| {
+                u.get("content")
+                    .and_then(|c| c.get("text"))
+                    .and_then(Value::as_str)
+            })
             .collect()
     }
 
-    /// Best-effort teardown: kill the bridge child and join the reader. Idempotent.
+    /// Best-effort teardown: ask the connection thread to shut down (the crate connection tears
+    /// down + the child is killed) and join it. Idempotent.
     pub fn shutdown(&self) {
-        let mut inner = self.inner.borrow_mut();
-        let _ = inner.child.kill();
-        let _ = inner.child.wait();
-        if let Some(handle) = inner.reader.take() {
-            // The child is already killed+reaped above → its stdout is closed → the
-            // reader's `read_line` hits EOF and the thread returns, so this join cannot
-            // hang on a wedged reader. Deterministic teardown (LOW-2: was `drop`/detach).
+        let (cmd_tx, thread) = {
+            let mut inner = self.inner.borrow_mut();
+            (inner.cmd_tx.clone(), inner.thread.take())
+        };
+        let _ = cmd_tx.unbounded_send(Command::Shutdown);
+        if let Some(handle) = thread {
             let _ = handle.join();
         }
+    }
+
+    /// If the session is turn-idle and an item waits, make it in-flight and dispatch it as
+    /// `session/prompt` to the connection thread (the SC-1 release → send).
+    fn release_next(inner: &mut HostInner) -> Result<(), AcpError> {
+        let session = match &inner.session {
+            Some(s) => s.clone(),
+            None => return Ok(()),
+        };
+        let item = match inner.queue.as_mut().and_then(OutboundQueue::try_release) {
+            Some(item) => item,
+            None => return Ok(()),
+        };
+        // A new turn begins → reset the started/streaming classifier.
+        inner.progress = TurnProgress::new();
+        inner
+            .cmd_tx
+            .unbounded_send(Command::Prompt {
+                session,
+                turn: item.turn,
+                text: item.message,
+            })
+            .map_err(|_| AcpError::Closed)
     }
 }
 
 impl Drop for AcpHost {
     fn drop(&mut self) {
         let inner = self.inner.get_mut();
-        let _ = inner.child.kill();
-        let _ = inner.child.wait();
-        if let Some(handle) = inner.reader.take() {
+        let _ = inner.cmd_tx.unbounded_send(Command::Shutdown);
+        if let Some(handle) = inner.thread.take() {
             let _ = handle.join();
         }
     }
@@ -489,56 +600,34 @@ impl Drop for AcpHost {
 
 impl AcpClient for AcpHost {
     fn initialize(&self) -> Result<InitializeResult, AcpError> {
-        let mut inner = self.inner.borrow_mut();
-        let params = json!({
-            "protocolVersion": PROTOCOL_VERSION,
-            "clientCapabilities": {
-                "fs": {"readTextFile": false, "writeTextFile": false},
-                "terminal": false,
-            },
-            "clientInfo": {"name": "dispatch-acp", "version": env!("CARGO_PKG_VERSION")},
-        });
-        let id = inner.send_request("initialize", params)?;
-        let result = inner.pump_until_response(id, Duration::from_secs(30))?;
-        let protocol_version = result
-            .get("protocolVersion")
-            .and_then(Value::as_i64)
-            .unwrap_or(PROTOCOL_VERSION);
-        let agent_name = result
-            .get("agentInfo")
-            .and_then(|a| a.get("name"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let agent_version = result
-            .get("agentInfo")
-            .and_then(|a| a.get("version"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        // `authMethods` is ALWAYS advertised (e.g. `claude-login`) even when a usable
-        // OAuth credential is present — STEP-0 round-tripped with NO key. So the
-        // handshake succeeding IS readiness; a genuine auth failure surfaces later as
-        // a JSON-RPC error to `session/new`/`session/prompt` (→ TerminalError), not
-        // here. We therefore do NOT gate boot on `authMethods` non-empty.
-        Ok(InitializeResult {
-            protocol_version,
-            agent_name,
-            agent_version,
-            auth_required: false,
-        })
+        let cmd_tx = self.inner.borrow().cmd_tx.clone();
+        let (tx, rx) = std_mpsc::channel();
+        cmd_tx
+            .unbounded_send(Command::Initialize(tx))
+            .map_err(|_| AcpError::Closed)?;
+        match rx.recv() {
+            Ok(Ok(init)) => Ok(init),
+            Ok(Err(e)) => Err(AcpError::Protocol(e)),
+            Err(_) => Err(AcpError::Closed),
+        }
     }
 
     fn new_session(&self, cwd: &str) -> Result<SessionId, AcpError> {
+        let cmd_tx = self.inner.borrow().cmd_tx.clone();
+        let (tx, rx) = std_mpsc::channel();
+        cmd_tx
+            .unbounded_send(Command::NewSession {
+                cwd: cwd.to_string(),
+                reply: tx,
+            })
+            .map_err(|_| AcpError::Closed)?;
+        let session = match rx.recv() {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(AcpError::Protocol(e)),
+            Err(_) => return Err(AcpError::Closed),
+        };
+        // The queue is rebuilt keyed by the real ACP session, at the CONFIGURED capacity (SC-1a).
         let mut inner = self.inner.borrow_mut();
-        let params = json!({"cwd": cwd, "mcpServers": []});
-        let id = inner.send_request("session/new", params)?;
-        let result = inner.pump_until_response(id, Duration::from_secs(60))?;
-        let session = result
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AcpError::Protocol("session/new result had no sessionId".to_string()))?
-            .to_string();
-        // The queue is rebuilt keyed by the real ACP session, at the host's CONFIGURED
-        // capacity (SC-1a) — NOT silently reset to the default (LOW-1).
         let capacity = inner.capacity;
         inner.queue = Some(OutboundQueue::new(session.clone(), capacity));
         inner.session = Some(session.clone());
@@ -550,207 +639,117 @@ impl AcpClient for AcpHost {
         if inner.session.is_none() {
             return Err(AcpError::Protocol("no acp session established".to_string()));
         }
-        // ENQUEUE (mints + returns the attributable turn id; LB#5). A 2nd inject
-        // mid-turn QUEUES (SC-3); a bounded-overflow → Err(QueueFull) (SC-1a).
+        // ENQUEUE (mints + returns the attributable turn id; LB#5). A 2nd inject mid-turn QUEUES
+        // (SC-3); a bounded-overflow → Err(QueueFull) (SC-1a).
         let turn = inner
             .queue
             .as_mut()
             .ok_or_else(|| AcpError::Protocol("no acp session established".to_string()))?
             .enqueue(text, from)
             .map_err(|_| AcpError::QueueFull)?;
-        // Release+send NOW iff the session is turn-idle (never interrupts an
-        // in-flight turn — SC-1); otherwise it sends when the in-flight terminal
-        // releases the slot in `next_update`.
-        inner.release_next()?;
+        // Release+send NOW iff the session is turn-idle (never interrupts an in-flight turn —
+        // SC-1); otherwise it sends when the in-flight terminal releases the slot in `next_update`.
+        Self::release_next(&mut inner)?;
         Ok(turn)
     }
 
     fn cancel(&self, _session: &str) -> Result<(), AcpError> {
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow();
         let session = inner
             .session
             .clone()
             .ok_or_else(|| AcpError::Protocol("no acp session established".to_string()))?;
-        // Best-effort interrupt (a notification): the bridge sets cancelled + calls
-        // query.interrupt(); the in-flight prompt then resolves `{stopReason:cancelled}`.
-        inner.send_notification("session/cancel", json!({"sessionId": session}))
+        inner
+            .cmd_tx
+            .unbounded_send(Command::Cancel { session })
+            .map_err(|_| AcpError::Closed)
     }
 
     fn next_update(&self, timeout: Duration) -> Result<Option<AcpEvent>, AcpError> {
-        let mut inner = self.inner.borrow_mut();
-        // Serve anything buffered during a blocking handshake first (FIFO).
-        if let Some(ev) = inner.pending.pop_front() {
-            return Ok(Some(ev));
-        }
-        let deadline = Instant::now() + timeout;
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                return Ok(None);
-            }
-            match inner.rx.recv_timeout(deadline - now) {
-                Ok(RawFrame::Update {
+        // Block on the ordered bus up to `timeout`. Every event returns (the crate owns framing +
+        // correlation, so there are no drop-and-keep-draining frames here). A quiet stream →
+        // Ok(None) (NOT an error).
+        let event = {
+            let inner = self.inner.borrow();
+            inner.bus_rx.recv_timeout(timeout)
+        };
+        match event {
+            Ok(BusEvent::Update {
+                session,
+                kind,
+                payload,
+            }) => {
+                let mut inner = self.inner.borrow_mut();
+                inner.progress.on_update();
+                inner.transcript.push(payload.clone());
+                Ok(Some(AcpEvent::Update {
                     session,
                     kind,
-                    update,
-                }) => {
-                    inner.progress.on_update();
-                    inner.transcript.push(update.clone());
-                    return Ok(Some(AcpEvent::Update {
-                        session,
-                        kind,
-                        payload: update,
-                    }));
+                    payload,
+                }))
+            }
+            Ok(BusEvent::Terminal {
+                session,
+                turn,
+                stop,
+            }) => {
+                let mut inner = self.inner.borrow_mut();
+                if let Some(q) = inner.queue.as_mut() {
+                    q.complete(&turn);
                 }
-                Ok(RawFrame::Response { id, result }) => {
-                    // A correlated `session/prompt` terminal? (Handshake responses are
-                    // consumed inline by `pump_until_response`, never reach here.)
-                    if let Some(turn) = inner.inflight.remove(&id) {
-                        let session = inner.session.clone().unwrap_or_default();
-                        let stop = result
-                            .get("stopReason")
-                            .and_then(Value::as_str)
-                            .and_then(StopReason::parse);
-                        match stop {
-                            Some(stop) => {
-                                if let Some(q) = inner.queue.as_mut() {
-                                    q.complete(&turn);
-                                }
-                                inner.last_obs = AcpTurnObservation::Terminal(stop);
-                                // Release+send the next queued turn (drain continuity).
-                                inner.release_next()?;
-                                return Ok(Some(AcpEvent::Terminal {
-                                    session,
-                                    turn,
-                                    stop,
-                                }));
-                            }
-                            None => {
-                                // A terminal we cannot map (no/unknown stopReason) →
-                                // treat as a failed turn, not a clean completion.
-                                if let Some(q) = inner.queue.as_mut() {
-                                    q.complete(&turn);
-                                }
-                                let message = "session/prompt response had no mappable stopReason"
-                                    .to_string();
-                                inner.last_obs = AcpTurnObservation::Failed(message.clone());
-                                inner.release_next()?;
-                                return Ok(Some(AcpEvent::TerminalError {
-                                    session,
-                                    turn,
-                                    message,
-                                }));
-                            }
-                        }
-                    }
-                    // Uncorrelated response — drop and keep draining.
-                    continue;
+                inner.last_obs = AcpTurnObservation::Terminal(stop);
+                // Release+send the next queued turn (drain continuity).
+                Self::release_next(&mut inner)?;
+                Ok(Some(AcpEvent::Terminal {
+                    session,
+                    turn,
+                    stop,
+                }))
+            }
+            Ok(BusEvent::TerminalError {
+                session,
+                turn,
+                message,
+            }) => {
+                let mut inner = self.inner.borrow_mut();
+                if let Some(q) = inner.queue.as_mut() {
+                    q.complete(&turn);
                 }
-                Ok(RawFrame::ErrorResponse { id, message }) => {
-                    if let Some(turn) = inner.inflight.remove(&id) {
-                        let session = inner.session.clone().unwrap_or_default();
-                        if let Some(q) = inner.queue.as_mut() {
-                            q.complete(&turn);
-                        }
-                        inner.last_obs = AcpTurnObservation::Failed(message.clone());
-                        inner.release_next()?;
-                        return Ok(Some(AcpEvent::TerminalError {
-                            session,
-                            turn,
-                            message,
-                        }));
-                    }
-                    continue;
-                }
-                Ok(RawFrame::ReverseRequest { id, method, .. }) => {
-                    inner.answer_reverse(id, &method)?;
-                    continue;
-                }
-                Ok(RawFrame::Closed(why)) => {
-                    inner.last_obs = AcpTurnObservation::TransportLost(why);
-                    return Err(AcpError::Closed);
-                }
-                Err(RecvTimeoutError::Timeout) => return Ok(None),
-                Err(RecvTimeoutError::Disconnected) => {
-                    inner.last_obs =
-                        AcpTurnObservation::TransportLost("reader gone".to_string());
-                    return Err(AcpError::Closed);
-                }
+                inner.last_obs = AcpTurnObservation::Failed(message.clone());
+                Self::release_next(&mut inner)?;
+                Ok(Some(AcpEvent::TerminalError {
+                    session,
+                    turn,
+                    message,
+                }))
+            }
+            Ok(BusEvent::Closed(why)) => {
+                self.inner.borrow_mut().last_obs = AcpTurnObservation::TransportLost(why);
+                Err(AcpError::Closed)
+            }
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => {
+                self.inner.borrow_mut().last_obs =
+                    AcpTurnObservation::TransportLost("connection thread gone".to_string());
+                Err(AcpError::Closed)
             }
         }
     }
 }
 
-/// The host IS the SC-5 demux the completion probe reads (SC-2a): the latest terminal
-/// observation, updated as `next_update` correlates terminals. The `--wait` loop wraps
-/// this in an [`AcpTurnCompletion`](super::completion::AcpTurnCompletion).
+/// The host IS the source the completion probe reads (SC-2a): the latest terminal observation,
+/// updated as `next_update` processes terminals. The `--wait` loop wraps this in an
+/// [`AcpTurnCompletion`](super::completion::AcpTurnCompletion).
 impl AcpTurnObserver for AcpHost {
     fn observe(&self) -> AcpTurnObservation {
         self.inner.borrow().last_obs.clone()
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // classify() is the wire-law heart of the SC-5 reader — pin each branch so a
-    // drift in frame discrimination reds (no live bridge needed: pure parsing).
-
-    #[test]
-    fn classify_session_update_notification() {
-        let v = json!({
-            "jsonrpc": "2.0",
-            "method": "session/update",
-            "params": {"sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "PONG"}}}
-        });
-        match classify(v).expect("classified") {
-            RawFrame::Update { session, kind, .. } => {
-                assert_eq!(session, "s1");
-                assert_eq!(kind, "agent_message_chunk");
-            }
-            other => panic!("expected Update, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn classify_prompt_response_is_response_not_notification() {
-        let v = json!({"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}});
-        match classify(v).expect("classified") {
-            RawFrame::Response { id, result } => {
-                assert_eq!(id, 3);
-                assert_eq!(result.get("stopReason").unwrap(), "end_turn");
-            }
-            other => panic!("expected Response, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn classify_error_response() {
-        let v = json!({"jsonrpc": "2.0", "id": 4, "error": {"code": -32603, "message": "internalError"}});
-        match classify(v).expect("classified") {
-            RawFrame::ErrorResponse { id, message } => {
-                assert_eq!(id, 4);
-                assert_eq!(message, "internalError");
-            }
-            other => panic!("expected ErrorResponse, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn classify_reverse_request_has_method_and_id() {
-        let v = json!({"jsonrpc": "2.0", "id": 7, "method": "session/request_permission", "params": {"x": 1}});
-        match classify(v).expect("classified") {
-            RawFrame::ReverseRequest { method, .. } => {
-                assert_eq!(method, "session/request_permission")
-            }
-            other => panic!("expected ReverseRequest, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn classify_unknown_notification_is_ignored() {
-        let v = json!({"jsonrpc": "2.0", "method": "some/unknown", "params": {}});
-        assert!(classify(v).is_none(), "unknown notification → ignored");
-    }
-}
+// Retired tests (called out, not silently dropped): the hand-rolled reader-frame `classify_*`
+// tests and `pump_until_response` mechanics that lived here pinned the old demux + framing +
+// response correlation — all now owned by the crate, so they are removed. Their behavioral
+// coverage is re-expressed at the new layer: the retained `rpc.rs` faithfulness/terminal-mapping
+// tests (unchanged), the SC-2b terminal-ordering guarantee proven by the fixture-forced SRT-2
+// ordering test (see `tests/`), and the live opencode wire evidence
+// (evidence/opencode-acp/opencode-wire-probe.log). See the handoff for the per-test mapping.

@@ -37,6 +37,17 @@ clap = { version = "4", default-features = false, features = ["std", "help", "us
 qrmux = { path = "../qrmux" }
 tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "io-util"] }
 anyhow = "1"
+# ACP crate-backed driver (provider/acp/client.rs). The official ACP client crate, pinned
+# =1.0.1 behind the provider seam (migration-spec §5; D4/F4: this crate ALONE, NOT the
+# `-tokio` 0.11.1 variant which pins the old 0.x line). async-process + futures are direct
+# access to crates ALREADY transitive via agent-client-protocol (no new resolution surface):
+# async-process spawns the bridge child with futures-compatible async pipes for the crate's
+# ByteStreams transport AND keeps env_remove(BRIDGE_ENV_STRIP) expressible (MF1); futures
+# supplies executor::block_on (drive the connection future on a bg thread, no tokio) + the
+# channel::mpsc sync<->async bridge.
+agent-client-protocol = "=1.0.1"
+async-process = "2"
+futures = "0.3"
 # tungstenite: the codex app-server ws client (codex-p2-spec sections 3.1, 6.3,
 # sanctioned dep S-1). SYNC/blocking call-per-verb — matches the sync engine, NO
 # tokio/async creep. default-features=false drops ALL TLS (native-tls/rustls);
