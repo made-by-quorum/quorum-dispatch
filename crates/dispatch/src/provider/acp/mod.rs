@@ -64,7 +64,26 @@ pub const BRIDGE_ENV_STRIP: &[&str] = &[
 
 /// The `claude-code-acp` bridge launch command (the official `@zed-industries/claude-code-acp`
 /// bin; STEP-0 provenance). The host spawns this with [`BRIDGE_ENV_STRIP`] removed from the env.
+///
+/// This is Pete's LIVE DEFAULT and it is deliberately UNCHANGED by the claude-migration atomic:
+/// the migration makes [`CLAUDE_AGENT_ACP_BIN`] REACHABLE behind the seam (selectable via the
+/// `qd acp-daemon --bridge-cmd` lever, see `acp_residence.rs`) while this compiled default keeps
+/// resolving `claude-code-acp` for every production create/resume path (which pass `bridge_cmd:
+/// None`, so `parse_adapter_args` falls back here). The eventual LIVE CUTOVER is a single,
+/// self-contained edit — repointing this const at [`CLAUDE_AGENT_ACP_BIN`] — held for super18's
+/// Pete-awake gate after the deferred live gates (MF1/MF4) pass; it is NOT this atomic's to flip.
 pub const BRIDGE_BIN: &str = "claude-code-acp";
+
+/// The `claude-agent-acp` bridge launch command — the `@agentclientprotocol/claude-agent-acp`
+/// successor to the deprecating `@zed-industries/claude-code-acp`, the claude-migration TARGET.
+///
+/// It is reachable behind the retained `rpc.rs` seam TODAY, without touching Pete's default:
+/// `qd acp-daemon --bridge-cmd claude-agent-acp` selects it (the same custom-transport driver in
+/// `client.rs` — `env_remove(BRIDGE_ENV_STRIP)` + `.stderr(inherit)` — drives it, agent-agnostic).
+/// No production path engages it (create/resume hardcode `bridge_cmd: None` → [`BRIDGE_BIN`]); it
+/// is exercised only by explicit selection (tests + the deferred Pete-awake live-runs). Flipping
+/// the live default = repointing [`BRIDGE_BIN`] here (super18's separate gate — NOT tonight).
+pub const CLAUDE_AGENT_ACP_BIN: &str = "claude-agent-acp";
 
 /// The Claude Code adapter driven over the official `claude-code-acp` ACP bridge.
 ///
