@@ -64,6 +64,7 @@ pub mod resolve;
 pub mod resume;
 pub mod resume_daemon;
 pub mod qrmux_dir;
+pub mod safe_kill;
 pub mod secrets;
 pub mod sendpty;
 pub mod shell_init;

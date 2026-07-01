@@ -879,12 +879,12 @@ impl DaemonSpawner for RealDaemonSpawner {
         // addressed (the pgid exists because OUR spawn created it — L10 bans
         // NAME/pattern addressing, not recorded-group addressing).
         // W7 CARRY: the kill verb for codex rows must use this same group ladder.
-        if pid <= 0 || pid > i32::MAX as i64 {
+        if pid <= 1 || pid > i32::MAX as i64 {
             return;
         }
         let pgid = pid as i32;
         // SIGTERM the group; brief grace; SIGKILL the group. ESRCH = already gone.
-        unsafe { libc::kill(-pgid, libc::SIGTERM) };
+        crate::safe_kill::safe_group_kill(pgid as i64, libc::SIGTERM);
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
         while std::time::Instant::now() < deadline {
             if !crate::effects::is_pid_alive(pgid) {
@@ -892,7 +892,7 @@ impl DaemonSpawner for RealDaemonSpawner {
             }
             std::thread::sleep(std::time::Duration::from_millis(150));
         }
-        unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        crate::safe_kill::safe_group_kill(pgid as i64, libc::SIGKILL);
         // The launcher was spawned by THIS process (Command::spawn), so after a
         // SIGKILL it is a ZOMBIE until reaped. Reap it eagerly so the failure path
         // leaves no zombie (the native child re-parents to init, which reaps it).

@@ -2141,7 +2141,7 @@ mod tests {
         assert!(held, "while the holder lives, a concurrent claim LOSES (atomic)");
         // KILL the holder GROUP mid-claim (flock + its sleep child) → the OS releases the
         // flock once every fd holding it is closed → a later resume must RECLAIM.
-        unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        crate::safe_kill::safe_group_kill(pgid as i64, libc::SIGKILL);
         holder.wait().ok(); // reap the flock parent (no zombie).
         let mut reclaimed = false;
         for _ in 0..100 {

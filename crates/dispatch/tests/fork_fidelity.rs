@@ -225,9 +225,7 @@ impl Sandbox {
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
-        unsafe {
-            libc::killpg(pgid, libc::SIGKILL);
-        }
+        dispatch::safe_kill::safe_group_kill(pgid as i64, libc::SIGKILL);
         let _ = child.wait();
         // Reap any `cat <fifo>` grandchild that escaped the group SIGKILL, while
         // this inode is still linked at fifo_path() (obl-2 hygiene).
@@ -285,9 +283,7 @@ impl Sandbox {
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
         appeared = appeared || marker.exists();
-        unsafe {
-            libc::killpg(pgid, libc::SIGKILL);
-        }
+        dispatch::safe_kill::safe_group_kill(pgid as i64, libc::SIGKILL);
         let _ = child.wait();
         // Reap any `cat <fifo>` grandchild that escaped the group SIGKILL, while
         // this inode is still linked at fifo_path() (obl-2 hygiene).
