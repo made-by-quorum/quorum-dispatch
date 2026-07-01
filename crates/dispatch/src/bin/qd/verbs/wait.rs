@@ -647,7 +647,8 @@ fn codex_root_fx<'a>(
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    }
+        acp_client: None,
+        pi_rpc: None,    }
 }
 
 #[cfg(test)]

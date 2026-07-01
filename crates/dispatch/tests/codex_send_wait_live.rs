@@ -313,7 +313,8 @@ fn codex_send_wait_live_jailed_e2e() {
             relay_port: None,
             app_server: Some(rpc_ref),
             codex_expected_turn_id: expected.as_deref(),
-            acp_client: None,        };
+            acp_client: None,
+        pi_rpc: None,        };
         let turn_id = CodexProvider
             .inject(
                 &fx,
@@ -443,6 +444,7 @@ fn codex_root(env: &JailEnv, paths: &dispatch::paths::QdPaths) -> PathBuf {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     CodexProvider.transcript_root(&fx)
 }

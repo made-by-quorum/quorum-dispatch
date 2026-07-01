@@ -344,7 +344,8 @@ fn inject_via_provider(
         // codex-only transport; the claude send:relay path uses relay+port.
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     // The send:relay verb keys on NAME+port (the fast path never builds a Session);
     // SessionKey carries the name as the id here (claude inject reads neither for
     // the send — it sends through relay+port). pid is None (not on this surface).
@@ -504,7 +505,8 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
         relay_port: None,
         app_server: Some(rpc_ref),
         codex_expected_turn_id: expected_turn_id.as_deref(),
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let key = SessionKey {
         id: &thread_id,
         name: session.name.as_deref(),
@@ -610,6 +612,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: Some(conn_ref),
+        pi_rpc: None,
     };
     let key = SessionKey {
         id: &session.session_id,
@@ -650,7 +653,8 @@ fn codex_resolve_fx<'a>(
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    }
+        acp_client: None,
+        pi_rpc: None,    }
 }
 
 /// Resolve `(relay_port, session_name, provider_id)` for `query`. The port is

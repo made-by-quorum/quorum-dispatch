@@ -561,7 +561,8 @@ fn try_spawn_and_connect<'a>(
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let req = LaunchRequest {
         name: params.name.clone(),
         cwd: Some(params.cwd.to_string_lossy().into_owned()),

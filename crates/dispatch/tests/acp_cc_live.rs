@@ -211,6 +211,7 @@ fn acp_host_queue_overflow_honors_configured_capacity() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: Some(&host),
+        pi_rpc: None,
     };
     let provider = provider_for("acp/claude-code").expect("acp/claude-code registered");
     let key = SessionKey { id: &session, name: Some("cap"), cwd: Some("/work/proj"), pid: None };
@@ -301,6 +302,7 @@ fn acp_cc_live_full_lifecycle() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: Some(&host),
+        pi_rpc: None,
     };
     provider
         .boot_waiter(&fx)

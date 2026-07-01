@@ -40,6 +40,7 @@ use crate::relay::{RelayContract, RelayError};
 pub mod acp;
 pub mod codex;
 pub mod fixture;
+pub mod pi;
 
 pub use fixture::FixtureDaemonProvider;
 
@@ -203,6 +204,15 @@ pub struct ProviderFx<'a> {
     /// the long-lived per-session ACP host (`provider/acp/client.rs`) owns the
     /// connection + the SC-1 queue + the SC-5 single-reader; this is the borrow of it.
     pub acp_client: Option<&'a dyn crate::provider::acp::AcpClient>,
+    /// The pi stdio-RPC transport CONTRACT (ADD-5 pattern, the `app_server`/
+    /// `acp_client` precedent): a CONNECTED `&dyn PiRpc` the verb layer hands in
+    /// (a [`crate::provider::pi::remote::PiRemote`] reaching the per-session pi
+    /// resident's loopback front). CONSUMED BY: `PiProvider::{boot_waiter, inject}`.
+    /// None for the claude/codex/acp/fixture lanes (they never speak pi). The trait
+    /// never holds a raw endpoint/socket — the pi resident
+    /// (`provider/pi/residence.rs`) owns the pi child + the stdio driver; this is
+    /// the verb-layer borrow of the reach to it.
+    pub pi_rpc: Option<&'a dyn crate::provider::pi::rpc::PiRpc>,
 }
 
 impl<'a> ProviderFx<'a> {
@@ -358,6 +368,9 @@ pub fn provider_for(id: &str) -> Option<&'static dyn Provider> {
         // official `claude-code-acp` bridge (STEP-0 GREEN, confirmed faithful on this box), so
         // the Mode-B→Mode-A switch A2 deferred for CC is now live. codex/pi/opencode stay deferred.
         "acp/claude-code" => Some(&acp::ACP_CC_PROVIDER),
+        // WS-A.2: pi is now resolvable (daemon-hosted, stdio-RPC; the resident
+        // host is `provider/pi/residence.rs`, the `pi-daemon` verb in main.rs).
+        "pi" => Some(&pi::PI_PROVIDER),
         _ => None,
     }
 }

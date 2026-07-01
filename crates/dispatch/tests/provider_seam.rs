@@ -223,6 +223,7 @@ impl Fixture {
             // the W6 steer/stale-fence ladder has its own dedicated tests below.
             codex_expected_turn_id: None,
             acp_client: self.acp_client.as_ref().map(|c| c as &dyn AcpClient),
+            pi_rpc: None,
         }
     }
 }
@@ -747,7 +748,8 @@ fn daemon_launch_plan_minimal_fx_consumes_no_claude_config() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let provider = FixtureDaemonProvider::ready();
     let plan = provider.launch_plan(&fx, &LaunchRequest::default());
     assert_eq!(
@@ -785,7 +787,8 @@ fn daemon_steer_stale_precondition_is_typed_error() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let key = SessionKey {
         id: "thread-1",
         name: None,
@@ -861,7 +864,8 @@ fn claude_launch_plan_matches_launch_rs_helpers() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let req = LaunchRequest {
         name: "wk".to_string(),
         cwd: Some("/work".to_string()),
@@ -938,7 +942,8 @@ fn claude_inject_preserves_relay_error_class() {
         relay_port: Some(8901),
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let key = SessionKey {
         id: "s",
         name: None,
@@ -963,7 +968,8 @@ fn claude_inject_preserves_relay_error_class() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     assert!(matches!(
         ClaudeProvider
             .inject(&fx_no_port, &key, "m", "cli")
@@ -1038,7 +1044,8 @@ fn daemon_boot_unready_fails_with_handshake_detail() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let err = provider.boot_waiter(&fx).wait_ready("wk").unwrap_err();
     assert_eq!(err.phase, BootPhase::PidFile);
     assert!(
@@ -1226,7 +1233,8 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let plan = CodexProvider.launch_plan(&fx, &LaunchRequest::default());
     assert_eq!(
         plan.argv,
@@ -1259,7 +1267,8 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let plan2 = CodexProvider.launch_plan(&fx2, &LaunchRequest::default());
     assert_eq!(
         plan2.argv,
@@ -1294,7 +1303,8 @@ fn codex_inject_no_transport_when_app_server_absent() {
         relay_port: None,
         app_server: None, // no connected rpc.
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let key = SessionKey {
         id: "thread-abc",
         name: None,
@@ -1426,7 +1436,8 @@ fn ladder_fx<'a>(
         relay_port: None,
         app_server: Some(rpc),
         codex_expected_turn_id: expected,
-        acp_client: None,    }
+        acp_client: None,
+        pi_rpc: None,    }
 }
 
 #[test]

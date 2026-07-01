@@ -432,6 +432,7 @@ fn codex_root(env: &JailEnv, paths: &dispatch::paths::QdPaths) -> PathBuf {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
+        pi_rpc: None,
     };
     CodexProvider.transcript_root(&fx)
 }

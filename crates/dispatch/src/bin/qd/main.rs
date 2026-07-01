@@ -65,6 +65,12 @@ fn run(argv: &[String]) -> i32 {
         // verb (cross-process residence). Dispatched pre-clap so it never enters the
         // user-facing surface and cannot be commander-error-mangled. Internal-only.
         Some("acp-daemon") => return dispatch::acp_residence::run_adapter(&rest[1..]),
+        // pi-daemon: the HIDDEN resident pi adapter entry (WS-A.2, item 1). The
+        // create path spawns `<exe> pi-daemon --listen ws://… --cwd …` DETACHED;
+        // that process owns the `pi --mode rpc` child + serves the loopback front,
+        // outliving the create verb (cross-process residence — the acp-daemon twin).
+        // Dispatched pre-clap so it never enters the user-facing surface. Internal-only.
+        Some("pi-daemon") => return dispatch::provider::pi::residence::run_pi_adapter(&rest[1..]),
         // relay:register (alias relay:repoint) / relay:rollback: hidden verbs.
         // Dispatched pre-clap so they are never advertised in help and cannot be
         // commander-error-mangled. They drive Claude Code's own `claude mcp` CLI

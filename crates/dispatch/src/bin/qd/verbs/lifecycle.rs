@@ -682,7 +682,8 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         // codex-only transport; the claude boot path has no app-server.
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let boot_waiter = provider_impl.boot_waiter(&boot_fx);
 
     let deps = NewDeps {

@@ -1094,7 +1094,8 @@ fn gather_codex(
         relay_port: None,
         app_server: None,
         codex_expected_turn_id: None,
-        acp_client: None,    };
+        acp_client: None,
+        pi_rpc: None,    };
     let provider = CodexProvider;
     // `$CODEX_HOME/sessions` (the rollout tree root). Its PARENT is `$CODEX_HOME`,
     // which holds `state_5.sqlite`.

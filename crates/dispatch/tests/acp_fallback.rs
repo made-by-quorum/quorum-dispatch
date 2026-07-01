@@ -32,6 +32,7 @@ fn fx_with_acp<'a>(
         app_server: None,
         codex_expected_turn_id: None,
         acp_client,
+        pi_rpc: None,
     }
 }
 
