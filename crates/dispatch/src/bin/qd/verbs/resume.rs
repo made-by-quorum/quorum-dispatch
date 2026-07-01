@@ -134,6 +134,15 @@ pub fn run(m: &ArgMatches) -> i32 {
     if session.provider.starts_with("acp/") {
         return run_acp_resume(&session);
     }
+    // WS-A.2 pi RESUME: a pi row is ALSO daemon-hosted (the `qd pi-daemon` resident +
+    // its `pi --mode rpc` child). Resume re-establishes the SAME pi session via a fresh
+    // resident booted with `--load-session <sessionId>` (pi's get_state session_id IS
+    // its durable identity). Placed BESIDE the codex/acp branches — BEFORE
+    // refuse_unknown_provider (which would refuse "pi") and the must-be-cold gate (a
+    // daemon-hosted row revives from any non-alive state, incl. a tombstoned stop).
+    if session.provider == "pi" {
+        return run_pi_resume(&session);
+    }
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
     if let Some(code) = common::refuse_unknown_provider("resume", &session) {
         return code;
@@ -621,6 +630,122 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
         Ok(ResumeOutcome::Revived { pid, endpoint }) => {
             // Revived to drivable — NO attach. Report the new daemon + how to drive it.
             println!("{}", codex_revived_line(&name, pid, &endpoint));
+            0
+        }
+        Err(e) => {
+            eprintln!("qd resume: \"{name}\": {e}");
+            e.exit_code()
+        }
+    }
+}
+
+/// WS-A.2 pi RESUME — the pi analog of [`run_acp_resume`]/[`run_codex_resume`]. A
+/// stopped/dead pi row revives to DRIVABLE (no interactive attach): re-spawn the
+/// resident via [`create_pi_session`] with `load_session = <sessionId>`, so the fresh
+/// resident boots pi in LOAD mode on the SAME durable session id, then writes a NEW row
+/// (new pid + endpoint, SAME session id). An ALREADY-ALIVE resident (pid alive ∧
+/// our-pi-daemon cmdline) is a clean no-op — the load-bearing double-spawn guard, since a
+/// fresh `create_pi_session` would claim the (now-free) name and spawn a DUPLICATE
+/// resident. The resident OUTLIVES this verb (residence holds again).
+fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
+    use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
+    use dispatch::effects::Clock;
+    use dispatch::provider::pi::daemon::{
+        create_pi_session, pi_daemon_is_alive, PiCreateDeps, PiCreateParams,
+    };
+
+    let name = session
+        .name
+        .clone()
+        .unwrap_or_else(|| session.session_id.clone());
+
+    // Resumability gate: pi's session_id (the get_state birth-id) IS its durable
+    // identity — with none there is nothing to load.
+    if session.session_id.is_empty() {
+        eprintln!("qd resume: session \"{name}\" has no pi session id — nothing to resume.");
+        return 1;
+    }
+
+    let env = RealEnv;
+    let home = match env.var("HOME").filter(|s| !s.is_empty()) {
+        Some(h) => PathBuf::from(h),
+        None => {
+            eprintln!("qd resume: HOME is not set — cannot resolve the session state dir.");
+            return 1;
+        }
+    };
+    let paths = QdPaths::from_home(&home);
+
+    // The current endpoint (alive-check input) — re-read off the row by pid (it is NOT on
+    // the Session surface), mirroring run_acp_resume/run_codex_resume.
+    let current_endpoint = session
+        .pid
+        .filter(|&p| p != 0)
+        .and_then(|pid| dispatch::registry::read_entry(&paths.sessions_dir, pid))
+        .and_then(|e| e.endpoint)
+        .filter(|s| !s.is_empty());
+
+    // ALREADY ALIVE → clean no-op, NO second resident. pid-alive ∧ identity (the cmdline
+    // carries the recorded `--listen <endpoint>`), the double-spawn guard.
+    let is_alive = |pid: i64| dispatch::effects::is_pid_alive(pid as i32);
+    let probe = real_cmdline_probe;
+    if pi_daemon_is_alive(
+        session.pid.unwrap_or(0),
+        current_endpoint.as_deref(),
+        &is_alive,
+        &probe,
+    ) {
+        println!("session \"{name}\" is already alive (pi resident live); wait/kill it by name.");
+        return 0;
+    }
+
+    // REVIVE: re-spawn the resident in LOAD mode via the SAME create choreography with
+    // load_session set (name-claim → spawn `pi-daemon --load-session <id>` DETACHED →
+    // connect_ready → read birth-id → write the NEW row).
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("qd resume: \"{name}\": cannot resolve own executable for pi adapter: {e}");
+            return 1;
+        }
+    };
+    let clock = RealClock;
+    let now_ms = || clock.now_ms();
+    let spawner = RealDaemonSpawner;
+    let claims_dir = paths
+        .sessions_dir
+        .parent()
+        .map(|p| p.join("claims"))
+        .unwrap_or_else(|| home.join(".claude").join("claims"));
+    let cwd = PathBuf::from(
+        session
+            .cwd
+            .clone()
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| ".".to_string()),
+    );
+
+    let deps = PiCreateDeps {
+        exe,
+        pi_bin: env.var("QD_PI_BIN").filter(|s| !s.is_empty()),
+        session_dir: env.var("PI_CODING_AGENT_SESSION_DIR").filter(|s| !s.is_empty()),
+        sessions_dir: paths.sessions_dir.clone(),
+        claims_dir,
+        log_dir: home.join(".quorum").join("dispatch").join("log"),
+        spawner: &spawner,
+        now_ms: &now_ms,
+    };
+    let params = PiCreateParams {
+        name: name.clone(),
+        cwd,
+        load_session: Some(session.session_id.clone()),
+    };
+    match create_pi_session(&deps, &params) {
+        Ok(out) => {
+            println!(
+                "resumed pi session \"{}\" (daemon pid {}, {}); wait/kill it by name.",
+                out.name, out.pid, out.endpoint
+            );
             0
         }
         Err(e) => {

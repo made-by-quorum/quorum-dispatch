@@ -88,6 +88,20 @@ fn run_with_client(
         return run_acp_send(&session, message);
     }
 
+    // WS-A.2: a pi row's SEND is a live model TURN (tier-b), deferred to a later atomic
+    // (A5 pi live-turn). pi's live verb-path TODAY is start / wait / kill / resume. Give
+    // an HONEST deferred message (pi IS a known provider) — NOT the misleading "unknown
+    // provider" reject, and NOT a bare "has no relay." (pi has a ws endpoint, no relay
+    // port). Placed beside the codex/acp SEND arms, BEFORE the relay-port-None check.
+    if provider_id == "pi" {
+        eprintln!(
+            "qd send:relay: \"{session_name}\" is a pi session — sending a turn to pi is a live \
+             model turn (tier-b), wired in a later atomic. pi start / wait / kill / resume are \
+             live now."
+        );
+        return 1;
+    }
+
     // No port on the resolved session → "has no relay." exit 1 (send.ts:406-409).
     //
     // codex P1 W5 (codex-p1-spec section 7.1): the NoTransport case stays driven by
@@ -704,7 +718,13 @@ fn resolve_relay_port(query: &str) -> Result<(Option<u16>, String, String, Optio
     // send:pty, which keep refusing codex via the shared helper until their own
     // wave wires them. We therefore pass a codex row through WITHOUT the refusal,
     // and refuse only a genuinely-unknown provider.
-    if session.provider != "codex" && !session.provider.starts_with("acp/") {
+    // WS-A.2: pass a pi row through too (like codex/acp) — pi is a KNOWN provider, not an
+    // unknown one. run_with_client gives it an HONEST "send is a tier-b turn, deferred"
+    // message rather than this loud unknown-provider refusal.
+    if session.provider != "codex"
+        && !session.provider.starts_with("acp/")
+        && session.provider != "pi"
+    {
         if let Some(code) = common::refuse_unknown_provider("send:relay", session) {
             return Err(code);
         }

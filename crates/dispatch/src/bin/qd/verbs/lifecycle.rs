@@ -383,10 +383,10 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // (the opencode/--port honest-error above stays FIRST + byte-identical). codex
     // P2 W4: codex is now a supported value (GATE-R RULED (A) daemon-thread).
     if let Some(p) = provider.as_deref() {
-        if p != "claude-code" && p != "codex" && p != "acp/claude-code" {
+        if p != "claude-code" && p != "codex" && p != "acp/claude-code" && p != "pi" {
             eprintln!(
                 "qd start: unknown provider \"{p}\" — this engine supports: claude-code, codex, \
-                 acp/claude-code (--provider opencode is parked)."
+                 acp/claude-code, pi (--provider opencode is parked)."
             );
             return 1;
         }
@@ -400,8 +400,8 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let provider_id = provider.as_deref().unwrap_or("claude-code");
     let Some(provider_impl) = dispatch::provider::provider_for(provider_id) else {
         eprintln!(
-            "qd start: unknown provider \"{provider_id}\" — this engine supports: claude-code, codex \
-             (--provider opencode is parked)."
+            "qd start: unknown provider \"{provider_id}\" — this engine supports: claude-code, codex, \
+             acp/claude-code, pi (--provider opencode is parked)."
         );
         return 1;
     };
@@ -520,6 +520,13 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // daemon arm (both are Hosting::Daemon).
     if provider_impl.id().starts_with("acp/") {
         return run_new_acp_daemon(provider_impl, &env, &home, &paths, &name, &cwd, prompt.clone());
+    }
+    // WS-A.2: pi is Daemon-hosted but, like acp/* and UNLIKE codex, its residence is
+    // a dispatch-OWNED adapter (pi speaks stdio, has no --listen) — so it takes its
+    // OWN create path (run_new_pi_daemon), NOT the codex app-server daemon arm below.
+    // Branch it BEFORE the codex daemon arm (both are Hosting::Daemon).
+    if provider_impl.id() == "pi" {
+        return run_new_pi_daemon(&env, &home, &paths, &name, &cwd, prompt.clone());
     }
     if provider_impl.hosting() == dispatch::provider::Hosting::Daemon {
         return run_new_codex_daemon(
@@ -1230,6 +1237,79 @@ fn run_new_codex_daemon(
     match dispatch::create_daemon::run_new_daemon(&deps, &params) {
         Ok(out) => {
             println!("Started detached codex session \"{}\"", out.name);
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            e.exit_code()
+        }
+    }
+}
+
+/// WS-A.2 pi daemon-residence create path. Thin verb-layer adapter: resolves the
+/// deps (self-exe, the pinned pi via `QD_PI_BIN`, `PI_CODING_AGENT_SESSION_DIR`,
+/// the registry sessions/claims/log dirs off the injected home) and delegates the
+/// whole choreography (name-claim → port-alloc → spawn the `pi-daemon` resident
+/// DETACHED → connect_ready → read birth-id → write the row) to
+/// [`dispatch::provider::pi::daemon::create_pi_session`]. The row + the resident's
+/// status sink are written by the lib; the resident OUTLIVES this verb (residence).
+fn run_new_pi_daemon(
+    env: &RealEnv,
+    home: &std::path::Path,
+    paths: &dispatch::paths::QdPaths,
+    name: &str,
+    cwd: &std::path::Path,
+    prompt: Option<String>,
+) -> i32 {
+    use dispatch::create_daemon::RealDaemonSpawner;
+    use dispatch::provider::pi::daemon::{create_pi_session, PiCreateDeps, PiCreateParams};
+
+    // A create-time prompt would be a model TURN (tier-b / OAuth); pi tier-a create
+    // is credential-free + turn-free, so a prompt is deferred, not driven here.
+    if prompt.as_deref().is_some_and(|s| !s.is_empty()) {
+        eprintln!(
+            "qd start: --provider pi ignores -p at create (tier-a is turn-free). A pi turn is a \
+             tier-b model turn wired in a later atomic; pi start / wait / kill / resume are live now."
+        );
+    }
+
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("qd start: cannot resolve own executable for pi adapter: {e}");
+            return 1;
+        }
+    };
+    let clock = RealClock;
+    let now_ms = || clock.now_ms();
+    let spawner = RealDaemonSpawner;
+    // The claims dir alongside `sessions/` (the create-path layout), off the sessions
+    // dir's parent so the claim shares the registry's state root.
+    let claims_dir = paths
+        .sessions_dir
+        .parent()
+        .map(|p| p.join("claims"))
+        .unwrap_or_else(|| home.join(".claude").join("claims"));
+
+    let deps = PiCreateDeps {
+        exe,
+        // The pinned pi binary (NOT on PATH) + pi's own session storage, off the env SEAM.
+        pi_bin: env.var("QD_PI_BIN").filter(|s| !s.is_empty()),
+        session_dir: env.var("PI_CODING_AGENT_SESSION_DIR").filter(|s| !s.is_empty()),
+        sessions_dir: paths.sessions_dir.clone(),
+        claims_dir,
+        log_dir: home.join(".quorum").join("dispatch").join("log"),
+        spawner: &spawner,
+        now_ms: &now_ms,
+    };
+    let params = PiCreateParams {
+        name: name.to_string(),
+        cwd: cwd.to_path_buf(),
+        load_session: None,
+    };
+    match create_pi_session(&deps, &params) {
+        Ok(out) => {
+            println!("Started detached pi session \"{}\"", out.name);
             0
         }
         Err(e) => {

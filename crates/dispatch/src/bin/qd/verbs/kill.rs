@@ -98,6 +98,14 @@ pub fn run(m: &ArgMatches) -> i32 {
     if session.provider.starts_with("acp/") {
         return run_acp_kill(&paths, session);
     }
+    // WS-A.2 (item 3 kill-no-leak): a pi row is daemon-hosted — the resident pi-daemon
+    // pid IS the session (= the pgid). GROUP-reap it (resident + the pi child + pi's
+    // &-detached grandchildren together) via the same proven group ladder, gated on the
+    // pi cmdline identity, then tombstone. Placed BEFORE refuse_unknown_provider (which
+    // would otherwise refuse "pi" and leave the resident + pi alive — the live #8 leak).
+    if session.provider == "pi" {
+        return run_pi_kill(&paths, session);
+    }
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
     if let Some(code) = common::refuse_unknown_provider("stop", session) {
         return code;
@@ -634,6 +642,45 @@ fn run_acp_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
         println!("killed {reg_name} (zmx -, pid {pid})");
     } else {
         println!("killed {reg_name} (zmx -, pid {pid}) [adapter already dead — tombstoned]");
+    }
+    0
+}
+
+/// WS-A.2 pi stop (item-3 kill-no-leak): the pi analog of [`run_acp_kill`].
+/// GROUP-reaps the resident pi-daemon pid (= pgid) via
+/// [`dispatch::provider::pi::daemon::teardown_pi_daemon`] — reaping the resident, the
+/// `pi --mode rpc` child, AND pi's `&`-detached grandchildren (PA11) together — gated
+/// on the pi cmdline identity (defeats PID reuse), then tombstones the row. The teardown
+/// routes its group signals through the `safe_group_kill` chokepoint (via
+/// `RealDaemonSpawner.kill`); this arm issues NO raw negative-pid group signal of its
+/// own — the box-killer conformance lint stays green over it. After this,
+/// ZERO pi-daemon/pi procs remain for the killed session (the no-leaked-procs proof
+/// the live #8 demands).
+fn run_pi_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
+    use dispatch::create_daemon::real_cmdline_probe;
+    use dispatch::provider::pi::daemon::teardown_pi_daemon;
+
+    let name = session
+        .name
+        .clone()
+        .unwrap_or_else(|| session.session_id.clone());
+    let pid = session.pid.unwrap_or(0);
+    if pid <= 0 {
+        eprintln!("qd stop: \"{name}\": pi session has no resident pid. Nothing to kill.");
+        return 1;
+    }
+    // Capture the row BEFORE the kill — it carries the endpoint (the cmdline-identity
+    // discriminator that defeats PID reuse) + the data the tombstone preserves.
+    let captured = read_entry(&paths.sessions_dir, pid);
+    let endpoint = captured.as_ref().and_then(|e| e.endpoint.as_deref());
+    let was_alive = dispatch::effects::is_pid_alive(pid as i32);
+    let probe = real_cmdline_probe;
+    teardown_pi_daemon(pid, endpoint, &probe);
+    ensure_tombstone(&paths.sessions_dir, pid, captured.as_ref());
+    if was_alive {
+        println!("killed {name} (pid {pid})");
+    } else {
+        println!("killed {name} (pid {pid}) [resident already dead — tombstoned]");
     }
     0
 }
