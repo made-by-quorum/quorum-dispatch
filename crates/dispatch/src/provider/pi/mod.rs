@@ -37,6 +37,7 @@ use crate::provider::{
 pub mod conformance;
 pub mod daemon;
 pub mod pin;
+pub mod redteam;
 pub mod remote;
 pub mod republish;
 pub mod residence;
