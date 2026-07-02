@@ -347,9 +347,9 @@ static CLAUDE_PROVIDER: ClaudeProvider = ClaudeProvider;
 
 /// Resolve a provider id to its impl (codex-p1-spec section 2.3).
 ///
-/// P1 registry: **claude-code only.** `"opencode"` is DELIBERATELY NOT an impl —
-/// the attach/kill/resume/send verbs keep their existing parked branches
-/// (byte-identical messages preserved, ADD-9a); it never resolves here. An
+/// Registry: claude-code, codex, acp/claude-code, pi, and (A-OC.1) opencode —
+/// where `"opencode"` and `"acp/opencode"` both resolve to the opencode-bridged
+/// [`acp::ACP_OPENCODE_PROVIDER`] (CLI ergonomic → internal id `acp/opencode`). An
 /// UNKNOWN id → `None`, and every ACTING caller errors LOUDLY (lifecycle.rs:39
 /// pattern) and exits nonzero. The `"fixture-daemon"` id is ALSO not registered
 /// here: [`FixtureDaemonProvider`] is a FIXTURE (the conformance lane constructs
@@ -366,8 +366,13 @@ pub fn provider_for(id: &str) -> Option<&'static dyn Provider> {
         // scoped-ACP-CC: the Claude Code ACP adapter is CLI-bootable. This SUPERSEDES A2
         // §A3-ACP's "gated off CLI boot until a bridge exists" — Pete's directive supplies the
         // official `claude-code-acp` bridge (STEP-0 GREEN, confirmed faithful on this box), so
-        // the Mode-B→Mode-A switch A2 deferred for CC is now live. codex/pi/opencode stay deferred.
+        // the Mode-B→Mode-A switch A2 deferred for CC is now live.
         "acp/claude-code" => Some(&acp::ACP_CC_PROVIDER),
+        // A-OC.1: opencode's product verb-path over the SAME ACP driver, bridged to `opencode
+        // acp`. The CLI ergonomic `--provider opencode` (Pete's phrasing — opencode is the
+        // provider, acp the transport) is an ALIAS that RESOLVES to internal id `acp/opencode`,
+        // so it rides the existing `acp/`-prefix verb dispatch with no per-opencode verb arms.
+        "opencode" | "acp/opencode" => Some(&acp::ACP_OPENCODE_PROVIDER),
         // WS-A.2: pi is now resolvable (daemon-hosted, stdio-RPC; the resident
         // host is `provider/pi/residence.rs`, the `pi-daemon` verb in main.rs).
         "pi" => Some(&pi::PI_PROVIDER),

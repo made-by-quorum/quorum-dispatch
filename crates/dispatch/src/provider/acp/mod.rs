@@ -85,30 +85,85 @@ pub const BRIDGE_BIN: &str = "claude-code-acp";
 /// the live default = repointing [`BRIDGE_BIN`] here (super18's separate gate — NOT tonight).
 pub const CLAUDE_AGENT_ACP_BIN: &str = "claude-agent-acp";
 
-/// The Claude Code adapter driven over the official `claude-code-acp` ACP bridge.
+/// An ACP-driven adapter, parameterized by which bridge program it spawns (A-OC.1).
 ///
 /// A stateless `'static` singleton (the [`crate::provider::ClaudeProvider`] precedent): ALL live
 /// state — the bridge connection, the SC-1 outbound queue, the SC-5 single reader — lives in the
 /// long-lived per-session ACP host ([`client`]) the verb layer hands in via
 /// [`ProviderFx::acp_client`] (ADD-5). `hosting() = Daemon` (no mux pane; a bridge subprocess).
 ///
+/// Two registered instances share this one driver: [`ACP_CC_PROVIDER`] (`acp/claude-code`, the
+/// `claude-code-acp` bridge — Pete's live default, byte-identical) and [`ACP_OPENCODE_PROVIDER`]
+/// (`acp/opencode`, the `opencode acp` bridge). Only the bridge SPAWN differs (`bridge_cmd` +
+/// `bridge_args`, consumed at the residence layer); the protocol, queue, correlation, and verb
+/// dispatch are identical.
+///
 /// **Transcripts delegate to [`crate::jsonl`]** (like `ClaudeProvider`) BY DESIGN, not by
-/// claude-coupling: the bridge runs the REAL Claude Code engine, so an ACP-driven session writes
-/// standard CC-shaped JSONL into the same projects dir as a normal CC session. That is also the
+/// claude-coupling: the bridge writes CC-shaped JSONL into the projects dir. That is also the
 /// answer to "how Pete keeps his live view" (A2 §5): his existing projects-dir transcript tooling
 /// already sees the ACP-driven session; the host additionally tees the `session/update` feed to a
 /// live transcript (SC-2c). What is DISTINCT from claude is the live drive path (ACP, not PTY) —
 /// `parse_status`/`inject`/`boot_waiter` below, and the SC-1 queue — NOT the at-rest transcript.
-pub struct AcpProvider;
+pub struct AcpProvider {
+    /// The stable provider id (registry/dispatch key + `--json` value): `acp/<bridge>`.
+    id: &'static str,
+    /// The resident adapter's `--bridge-cmd` override. `None` keeps the compiled [`BRIDGE_BIN`]
+    /// default (`claude-code-acp`) so acp/claude-code's adapter argv + spawned bridge stay
+    /// BYTE-IDENTICAL; `Some(cmd)` (opencode → `"opencode"`) selects a different bridge program at
+    /// the residence layer (`run_new_acp_daemon` / `run_acp_resume`).
+    bridge_cmd: Option<&'static str>,
+    /// Extra `--bridge-arg`s for the bridge program (opencode: `["acp"]`; claude-code: none).
+    bridge_args: &'static [&'static str],
+}
 
-/// The ONE registered ACP Claude Code provider (`'static` singleton — `provider_for` hands out
-/// `&'static dyn Provider` without allocation, the `CLAUDE_PROVIDER` precedent).
-pub static ACP_CC_PROVIDER: AcpProvider = AcpProvider;
+/// The registered acp/claude-code provider — Pete's LIVE default. `bridge_cmd = None` ⇒ the
+/// compiled [`BRIDGE_BIN`] (`claude-code-acp`), byte-identical to pre-A-OC.1. `'static` singleton
+/// (`provider_for` hands out `&'static dyn Provider` without allocation, the `CLAUDE_PROVIDER`
+/// precedent).
+pub static ACP_CC_PROVIDER: AcpProvider = AcpProvider {
+    id: "acp/claude-code",
+    bridge_cmd: None,
+    bridge_args: &[],
+};
+
+/// The registered acp/opencode provider (A-OC.1) — the SAME ACP driver bridged to `opencode acp`
+/// instead of `claude-code-acp`. CLI `--provider opencode` resolves to this via
+/// [`crate::provider::provider_for`] and rides the existing `acp/`-prefix verb dispatch.
+pub static ACP_OPENCODE_PROVIDER: AcpProvider = AcpProvider {
+    id: "acp/opencode",
+    bridge_cmd: Some("opencode"),
+    bridge_args: &["acp"],
+};
+
+impl AcpProvider {
+    /// The resident adapter's `--bridge-cmd` override (`None` = the [`BRIDGE_BIN`] default). Read
+    /// by the residence create/resume paths (`run_new_acp_daemon`/`run_acp_resume`) to spawn the
+    /// right bridge program for this provider.
+    pub fn bridge_cmd(&self) -> Option<&'static str> {
+        self.bridge_cmd
+    }
+
+    /// The extra `--bridge-arg`s for this provider's bridge program (opencode: `["acp"]`).
+    pub fn bridge_args(&self) -> &'static [&'static str] {
+        self.bridge_args
+    }
+}
+
+/// Resolve a registered `acp/*` provider id to its concrete [`AcpProvider`] — the bridge spec's
+/// single home. The residence verbs read `bridge_cmd`/`bridge_args` off the SAME statics
+/// [`crate::provider::provider_for`] dispatches, so there is no second bridge mapping to drift.
+pub fn acp_provider_for(id: &str) -> Option<&'static AcpProvider> {
+    match id {
+        "acp/claude-code" => Some(&ACP_CC_PROVIDER),
+        "acp/opencode" => Some(&ACP_OPENCODE_PROVIDER),
+        _ => None,
+    }
+}
 
 impl Provider for AcpProvider {
     fn id(&self) -> &'static str {
         // Namespaced `acp/<bridge>` (A2 §A3-ACP): the registry/dispatch key + `--json` value.
-        "acp/claude-code"
+        self.id
     }
 
     fn hosting(&self) -> Hosting {
@@ -116,12 +171,17 @@ impl Provider for AcpProvider {
         Hosting::Daemon
     }
 
-    /// The bridge launch command. The argv is the `claude-code-acp` bin (+ passthrough); the
+    /// The bridge launch command. The argv is this provider's bridge program + args (+ passthrough
+    /// — claude-code: `claude-code-acp`; opencode: `opencode acp`); the
     /// host's spawn REMOVES [`BRIDGE_ENV_STRIP`] from the inherited env (the nesting guard —
     /// `LaunchPlan.env` can only ADD, so the removal is a spawn-time concern, documented here and
     /// applied in `client.rs`). Consumes NO claude config surface (no `fx.env`/config-toml read).
     fn launch_plan(&self, _fx: &ProviderFx, req: &LaunchRequest) -> LaunchPlan {
-        let mut argv = vec![BRIDGE_BIN.to_string()];
+        // The bridge program: this provider's override (opencode → `opencode acp`) or the
+        // compiled BRIDGE_BIN default (claude-code → `claude-code-acp`). For acp/claude-code
+        // (bridge_cmd None, bridge_args empty) this is byte-identical to the pre-A-OC.1 argv.
+        let mut argv = vec![self.bridge_cmd.unwrap_or(BRIDGE_BIN).to_string()];
+        argv.extend(self.bridge_args.iter().map(|a| a.to_string()));
         argv.extend(req.passthrough.iter().cloned());
         LaunchPlan {
             argv,

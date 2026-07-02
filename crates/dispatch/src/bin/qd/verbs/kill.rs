@@ -48,7 +48,9 @@ pub fn run(m: &ArgMatches) -> i32 {
     // are non-interactive: S2 name validation + resolve_or_die's LOUD
     // ambiguous-prefix refusal (common.rs) + the unambiguous W4 success line.
     let _ = m.get_flag("force");
-    let server = m.get_flag("server");
+    // `--server` was the OpenCode-only kill flag; A-OC.1 un-parks opencode (an `acp/opencode`
+    // row now GROUP-reaps via the acp/ arm below), so it is a deprecated parse-accepted no-op.
+    let _ = m.get_flag("server");
 
     let env = RealEnv;
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
@@ -70,16 +72,10 @@ pub fn run(m: &ArgMatches) -> i32 {
     };
     let session = &session;
 
-    // OpenCode kill (lifecycle.ts:542-577) — parked: the A1 join design only ever
-    // constructs provider:"claude-code" rows (see model.rs:92 + join.rs construction
-    // sites), so this branch is structurally unreachable until an OC-join lands.
-    // Kept structurally honest (ADD-9a), mirroring run_attach's parked OC branch.
-    // NOTE: spec §2 carries no OC exclusion — the real ground is the A1 join design.
-    if session.provider == "opencode" {
-        eprintln!("qd stop: OpenCode kill is not supported in the Rust engine (parked).");
-        let _ = server; // --server is the OC-only flag; parked with the branch.
-        return 1;
-    }
+    // A-OC.1: opencode is un-parked — an `acp/opencode` row is daemon-hosted and reaches the
+    // acp/ GROUP-reap arm below (session.provider.starts_with("acp/") → run_acp_kill), reaping
+    // the resident adapter + its `opencode acp` bridge child together, exactly like
+    // acp/claude-code. No by-name opencode kill branch remains.
     // codex P2 W7 (codex-p2-spec §7.6 kill paragraph): a codex row is DAEMON-hosted —
     // the daemon pid IS the session. Reap it GROUP-addressed (the W4
     // RealDaemonSpawner::kill pgid ladder — the launcher ignores SIGTERM + a

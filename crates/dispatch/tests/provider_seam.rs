@@ -611,7 +611,9 @@ fn conformance_codex() {
 #[test]
 fn conformance_acp() {
     let fix = acp_fixture();
-    conformance(&acp::AcpProvider, &fix);
+    // A-OC.1: AcpProvider is now a fielded struct (bridge-parameterized); drive the conformance
+    // harness against the registered acp/claude-code singleton (representative of the driver).
+    conformance(&acp::ACP_CC_PROVIDER, &fix);
 }
 
 // ===========================================================================
@@ -810,7 +812,7 @@ fn daemon_steer_stale_precondition_is_typed_error() {
     );
 }
 
-/// `provider_for`: "claude-code" resolves; "fixture-daemon" does NOT resolve from
+/// `provider_for`: the known providers resolve; "fixture-daemon" does NOT resolve from
 /// the production registry; an unknown id → None.
 ///
 /// MUTATION EVIDENCE: registering the fixture in `provider_for` would make
@@ -818,8 +820,12 @@ fn daemon_steer_stale_precondition_is_typed_error() {
 /// that. The fixture is a CONFORMANCE construct, not a dispatchable provider.
 /// DOCUMENTED CHOICE (codex-p1-spec section 2.3): the fixture is constructed
 /// directly by the conformance lane, never via the registry.
+///
+/// A-OC.1: opencode is now a registered provider — `--provider opencode` (Pete's ergonomic)
+/// and the internal id `acp/opencode` BOTH resolve to the opencode-bridged AcpProvider (id
+/// `acp/opencode`). Reverting the alias reds the two opencode asserts.
 #[test]
-fn provider_for_registry_is_claude_only() {
+fn provider_for_registry_resolves_known_providers() {
     assert_eq!(
         provider_for("claude-code").map(|p| p.id()),
         Some("claude-code"),
@@ -829,9 +835,15 @@ fn provider_for_registry_is_claude_only() {
         provider_for("fixture-daemon").is_none(),
         "the fixture daemon is NOT a registered/dispatchable provider"
     );
-    assert!(
-        provider_for("opencode").is_none(),
-        "opencode is parked (verbs keep their branches), not a Provider impl"
+    assert_eq!(
+        provider_for("opencode").map(|p| p.id()),
+        Some("acp/opencode"),
+        "A-OC.1: --provider opencode resolves to the acp/opencode provider (CLI alias)"
+    );
+    assert_eq!(
+        provider_for("acp/opencode").map(|p| p.id()),
+        Some("acp/opencode"),
+        "the internal id acp/opencode resolves too"
     );
     assert!(
         provider_for("totally-unknown").is_none(),

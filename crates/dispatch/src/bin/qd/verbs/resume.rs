@@ -105,15 +105,10 @@ pub fn run(m: &ArgMatches) -> i32 {
         Err(code) => return code,
     };
 
-    // OpenCode refusal (lifecycle.ts:415-435) — parked: the A1 join design only
-    // constructs provider:"claude-code" rows (model.rs:92 + join.rs sites), so this
-    // branch is structurally unreachable until an OC-join lands (ADD-9a). Kept
-    // structurally honest. NOTE: spec §2 carries no OC exclusion — the real ground
-    // is the A1 join design.
-    if session.provider == "opencode" {
-        eprintln!("qd resume: OpenCode resume is not supported in the Rust engine (parked).");
-        return 1;
-    }
+    // A-OC.1: opencode is un-parked — an `acp/opencode` row is daemon-hosted and reaches the
+    // acp/ revive arm below (session.provider.starts_with("acp/") → run_acp_resume), which
+    // re-spawns the resident in LOAD mode with the opencode bridge re-derived from the row's
+    // provider. No by-name opencode refusal branch remains.
     // codex P2 W7 (codex-p2-spec §7.6; ADD-26(2)): a codex row is DAEMON-hosted —
     // resume is a first-class AGENT verb = thread/resume revive-to-DRIVABLE with NO
     // interactive-attach tail (agents have no TTY; attach/--remote is SEVERED). This
@@ -791,9 +786,13 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     let paths = QdPaths::from_home(&home);
 
     // Resumability gate (the acp analog of resume.rs's `no resumable transcript` arm):
-    // a stopped acp row needs BOTH a sessionId (to `session/load`) and a jsonl_path
-    // (the bridge's CC store the load reads). Either missing → nothing to resume.
-    if session.session_id.is_empty() || session.jsonl_path.is_none() {
+    // a stopped acp row always needs a sessionId (the ACP `session/load` handle). acp/claude-code
+    // ADDITIONALLY needs a jsonl_path — the CC store the bridge's load reads. A-OC.1: acp/opencode
+    // persists to opencode's OWN store (NOT the CC projects dir), so it has no jsonl_path; gate it
+    // on the sessionId alone (opencode advertises the `loadSession` capability). The provider
+    // check keeps acp/claude-code's gate BYTE-IDENTICAL.
+    let needs_cc_transcript = session.provider == "acp/claude-code";
+    if session.session_id.is_empty() || (needs_cc_transcript && session.jsonl_path.is_none()) {
         eprintln!(
             "qd resume: session \"{name}\" was stopped and has no resumable transcript — \
              nothing to resume."
@@ -869,8 +868,24 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     let cwd_str = session.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| ".".to_string());
     let cwd = PathBuf::from(&cwd_str);
 
+    // A-OC.1: re-derive THIS row's bridge from its provider so a RESUME re-spawns the SAME
+    // bridge the create path did (acp/claude-code → BRIDGE_BIN default via bridge_cmd None,
+    // byte-identical; acp/opencode → `opencode acp`). Without this a resumed opencode session
+    // would respawn `claude-code-acp` loading an opencode session — the verb-routing-arms trap.
+    let acp = dispatch::provider::acp::acp_provider_for(&session.provider);
+    let bridge_cmd = acp.and_then(|p| p.bridge_cmd());
+    let bridge_args: Vec<String> = acp
+        .map(|p| p.bridge_args().iter().map(|a| a.to_string()).collect())
+        .unwrap_or_default();
     // LOAD MODE: `--load-session <sessionId>` → the adapter boots via real `session/load`.
-    let argv = build_adapter_argv(&exe, &endpoint, &cwd, None, &[], Some(&session.session_id));
+    let argv = build_adapter_argv(
+        &exe,
+        &endpoint,
+        &cwd,
+        bridge_cmd,
+        &bridge_args,
+        Some(&session.session_id),
+    );
     let log_path = home
         .join(".quorum")
         .join("dispatch")
@@ -969,7 +984,11 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     // post-resume wait can confirm the turn CONTINUED the SAME bridge JSONL (fork-on-load
     // detection) from PRIMARY source. Best-effort: a marker-write failure does not fail
     // the resume (the turn still works; we just lose the one-time verification).
-    {
+    // A-OC.1: this is a claude-bridge fork-on-load check against the CC projects JSONL; it does
+    // NOT apply to acp/opencode (opencode persists to its own store, no CC JSONL to baseline), so
+    // skip it for non-claude bridges — otherwise the wait-side verify would always read
+    // Unconfirmed and emit a misleading degraded-confidence warning on every opencode resume.
+    if session.provider == "acp/claude-code" {
         use dispatch::resume_daemon::{
             resume_verify_marker_path, write_resume_verify_marker, ResumeVerifyMarker,
         };

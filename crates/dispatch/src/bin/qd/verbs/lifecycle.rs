@@ -27,8 +27,8 @@ use super::common;
 /// The cold-vs-done outcome of [`attach_resolved`] (W1 phase 2). A `MuxPane`
 /// (claude) session with no live pane is `Cold` — the SHARED mechanic returns it to
 /// the CALLER instead of deciding: `connect` maps it to auto-revive-then-attach.
-/// Every other path (opencode parked, daemon redirect, unknown-provider refusal,
-/// collision refusal, live attach) is a terminal `Done(code)`.
+/// Every other path (daemon redirect — incl. codex + acp/opencode, unknown-provider
+/// refusal, collision refusal, live attach) is a terminal `Done(code)`.
 pub enum AttachOutcome {
     Done(i32),
     Cold,
@@ -38,7 +38,7 @@ pub enum AttachOutcome {
 /// called by `connect::run` (its one caller since the attach-verb retirement,
 /// STATE 22). `verb` names the caller for the opencode/unknown-provider wording.
 ///
-/// Dispatch order: collision refusal → opencode (parked) → daemon redirect (codex)
+/// Dispatch order: collision refusal → daemon redirect (codex + acp/opencode)
 /// → unknown-provider refusal → cold-vs-live. Cold (`MuxPane`, no live pane) is
 /// returned to the CALLER as [`AttachOutcome::Cold`] (W1 phase 2): `connect`
 /// maps it to auto-revive-then-attach. All other outcomes are terminal
@@ -62,11 +62,9 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
             }
         }
     }
-    // OpenCode attach (commands/lifecycle.ts:362-376) is parked (OpenCode ruling).
-    if session.provider == "opencode" {
-        eprintln!("qd {verb}: OpenCode attach is not supported in the Rust engine (parked).");
-        return AttachOutcome::Done(1);
-    }
+    // A-OC.1: opencode is un-parked — an `acp/opencode` row is daemon-hosted, so it flows
+    // through the shared daemon-redirect below (provider_for resolves it; Hosting::Daemon →
+    // "no terminal to attach, drive with send:relay"), exactly like codex/acp/claude-code.
     // codex (Hosting::Daemon) IS supported but has no terminal to attach — the
     // shared LOUD redirect, NOT the wrong "unknown provider" refusal (latent fix).
     if let Some(p) = dispatch::provider::provider_for(&session.provider) {
@@ -367,13 +365,11 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // (no mux pane to render) — silently unused there.
     let render = common::resolve_render_mode(m, &env);
 
-    // Deferred surfaces: ACCEPT at parse (above), then honest error AFTER parse
-    // (spec §3 row 5 — this changes A2's reject-at-parse to accept-then-honest-error).
-    if provider.as_deref() == Some("opencode") || port.is_some() {
-        eprintln!(
-            "qd start: --provider opencode / --port are not yet supported in the Rust engine \
-             (parked OpenCode)."
-        );
+    // A-OC.1: `--provider opencode` is UN-PARKED — it resolves to the acp/opencode provider
+    // below and rides the acp/-prefix daemon create path. `--port` STAYS parked (the legacy
+    // opencode-ws port; the acp/opencode residence allocates its own loopback port).
+    if port.is_some() {
+        eprintln!("qd start: --port is not yet supported in the Rust engine (parked).");
         return 1;
     }
     // codex P1, R1 (codex-p1-spec section 3.3): FAIL-CLOSED on an unknown
@@ -383,10 +379,16 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // (the opencode/--port honest-error above stays FIRST + byte-identical). codex
     // P2 W4: codex is now a supported value (GATE-R RULED (A) daemon-thread).
     if let Some(p) = provider.as_deref() {
-        if p != "claude-code" && p != "codex" && p != "acp/claude-code" && p != "pi" {
+        if p != "claude-code"
+            && p != "codex"
+            && p != "acp/claude-code"
+            && p != "pi"
+            && p != "opencode"
+            && p != "acp/opencode"
+        {
             eprintln!(
                 "qd start: unknown provider \"{p}\" — this engine supports: claude-code, codex, \
-                 acp/claude-code, pi (--provider opencode is parked)."
+                 acp/claude-code, pi, opencode (= acp/opencode)."
             );
             return 1;
         }
@@ -401,7 +403,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let Some(provider_impl) = dispatch::provider::provider_for(provider_id) else {
         eprintln!(
             "qd start: unknown provider \"{provider_id}\" — this engine supports: claude-code, codex, \
-             acp/claude-code, pi (--provider opencode is parked)."
+             acp/claude-code, pi, opencode (= acp/opencode)."
         );
         return 1;
     };
@@ -1330,7 +1332,7 @@ fn run_new_pi_daemon(
 /// cross-process residence. On a readiness failure the adapter is group-killed (no orphan).
 #[allow(clippy::too_many_arguments)]
 fn run_new_acp_daemon(
-    _provider_impl: &'static dyn dispatch::provider::Provider,
+    provider_impl: &'static dyn dispatch::provider::Provider,
     _env: &RealEnv,
     home: &std::path::Path,
     paths: &dispatch::paths::QdPaths,
@@ -1365,7 +1367,15 @@ fn run_new_acp_daemon(
     // 3. spawn the adapter DETACHED (codex RealDaemonSpawner reuse: process_group(0),
     //    stdin null, stdout/stderr → log). The bridge child inherits the group.
     // create path: no `--load-session` (a brand-new session/new, not a resume).
-    let argv = build_adapter_argv(&exe, &endpoint, cwd, None, &[], None);
+    // A-OC.1: resolve THIS provider's bridge — acp/claude-code keeps the BRIDGE_BIN default
+    // (bridge_cmd None → build_adapter_argv emits NO `--bridge-cmd`, byte-identical); acp/opencode
+    // yields `--bridge-cmd opencode --bridge-arg acp` so the residence spawns `opencode acp`.
+    let acp = dispatch::provider::acp::acp_provider_for(provider_impl.id());
+    let bridge_cmd = acp.and_then(|p| p.bridge_cmd());
+    let bridge_args: Vec<String> = acp
+        .map(|p| p.bridge_args().iter().map(|a| a.to_string()).collect())
+        .unwrap_or_default();
+    let argv = build_adapter_argv(&exe, &endpoint, cwd, bridge_cmd, &bridge_args, None);
     let log_path = home
         .join(".quorum")
         .join("dispatch")
@@ -1420,7 +1430,9 @@ fn run_new_acp_daemon(
         entrypoint: None,
         backend: None,
         spawned_by: None,
-        provider: Some("acp/claude-code".to_string()),
+        // A-OC.1: persist THIS provider's id (acp/claude-code OR acp/opencode) so the other
+        // verbs (kill/wait/resume/send:relay) route + re-derive the bridge from the row.
+        provider: Some(provider_impl.id().to_string()),
         endpoint: Some(endpoint),
         // A freshly-created healthy row carries NO degradation latch (the tier is
         // DERIVED per verb; only a drop-to-floor persists `transport`).
