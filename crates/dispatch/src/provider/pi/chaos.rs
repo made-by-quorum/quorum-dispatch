@@ -402,13 +402,41 @@ fn comm_of(pid: i64) -> Option<String> {
 /// Phase-2 converge): a coordinator's keep-alive `sleep`/shell leaves naturally
 /// spawn+exit constantly, and their exit is NOT an outage. These are EXCLUDED from
 /// the layer-(b) durable snapshot so a benign natural exit cannot false-VOID a round.
-/// Everything else (qd/claude/codex/pi daemons + coordinators) is DURABLE — PROTECTED.
-/// The list is deliberately narrow: if a comm is not obviously transient churn it is
-/// treated as durable (fail-safe toward MORE protection, never less).
+///
+/// A4.1 ALSO excludes the build-TOOLCHAIN comm set (super-22's build-churn hardening):
+/// when a `cargo` build overlaps a live converge round, its compiler/linker/build-driver
+/// processes transit fleet.service and EXIT as build steps finish mid-round — a benign
+/// exit that would otherwise read as a durable member vanishing (false BREACH / VOID).
+/// This set is EMPIRICALLY DERIVED, NOT guessed: an `strace -f -e execve` capture of a
+/// real cold `cap-cargo` + `sccache` build on THIS box (aarch64), taking only successful
+/// exec basenames truncated to the 15-char `TASK_COMM` width that `/proc/<pid>/comm`
+/// reports (see `comm_of`). Observed here: `cargo`/`rustc`/`sccache` (drivers),
+/// `cc`/`collect2`/`ld.mold` (the linker chain — this box links via the `mold` linker,
+/// whose comm is `ld.mold`, per the cargo config's `-fuse-ld=mold`, plus GNU `collect2`),
+/// `build-script-bu` (a compiled `build-script-build`, comm-truncated to 15), and
+/// `pkg-config` (dependency probing). Names the toolchain could spawn but that did NOT
+/// transit on this box (no C/C++ source, no `rust-lld`/`lld`/`clang`) are deliberately
+/// NOT added: including un-observed names would be guessing, and their absence errs SAFE
+/// (an uncovered build tool → false-VOID, never a missed real breach).
+///
+/// CORRECTNESS (why relaxing protection for this set is SAFE + leaves the teeth intact):
+/// a build-toolchain process in fleet.service is ALWAYS ephemeral build churn — it is
+/// NEVER a legitimate durable fleet member (durable = qd/claude=node/relay/pi/codex/
+/// systemd daemons + coordinators). Excluding it therefore errs CORRECTLY (prevents a
+/// false-VOID) WITHOUT weakening real-breach detection: no durable member is ever named
+/// `rustc`/`cargo`/`cc`/`ld.mold`/etc., so a real qd/claude/pi/relay vanish STILL VOIDs.
+/// The match is EXACT full-comm (never substring), so no build name can collide with a
+/// durable member. Everything NOT in this deliberately-narrow set stays durable/PROTECTED
+/// (fail-safe toward MORE protection, never less: an unknown or future comm errs toward
+/// false-VOID, never toward missing a real breach).
 fn is_transient_comm(comm: &str) -> bool {
     matches!(
         comm,
+        // super-21: keep-alive / shell churn.
         "sleep" | "bash" | "sh" | "dash" | "env" | "timeout" | "cat" | ""
+        // A4.1: empirically-derived build-toolchain churn (this box, EXACT full-comm).
+        | "cargo" | "rustc" | "sccache" | "cc" | "collect2" | "ld.mold"
+        | "build-script-bu" | "pkg-config"
     ) || comm.contains("<defunct>")
 }
 
@@ -1662,10 +1690,106 @@ mod tests {
             assert!(is_transient_comm(churn), "{churn} should be transient");
         }
         assert!(is_transient_comm("sleep <defunct>"));
+        // A4.1: the empirically-derived build-toolchain set is ALSO transient (a build
+        // overlapping a converge must not false-VOID when a build step exits mid-round).
+        for build in BUILD_TOOLCHAIN_COMMS {
+            assert!(is_transient_comm(build), "{build} (build toolchain) should be transient");
+        }
         // Fail-safe toward protection: anything not obviously churn is durable.
         for durable in ["qd", "claude", "codex", "pi", "node", "relay", "systemd"] {
             assert!(!is_transient_comm(durable), "{durable} must be durable/protected");
         }
+        // EXACT full-comm, never substring: no build comm collides with a durable member,
+        // and a name merely CONTAINING a build comm stays durable (e.g. a hypothetical
+        // "cargo-daemon" is NOT falsely transient).
+        for durable in ["qd", "claude", "codex", "pi", "node", "relay", "systemd"] {
+            for build in BUILD_TOOLCHAIN_COMMS {
+                assert_ne!(*build, durable, "build comm {build} must not equal durable {durable}");
+            }
+        }
+        assert!(!is_transient_comm("cargo-daemon"), "substring must NOT match");
+        assert!(!is_transient_comm("rustc-wrapper"), "substring must NOT match");
+    }
+
+    /// The A4.1 empirically-derived build-toolchain comm set (this box, aarch64),
+    /// mirrored from `is_transient_comm` for the classification + non-vacuity tests.
+    const BUILD_TOOLCHAIN_COMMS: &[&str] = &[
+        "cargo",
+        "rustc",
+        "sccache",
+        "cc",
+        "collect2",
+        "ld.mold",
+        "build-script-bu",
+        "pkg-config",
+    ];
+
+    /// NON-VACUITY via the SHARED source (super-22's revert-probe bar, acceptance-
+    /// BLOCKING). This drives the SAME `is_transient_comm` classifier that
+    /// `fleet_snapshot_durable` uses (here over a synthetic fleet so the build-overlap
+    /// scenario is exercisable without /proc), then runs the real teeth
+    /// (`fleet_intact`/`fleet_lost`) over the resulting durable snapshot. It proves BOTH
+    /// halves through ONE shared mechanism:
+    ///   (a) a build finishing mid-converge does NOT false-VOID (build churn filtered out);
+    ///   (b) a DURABLE member vanishing STILL VOIDs (teeth untouched).
+    /// REVERT-PROBE: deleting the A4.1 build-comm additions from `is_transient_comm`
+    /// FLIPS (a) RED (a build tool becomes "durable", so its benign exit VOIDs) while
+    /// (b) stays GREEN — proving the additions are load-bearing AND distinct from the
+    /// teeth (not a vacuous relabel). The `durable_of` closure below is the exact
+    /// synthetic analogue of `fleet_snapshot_durable`'s `!is_transient_comm(comm_of(p))`
+    /// filter, so a revert genuinely propagates here.
+    #[test]
+    fn build_churn_no_void_but_durable_vanish_still_voids() {
+        // Durable snapshot = fleet members MINUS transient churn — the SHARED classifier,
+        // exactly as fleet_snapshot_durable applies it (synthetic comms in place of /proc).
+        let durable_of = |members: &[(i64, &str)]| -> HashSet<i64> {
+            members
+                .iter()
+                .filter(|(_, c)| !is_transient_comm(c))
+                .map(|(p, _)| *p)
+                .collect()
+        };
+
+        // A live fleet during a build-overlapping converge: durable daemons/coordinators
+        // (10-14) PLUS the whole build toolchain (20-27) transiting fleet.service.
+        let before_members: &[(i64, &str)] = &[
+            (10, "qd"),
+            (11, "claude"),
+            (12, "pi"),
+            (13, "relay"),
+            (14, "codex"),
+            (20, "rustc"),
+            (21, "cc"),
+            (22, "ld.mold"),
+            (23, "build-script-bu"),
+            (24, "sccache"),
+            (25, "cargo"),
+            (26, "collect2"),
+            (27, "pkg-config"),
+        ];
+        let before = durable_of(before_members);
+        // The durable snapshot EXCLUDES every build-tool pid, KEEPS every daemon.
+        // (Under a revert this assertion ALSO flips, since the build pids re-enter.)
+        assert_eq!(
+            before,
+            set(&[10, 11, 12, 13, 14]),
+            "build toolchain must be filtered OUT of the durable snapshot"
+        );
+
+        // (a) The build finishes mid-round: the ENTIRE toolchain exits; daemons survive.
+        let after_build_done = set(&[10, 11, 12, 13, 14]);
+        assert!(
+            fleet_intact(&before, &after_build_done).is_ok(),
+            "a build finishing mid-converge must NOT false-VOID (build churn is transient)"
+        );
+
+        // (b) A DURABLE member (claude, pid 11) vanishes — teeth intact: STILL VOIDs.
+        let after_outage = set(&[10, 12, 13, 14]);
+        assert_eq!(
+            fleet_lost(&before, &after_outage, &HashSet::new()),
+            vec![11],
+            "a durable member vanishing MUST still be caught (teeth untouched)"
+        );
     }
 
     #[test]
