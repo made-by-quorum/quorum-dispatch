@@ -1264,12 +1264,14 @@ fn run_new_pi_daemon(
     use dispatch::create_daemon::RealDaemonSpawner;
     use dispatch::provider::pi::daemon::{create_pi_session, PiCreateDeps, PiCreateParams};
 
-    // A create-time prompt would be a model TURN (tier-b / OAuth); pi tier-a create
-    // is credential-free + turn-free, so a prompt is deferred, not driven here.
+    // A create-time prompt would be a model TURN (tier-b / OAuth); pi tier-a create is
+    // credential-free + turn-free by design, so `-p` is not driven at create. The pi turn
+    // path is now live via SEND — point the caller at it rather than advertising an unwired
+    // future (A5 wired the send arm; start / send / wait / kill / resume are all live now).
     if prompt.as_deref().is_some_and(|s| !s.is_empty()) {
         eprintln!(
-            "qd start: --provider pi ignores -p at create (tier-a is turn-free). A pi turn is a \
-             tier-b model turn wired in a later atomic; pi start / wait / kill / resume are live now."
+            "qd start: --provider pi ignores -p at create (tier-a create is turn-free). To drive a \
+             pi turn, send to the running session: qd send:relay {name} \"<prompt>\"."
         );
     }
 

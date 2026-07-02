@@ -88,18 +88,16 @@ fn run_with_client(
         return run_acp_send(&session, message);
     }
 
-    // WS-A.2: a pi row's SEND is a live model TURN (tier-b), deferred to a later atomic
-    // (A5 pi live-turn). pi's live verb-path TODAY is start / wait / kill / resume. Give
-    // an HONEST deferred message (pi IS a known provider) — NOT the misleading "unknown
-    // provider" reject, and NOT a bare "has no relay." (pi has a ws endpoint, no relay
-    // port). Placed beside the codex/acp SEND arms, BEFORE the relay-port-None check.
+    // WS-A.5: a pi row's SEND is a live model TURN — reconnect to the resident pi-daemon's
+    // ws front and drive `PiProvider::inject` (prompt{streamingBehavior:"steer"}: starts a
+    // fresh turn when idle, steers the open turn when busy). Routed here BEFORE the
+    // relay-port-None check (a pi row has a ws endpoint, no relay port), exactly as the
+    // codex/acp SEND arms are. A5 flips the A2 graceful-deferred arm deferred→live.
     if provider_id == "pi" {
-        eprintln!(
-            "qd send:relay: \"{session_name}\" is a pi session — sending a turn to pi is a live \
-             model turn (tier-b), wired in a later atomic. pi start / wait / kill / resume are \
-             live now."
-        );
-        return 1;
+        let Some(session) = session else {
+            return no_relay_exit(&session_name);
+        };
+        return run_pi_send(&session, message);
     }
 
     // No port on the resolved session → "has no relay." exit 1 (send.ts:406-409).
@@ -642,6 +640,106 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
             0
         }
         Err(InjectError::Precondition(s)) => {
+            eprintln!("qd send:relay: \"{name}\": send failed ({s}).");
+            1
+        }
+        Err(_) => not_reachable(&name),
+    }
+}
+
+/// WS-A.5 pi residence SEND path. The pi analog of [`run_acp_send`]: re-read the row's
+/// recorded `endpoint`, verify the resident pi-daemon's IDENTITY (pid alive AND the live
+/// `/proc` cmdline carries our `pi-daemon --listen <endpoint>` marker — defeats PID reuse:
+/// a connect-success is liveness, the cmdline + recorded endpoint is identity), connect a
+/// fresh short-lived [`PiRemote`] to the resident ws front, and drive `PiProvider::inject`.
+///
+/// `inject` mints a live turn via `prompt{streamingBehavior:"steer"}` — a single call that
+/// starts a fresh turn when the resident is idle and steers the open turn when busy (no
+/// per-turn believed-state read; contrast the codex `expectedTurnId` ladder). On success the
+/// minted turn id is printed (the async-send analog — the codex/acp arms print the turn id
+/// too). Events do NOT return through this client (`PiRemote::next_event` is `Ok(None)` by
+/// design — the resident routes pi's stream into the registry sink); a caller wanting the
+/// turn OUTCOME reads the registry/transcript, not the send reply. A dead/wrong-identity
+/// endpoint or a failed connect DEGRADES to the SEND "not reachable" surface — never a hang
+/// on a dead endpoint, never a fake.
+fn run_pi_send(session: &Session, message: &str) -> i32 {
+    use dispatch::provider::pi::residence::cmdline_is_our_pi_daemon;
+    use dispatch::provider::pi::{PiProvider, PiRemote, PiRpc};
+    use dispatch::provider::{InjectError, Provider, ProviderFx, SessionKey};
+
+    let name = session.name.clone().unwrap_or_default();
+    let env = RealEnv;
+    let paths = match common::paths_from_home(&env) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let not_reachable = |name: &str| {
+        eprintln!(
+            "qd send:relay: \"{name}\": pi session daemon not reachable (try qd resume {name})"
+        );
+        1
+    };
+
+    let Some(pid) = session.pid.filter(|&p| p != 0) else {
+        return not_reachable(&name);
+    };
+    // The endpoint lives in the registry row (re-read by pid; NOT on the --json surface).
+    let endpoint = dispatch::registry::read_entry(&paths.sessions_dir, pid)
+        .and_then(|e| e.endpoint)
+        .filter(|s| !s.is_empty());
+
+    // Identity + liveness fence (residence S6): a connect-success is liveness only — the
+    // live cmdline carrying OUR `pi-daemon --listen <endpoint>` marker (+ pid alive) is the
+    // identity guard against PID reuse. A wrong/dead identity degrades, never drives-on-dead.
+    let cmdline = dispatch::create_daemon::real_cmdline_probe(pid);
+    let identity_ok = endpoint.is_some()
+        && dispatch::effects::is_pid_alive(pid as i32)
+        && cmdline_is_our_pi_daemon(cmdline.as_deref(), endpoint.as_deref());
+    if !identity_ok {
+        return not_reachable(&name);
+    }
+    let endpoint = endpoint.expect("identity_ok implies a recorded endpoint");
+
+    // Connect a fresh short-lived remote to the resident ws front (the AcpConnection
+    // fail-fast discipline — a contended connect fails fast rather than hanging).
+    let remote = match PiRemote::connect(&endpoint, Duration::from_secs(5)) {
+        Ok(r) => r,
+        Err(_) => return not_reachable(&name),
+    };
+    let rpc_ref: &dyn PiRpc = &remote;
+    let fx = ProviderFx {
+        env: &env,
+        paths: &paths,
+        socket_dir: paths.sessions_dir.clone(),
+        mux: None,
+        clock: None,
+        sleeper: None,
+        relay: None,
+        relay_port: None,
+        app_server: None,
+        codex_expected_turn_id: None,
+        acp_client: None,
+        pi_rpc: Some(rpc_ref),
+    };
+    let key = SessionKey {
+        id: &session.session_id,
+        name: session.name.as_deref(),
+        cwd: session.cwd.as_deref(),
+        pid: session.pid,
+    };
+    let from = derive_from_session(&RealEnv);
+    let result = PiProvider.inject(&fx, &key, message, &from);
+    // Best-effort close of our short-lived client (the resident daemon stays up).
+    let _ = remote.close();
+    match result {
+        Ok(turn_id) => {
+            // The async-send analog: print the minted turn id, append usage.
+            println!("{turn_id}");
+            usage_send_relay(&name);
+            0
+        }
+        Err(InjectError::Precondition(s)) => {
+            // A refused/timed-out prompt (PA9: the sink stays idle) — SEND-vocabulary only.
             eprintln!("qd send:relay: \"{name}\": send failed ({s}).");
             1
         }
