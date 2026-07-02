@@ -690,7 +690,7 @@ fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
         &is_alive,
         &probe,
     ) {
-        println!("session \"{name}\" is already alive (pi resident live); wait/kill it by name.");
+        println!("session \"{name}\" is already alive (pi resident live); wait/stop it by name.");
         return 0;
     }
 
@@ -738,7 +738,7 @@ fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
     match create_pi_session(&deps, &params) {
         Ok(out) => {
             println!(
-                "resumed pi session \"{}\" (daemon pid {}, {}); wait/kill it by name.",
+                "resumed pi session \"{}\" (daemon pid {}, {}); wait/stop it by name.",
                 out.name, out.pid, out.endpoint
             );
             0
