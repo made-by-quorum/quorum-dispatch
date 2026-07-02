@@ -680,25 +680,43 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
         1
     };
 
-    let Some(pid) = session.pid.filter(|&p| p != 0) else {
-        return not_reachable(&name);
-    };
+    // Identity + liveness fence (residence S6): a connect-success is liveness only — the
+    // live cmdline carrying OUR `pi-daemon --listen <endpoint>` marker (+ pid alive + a
+    // recorded endpoint) is the identity guard against PID reuse.
+    let pid = session.pid.filter(|&p| p != 0);
     // The endpoint lives in the registry row (re-read by pid; NOT on the --json surface).
-    let endpoint = dispatch::registry::read_entry(&paths.sessions_dir, pid)
+    let endpoint = pid
+        .and_then(|pid| dispatch::registry::read_entry(&paths.sessions_dir, pid))
         .and_then(|e| e.endpoint)
         .filter(|s| !s.is_empty());
+    let (pid_alive, cmdline_is_ours) = match pid {
+        Some(pid) => {
+            let cmdline = dispatch::create_daemon::real_cmdline_probe(pid);
+            (
+                dispatch::effects::is_pid_alive(pid as i32),
+                cmdline_is_our_pi_daemon(cmdline.as_deref(), endpoint.as_deref()),
+            )
+        }
+        None => (false, false),
+    };
 
-    // Identity + liveness fence (residence S6): a connect-success is liveness only — the
-    // live cmdline carrying OUR `pi-daemon --listen <endpoint>` marker (+ pid alive) is the
-    // identity guard against PID reuse. A wrong/dead identity degrades, never drives-on-dead.
-    let cmdline = dispatch::create_daemon::real_cmdline_probe(pid);
-    let identity_ok = endpoint.is_some()
-        && dispatch::effects::is_pid_alive(pid as i32)
-        && cmdline_is_our_pi_daemon(cmdline.as_deref(), endpoint.as_deref());
-    if !identity_ok {
-        return not_reachable(&name);
+    // A6.1 DEAD-ONLY floor (super-22 acceptance condition 8): when the native rpc
+    // resident is PROVABLY DEAD/GONE (no pid / pid dead / wrong-identity cmdline /
+    // missing endpoint — the S6 "not reachable" branch) DROP to the structured
+    // `-p --mode json` floor instead of erroring. A LIVE identity-verified resident
+    // NEVER floors — even the failed/slow ws connect below stays "not reachable" (the
+    // rpc retry/steer surface), because a one-shot `-c --session-dir` concurrent with
+    // the resident's OPEN session JSONL would race/corrupt it (single-writer safety).
+    // dead ⇒ floor + reuse-dir; alive ⇒ never floor.
+    if dispatch::provider::pi::floor::floor_may_fire(
+        pid.is_some(),
+        pid_alive,
+        cmdline_is_ours,
+        endpoint.is_some(),
+    ) {
+        return run_pi_floor_send(session, message, &env, &paths);
     }
-    let endpoint = endpoint.expect("identity_ok implies a recorded endpoint");
+    let endpoint = endpoint.expect("live identity-verified resident implies a recorded endpoint");
 
     // Connect a fresh short-lived remote to the resident ws front (the AcpConnection
     // fail-fast discipline — a contended connect fails fast rather than hanging).
@@ -744,6 +762,110 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
             1
         }
         Err(_) => not_reachable(&name),
+    }
+}
+
+/// A6.1 pi structured-floor SEND — the DEAD-ONLY fallback lane. Reached from
+/// [`run_pi_send`] ONLY when the native rpc resident is provably dead (the S6
+/// identity+liveness fence failed; [`dispatch::provider::pi::floor::floor_may_fire`]).
+/// Delivers the turn via a ONE-SHOT `pi -p --mode json -c --session-dir <dedicated>`
+/// child and captures the outcome SCRAPE-FREE from the `turn_end`/`agent_end` ndjson
+/// (see [`dispatch::provider::pi::floor`]). Continuity = `-c` + one dedicated
+/// per-qd-session `--session-dir` (turn-2 resumes turn-1's single appended session
+/// file). The drop is OBSERVABLE (a stderr drop-log line — ACP-ladder parity, never a
+/// silent degrade). pi's OWN settings cred (openai-codex, `~/.pi/agent`) is inherited —
+/// NEVER a `--provider`/credential override or swap.
+fn run_pi_floor_send(
+    session: &Session,
+    message: &str,
+    env: &RealEnv,
+    paths: &dispatch::paths::QdPaths,
+) -> i32 {
+    use dispatch::provider::pi::{floor, PiProvider};
+    use dispatch::provider::Provider;
+
+    let name = session.name.clone().unwrap_or_default();
+
+    // pi binary: the QD_PI_BIN override (pi is NOT on PATH in quorum boxes) else "pi".
+    let pi_bin = env
+        .var("QD_PI_BIN")
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "pi".to_string());
+
+    // pi's sessions root off env ONLY (PI_CODING_AGENT_SESSION_DIR else
+    // $HOME/.pi/agent/sessions) — reuse the provider's public resolver via a minimal
+    // env-only fx (transcript_root reads fx.env, never paths).
+    let fx = pi_resolve_fx(env, paths);
+    let sessions_root = PiProvider.transcript_root(&fx);
+    // One dedicated floor dir per qd-session, isolated from the rpc resident's
+    // sessions so `-c`'s most-recent pick is unambiguous + turn-2 resumes turn-1.
+    let session_dir = floor::floor_session_dir(&sessions_root, &session.session_id);
+    if let Err(e) = std::fs::create_dir_all(&session_dir) {
+        eprintln!("qd send:relay: \"{name}\": pi floor could not create session dir: {e}");
+        return 1;
+    }
+    let continue_session = floor::dir_has_session(&session_dir);
+    let cwd = session
+        .cwd
+        .as_deref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+
+    // Observable degrade (never silent — the ACP-ladder drop-log parity).
+    eprintln!(
+        "{}",
+        floor::floor_drop_log_line(&name, "native rpc resident not identity-verified")
+    );
+
+    let turn = floor::FloorTurn {
+        pi_bin: &pi_bin,
+        session_dir: &session_dir,
+        cwd: &cwd,
+        prompt: message,
+        continue_session,
+    };
+    match floor::run_floor_turn(&turn, floor::DEFAULT_FLOOR_TIMEOUT) {
+        Ok(outcome) => {
+            // Best-effort structured delivery: the turn landed and was captured
+            // scrape-free. The outcome persists in the appended session file (the
+            // transcript-read analog of the async rpc send). Confirm delivery on
+            // stderr; SEND-vocabulary only.
+            eprintln!(
+                "qd send:relay: \"{name}\": delivered via pi structured floor (stopReason={}).",
+                outcome.stop_reason.as_deref().unwrap_or("?")
+            );
+            usage_send_relay(&name);
+            0
+        }
+        Err(e) => {
+            eprintln!("qd send:relay: \"{name}\": pi floor delivery failed ({e}).");
+            1
+        }
+    }
+}
+
+/// A minimal `ProviderFx` for resolving pi's env-only `transcript_root`
+/// (`PI_CODING_AGENT_SESSION_DIR`/$HOME — never paths). Borrow lifetimes are
+/// bounded by the caller's `env`/`paths`.
+fn pi_resolve_fx<'a>(
+    env: &'a RealEnv,
+    paths: &'a dispatch::paths::QdPaths,
+) -> dispatch::provider::ProviderFx<'a> {
+    dispatch::provider::ProviderFx {
+        env,
+        paths,
+        socket_dir: paths.sessions_dir.clone(),
+        mux: None,
+        clock: None,
+        sleeper: None,
+        relay: None,
+        relay_port: None,
+        app_server: None,
+        codex_expected_turn_id: None,
+        acp_client: None,
+        pi_rpc: None,
     }
 }
 

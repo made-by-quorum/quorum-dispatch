@@ -37,6 +37,7 @@ use crate::provider::{
 pub mod chaos;
 pub mod conformance;
 pub mod daemon;
+pub mod floor;
 pub mod pin;
 pub mod redteam;
 pub mod remote;

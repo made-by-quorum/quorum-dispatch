@@ -357,6 +357,285 @@ fn pi_tier_b_send_turn_live() {
     }
 }
 
+// ===========================================================================
+// A6.1 — pi STRUCTURED FLOOR (Shape S) integrated continuity + DEAD-ONLY trigger,
+// RUN-not-read. Drives the WIRED `qd send:relay` pi arm end-to-end and proves:
+//   * DEAD-ONLY trigger (super-22 cond 8): an ALIVE identity-verified resident is
+//     driven through the rpc path (NEVER floors); a PROVABLY-DEAD resident (killed
+//     pid, row not tombstoned) DROPS to the structured `-p --mode json` floor.
+//   * INTEGRATED CONTINUITY (acceptance 1, BLOCKING): ≥2 turns THROUGH the floor
+//     lane (the run_pi_send → floor::run_floor_turn path, NOT a standalone `pi -p`);
+//     turn-2 RECALLS turn-1's codeword; the floor session persists as a SINGLE
+//     appended file (no fork) under a dedicated per-qd-session dir.
+//   * SCRAPE-FREE capture: the outcome is parsed from the `turn_end`/`agent_end`
+//     ndjson by floor::parse_floor_stdout (the driver the arm calls).
+//   * NON-VACUITY: the floor-drop stderr line is asserted (the run actually took the
+//     floor branch, never a skip-mode no-op).
+// TIER: needs pi's OWN `~/.pi/agent` OAuth for a real recall turn (A6-FULL); cred
+// absent ⇒ A6-PARTIAL (trigger + drop observed; recall deferred). NEVER claude/swap.
+// DISTINCT gate `QD_PI_FLOOR_LIVE=1`. Bounded spend: ~3 tiny turns.
+//   QD_PI_FLOOR_LIVE=1 QD_PI_BIN=~/.npm-pi-global/bin/pi \
+//     cargo test -p quorum-dispatch --test pi_verb_roundtrip_live \
+//       pi_floor_continuity_live -- --nocapture --test-threads=1
+
+fn floor_live() -> bool {
+    std::env::var("QD_PI_FLOOR_LIVE").as_deref() == Ok("1")
+}
+
+/// Count every `*.jsonl` under `dir` (recursive). A single file across ≥2 floor
+/// turns is the "single appended session, no fork" continuity proof.
+fn count_jsonl_files(dir: &Path) -> usize {
+    let mut n = 0usize;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|x| x.to_str()) == Some("jsonl") {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// True iff some `assistant`-role message across the `*.jsonl` under `dir` contains
+/// `needle`. This proves RECALL (turn-2's assistant reply carries the codeword) —
+/// distinct from turn-1's USER message which also contains it, so we require the
+/// `assistant` role on the SAME line.
+fn assistant_message_contains(dir: &Path, needle: &str) -> bool {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if p.extension().and_then(|x| x.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                for line in text.lines() {
+                    let compact: String =
+                        line.chars().filter(|c| !c.is_whitespace()).collect();
+                    if compact.contains("\"role\":\"assistant\"") && compact.contains(needle) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Read `(endpoint, sessionId, pid)` for a pi row by name. RUN-not-read.
+fn read_pi_row_with_pid(sessions_dir: &Path, name: &str) -> Option<(String, String, i64)> {
+    let want_name = format!("\"name\":\"{name}\"");
+    for e in std::fs::read_dir(sessions_dir).ok()?.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&p) else { continue };
+        let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        if !compact.contains(&want_name) {
+            continue;
+        }
+        let endpoint = extract_json_str(&compact, "endpoint")?;
+        let session_id = extract_json_str(&compact, "sessionId").unwrap_or_default();
+        let pid = extract_json_num(&compact, "pid").unwrap_or(0);
+        return Some((endpoint, session_id, pid));
+    }
+    None
+}
+
+/// Pull a numeric `"<key>":<number>` out of a whitespace-compacted JSON string.
+fn extract_json_num(compact: &str, key: &str) -> Option<i64> {
+    let needle = format!("\"{key}\":");
+    let start = compact.find(&needle)? + needle.len();
+    let rest = &compact[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '-')
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+#[test]
+fn pi_floor_continuity_live() {
+    if !floor_live() {
+        eprintln!(
+            "pi_floor_continuity_live: SKIPPED (set QD_PI_FLOOR_LIVE=1 to run the integrated floor turn)"
+        );
+        return;
+    }
+    let pi = pi_bin();
+    assert!(pi.exists(), "pinned pi binary not found at {} (set QD_PI_BIN)", pi.display());
+    let qd = PathBuf::from(env!("CARGO_BIN_EXE_qd"));
+
+    let home = tempfile::tempdir().expect("tempdir HOME");
+    let home_path = home.path().to_path_buf();
+    let sess_dir = home_path.join("pi-sessions");
+    std::fs::create_dir_all(&sess_dir).expect("mk sess dir");
+    let cred_present = link_real_pi_cred(&home_path);
+    let cwd = home_path.to_string_lossy().into_owned();
+    let name = "pi-floor";
+
+    let qd_cmd = |args: &[&str]| -> Command {
+        let mut c = Command::new(&qd);
+        c.args(args)
+            .env("HOME", &home_path)
+            .env("QD_PI_BIN", &pi)
+            .env("PI_CODING_AGENT_SESSION_DIR", &sess_dir);
+        for v in SCRUB_VARS {
+            c.env_remove(v);
+        }
+        c
+    };
+
+    // --- start a real pi resident (ALIVE) --------------------------------------
+    let start_out = qd_cmd(&["start", name, "--provider", "pi", "--cwd", &cwd])
+        .output()
+        .expect("spawn qd start");
+    assert!(
+        start_out.status.success(),
+        "qd start --provider pi failed: exit={:?}\nstderr={}",
+        start_out.status.code(),
+        String::from_utf8_lossy(&start_out.stderr)
+    );
+    let sessions_dir = QdPaths::from_home(&home_path).sessions_dir;
+    let (endpoint, session_id, pid) =
+        read_pi_row_with_pid(&sessions_dir, name).expect("pi row after start");
+    assert!(endpoint.starts_with("ws://"), "row endpoint not ws: {endpoint}");
+    assert!(pid > 0, "row pid not recorded (cannot prove dead-vs-alive)");
+
+    // Teardown guard (belt-and-suspenders; the group kill below already reaps).
+    struct Killer<'a> {
+        run: &'a dyn Fn(&[&str]) -> Command,
+        name: &'a str,
+    }
+    impl Drop for Killer<'_> {
+        fn drop(&mut self) {
+            let _ = (self.run)(&["stop", self.name]).output();
+        }
+    }
+    let _killer = Killer { run: &qd_cmd, name };
+
+    // --- CO-FIRE ISOLATION (super-22 cond 8, ALIVE side): a send against the LIVE
+    //     identity-verified resident is driven through the rpc path and NEVER floors.
+    let alive_send = qd_cmd(&["send:relay", name, "Reply with only: OK. No tool use."])
+        .output()
+        .expect("spawn alive send");
+    let alive_stderr = String::from_utf8_lossy(&alive_send.stderr).to_string();
+    assert_eq!(
+        alive_send.status.code(),
+        Some(0),
+        "alive send (rpc path) did not exit 0: stderr={alive_stderr}"
+    );
+    assert!(
+        !alive_stderr.contains("dropped to the structured"),
+        "ALIVE resident FLOORED — dead-only trigger violated (single-writer-safety break)\nstderr={alive_stderr}"
+    );
+
+    // --- kill the resident's process GROUP → PROVABLY DEAD (row not tombstoned) --
+    // The neg-pgid goes via `kill -9 -- -<pgid>` (the external-kill neg-pgid misparse
+    // guard); the resident is its own pgid leader, so `-pid` is the group (reaps the
+    // resident + its pi rpc child, no orphan leak).
+    let _ = Command::new("kill")
+        .args(["-9", "--", &format!("-{pid}")])
+        .output();
+    let mut dead = false;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if !dispatch::effects::is_pid_alive(pid as i32) {
+            dead = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(dead, "resident pid {pid} still alive after group kill — cannot prove DEAD-ONLY trigger");
+
+    // The floor's dedicated per-qd-session dir (isolated from the resident's sessions
+    // under sess_dir root). Count/recall across the whole qd-floor tree so the proof
+    // does not depend on the exact session-id derivation.
+    let floor_root = sess_dir.join("qd-floor");
+    let codeword = "ZEPHYR";
+
+    // --- TURN 1 THROUGH THE FLOOR: seed the codeword ----------------------------
+    let t1_prompt =
+        format!("Remember this codeword for later: {codeword}. Reply with only: OK. No tool use.");
+    let t1 = qd_cmd(&["send:relay", name, &t1_prompt]).output().expect("spawn floor t1");
+    let t1_stderr = String::from_utf8_lossy(&t1.stderr).to_string();
+    // NON-VACUITY + DEAD-ONLY (dead side): the send took the floor branch.
+    assert!(
+        t1_stderr.contains("dropped to the structured"),
+        "turn-1 did NOT drop to the floor against a dead resident (trigger not exercised)\nstderr={t1_stderr}"
+    );
+
+    // --- TURN 2 THROUGH THE FLOOR: recall (continuity via -c + same dir) ---------
+    let t2_prompt = "What was the codeword I asked you to remember? Reply with only that word. No tool use.";
+    let t2 = qd_cmd(&["send:relay", name, t2_prompt]).output().expect("spawn floor t2");
+    let t2_stderr = String::from_utf8_lossy(&t2.stderr).to_string();
+    assert!(
+        t2_stderr.contains("dropped to the structured"),
+        "turn-2 did NOT drop to the floor\nstderr={t2_stderr}"
+    );
+
+    // --- continuity: SINGLE appended session file (no fork) + assistant RECALL ---
+    let session_files = count_jsonl_files(&floor_root);
+    let recalled = assistant_message_contains(&floor_root, codeword);
+
+    let tier = if cred_present && session_files == 1 && recalled {
+        "A6-FULL"
+    } else {
+        "A6-PARTIAL(trigger+delivery)"
+    };
+    let evidence = format!(
+        "{{\n  \"tier\": \"{tier}\",\n  \"cred_present\": {cred_present},\n  \
+         \"session_id\": \"{session_id}\",\n  \"resident_pid\": {pid},\n  \
+         \"resident_killed_dead\": {dead},\n  \"alive_send_floored\": {},\n  \
+         \"t1_exit\": {:?},\n  \"t2_exit\": {:?},\n  \"t1_dropped_to_floor\": {},\n  \
+         \"t2_dropped_to_floor\": {},\n  \"floor_session_files\": {session_files},\n  \
+         \"assistant_recalled_codeword\": {recalled}\n}}",
+        alive_stderr.contains("dropped to the structured"),
+        t1.status.code(),
+        t2.status.code(),
+        t1_stderr.contains("dropped to the structured"),
+        t2_stderr.contains("dropped to the structured"),
+    );
+    let evidence_path = std::env::var("QD_PI_FLOOR_EVIDENCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home_path.join("pi-a6-floor-evidence.json"));
+    let _ = std::fs::write(&evidence_path, &evidence);
+    eprintln!("=== pi A6.1 floor continuity evidence: {} ===", evidence_path.display());
+    eprintln!("{evidence}");
+
+    // --- rulings ---------------------------------------------------------------
+    if cred_present {
+        assert_eq!(t1.status.code(), Some(0), "turn-1 floor delivery did not exit 0\nstderr={t1_stderr}");
+        assert_eq!(t2.status.code(), Some(0), "turn-2 floor delivery did not exit 0\nstderr={t2_stderr}");
+        assert_eq!(
+            session_files, 1,
+            "continuity: floor forked into {session_files} session files (want 1 single appended file)"
+        );
+        assert!(
+            recalled,
+            "continuity: turn-2 did NOT recall codeword {codeword} through the integrated floor lane"
+        );
+        eprintln!(
+            "pi A6.1 floor A6-FULL GREEN: alive⇒rpc (no floor); dead⇒floor; 2 turns through the floor, single-file continuity + recall proven."
+        );
+    } else {
+        eprintln!(
+            "pi A6.1 floor A6-PARTIAL: DEAD-ONLY trigger proven (alive⇒no-floor, dead⇒floor drop-log observed x2); \
+             cred absent → recall/single-file completion deferred (durable cred-gap)."
+        );
+    }
+}
+
 /// Read a pi registry row by `name` from `sessions_dir`, returning `(endpoint, sessionId)`.
 /// RUN-not-read: the row is the observed effect. Minimal string parse (no serde in tests).
 fn read_pi_row(sessions_dir: &Path, name: &str) -> Option<(String, String)> {
