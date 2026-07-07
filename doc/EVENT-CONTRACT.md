@@ -1,7 +1,7 @@
 # dispatch EVENT-CONTRACT — the external event-source contract
 
 **Status: normative, external.** This is the single source of truth for any
-**outside** reader of dispatch's on-disk event sources — chiefly bond's DuckDB
+**outside** reader of dispatch's on-disk event sources — chiefly a consumer's DuckDB
 read layer (SPEC-v2 §10, track #7). It restates, from the #1 dispatch ground-truth
 findings (`[S §x]`) and the live source (`path:line`), exactly what dispatch
 produces today, plus the one additive change W2 introduces (the agent-pid
@@ -134,7 +134,7 @@ TERMINAL_EVENTS = [ turn-anchored, turn-anchored-mismatch, anchor-timeout,
   (`reader_paths events.rs:481-494`; DuckDB `union_by_name=true`), first-terminal-
   wins over the union ordered `(ts, pid, seq)`.
 - **`send_id`** (`mint_send_id events.rs:64-70`) = `"{pid}-{epoch_ms}-{n}"`,
-  **OPAQUE — equality only, nobody parses it.** The join from a bond event to its
+  **OPAQUE — equality only, nobody parses it.** The join from a consumer's event to its
   delivery span. Absent from the mux family; **now emitted by `send:relay`** as
   `send_id == message_id` (§1.5 — reverses the prior §4/G1 relay event-silence).
 - **Per-record cap + shrink-to-fit-NEVER-skip:** `MAX_RECORD_BYTES=4096`
@@ -157,7 +157,7 @@ TERMINAL_EVENTS = [ turn-anchored, turn-anchored-mismatch, anchor-timeout,
 
 Ratified, why-holder-approved (`ec00a38`). A uniform **on-sent → on-queued →
 on-received** sequence for both transports, keyed entirely by **`send_id`**. The
-**one-way invariant is preserved**: dispatch knows nothing of bond; every record goes
+**one-way invariant is preserved**: dispatch knows nothing of its consumers; every record goes
 ONLY into dispatch's own `state/sessions/<key>.events.jsonl`, and the relay WIRE
 (`POST /message`, `/replies`, `/health`, sidecars, the `CcRelay` client) is
 **byte-identical** — these emits happen purely in the local log, after the message
@@ -197,9 +197,9 @@ has already left.
 - **No prose (§X.7):** relay carries no `content_preview`; the new on-received kinds
   carry only `send_id` + `content_sha256`/`reason`.
 - **Version compatibility:** additive + skip-unknown (string-keyed read path), so a
-  version mismatch can only ever leave a gate **PENDING — never a wrong fire**: old
-  bond + new dispatch skips the new kinds; new bond + old dispatch finds no events and stays
-  PENDING. (The live dual-binary cutover + real-dispatch E2E are owned by the cutover
+  version mismatch can only ever leave a gate **PENDING — never a wrong fire**: an old
+  consumer + new dispatch skips the new kinds; a new consumer + old dispatch finds no events and
+  stays PENDING. (The live dual-binary cutover + real-dispatch E2E are owned by the cutover
   composite, not this contract.)
 
 ---
@@ -247,10 +247,10 @@ On `session-opened`, after `schema_version`, two **OPTIONAL** fields (SPEC-v2
 | `pid_start_ms` | u64? | kernel start-time of the recorded `pid` (the PTY child / **agent**), epoch-**MILLISECONDS**, **ms-floored on both platforms** |
 | `boot_id` | str? | a per-boot-stable **opaque** id, compared by **EXACT string equality only** |
 
-- **What `pid` is:** the **PTY child = the agent process** (the responder bond
+- **What `pid` is:** the **PTY child = the agent process** (the responder a consumer
   cares about), **NOT** the qrmux daemon — captured ONCE at spawn
   (`qrmux events.rs:83-85`, `session.rs`), written on `session-opened`. The token
-  pins the start-time of *that same recorded pid*; bond re-checks *that same pid*,
+  pins the start-time of *that same recorded pid*; the consumer re-checks *that same pid*,
   so recycle-detection works regardless [SPEC-v2 §5.A, M5; #4/dispatch-gt-ac1].
 - **Why:** today liveness rests on `kill(pid,0)` with no start-time check
   (`is_pid_alive crates/dispatch/src/effects.rs:520-527`), so a recycled pid reads
@@ -273,7 +273,7 @@ On `session-opened`, after `schema_version`, two **OPTIONAL** fields (SPEC-v2
     (`pidinfo::<BSDInfo>(pid,0)` → `pbi_start_tvsec*1000 + pbi_start_tvusec/1000`);
     `boot_id` via `sysctlbyname("kern.bootsessionuuid")`. **Never `kern.boottime`**
     (re-disciplines under NTP/sleep → false crash-dead under string-equality). This
-    is the SAME libproc call SPEC-v2 §5.A names for bond's fallback → producer and
+    is the SAME libproc call SPEC-v2 §5.A names for the consumer's fallback → producer and
     consumer derive **bit-identical** values by construction (same-box invariant).
   - **Linux:** `pid_start_ms` from `/proc/<pid>/stat` field 22 (`starttime` ticks) +
     `/proc/stat` `btime` + `sysconf(_SC_CLK_TCK)`; `boot_id` =
@@ -284,7 +284,7 @@ On `session-opened`, after `schema_version`, two **OPTIONAL** fields (SPEC-v2
 > **PREDATE and are SUPERSEDED by this contract.** The shipped producer emits
 > **`pid_start_ms` (epoch-MILLISECONDS)** + **`boot_id` from `kern.bootsessionuuid`**
 > (`kern.boottime` is explicitly *rejected* — it re-disciplines under NTP/sleep). An
-> outside reader (bond #7) **MUST build the consumer against THIS document** as the
+> outside reader (track #7) **MUST build the consumer against THIS document** as the
 > authoritative producer contract — `pid_start_ms` (epoch-ms) + `boot_id` from
 > `kern.bootsessionuuid` — **NOT §5.A's literal text**, else every token comparison
 > mismatches and the token goes **silently inert** (fail-safe crash-dead). The §5.A
@@ -311,7 +311,7 @@ under the v2 reader (`#[serde(default)]` → fields `None`). The version bump si
 "a token *may* be present." The additive-evolution **rule is declared** at
 `qrmux events.rs:39-40` — warn (never fail) on a newer-than-known version — but
 dispatch has **no mux-stream consumer**, so its **enforcement is the consumer's**
-(bond #7): a v2 reader skips a newer `schema_version` / unknown fields, never
+(track #7): a v2 reader skips a newer `schema_version` / unknown fields, never
 errors. The *never-fail* half is structural here (`deny_unknown_fields` is banned),
 asserted by the forward-compat test (a `schema_version:3` / unknown-field
 `session-opened` line parses under the v2 reader, ignored).
@@ -319,7 +319,7 @@ asserted by the forward-compat test (a `schema_version:3` / unknown-field
 ### 2.5 Cross-impl symmetry — the PUBLISHED linux parser fixture vector
 
 The linux `/proc/<pid>/stat` parser is value-contract-critical (producer dispatch and
-consumer bond are separate codebases). bond's track (#7) MUST assert the **same**
+consumer are separate codebases). The consumer's track (#7) MUST assert the **same**
 vector against its own implementation:
 
 | input | value |
@@ -350,12 +350,12 @@ parser is pure.)
    **skipped** by readers, never error; nothing is renamed/retyped/removed;
    `deny_unknown_fields` is **banned**; any additive change bumps the version. The
    "warn (not fail) on a newer version" rule is **declared** at `events.rs:39-40`;
-   its **enforcement is the consumer's** (bond #7) — dispatch has no mux-stream reader.
+   its **enforcement is the consumer's** (track #7) — dispatch has no mux-stream reader.
 4. **Torn-tail tolerance**: read with `ignore_errors`; an unparseable line →
    skipped (`parse_line → None`, `qrmux events.rs:163-165`; delivery
    `events.rs:839-882`).
 5. **Cross-log joins:**
-   - bond event ↔ delivery span: **`send_id`** (delivery only).
+   - consumer event ↔ delivery span: **`send_id`** (delivery only).
    - delivery span ↔ session span: **`name`** only (`delivery.name == mux.session`);
      the mux log has no uuid/`send_id`. Name is **reusable over time** (kill+restart
      yields multiple epochs sharing `session=NAME`), disambiguated by epoch +
@@ -369,24 +369,24 @@ parser is pure.)
 ## 4. Scope — the deliberate NON-changes (W4)
 
 So a reader (and a future builder) is not misled into expecting changes dispatch did
-**not** make. These are resolved **bond-side** in SPEC-v2, not in dispatch:
+**not** make. These are resolved **consumer-side** in SPEC-v2, not in dispatch:
 
 - **Relay event-silence (G1) — REVERSED by the 3-phase delivery contract (§1.5).**
   The prior contract held that `send:relay` emitted **no event and no `send_id`**,
-  with correlation resolved bond-side (SPEC-v2 §4.D, arm-time refusal of relay on a
+  with correlation resolved consumer-side (SPEC-v2 §4.D, arm-time refusal of relay on a
   watched link). The ratified 3-phase delivery contract (§1.5, `ec00a38`) **takes the
   alternative the prior version declined**: `send:relay` now emits `send-initiated`
   (relay values) + `relay-delivered` sender-side, and `message-seen`/`seen-failed`
   recipient-side, all keyed `send_id == message_id`. The **one-way invariant still
   holds** — events go ONLY into dispatch's own log; the relay WIRE is byte-identical.
-- **`content_preview` privacy (G6):** SPEC-v2 §4.C handles this **bond-side** (a
+- **`content_preview` privacy (G6):** SPEC-v2 §4.C handles this **consumer-side** (a
   read-allowlist that EXCLUDES `content_preview`). **dispatch does NOT change
   `content_preview`** — the redactor (`redact.rs`) is untouched. (W1.3 only adds a
   reader-facing reconcile note at the misleading invariant; see §5.)
 - **`send:http` unusable for engine sessions (G10):** always exits 1 for engine
   sessions (`send.rs:1014-1043`). **Documented, no change.**
 - **W3 (optional `send_id`-to-stderr) — DROPPED.** SPEC-v2 §4.A.3 C1-sub marks it
-  OPTIONAL and **NOT load-bearing** (bond's direct-spawn pid-match + the
+  OPTIONAL and **NOT load-bearing** (the consumer's direct-spawn pid-match + the
   issued-but-unsent reconcile floor cover correlation). It was assessed for #6 and
   **dropped**: the `send:pty` success paths in `send.rs` are interleaved with the
   `--wait` fall-through, so emitting *exactly one* `send-id:` line cleanly would
@@ -410,7 +410,7 @@ the key token is scrubbed; the surrounding prose is verbatim"*. So **readable
 message prose** (secrets-scrubbed, ≤256 B) **is** written to the delivery log.
 
 An external reader must treat the delivery log as carrying readable prose. The fix
-is **consumer-side**: bond's §4.C read-allowlist (envelope `v,ts,pid,seq,session,
+is **consumer-side**: the consumer's §4.C read-allowlist (envelope `v,ts,pid,seq,session,
 name`; `send_id`; `event`; `content_sha256`,`content_len`; `anchor`; terminal-
 detail) that **EXCLUDES `content_preview`** and any content-prose field. The
 redactor itself is **unchanged** (W4). A one-line correction note is also recorded
@@ -423,5 +423,5 @@ at the dispatch invariant so the in-source comment no longer misleads.
 - Substrate: #1 dispatch ground-truth (`exec/findings/dispatch-ground-truth.md`, `[S §x]`)
   + live dispatch source `path:line`.
 - Conformance: SPEC-v2 §5.A (token), §6.A (terminal set), §10 (DuckDB-readable),
-  §4.C/§4.D (bond-side non-changes).
+  §4.C/§4.D (consumer-side non-changes).
 - W2 decision + value contract: ADR `doc/adr/0019-agent-pid-identity-token.md`.

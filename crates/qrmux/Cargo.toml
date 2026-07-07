@@ -26,7 +26,7 @@ unicode-width = "0.2"
 dirs = "5"
 
 # Agent-pid identity token (W2 / SPEC-v2 §5.A): darwin start-time via the SAME
-# libproc proc_pidinfo(PROC_PIDTBSDINFO) call bond's §5.A fallback names →
+# libproc proc_pidinfo(PROC_PIDTBSDINFO) call the consumer's §5.A fallback names →
 # bit-identical values by construction. Exact-pinned (R8: a compile error is the
 # API-drift backstop). macOS-only; `nix::libc` already covers sysctlbyname.
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -16,8 +16,8 @@ pub fn is_live_status(status: SessionStatus) -> bool {
 }
 
 /// P0 `info --json` `live` semantics (spec-w8): [`is_live_status`] AND
-/// pid-alive-where-a-pid-exists. This is the field bond joins against for
-/// liveness annotation.
+/// pid-alive-where-a-pid-exists. This is the field an outside consumer joins
+/// against for liveness annotation.
 ///
 /// A pid of `None` or `0` means "no pid recorded" (e.g. ZmxOnly rows) — fall
 /// back to the status-only view there, the SAME convention as the verb layer's

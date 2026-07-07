@@ -37,7 +37,7 @@
 //! an external reader: `send-initiated` ALSO carries `content_preview` (see that
 //! field + `redact.rs`) — redacted-but-**readable** message prose (secrets-
 //! scrubbed, ≤256 B), NOT sha+len only. So the delivery log DOES carry readable
-//! prose. The redactor is unchanged (W4); the consumer-side fix is bond's §4.C
+//! prose. The redactor is unchanged (W4); the consumer-side fix is the consumer's §4.C
 //! read-allowlist, which EXCLUDES `content_preview`. See `doc/EVENT-CONTRACT.md`.
 
 use std::collections::HashMap;
@@ -315,9 +315,9 @@ pub enum Payload {
     /// §X.3.4 (3-phase delivery) — on-received, TERMINAL (success). The uniform
     /// "the recipient pulled it into working context" signal for BOTH transports
     /// (relay: a recipient-side transcript observer; pty: the W8 ungate). Deliberately
-    /// a NEW kind, NOT `turn-anchored`, so bond's on-received `reason=Seen` gate can
+    /// a NEW kind, NOT `turn-anchored`, so a consumer's on-received `reason=Seen` gate can
     /// never be tripped by a `--wait`/W8 `turn-anchored` anchor. `send_id` is
-    /// MANDATORY (bond drops a terminal without it). `content_sha256`: pty hashes the
+    /// MANDATORY (a consumer drops a terminal without it). `content_sha256`: pty hashes the
     /// raw message; relay hashes the extracted inner body (recipient-side ADVISORY —
     /// terminals resolve by `send_id` only, §X.4). Never carries prose (§X.7).
     MessageSeen {
@@ -2117,7 +2117,7 @@ mod tests {
     #[test]
     fn x3_relay_send_initiated_uses_relay_values() {
         // U2 — §X.3.1: relay REUSES Payload::SendInitiated with relay values
-        // (NOT a bare 2-field record). bond adopts it as untyped JSON by
+        // (NOT a bare 2-field record). A consumer adopts it as untyped JSON by
         // content_sha256, ignoring verb/send_path; the new diagnostic string
         // values pass through transparently.
         let sha = sha256_hex(b"hello relay");
@@ -2778,7 +2778,7 @@ mod tests {
     /// + `chunks-delivered`, no new kinds) interleaved with the THREE NEW kinds
     /// (`relay-delivered`, `message-seen`, `seen-failed`) all fold cleanly: every
     /// line parses, NONE is counted as corruption, and a reader that does not expect
-    /// the new kinds (an OLD bond) is unaffected. The new on-disk lines are produced
+    /// the new kinds (an OLD frame) is unaffected. The new on-disk lines are produced
     /// by the REAL build_record_line (the same path the emitters use), so this is
     /// the record-level half of I5; the relay-WIRE byte-identity half is proven by
     /// relay_server_differential/parity (no wire bytes change — events go ONLY into

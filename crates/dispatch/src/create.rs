@@ -547,7 +547,7 @@ pub fn run_new(deps: &NewDeps, params: &NewParams) -> Result<NewOutcome, NewErro
     // The old HARDENING #1 step resolved `<agents_dir>/<agent>.md` here and
     // fail-closed booted that role. `qd start --agent` is now REFUSED at the verb
     // layer (verbs/stubs.rs::run_start_agent_retired) — role/agent content lives
-    // in the work-model plugin and is spawned via `bond commission`, so the engine
+    // in the work-model plugin and is spawned via `frame commission`, so the engine
     // no longer owns or resolves that agents dir. `params.agent` therefore never
     // arrives `Some` from the CLI; the launch-argv plumbing (NewOpts.agent →
     // build_new_extra_args) is retained as a generic builder seam, not a static

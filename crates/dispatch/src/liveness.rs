@@ -83,7 +83,7 @@ pub enum LifecycleState {
     /// (B) readiness sub-state — **ledger-fed**: the session is parked on a
     /// relay/question `--wait` — alive but WAITING, distinct from working and
     /// stuck. The claude stream ALONE cannot tell a `--wait` from a long turn (a
-    /// blocking `--wait` looks like a long turn), so the relay/bond **ledger**
+    /// blocking `--wait` looks like a long turn), so the external wait-**ledger**
     /// feeds this; without it a waiting session would be mis-read as [`Self::Stuck`]
     /// (the amend's whole point). An ALIVE sub-state.
     AliveWaiting,
@@ -233,7 +233,7 @@ impl<P: ProcProbe> LivenessSource for OsLiveness<P> {
     }
 }
 
-/// Per-session facts fed by the daemon's headless stream + the relay/bond ledger.
+/// Per-session facts fed by the daemon's headless stream + the external wait-ledger.
 /// All defaulted so a session with NO stream observation classifies EXACTLY as
 /// the OS layer would (additive, non-regressing — the false-positive guard).
 #[derive(Debug, Clone, Default)]
@@ -258,7 +258,7 @@ pub struct StreamObs {
 pub const STUCK_THRESHOLD_MS: i64 = 300_000;
 
 /// The (B) readiness-augmented [`LivenessSource`]: wraps an inner source (the
-/// [`OsLiveness`]) and OVERLAYS the daemon headless-stream + relay/bond ledger
+/// [`OsLiveness`]) and OVERLAYS the daemon headless-stream + external wait-ledger
 /// signals onto its OS verdict. Additive — new consumers (e.g. the `qd ls`
 /// readiness facet) call [`Self::classify_obs`]; old consumers keep calling the
 /// base [`LivenessSource::classify`] (which delegates to `inner`, unchanged).
@@ -1332,7 +1332,7 @@ mod tests {
     }
 
     // ===================== WP-B4 readiness-augmented StreamLiveness =====
-    // The (B) overlay: daemon headless-stream + relay/bond ledger signals folded
+    // The (B) overlay: daemon headless-stream + external wait-ledger signals folded
     // onto the OS verdict, behind the seam. `ConstSrc` (above) is the fixed-state
     // inner; all classification is deterministic with no real /proc or claude.
 

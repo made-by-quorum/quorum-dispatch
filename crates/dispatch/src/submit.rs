@@ -500,7 +500,7 @@ pub fn deliver_idle_two_write_with(
 /// (ADR 0008, M2) needs to distinguish a STALL (PID file readable, status simply
 /// never reached busy) from an INFRA failure (PID file vanished post-boot). A
 /// `PidFileMissing` routed to the "stalled → exit 10" bucket would lie to an
-/// external `bond spawn`, so it stays distinct.
+/// external spawn caller, so it stays distinct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliverOutcome {
     /// Session went busy — the turn started.
@@ -521,7 +521,7 @@ pub enum DeliverOutcome {
 ///
 /// R4 (ADR 0009, LEAD EXTENSION of the orc-2 ruling): `send_message` now delivers
 /// the R4 TWO-WRITE shape (text, settle, separate CR) — the create path's priming
-/// prompts (external `bond spawn`) are the LIKELIEST ≥4KB case and share the exact
+/// prompts (an external caller's spawn) are the LIKELIEST ≥4KB case and share the exact
 /// single-write loss mechanism the ruling names on the idle send:pty path. Each
 /// remediation round's CR is CONTENT-VERIFIED via the new `read_screen` hook (the
 /// per-round [`SubmitDeps`] from `submit_deps` reads the screen and CRs only while
@@ -1133,7 +1133,7 @@ pub trait DeferredVerifyDeps {
 /// Bounded DEFERRED verification for a no-wait pty send to a FRESHLY-spawned child
 /// — the S1 root-cause fix (RESPEC-DELTA §3). The transcript is unresolvable at
 /// send-time for a just-spawned child, so the W8 verify's `None` arm could only
-/// warn and the priming chain stalled (no `message-seen` ⇒ bond's on-received gate
+/// warn and the priming chain stalled (no `message-seen` ⇒ the consumer's on-received gate
 /// never advanced ⇒ links 2..n never fired). This polls the transcript into
 /// existence (modeled on the relay observer's per-poll `find_jsonl_path`), anchors
 /// the content scan at the NIT-2 high-water floor (the first user-text record's
@@ -1234,17 +1234,17 @@ fn deferred_verify_floor_core(
 }
 
 /// Bounded DEFERRED verification for a BUSY-QUEUED no-wait pty send — the D2 §7-B
-/// RE-SCAN fix (PTY-FIX-DESIGN.md §4). When bond fires a chain link at a child that
+/// RE-SCAN fix (PTY-FIX-DESIGN.md §4). When a consumer fires a chain link at a child that
 /// is still mid-turn, `send:pty` classifies it `SendQueue` and (pre-fix) returned
 /// without any verify → the busy-queued path was STRUCTURALLY incapable of emitting
 /// `message-seen` → a create-head `--via pty` chain of ≥3 links stalled at link-2
-/// (bond's on-received never opened link-3). This extends the proven deferred verify
+/// (the consumer's on-received never opened link-3). This extends the proven deferred verify
 /// to that path: it polls the (already-resolvable) transcript at/after the CAPTURED
 /// PRE-SEND OFFSET — the high-water floor that sits PAST the prior in-flight turn's
 /// user record (constraint 1) — until the queued turn's record genuinely lands.
 ///
 /// SEMANTIC MUST (PTY-FIX-DESIGN.md §3): on a unique match the CALLER emits the SAME
-/// `message-seen` the idle path emits (→ bond `Fired{Seen}`, trips on-received) —
+/// `message-seen` the idle path emits (→ the consumer's `Fired{Seen}`, trips on-received) —
 /// never `turn-anchored`. Returns [`PayloadVerifyOutcome::Verified`] iff EXACTLY ONE
 /// user record at/after the floor matches `message` byte-exact (the NIT-2 uniqueness
 /// guarantee, constraint 3). The high-water floor means the prior in-flight turn's

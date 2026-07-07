@@ -3,7 +3,7 @@
 //! harness mirrors p0_qafix.rs for the forged-registry rows — integration test
 //! binaries cannot import each other, duplication is the sanctioned shape).
 //!
-//! The json object is the point-resolution surface bond joins against; the
+//! The json object is the point-resolution surface an outside consumer joins against; the
 //! field list was promised to P1 exactly as the goldens freeze it:
 //! name, sessionId, qdId?, qdIdPrefix?, status, live, pid, provider.
 //!

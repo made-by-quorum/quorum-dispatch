@@ -1,12 +1,14 @@
 # ADR 0019: Agent-pid identity token on `session-opened`
 
+> Historical note: at decision time this ADR named its consumer explicitly. Per the layering invariant (dispatch names no upper layer — see `doc/EVENT-CONTRACT.md`), the consumer appears below only generically: "the consumer" / "an outside reader of the event log". The technical content is preserved as decided.
+
 **Status:** Accepted
 **Date:** 2026-06-21
 
 ## Context
 
-bond derives session liveness ("is this obligation's respondent alive?") by
-checking the `session-opened.pid` recorded in dispatch's mux log. Today that check
+An outside reader of the event log derives session liveness ("is the agent behind
+this session alive?") by checking the `session-opened.pid` recorded in dispatch's mux log. Today that check
 is a bare `kill(pid, 0)` with **no process-start-time check** — the delivery-side
 dead-writer rule self-documents the hole (*"pid-reuse makes a recycled pid look
 alive … no process-start-time check in v1"*, `crates/dispatch/src/events.rs`).
@@ -15,17 +17,17 @@ alive … no process-start-time check in v1"*, `crates/dispatch/src/events.rs`).
 SPEC-v2 §5.A / R2-8 / P1 calls for a **process-identity token** that survives pid
 reuse, carried on `session-opened` in addition to `pid`. P1 was marked
 **PARTIALLY-CLOSED**: a robust, non-duplicating, non-soft-state baseline can come
-**only** from dispatch recording the start-time on its own event (caching it in bond
-would either duplicate a dispatch fact into bond's log — a §1 ownership violation —
-or die on the supervisor restart bond's design assumes). The robust closure is
+**only** from dispatch recording the start-time on its own event (caching it consumer-side
+would either duplicate a dispatch fact into the consumer's log — a §1 ownership violation —
+or die on the supervisor restart the consumer's design assumes). The robust closure is
 therefore a **cross-track dependency carried to the dispatch track** (#4/#6). This
 ADR records building it.
 
 The recorded `session-opened.pid` is the **PTY child = the agent process** (the
-responder bond cares about), captured once at spawn (`qrmux events.rs:83-85`,
+responder the consumer cares about), captured once at spawn (`qrmux events.rs:83-85`,
 `session.rs`), **NOT** the qrmux daemon (SPEC-v2 §5.A corrected at `81becc4`, M5).
-The token pins the start-time of *whatever pid is on record*; bond re-checks *that
-same recorded pid*, so recycle-detection works regardless.
+The token pins the start-time of *whatever pid is on record*; the consumer re-checks
+*that same recorded pid*, so recycle-detection works regardless.
 
 ## Decision
 
@@ -48,7 +50,7 @@ The value contract (`crates/qrmux/src/procid.rs`):
   API-drift backstop, R8); `boot_id` via `sysctlbyname("kern.bootsessionuuid")`.
   **Never `kern.boottime`** (re-disciplines under NTP/wake-from-sleep → false
   crash-dead under string-equality). This is the **same libproc call SPEC-v2 §5.A
-  names for bond's fallback** → producer (dispatch) and consumer (bond) derive
+  names for the consumer's fallback** → producer (dispatch) and consumer derive
   bit-identical values by construction.
 - **Linux:** `pid_start_ms` from `/proc/<pid>/stat` field 22 (`starttime` ticks) +
   `/proc/stat` `btime` + `sysconf(_SC_CLK_TCK)` (a pure parser split from IO for
@@ -63,17 +65,17 @@ is `None` only when its source is unreadable — **not** on `pid==0`; on `pid==0
 may still be present, yielding a **`boot_id`-only half-token** (`pid:0`, `boot_id`
 present, `pid_start_ms` omitted). This is intentional — gating `boot_id→None` on
 `pid==0` would add a needless special case for zero correctness benefit. The
-half-token stays fail-safe because bond treats **any absent `pid_start_ms` as
+half-token stays fail-safe because the consumer treats **any absent `pid_start_ms` as
 crash-dead regardless of `boot_id`** (absence / mismatch ⇒ crash-dead, never
 false-LIVE).
 
 **Same-box invariant (load-bearing):** the token is always produced and consumed on
-the same machine (bond reads dispatch's local `~/.quorum/dispatch/` logs), so producer
+the same machine (the consumer reads dispatch's local `~/.quorum/dispatch/` logs), so producer
 and consumer are the same OS by construction and read the value identically.
 
 ## Consequences
 
-- **Closes P1 robustly** (the cross-track dependency): once v2 ships, bond prefers
+- **Closes P1 robustly** (the cross-track dependency): once v2 ships, the consumer prefers
   the token when present and falls back to a direct libproc read when absent
   (pre-token lines / `None` fields); both paths fail-safe to crash-dead. The token
   never changes which pid is recorded, so token and fallback key the same pid.
@@ -93,15 +95,15 @@ and consumer are the same OS by construction and read the value identically.
   schema/stamp). The firing lifecycle, watcher, DuckDB, relay, `content_preview`
   redactor, the delivery schema, and every transport are **untouched**.
 - **Cross-impl contract:** the linux parser's expected vector is published in
-  `doc/EVENT-CONTRACT.md` §2.5 so bond's track (#7) asserts the same value.
-- **Consumer side (bond, #5/#7) is out of scope here** — documented in
+  `doc/EVENT-CONTRACT.md` §2.5 so the consumer's track (#7) asserts the same value.
+- **The consumer side (#5/#7) is out of scope here** — documented in
   `doc/EVENT-CONTRACT.md` §2.3/§2.4 for that builder to conform.
 - **Naming supersedes SPEC-v2 §5.A (F5).** SPEC-v2 §5.A's illustrative names
   **`pid_start_unix`** + **`sysctl kern.boottime`** PREDATE and are **SUPERSEDED by
   this contract**: the shipped producer emits **`pid_start_ms` (epoch-MILLISECONDS)**
   + **`boot_id` from `kern.bootsessionuuid`** (`kern.boottime` explicitly rejected).
   The build is correct — it follows the accepted plan; this is upstream spec
-  staleness, not a build defect. An outside reader (bond #7) **MUST build the
+  staleness, not a build defect. An outside reader (track #7) **MUST build the
   consumer against `doc/EVENT-CONTRACT.md`** as the authoritative producer contract,
   **NOT §5.A's literal text** — else every token comparison mismatches and the token
   goes silently inert (fail-safe crash-dead). The §5.A spec-text sync is the

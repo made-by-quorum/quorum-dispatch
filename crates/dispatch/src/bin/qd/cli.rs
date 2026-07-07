@@ -460,8 +460,8 @@ fn cmd_info() -> Command {
         .about("Detailed view of a single session")
         .override_help(help::INFO)
         .arg(positional("session"))
-        // P0 spec-w8: one json object (the point-resolution surface bond joins
-        // against). Human output without the flag stays byte-unchanged.
+        // P0 spec-w8: one json object (the point-resolution surface an outside
+        // consumer joins against). Human output without the flag stays byte-unchanged.
         .arg(long_flag("json", "Output as JSON"))
 }
 

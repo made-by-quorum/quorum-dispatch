@@ -469,7 +469,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                 // D2 §7-B RE-SCAN (PTY-FIX-DESIGN.md §4) — the busy-queued `!wait`
                 // path used to return HERE with NO verify, so it was structurally
                 // incapable of emitting `message-seen`: a create-head `--via pty`
-                // chain of ≥3 links stalled at link-2 (bond's on-received never
+                // chain of ≥3 links stalled at link-2 (the consumer's on-received never
                 // opened link-3). Extend the proven deferred verify to this path:
                 // a BOUNDED, high-water-anchored, uniqueness-checked transcript poll.
                 // On the queued turn genuinely landing past the captured pre-send
@@ -500,7 +500,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                         ) {
                             dispatch::submit::PayloadVerifyOutcome::Verified => {
                                 // The queued turn landed uniquely past the floor →
-                                // the on-received `message-seen` fires (bond's
+                                // the on-received `message-seen` fires (the consumer's
                                 // reason=Seen gate opens the next link). Joined by
                                 // send_id (transport-agnostic) — same emit the idle
                                 // and fresh-child resolvable paths use.
@@ -672,10 +672,10 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                 } else {
                                     // §X.3.4/§X.5 — async NO-WAIT W8 success → the
                                     // on-received `message-seen` (NOT turn-anchored, so
-                                    // bond's reason=Seen gate can never be tripped by a
+                                    // a consumer's reason=Seen gate can never be tripped by a
                                     // W8/--wait anchor). The call-base goal turn
                                     // (runner.rs:250, send_pty(.., false)) IS this path
-                                    // → bond routes it to Fired{reason=Seen}.
+                                    // → the consumer routes it to Fired{reason=Seen}.
                                     emit_w8_message_seen(&writer, &clock, &send_id, message);
                                 }
                             }
@@ -760,7 +760,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                         // §3.2 DISPATCH-PTY DEFERRED RESOLUTION — the S1 fresh-child
                         // fix. The transcript was unresolvable at send-time (a
                         // just-spawned child), so the old code only WARNED here and
-                        // emitted no `message-seen` → bond's on-received gate never
+                        // emitted no `message-seen` → the consumer's on-received gate never
                         // advanced → the priming chain truncated after turn-1
                         // (silent under-prime). Defer the resolution: poll the
                         // transcript into existence, anchor the content scan at the
@@ -787,7 +787,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                         ) {
                             dispatch::submit::PayloadVerifyOutcome::Verified => {
                                 // The fresh child's no-wait pty `message-seen`
-                                // fires (the S1 stall is closed); bond's OnReceived
+                                // fires (the S1 stall is closed); the consumer's OnReceived
                                 // gate (joining by send_id) fires link N+1.
                                 emit_w8_message_seen(&writer, &clock, &send_id, message);
                             }
@@ -971,7 +971,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
 /// §X.3.4 (3-phase delivery, on-received) — the async NO-WAIT W8 success signal.
 /// A Verified read-back on the async no-wait path IS the recipient pulling the
 /// message into working context. Deliberately `message-seen` (a NEW terminal kind,
-/// NOT `turn-anchored`) so bond's on-received reason=Seen gate is satisfied and no
+/// NOT `turn-anchored`) so the consumer's on-received reason=Seen gate is satisfied and no
 /// `--wait`/W8 `turn-anchored` anchor can ever false-fire it (§X.5).
 /// `content_sha256 = sha256(message)` — the robust pty key (the same bytes the
 /// sender hashed). Carries no prose (§X.7).

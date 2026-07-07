@@ -560,7 +560,7 @@ mod tests {
             FakeStore {
                 files: HashMap::new(),
                 backend: "file".to_string(),
-                path: "/quorum/bond/config.toml".to_string(),
+                path: "/quorum/qd/config.toml".to_string(),
             }
         }
     }
@@ -900,7 +900,7 @@ mod tests {
         let r = run_config_logic(&argv(&["path"]), &mut s, None);
         assert_eq!(r.exit_code, 0);
         assert!(r.stdout.contains("Backend:     file"));
-        assert!(r.stdout.contains("/quorum/bond/config.toml"));
+        assert!(r.stdout.contains("/quorum/qd/config.toml"));
         // B4 affordance: the key is listed WITH its resolving tier.
         assert!(r.stdout.contains("openrouter-key (file)"));
         assert!(!r.stdout.contains("sk-super-secret"));

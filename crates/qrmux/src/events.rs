@@ -260,7 +260,7 @@ impl EventWriter {
     /// `pid_start_ms`/`boot_id` are the agent-pid identity token (W2 / SPEC-v2
     /// §5.A) of `pid` — captured by the caller from the SAME `pid` recorded
     /// here (never `std::process::id()`, the daemon). Both `None` is fail-safe
-    /// (the field is omitted; bond treats absence as crash-dead).
+    /// (the field is omitted; frame treats absence as crash-dead).
     pub fn open(
         ctx: &EventsCtx,
         session: &str,

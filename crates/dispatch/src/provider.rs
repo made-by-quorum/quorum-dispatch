@@ -461,7 +461,7 @@ impl Provider for ClaudeProvider {
         // create-head; OFF for plain starts, resume, and the fakerepl suite (which
         // keeps the pre-Fix-A pid+idle readiness, byte-for-byte). See the
         // BUILD-REPORT bubble: whether to keep this opt-in, default it on with a
-        // fakerepl sidecar-emulation, or scope it bond-side is a coordinator call.
+        // fakerepl sidecar-emulation, or scope it consumer-side is a coordinator call.
         let waiter = crate::boot::EventBootWaiter::new(
             mux,
             fx.socket_dir.clone(),

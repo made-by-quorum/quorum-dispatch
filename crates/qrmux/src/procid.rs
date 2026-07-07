@@ -4,14 +4,14 @@
 //! The token is `(pid_start_ms, boot_id)` of the recorded `session-opened.pid`
 //! — the **PTY child (the agent process), NOT the qrmux daemon** (events.rs
 //! `SessionOpened.pid`, captured in `Session::new` right after the PTY spawn).
-//! It is the recycle-defeating discriminator bond uses for liveness: a
+//! It is the recycle-defeating discriminator frame uses for liveness: a
 //! kernel start-time pins the incarnation **within** a boot; a boot-id
 //! disambiguates **across** reboots. Both are read on the SAME box the token is
 //! later consumed on (SPEC-v2 §2 same-box invariant), so producer (dispatch) and
-//! consumer (bond) derive identical values by construction.
+//! consumer (frame) derive identical values by construction.
 //!
 //! **Fail-safe everywhere.** Any read/parse failure → `None`; the field is then
-//! omitted from `session-opened` (`skip_serializing_if`) and bond treats absence
+//! omitted from `session-opened` (`skip_serializing_if`) and frame treats absence
 //! as crash-dead (never false-LIVE).
 //!
 //! **Resolution is ms-FLOORED on BOTH platforms (N1/D1):** darwin's source is
@@ -62,8 +62,8 @@ pub fn boot_id() -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn pid_start_ms_inner(pid: u32) -> Result<u64, String> {
-    // Exactly the call SPEC-v2 §5.A names for bond's fallback → producer
-    // (dispatch) and consumer (bond) derive bit-identical values by construction.
+    // Exactly the call SPEC-v2 §5.A names for the consumer's fallback → producer
+    // (dispatch) and consumer derive bit-identical values by construction.
     // Avoids the hand-rolled `kinfo_proc` FFI (layout differs x86_64 vs aarch64).
     use libproc::bsd_info::BSDInfo;
     use libproc::proc_pid::pidinfo;
@@ -279,7 +279,7 @@ mod tests {
     }
 
     /// §5.6a CROSS-IMPL LINUX parser fixture — the vector PUBLISHED VERBATIM in
-    /// doc/EVENT-CONTRACT.md so bond's track (#7) asserts the SAME vector. The
+    /// doc/EVENT-CONTRACT.md so the consumer's track (#7) asserts the SAME vector. The
     /// `comm` contains `) (` and spaces (the last-`)` parse). Pure → asserted on
     /// every host. btime=1700000000 s, starttime=22200 ticks, CLK_TCK=100 →
     /// 1700000000*1000 + 22200*1000/100 = 1_700_000_222_000.

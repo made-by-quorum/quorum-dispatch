@@ -336,7 +336,7 @@ fn stray_short_code(session_id: &str) -> String {
 // --- info --json (P0 spec-w8) ---
 
 /// P0 `qd info <target> --json`: ONE json object for the RESOLVED session — the
-/// point-resolution surface bond joins against (liveness/names/ids), promised to
+/// point-resolution surface an outside consumer joins against (liveness/names/ids), promised to
 /// P1 as this EXACT field list. Shape follows the `ls --json` conventions:
 /// camelCase keys; `qdId`/`qdIdPrefix` ABSENT (not null) when the session has
 /// no mapped stable id. That absence is a LIFECYCLE state, not an error

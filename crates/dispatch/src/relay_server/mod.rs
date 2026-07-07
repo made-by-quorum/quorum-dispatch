@@ -945,7 +945,7 @@ pub fn run_with_env(env: &dyn Env) -> i32 {
 ///
 /// - Matcher = `message_id` SUBSTRING (the landed record is channel-wrapped, NOT
 ///   the pty byte-exact match, §X.3.4). `content_sha256` = sha256(extracted inner
-///   body) — ADVISORY recipient-side (bond resolves by `send_id` only, §X.4).
+///   body) — ADVISORY recipient-side (a consumer resolves by `send_id` only, §X.4).
 /// - `send_id` = the `message_id` recovered verbatim from the landed record (§X.4).
 /// - Latency is normal/UNBOUNDED (§X.6): no timeout — PENDING until it lands.
 /// - Scope: `accept(id)` gates emission to ids THIS recipient genuinely received
@@ -1037,7 +1037,7 @@ fn run_received_observer(
 /// live layer (e.g. the inbox-file consumed-on-pull cross-check).
 ///
 /// `content_sha256` is over the EXTRACTED inner body (§X.3.4 — `sha256(wrapped) ≠
-/// sha256(body)`); recipient-side it is ADVISORY (bond resolves by `send_id`).
+/// sha256(body)`); recipient-side it is ADVISORY (a consumer resolves by `send_id`).
 /// Returns at most one pair. No `message_id` attribute → none.
 fn extract_relay_messages(text: &str) -> Vec<(String, String)> {
     const OPEN: &str = "<channel ";

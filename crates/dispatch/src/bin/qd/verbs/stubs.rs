@@ -69,13 +69,13 @@ pub fn run_attach_retired() -> i32 {
 /// The retired `qd start --agent` stub's exact stderr line. Role/agent CONTENT
 /// (the `<name>.md` definitions the old static-agent path resolved under
 /// `~/.quorum/dispatch/plugins/core/agents/`) now lives in the work-model PLUGIN; spawning a
-/// role is `bond commission <role>.md`, not the engine's native `--agent`. The
+/// role is `frame commission <role>.md`, not the engine's native `--agent`. The
 /// engine refuses the flag with this teaching error instead of resolving a
 /// path it no longer owns (the new/kill/attach retirement pattern). Pinned
 /// by a unit test so the wording can't drift.
 pub fn start_agent_retired_line() -> &'static str {
     "qd start --agent is retired: role/agent content lives in the work-model plugin now. \
-     Commission a role via `bond commission <path-to-role>.md --name … --goal …` instead."
+     Commission a role via `frame commission <path-to-role>.md --name … --goal …` instead."
 }
 
 /// `qd start --agent <name>` retired guard: helpful stderr, exit 1. Fires from
@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(
             start_agent_retired_line(),
             "qd start --agent is retired: role/agent content lives in the work-model plugin now. \
-             Commission a role via `bond commission <path-to-role>.md --name … --goal …` instead."
+             Commission a role via `frame commission <path-to-role>.md --name … --goal …` instead."
         );
     }
 

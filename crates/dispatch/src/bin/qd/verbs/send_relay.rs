@@ -147,7 +147,7 @@ fn run_with_client(
     // `--wait` paths. The message has already left over the relay WIRE (the POST
     // returned message_id above); this is purely the LOCAL event log — the wire
     // is byte-untouched and the one-way invariant holds (dispatch knows nothing of
-    // bond; bond adopts these lines by content_sha256 + send_id). Best-effort.
+    // its consumers; a consumer adopts these lines by content_sha256 + send_id). Best-effort.
     emit_relay_send_events(&session_name, session.as_ref(), message, &message_id);
 
     if !wait {
@@ -172,9 +172,9 @@ fn run_with_client(
 /// with relay values, §X.3.1 — NOT a bare 2-field record) and `relay-delivered`
 /// (§X.3.2, non-terminal) into the **TARGET's** delivery log, keyed to the target
 /// uuid when the full-scan path resolved a `Session` row, else the
-/// `byname-<target>` file (bond merges both, §1.4 G5). `send_id = message_id`;
+/// `byname-<target>` file (a consumer merges both, §1.4 G5). `send_id = message_id`;
 /// `content_sha256 = sha256(raw caller message bytes)` (§X.4 — the SAME bytes
-/// bond hashes into its on-sent Attempting marker). The relay `send-initiated`
+/// the consumer hashes into its own on-sent marker). The relay `send-initiated`
 /// carries NO prose (`content_preview` omitted — a privacy improvement, §X.7).
 ///
 /// BEST-EFFORT: a write failure (or an unresolvable HOME) is logged by
@@ -1364,7 +1364,7 @@ mod tests {
         wait_until_up(handle.port);
 
         // 2) A real send over the WIRE → the server mints a real message_id.
-        let message = "prime the bond — please ack receipt";
+        let message = "prime the session — please ack receipt";
         let client = CcRelay::new();
         let message_id = client
             .send_message(handle.port, message, "sess-sender")

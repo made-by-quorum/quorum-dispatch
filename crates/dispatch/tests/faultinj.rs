@@ -987,7 +987,7 @@ fn class3_enqueue_does_not_wake_red() {
         })
     };
 
-    // Model the enqueue exactly as relay/bond delivery does (paths.rs:79): (a) write
+    // Model the enqueue exactly as relay/external delivery does (paths.rs:79): (a) write
     // the inbox file, then (b) call the REAL enqueue-hook decision core (`wake_inbox`
     // — the SAME fn the relay server calls after `write_inbox_file`).
     let inbox = state_dir.join("inbox");

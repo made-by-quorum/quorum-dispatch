@@ -292,7 +292,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // (the resume verb owns same-participant wake); `--fork <session>` is the
     // one transcript-seeded start — a NEW participant forked from an existing
     // session's transcript. The value is resolved below via the standard
-    // target pipeline (name | full bond id | unambiguous prefix).
+    // target pipeline (name | full qd id | unambiguous prefix).
     let fork_target = m.get_one::<String>("fork").cloned();
     // WP-B5-iii (FORK-IDENTITY-SPEC §4): `--turn N` = REWIND-ONLY (1-based), only
     // meaningful with `--fork`. Omitted ⇒ latest safe boundary. A non-positive or
@@ -325,7 +325,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // `qd start --agent <name>` is RETIRED. The old static-agent path resolved
     // `~/.quorum/dispatch/plugins/core/agents/<name>.md` and fail-closed booted that role;
     // role/agent CONTENT now lives in the work-model plugin and spawning is
-    // `bond commission <role>.md`, never the engine's native flag. Refuse here —
+    // `frame commission <role>.md`, never the engine's native flag. Refuse here —
     // BEFORE preflight/claim/launch, so nothing is created — with the teaching
     // error (the new/kill/attach retirement pattern). NOTHING uses --agent.
     if agent.is_some() {
@@ -1670,10 +1670,10 @@ impl dispatch::submit::VerifyDeps for NewPVerifyDeps<'_> {
 ///   - [`DeliverOutcome::Accepted`] → **0**, stdout `Prompt delivered to "<n>"`.
 ///   - [`DeliverOutcome::Stalled`]  → **10**, stderr the WARNING block (the
 ///     session EXISTS; the turn-start is unconfirmed) — the deliberate divergence
-///     from TS's always-0 (lifecycle.ts:921-931) so an external `bond spawn` can
+///     from TS's always-0 (lifecycle.ts:921-931) so an external spawn caller can
 ///     tell "made, not running" apart from "made + running".
 ///   - [`DeliverOutcome::PidFileMissing`] → **1** (R1: a vanished PID file is an
-///     INFRA failure, NOT a stall; routing it to 10 would lie to `bond spawn`).
+///     INFRA failure, NOT a stall; routing it to 10 would lie to that caller).
 ///
 /// The TS WARNING wording (lifecycle.ts:923-930) is ported verbatim for the
 /// Stalled branch; PidFileMissing gets its own infra-distinguishing stderr.
@@ -1864,7 +1864,7 @@ fn with_real_secret_deps<R>(
 /// resolveOrDie error + exit 1.
 ///
 /// P0 spec-w8: `--json` prints ONE json object (render::info_json — the
-/// point-resolution surface bond joins against) instead of the human text.
+/// point-resolution surface an outside consumer joins against) instead of the human text.
 /// Resolution is the standard pipeline UNCHANGED — the not-found/ambiguity
 /// error paths above the branch stay loud on stderr + exit 1 and emit NO json.
 pub fn run_info(m: &ArgMatches) -> i32 {
@@ -2244,7 +2244,7 @@ mod tests {
     #[test]
     fn deliver_outcome_pidfile_missing_is_1_not_10() {
         // R1: a vanished PID file is infra (exit 1), explicitly NOT the stalled
-        // code 10 — routing it to 10 would lie to an external bond spawn.
+        // code 10 — routing it to 10 would lie to an external spawn caller.
         assert_eq!(map_deliver_outcome(DeliverOutcome::PidFileMissing, "wk"), 1);
     }
 

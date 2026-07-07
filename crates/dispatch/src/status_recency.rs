@@ -19,7 +19,7 @@
 //!
 //! ## INTERNAL-ONLY boundary (this WP)
 //! The signal is a pure capability ready to be threaded into the status fold (in
-//! the engine's `qd ls` consumers, or bond's `status_liveness` fold). It produces
+//! the engine's `qd ls` consumers, or an outside consumer's status-liveness fold). It produces
 //! **no `busy-stale` token, no warn glyph, no new status string** — surfacing it
 //! is DISPLAY SURFACE, held by the lead for Pete. This module therefore emits
 //! nothing on its own; it only computes.
