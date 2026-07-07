@@ -65,6 +65,13 @@ fn build_wait_deps<'a>(
 /// (no socket / daemon refuses) decides Down well under this, adding no latency.
 const ENTRY_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// The pi wait poll floor (B1 clause 5 — pi-native timing). A daemon-hosted pi
+/// session is gated by re-reading `get_state().is_streaming` over the resident ws
+/// front on pi's OWN ~150ms cadence (the resident's `POLL_INTERVAL`), NEVER a
+/// claude-shaped in-process "promptly" bar. A resident + ws + point-read has this
+/// floor by architecture; the loop honors it rather than busy-spinning.
+const PI_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+
 /// A [`TurnCompletion`] that never reports completion evidence — the channel-DOWN
 /// fallback used when a live subscriber exists but NO transcript was resolvable, so
 /// the channel `result` seam stays load-bearing on the healthy path while the
@@ -141,6 +148,16 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
     // is the truth. A dead/degraded endpoint reports cold (no hang).
     if session.provider.starts_with("acp/") {
         return run_acp_wait(session, &label, timeout_ms);
+    }
+
+    // pi (B1): the daemon-hosted reconnect shape of acp/codex, but the busy/idle
+    // gate is a `get_state().is_streaming` POINT-READ (drop-immune BY CONSTRUCTION —
+    // a dropped stream event cannot starve a point-read), NEVER a watch for an
+    // `agent_end`. Without this arm a pi row falls through to the claude pid-file +
+    // transcript loop below, which is stale-disk / false-idle for a daemon-hosted
+    // session that has no pid-file turn state.
+    if session.provider == "pi" {
+        return run_pi_wait(session, &label, timeout_ms);
     }
 
     // --- claude path ---------------------------------------------------------
@@ -554,6 +571,129 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
     }
 }
 
+/// The pi wait gate decision from ONE `is_streaming` point-read — the drop-immune
+/// core of [`run_pi_wait`], shared by the ENTRY gate and the poll loop. This is the
+/// single seam that separates the THREE gate cases (B1 clause 2):
+///   * `false` → RELEASE. Covers BOTH "finished" and "never-started": a session
+///     with no turn in flight reads `is_streaming:false`, so neither hangs — a
+///     just-booted pi that never got a prompt releases immediately.
+///   * `true`  → BLOCK. A turn is genuinely in flight; keep point-reading.
+/// A live endpoint that ERRORS is neither case — the caller maps it to `cold`
+/// (exit 1), never a false release and never a hang.
+#[derive(Debug, PartialEq, Eq)]
+enum PiWaitVerdict {
+    Release,
+    Block,
+}
+
+fn pi_wait_verdict(is_streaming: bool) -> PiWaitVerdict {
+    if is_streaming {
+        PiWaitVerdict::Block
+    } else {
+        PiWaitVerdict::Release
+    }
+}
+
+/// pi (B1): block until a daemon-hosted pi session goes busy→idle. The acp/codex
+/// daemon-reconnect shape (resolve the row's recorded endpoint, gate on identity +
+/// liveness, connect), but completion is observed by re-reading
+/// `PiRemote::observe().is_streaming` — a POINT-READ — on pi's ~150ms floor, NOT by
+/// watching the event stream for an `agent_end`. That is the inviolable B1
+/// constraint: a dropped stream event can starve a stream-watch but can NEVER
+/// starve a point-read of the live state. A dead/degraded endpoint reports cold
+/// (no hang); a never-started session reads idle and releases (no hang).
+fn run_pi_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64) -> i32 {
+    use dispatch::provider::pi::{residence::cmdline_is_our_pi_daemon, PiRemote};
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    let env = RealEnv;
+    let paths = match common::paths_from_home(&env) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let cold = |label: &str| {
+        eprintln!("qd wait: \"{label}\": pi session daemon not reachable (try qd resume {label}).");
+        1
+    };
+
+    let Some(pid) = session.pid.filter(|&p| p != 0) else {
+        eprintln!("Session has no PID (cold/dead). Nothing to wait for.");
+        return 1;
+    };
+    let entry = dispatch::registry::read_entry(&paths.sessions_dir, pid);
+    let endpoint = entry
+        .as_ref()
+        .and_then(|e| e.endpoint.clone())
+        .filter(|s| !s.is_empty());
+
+    // Identity + liveness gate (the acp SEND/WAIT posture): a live endpoint, the pid
+    // alive, and the `/proc` cmdline is OUR pi-daemon for THIS endpoint (defeats pid
+    // reuse — a connect-success is liveness, cmdline+endpoint is identity). Any miss
+    // → cold, never drive a stranger's socket.
+    let cmdline = dispatch::create_daemon::real_cmdline_probe(pid);
+    let alive = endpoint.is_some()
+        && dispatch::effects::is_pid_alive(pid as i32)
+        && cmdline_is_our_pi_daemon(cmdline.as_deref(), endpoint.as_deref());
+    if !alive {
+        return cold(label);
+    }
+    let endpoint = endpoint.expect("alive implies a live endpoint");
+
+    let remote = match PiRemote::connect(&endpoint, Duration::from_secs(5)) {
+        Ok(r) => r,
+        Err(_) => return cold(label),
+    };
+
+    // ENTRY gate — the drop-immune point-read separates the three cases.
+    match remote.observe() {
+        Ok(obs) => {
+            if pi_wait_verdict(obs.is_streaming) == PiWaitVerdict::Release {
+                eprintln!("{label} is idle.");
+                usage_wait(&session.session_id, session.name.as_deref());
+                return 0;
+            }
+        }
+        Err(_) => return cold(label),
+    }
+
+    eprint!("Waiting for {label}...");
+    let _ = std::io::stderr().flush();
+
+    // Honor the timeout knob; a 0/absent timeout defaults to the 120s wait default.
+    let total = if timeout_ms > 0 {
+        Duration::from_millis(timeout_ms as u64)
+    } else {
+        Duration::from_secs(120)
+    };
+    let deadline = Instant::now() + total;
+    loop {
+        if Instant::now() >= deadline {
+            eprintln!(" timeout");
+            return 1;
+        }
+        // pi-native cadence: re-read is_streaming on the ~150ms floor (NOT a busy
+        // spin, NOT a claude-shaped promptly bar).
+        std::thread::sleep(PI_POLL_INTERVAL);
+        match remote.observe() {
+            Ok(obs) => match pi_wait_verdict(obs.is_streaming) {
+                PiWaitVerdict::Release => {
+                    eprintln!(" done");
+                    usage_wait(&session.session_id, session.name.as_deref());
+                    return 0;
+                }
+                PiWaitVerdict::Block => continue,
+            },
+            // The resident dropped / went unreachable mid-wait → source integrity
+            // lost → exit 1 (never a false done, never a hang).
+            Err(_) => {
+                eprintln!(" channel closed");
+                return 1;
+            }
+        }
+    }
+}
+
 /// FINDING #2 PART 2 — the cold-path VERIFY-THE-BRIDGE consumer. Returns `Some(exit)`
 /// ONLY on a detected fork (fail loud, nonzero); `None` to proceed (Continued, or an
 /// Unconfirmed that emits a LOUD degraded-confidence warning but does not fail the turn).
@@ -806,6 +946,20 @@ mod tests {
         std::fs::create_dir_all(&sessions).unwrap();
         let projects = tmp.path().join("projects");
         assert_eq!(super::verify_post_resume_for(&sessions, &projects, 9999, "anything"), None);
+    }
+
+    /// B1 — the pi wait gate separates the THREE cases off a single is_streaming
+    /// point-read. REVERT SEAM: invert `pi_wait_verdict` (streaming→Release) and a
+    /// mid-turn wait would false-idle; collapse it to always-Block and a finished/
+    /// never-started session would hang — either way this REDs.
+    #[test]
+    fn pi_wait_verdict_separates_the_three_gate_cases() {
+        use super::{pi_wait_verdict, PiWaitVerdict};
+        // in-progress (a turn in flight) → BLOCK.
+        assert_eq!(pi_wait_verdict(true), PiWaitVerdict::Block);
+        // finished AND never-started both read is_streaming:false → RELEASE (neither
+        // hangs — the two non-blocking cases collapse to the same point-read value).
+        assert_eq!(pi_wait_verdict(false), PiWaitVerdict::Release);
     }
 
     /// A fake channel status seam returning a fixed observation (no socket).

@@ -48,7 +48,7 @@ pub mod session;
 pub mod status;
 pub mod stdio;
 
-pub use remote::PiRemote;
+pub use remote::{PiObservation, PiRemote};
 pub use rpc::{PiEvent, PiRpc, PiRpcError, RpcSessionState, StreamingBehavior};
 pub use status::PiStatusMapper;
 pub use stdio::PiStdio;

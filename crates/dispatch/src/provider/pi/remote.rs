@@ -47,6 +47,18 @@ fn parse_ws_addr(url: &str) -> Result<std::net::SocketAddr, PiRpcError> {
         .map_err(|e| PiRpcError::Transport(format!("bad ws addr {host_port}: {e}")))
 }
 
+/// A single resident OBSERVATION (B1): the live streaming flag + the resident's
+/// drop-immune completed-turn count, from ONE `get_state` front round-trip. The
+/// ls/info gather ([`crate::join`]) renders a live pi row's status + turns off
+/// this without a second call. `is_streaming` is the SAME drop-immune point-read
+/// `qd wait` gates on; `turns` is the resident's busy→idle-edge count (never a raw
+/// `agent_end` tally).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PiObservation {
+    pub is_streaming: bool,
+    pub turns: u64,
+}
+
 /// The qd-side resident client. `!Sync` by design (one [`RefCell`] socket); one
 /// in-flight request at a time (the resident serves one connection serially).
 pub struct PiRemote {
@@ -94,6 +106,22 @@ impl PiRemote {
             .get("session_id")
             .and_then(Value::as_str)
             .map(str::to_string))
+    }
+
+    /// B1 observability point-read: `is_streaming` + the resident's completed-turn
+    /// count in ONE `get_state` round-trip (the front reply carries both). Used by
+    /// the ls/info gather so a live pi row's status and turns come from a single
+    /// drop-immune resident read. A missing `turns` (an older resident) degrades to
+    /// 0 permissively.
+    pub fn observe(&self) -> Result<PiObservation, PiRpcError> {
+        let result = self.request("get_state", json!({}))?;
+        Ok(PiObservation {
+            is_streaming: result
+                .get("is_streaming")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            turns: result.get("turns").and_then(Value::as_u64).unwrap_or(0),
+        })
     }
 
     fn apply_read_timeout(&self, timeout: Duration) -> Result<(), PiRpcError> {

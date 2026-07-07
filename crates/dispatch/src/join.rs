@@ -158,6 +158,19 @@ pub struct JoinInputs {
     /// root exists (most hosts) → a cheap no-op. Appended by the codex gather step
     /// AFTER the four claude-shaped branches; the join emits them as `Cold` rows.
     pub codex_cold: Vec<CodexColdRow>,
+    /// B1: the LIVE status a pi registry row derives from its resident's
+    /// `is_streaming` POINT-READ, keyed by sessionId. Unlike codex (a connectionless
+    /// rollout-tail read), pi has no on-disk turn-state file, so the ONLY faithful
+    /// live signal is the resident get_state — the gather step opens ONE short-lived
+    /// front connection per live pi row. A row absent from this map (unreachable /
+    /// dead / mis-identified resident) falls back to Idle in the join (the codex
+    /// absent-row posture). EMPTY when there are no pi rows → byte-stable no-op.
+    pub pi_status_for: HashMap<String, SessionStatus>,
+    /// B1: the resident's drop-immune completed-turn count per live pi row (the
+    /// busy→idle-edge count, NOT a raw `agent_end` tally), from the SAME get_state
+    /// round-trip as `pi_status_for`. A row present here OVERRIDES the generic
+    /// transcript-derived `turns` for that pi row; absent → the transcript value.
+    pub pi_turns_for: HashMap<String, u64>,
 }
 
 /// A discovered COLD codex row (codex-p2-spec section 7.4) — a foreign or dead
@@ -404,6 +417,18 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
                 .get(&sid)
                 .copied()
                 .unwrap_or(SessionStatus::Idle)
+        } else if provider_id == "pi" {
+            // B1: a live pi row's status is the resident `is_streaming` point-read
+            // (gather step). Absent from the map = unreachable/dead resident → Idle
+            // (parity with codex's absent-row posture; a cold/just-created pi row
+            // reads idle). The string-based `parse_status` is NEVER used for pi — its
+            // native signal is an isStreaming object, not the claude status STRING
+            // (which pi's parse_status rejects → the always-Idle bug this replaces).
+            inputs
+                .pi_status_for
+                .get(&sid)
+                .copied()
+                .unwrap_or(SessionStatus::Idle)
         } else {
             let status_provider = crate::provider::provider_for(&provider_id)
                 .unwrap_or_else(|| crate::provider::provider_for("claude-code").unwrap());
@@ -412,6 +437,20 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
                     p.status.clone().unwrap_or_default(),
                 ))
                 .unwrap_or(SessionStatus::Idle)
+        };
+
+        // B1: a live pi row's turn count is the resident's drop-immune busy→idle-edge
+        // count (gather step), overriding the generic transcript-derived value; any
+        // other provider (and a pi row absent from the map) keeps the transcript
+        // `turns`. Precomputed here because `sid` is moved into the Session below.
+        let row_turns = if provider_id == "pi" {
+            inputs
+                .pi_turns_for
+                .get(&sid)
+                .copied()
+                .unwrap_or(stats.turns)
+        } else {
+            stats.turns
         };
 
         // name: pid.name || jsonlStats.name (TS ||: empty string is falsy too).
@@ -431,7 +470,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             zmx_clients: zmx_match.map(|z| z.clients),
             socket_dir: zmx_match.and_then(|z| z.socket_dir.clone()),
             relay_port: pid_i32.and_then(|pid| relay_by_claude_pid.get(&pid).copied()),
-            turns: stats.turns,
+            turns: row_turns,
             tokens: stats.tokens,
             cwd: p.cwd.clone(),
             last_active_ms: p.updated_at,
@@ -1015,6 +1054,12 @@ pub fn gather_with_dirs(
         stats_for.entry(path).or_insert(stats);
     }
 
+    // --- pi gather step (B1) — ADDITIVE, ONLY touches pi rows. Resolves each live
+    //     pi row's turn state from its resident via an `is_streaming` point-read
+    //     (the drop-immune status source). A cheap no-op when there are no pi rows.
+    //     The claude/codex branches are byte-untouched. ---
+    let (pi_status_for, pi_turns_for) = gather_pi(&registry);
+
     JoinInputs {
         zmx_sessions,
         registry,
@@ -1031,7 +1076,86 @@ pub fn gather_with_dirs(
         match_live_by_name: matches!(mux_dirs, MuxDirs::Embedded { .. }),
         codex_status_for,
         codex_cold,
+        pi_status_for,
+        pi_turns_for,
     }
+}
+
+/// The pi gather step (B1) — the pi analog of [`gather_codex`], kept in ONE place
+/// so the claude/codex gather stays untouched. For each LIVE pi registry row it
+/// opens ONE short-lived resident front connection and does a single
+/// [`crate::provider::pi::PiRemote::observe`] round-trip → `(is_streaming, turns)`.
+///
+/// Returns `(status_by_id, turns_by_id)`:
+///   - `status_by_id`: `Busy` while `is_streaming`, else `Idle`, per live pi row.
+///     Absent ⇒ the join falls back to Idle (the codex absent-row posture).
+///   - `turns_by_id`: the resident's drop-immune busy→idle-edge count per row.
+///
+/// WHY A SOCKET (unlike codex's connectionless rollout read): pi has NO on-disk
+/// turn-state file — OPTION B (P4DB) burned the status sink and mandated on-read
+/// derivation, and pi's lazy-written session JSONL does not encode live turn
+/// state. The resident `get_state` is the ONLY faithful live signal, and it is the
+/// SAME drop-immune point-read `qd wait` gates on. PERMISSIVE / fail-fast (L8): a
+/// dead / unreachable / mis-identified resident contributes NOTHING (a 500ms
+/// connect timeout + the identity gate) — never a hang, never an error, the row
+/// just renders Idle with its transcript turns. EMPTY when there are no pi rows.
+///
+/// LIMITATION (documented, out of B1 scope to change): the resident serves ONE
+/// front connection at a time (`PiStdio` is `!Sync`), so while a `qd wait` is
+/// camped on a pi session this gather's connect for THAT row times out and the row
+/// renders Idle in `ls` until the wait releases. Every other pi row, and the
+/// common no-active-wait case, reads live status fine.
+fn gather_pi(registry: &[ScannedEntry]) -> (HashMap<String, SessionStatus>, HashMap<String, u64>) {
+    use crate::provider::pi::{residence::cmdline_is_our_pi_daemon, PiRemote};
+    use std::time::Duration;
+
+    let mut status_for: HashMap<String, SessionStatus> = HashMap::new();
+    let mut turns_for: HashMap<String, u64> = HashMap::new();
+
+    for scanned in registry {
+        if scanned.entry.provider.as_deref() != Some("pi") {
+            continue;
+        }
+        let Some(sid) = scanned.entry.session_id.clone() else {
+            continue;
+        };
+        let endpoint = scanned
+            .entry
+            .endpoint
+            .clone()
+            .filter(|s| !s.is_empty());
+        let Some(pid) = scanned.entry.pid.filter(|&p| p != 0) else {
+            continue;
+        };
+        // Identity + liveness gate (the wait/send posture): defeats pid reuse — a
+        // connect-success alone is not identity. A miss → skip (the row renders Idle).
+        let cmdline = crate::create_daemon::real_cmdline_probe(pid);
+        let alive = endpoint.is_some()
+            && crate::effects::is_pid_alive(pid as i32)
+            && cmdline_is_our_pi_daemon(cmdline.as_deref(), endpoint.as_deref());
+        if !alive {
+            continue;
+        }
+        let endpoint = endpoint.expect("alive implies a live endpoint");
+
+        // Fail-fast connect (500ms) — a live-but-camped or dead resident times out
+        // and the row degrades to Idle rather than stalling `ls`.
+        if let Ok(remote) = PiRemote::connect(&endpoint, Duration::from_millis(500)) {
+            if let Ok(obs) = remote.observe() {
+                status_for.insert(
+                    sid.clone(),
+                    if obs.is_streaming {
+                        SessionStatus::Busy
+                    } else {
+                        SessionStatus::Idle
+                    },
+                );
+                turns_for.insert(sid, obs.turns);
+            }
+        }
+    }
+
+    (status_for, turns_for)
 }
 
 /// The codex gather step (codex-p2-spec sections 3.3, 7.4) — ALL the codex
@@ -2038,6 +2162,58 @@ mod tests {
         // codex_status_for is EMPTY (no rollout file yet).
         let out = join_sessions(&inputs, JoinOpts::default());
         assert_eq!(find(&out, "cdx-fresh").status, SessionStatus::Idle);
+    }
+
+    // --- B1: live pi status derives from the pre-gathered resident point-read
+    //     map, NOT the registry string parse_status path (which pi rejects). ---
+    //
+    // MUTATION EVIDENCE: a pi registry status STRING fed to `parse_status` returns
+    // None → Idle (pi's native signal is an isStreaming OBJECT, not a claude
+    // string). So WITHOUT the `pi_status_for` branch a running pi turn would read
+    // Idle in `ls`. These deterministic (no-socket) tests guard the join wiring;
+    // the gather's live connect is RUN-not-read at the live-dogfood phase.
+
+    fn pi_live(sid: &str, name: &str, updated: i64) -> ScannedEntry {
+        let mut e = live(6000, sid, Some(name), updated);
+        e.entry.provider = Some("pi".to_string());
+        e.entry.endpoint = Some("ws://127.0.0.1:19100".to_string());
+        // The registry status string is IGNORED for pi rows (no parse_status).
+        e.entry.status = Some("idle".to_string());
+        e
+    }
+
+    #[test]
+    fn pi_live_row_status_comes_from_pregathered_is_streaming_map() {
+        let mut inputs = base_inputs();
+        inputs.registry = vec![pi_live("pi-busy", "pi-a", 9_000)];
+        // The gather step read is_streaming:true off the resident → Busy.
+        inputs.pi_status_for = [("pi-busy".to_string(), SessionStatus::Busy)]
+            .into_iter()
+            .collect();
+        inputs.pi_turns_for = [("pi-busy".to_string(), 3u64)].into_iter().collect();
+        let out = join_sessions(&inputs, JoinOpts::default());
+        let s = find(&out, "pi-busy");
+        assert_eq!(
+            s.status,
+            SessionStatus::Busy,
+            "pi live status = the resident is_streaming point-read, NOT parse_status(\"idle\")"
+        );
+        assert_eq!(s.turns, 3, "pi turns = the resident's busy→idle-edge count");
+        assert_eq!(s.provider, "pi");
+    }
+
+    #[test]
+    fn pi_live_row_absent_from_map_is_idle() {
+        // An unreachable / dead / mis-identified pi resident is absent from the map
+        // → Idle (a cold/just-created pi session is idle). Turns fall back to the
+        // transcript value (0 with no transcript here).
+        let mut inputs = base_inputs();
+        inputs.registry = vec![pi_live("pi-cold", "pi-b", 8_000)];
+        // pi_status_for / pi_turns_for EMPTY (resident unreachable).
+        let out = join_sessions(&inputs, JoinOpts::default());
+        let s = find(&out, "pi-cold");
+        assert_eq!(s.status, SessionStatus::Idle);
+        assert_eq!(s.turns, 0);
     }
 
     #[test]

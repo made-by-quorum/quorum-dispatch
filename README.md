@@ -15,6 +15,22 @@ via `QD_HOME`). This repository hosts the engine workspace:
 In active use across macOS (arm64) and Linux (x86_64), gated by a green
 two-platform CI.
 
+## pi provider — observer caveat (flag-c)
+
+> ⚠️ **A second observer must not trust `qd info` / `qd ls` for a pi session while another
+> `qd wait` holds that resident's sole connection.** A live pi resident serves a single
+> connection. While a `qd wait <pi-session>` is camped on a resident, a concurrent,
+> connectionless `qd info` / `qd ls` reads a **stale registry-cache snapshot** — it can report
+> the wrong busy/idle `status` (e.g. `idle` while the session is genuinely busy), with exit code
+> 0 and **no error and no staleness marker**.
+>
+> The busy/idle **gate itself is exact** for any reader that holds the connection and does the
+> live `is_streaming` point-read — i.e. `qd wait` itself, and any turn-lifecycle gating built on
+> it. The staleness affects only the *connectionless* observe path (`qd info` / `qd ls`) under a
+> camped wait; it is registry-cache staleness, not a dropped event. **To gate pi liveness, use
+> `qd wait` (or `is_streaming`), never the `qd info` / `qd ls` `status` field.** A staleness
+> marker/error on the observe path is a planned fast-follow.
+
 ## Build
 
 Toolchain is pinned to Rust 1.95 via `rust-toolchain.toml`.
