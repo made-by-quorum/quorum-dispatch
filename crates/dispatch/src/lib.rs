@@ -14,6 +14,7 @@
 //!   see [`registry`] module docs. Lineage = `spawned_by` ONLY (ADD-3a/3b).
 
 pub mod acp_residence;
+pub mod archive;
 pub mod backends;
 pub mod boot;
 pub mod bootstrap;
@@ -71,6 +72,7 @@ pub mod stray;
 pub mod submit;
 pub mod survey;
 pub mod telemetry;
+pub mod tombstone;
 pub mod update;
 pub mod wait;
 pub mod wait_channel;

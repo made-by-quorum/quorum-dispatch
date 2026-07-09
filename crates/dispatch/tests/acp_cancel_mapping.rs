@@ -44,7 +44,7 @@ fn cancel_maps_literal_cancelled_and_releases_the_slot() {
     let session = host.new_session(cwd.to_str().unwrap()).expect("session/new");
 
     // Send a turn (the fixture streams a chunk then HOLDS the response) → it is in flight.
-    let _turn = host.prompt(&session, "go", "test").expect("prompt enqueue+send");
+    let _turn = host.prompt(&session, "go", "test", &|| {}).expect("prompt enqueue+send");
     assert!(host.in_flight(), "the turn must be in flight before we cancel it");
 
     // The interrupt: cancel → session/cancel → the fixture resolves the held prompt `cancelled`.

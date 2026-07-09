@@ -356,7 +356,13 @@ fn stray_short_code(session_id: &str) -> String {
 /// - A pid of `0` means "no pid recorded" (the engine-wide convention, see
 ///   `is_live_with_pid`) and renders as `null`, matching what `live` consulted.
 ///
-/// Key order: name, sessionId, qdId?, qdIdPrefix?, status, live, pid, provider.
+/// Key order: name, sessionId, qdId?, qdIdPrefix?, status, live, pid,
+/// provider, jsonlPath?. `jsonlPath` follows the same absent-not-null
+/// convention as `qdId` (omitted, never `null`, when the session has no
+/// resolved transcript path) — mirrors `ls --json`'s `session_to_value`,
+/// which reads the same `Session.jsonl_path` field (persist-relocation:
+/// frame's engine adapter reads this to locate the transcript to copy,
+/// without dispatch ever re-deriving the path a second time).
 pub fn info_json(
     s: &Session,
     prefixes: &std::collections::HashMap<String, String>,
@@ -387,6 +393,9 @@ pub fn info_json(
         },
     );
     m.insert("provider".into(), json!(s.provider));
+    if let Some(jsonl_path) = &s.jsonl_path {
+        m.insert("jsonlPath".into(), Value::String(jsonl_path.clone()));
+    }
     Value::Object(m)
 }
 
@@ -441,6 +450,14 @@ fn turn_to_value(t: &TurnPreview) -> Value {
 pub fn epoch_ms_to_iso(ms: i64) -> String {
     let (y, mo, d, h, mi, s, milli) = civil_from_epoch_ms(ms);
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{milli:03}Z")
+}
+
+/// Epoch ms → AWS SigV4 `x-amz-date` long form `YYYYMMDDTHHMMSSZ` (UTC, no
+/// milliseconds, no separators). `crate::archive::sigv4` signs against
+/// exactly this string; the first 8 chars double as the SigV4 date stamp.
+pub fn epoch_ms_to_amz_date(ms: i64) -> String {
+    let (y, mo, d, h, mi, s, _milli) = civil_from_epoch_ms(ms);
+    format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z")
 }
 
 /// Epoch ms → en-US `toLocaleString()` form `M/D/YYYY, H:MM:SS AM/PM` in UTC.
@@ -774,6 +791,26 @@ mod tests {
         assert_eq!(
             epoch_ms_to_iso(1_709_209_845_678),
             "2024-02-29T12:30:45.678Z"
+        );
+    }
+
+    #[test]
+    fn amz_date_strips_separators_and_millis() {
+        // Same instants as `iso_matches_bun` — the amz-date form is the ISO
+        // form with dashes/colons/millis stripped.
+        assert_eq!(
+            epoch_ms_to_amz_date(1_717_495_200_000),
+            "20240604T100000Z"
+        );
+        assert_eq!(epoch_ms_to_amz_date(0), "19700101T000000Z");
+        // ms precision is dropped, not rounded.
+        assert_eq!(
+            epoch_ms_to_amz_date(1_717_495_200_123),
+            "20240604T100000Z"
+        );
+        assert_eq!(
+            epoch_ms_to_amz_date(1_709_209_845_678),
+            "20240229T123045Z"
         );
     }
 
@@ -1265,6 +1302,7 @@ mod tests {
     fn info_json_mapped_emits_all_fields_in_order() {
         let mut s = a6_session();
         s.qd_id = Some("ab3kx9mq".into());
+        s.jsonl_path = Some("/p/sess-a6.jsonl".into());
         let prefixes: std::collections::HashMap<String, String> =
             [("ab3kx9mq".to_string(), "ab3".to_string())].into();
         let v = info_json(&s, &prefixes, true);
@@ -1280,7 +1318,8 @@ mod tests {
                 "status",
                 "live",
                 "pid",
-                "provider"
+                "provider",
+                "jsonlPath"
             ],
             "the EXACT promised field list, in order"
         );
@@ -1292,6 +1331,7 @@ mod tests {
         assert_eq!(obj["live"], json!(true));
         assert_eq!(obj["pid"], json!(4242));
         assert_eq!(obj["provider"], json!("claude-code"));
+        assert_eq!(obj["jsonlPath"], json!("/p/sess-a6.jsonl"));
     }
 
     #[test]
@@ -1302,6 +1342,10 @@ mod tests {
         let obj = v.as_object().unwrap();
         assert!(!obj.contains_key("qdId"), "unmapped → qdId ABSENT");
         assert!(!obj.contains_key("qdIdPrefix"), "qdIdPrefix ABSENT too");
+        assert!(
+            !obj.contains_key("jsonlPath"),
+            "no transcript resolved → jsonlPath ABSENT, not null"
+        );
     }
 
     #[test]

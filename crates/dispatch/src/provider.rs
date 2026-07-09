@@ -204,6 +204,16 @@ pub struct ProviderFx<'a> {
     /// the long-lived per-session ACP host (`provider/acp/client.rs`) owns the
     /// connection + the SC-1 queue + the SC-5 single-reader; this is the borrow of it.
     pub acp_client: Option<&'a dyn crate::provider::acp::AcpClient>,
+    /// Child B (opencode D1, the exactly-once dispatch-timing guard): a durable
+    /// "structured send is going out" marker write, invoked by `AcpProvider::inject`
+    /// (via `AcpClient::prompt`'s `on_dispatched`) the MOMENT this turn's bytes are
+    /// confirmed on the wire — before the reply is read. The verb layer supplies a
+    /// closure that persists the registry row's `structured_send_issued` bit; a
+    /// socket drop between dispatch and reply-read then still leaves the correct
+    /// history for the NEXT process to read (never gated on `inject`'s `Ok` return
+    /// alone). `None` for every lane but the ACP send verb (claude/codex/pi/fixture
+    /// never read it; a caller with no exactly-once concern, e.g. tests, omits it).
+    pub acp_pre_dispatch: Option<&'a dyn Fn()>,
     /// The pi stdio-RPC transport CONTRACT (ADD-5 pattern, the `app_server`/
     /// `acp_client` precedent): a CONNECTED `&dyn PiRpc` the verb layer hands in
     /// (a [`crate::provider::pi::remote::PiRemote`] reaching the per-session pi

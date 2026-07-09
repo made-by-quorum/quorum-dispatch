@@ -451,7 +451,9 @@ fn build_claude_command(deps: &NewDeps, params: &NewParams) -> String {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     let req = LaunchRequest {
         name: params.name.clone(),
         cwd: Some(params.cwd.to_string_lossy().into_owned()),

@@ -125,7 +125,7 @@ fn wait_for_jsonl(session_id: &str, budget: Duration, pred: impl Fn(&[String]) -
 /// Drive a connected adapter to a turn terminal. Pulls `next_update` over the REAL ws
 /// front the adapter serves; the reply is asserted from the JSONL primary source.
 fn drive_turn(conn: &dispatch::provider::acp::AcpConnection, session: &str, prompt: &str, from: &str) {
-    conn.prompt(session, prompt, from).expect("prompt enqueue");
+    conn.prompt(session, prompt, from, &|| {}).expect("prompt enqueue");
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         assert!(Instant::now() < deadline, "no terminal within budget");

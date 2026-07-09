@@ -314,6 +314,55 @@ physical terminal attach (ruling Q2c satisfied). A future PTY-allocating harness
 real-terminal run) can exercise the final attach; recorded here as
 **NAMED-DIVERGENCE-PENDING-PTY-HARNESS**. (Genuinely env-blocked, same class as a5.)
 
+## Addendum (2026-07-08, opencode D1 Child D): acp/claude-code transport-loss = refuse-and-surface, identity preserved (named divergence)
+
+**Ruling:** clerk-4's Arm-B ratification (bond note `01KX01BY7G`, 2026-07-08, under
+Pete's overnight full-executive grant; resolves the conditional ruling `01KWZWT83B`
+on Child C's live probe evidence). Same class as the codex/opencode divergence
+ruling `01KWZ80MXS`.
+
+**The divergence.** D1's target — auto-deliver graceful degrade on transport loss —
+realizes on **pi only** (pi's own ratified, latch-free floor regime,
+`provider/pi/floor.rs`, untouched). `acp/claude-code` joins `codex` and
+`acp/opencode` as a NAMED divergence: on transport loss (pre-send, post-send, or
+mid-wait) `qd send`/`qd wait` **REFUSE and surface** the human-recovery line
+("… not reachable (try qd resume …)", exit 1) — with one addition the other
+divergences don't need: **the session's identity is preserved** in a qd-owned
+store before the refusal (below). No auto-deliver path exists for this provider:
+the Child-B degrade+latch+companion-drive machinery was **removed, not gated**
+(structural unreachability — `send_relay.rs::run_acp_send`, `wait.rs::run_acp_wait`,
+`provider/acp/ladder.rs`; the former `verbs/acp_floor.rs` is deleted).
+
+**Why (evidence-backed, Child C live probes).** The floor drive's only revival
+seam is `claude --resume <session_id>`, which is structurally impossible for the
+only degrade-eligible population — a zero-structured-turn session has no
+conversation to resume ("No conversation found", exit 1, live-proven). A clean
+Arm A (an existing path delivers) is therefore impossible, and the Arm-A drive
+REDESIGN (fresh-start companion / seed materialization) was ruled a speculative
+redesign on a lane with zero prior production use on this box, and DECLINED.
+
+**Identity preservation (the arm-independent fix).** The claude CLI's own
+dead-pid janitor reaps `~/.claude/sessions/<pid>.json` ~1s after daemon death
+(live-proven 3/3; qd makes zero unlink/rename on the row) — so a transport-lost
+session's identity was erased no matter the disposition. The fix: at every
+loss-refusal, qd first writes an **identity tombstone** —
+`<QD_HOME || ~/.quorum/dispatch>/state/tombstones/<session_id>.json`
+(`dispatch::tombstone`; atomic tmp+rename, latest-wins with the first-loss
+timestamp carried forward) — recording session_id, name, pid, cwd, provider,
+endpoint, transcript path, loss reason, timestamps. The refusal stderr names the
+record's path ("identity preserved at …"). Scope: `acp/claude-code` only;
+codex/opencode refusals stay byte-identical and write nothing.
+
+**Reverts/levers.** `QD_ACP_PTY_FLOOR_DISABLE` (which gated only the retired
+drive) is now a NO-OP — refusal is the unconditional disposition it used to
+select. The `RegistryEntry::transport="pty"` latch is write-retired; a row
+bearing one (never-deployed dev-binary writes only) reads conservatively as
+unavailable ⇒ refuse. `structured_send_issued` (the exactly-once wire marker)
+is still recorded unconditionally — history truth, no longer a disposition
+branch. If Pete later wants real acp/claude-code degrade-robustness, it is a
+scoped FUTURE effort behind clerk-4's gate (the lever), not a revert of this
+divergence.
+
 ## Cross-references
 
 - LESSONS **L5** (boot-readiness EVENT) + **L9a** (HOME load-bearing for the jail) —

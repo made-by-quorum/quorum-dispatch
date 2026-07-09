@@ -191,8 +191,16 @@ pub fn resolve_config_path(env: &dyn Env) -> String {
 /// sections/lines are ignored (permissive read, L8).
 /// (`0d0fa9e:src/secrets.ts:89-107`).
 pub fn parse_secrets_toml(text: &str) -> Vec<(String, String)> {
+    parse_toml_section(text, "secrets")
+}
+
+/// Parse ANY single `[name]` section's `key = "value"` rows out of our flat
+/// string-table config format. [`parse_secrets_toml`] is this specialized to
+/// `"secrets"`; `crate::archive::config` reuses it for `[archive]` rather than
+/// re-deriving the same tiny parser for a second table.
+pub(crate) fn parse_toml_section(text: &str, section: &str) -> Vec<(String, String)> {
     let mut table: Vec<(String, String)> = Vec::new();
-    let mut in_secrets = false;
+    let mut in_section = false;
     for raw in text.split('\n') {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -200,10 +208,10 @@ pub fn parse_secrets_toml(text: &str) -> Vec<(String, String)> {
         }
         // Section header `[name]`.
         if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            in_secrets = name.trim() == "secrets";
+            in_section = name.trim() == section;
             continue;
         }
-        if !in_secrets {
+        if !in_section {
             continue;
         }
         if let Some((key, value)) = parse_kv_line(line) {

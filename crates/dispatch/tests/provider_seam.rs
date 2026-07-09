@@ -131,8 +131,15 @@ impl AcpClient for FixtureAcp {
     fn new_session(&self, _cwd: &str) -> Result<String, AcpError> {
         Ok("acp-sess-conf-1".to_string())
     }
-    fn prompt(&self, _session: &str, text: &str, _from: &str) -> Result<String, AcpError> {
+    fn prompt(
+        &self,
+        _session: &str,
+        text: &str,
+        _from: &str,
+        on_dispatched: &dyn Fn(),
+    ) -> Result<String, AcpError> {
         self.sent.borrow_mut().push(text.to_string());
+        on_dispatched();
         Ok(self.turn_id.clone())
     }
     fn cancel(&self, _session: &str) -> Result<(), AcpError> {
@@ -224,6 +231,7 @@ impl Fixture {
             codex_expected_turn_id: None,
             acp_client: self.acp_client.as_ref().map(|c| c as &dyn AcpClient),
             pi_rpc: None,
+            acp_pre_dispatch: None,
         }
     }
 }
@@ -751,7 +759,9 @@ fn daemon_launch_plan_minimal_fx_consumes_no_claude_config() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     let provider = FixtureDaemonProvider::ready();
     let plan = provider.launch_plan(&fx, &LaunchRequest::default());
     assert_eq!(
@@ -790,7 +800,9 @@ fn daemon_steer_stale_precondition_is_typed_error() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     let key = SessionKey {
         id: "thread-1",
         name: None,
@@ -877,7 +889,9 @@ fn claude_launch_plan_matches_launch_rs_helpers() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     let req = LaunchRequest {
         name: "wk".to_string(),
         cwd: Some("/work".to_string()),
@@ -955,7 +969,9 @@ fn claude_inject_preserves_relay_error_class() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     let key = SessionKey {
         id: "s",
         name: None,
@@ -981,7 +997,9 @@ fn claude_inject_preserves_relay_error_class() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     assert!(matches!(
         ClaudeProvider
             .inject(&fx_no_port, &key, "m", "cli")
@@ -1057,7 +1075,9 @@ fn daemon_boot_unready_fails_with_handshake_detail() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     let err = provider.boot_waiter(&fx).wait_ready("wk").unwrap_err();
     assert_eq!(err.phase, BootPhase::PidFile);
     assert!(
@@ -1246,7 +1266,9 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     let plan = CodexProvider.launch_plan(&fx, &LaunchRequest::default());
     assert_eq!(
         plan.argv,
@@ -1280,7 +1302,9 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     let plan2 = CodexProvider.launch_plan(&fx2, &LaunchRequest::default());
     assert_eq!(
         plan2.argv,
@@ -1316,7 +1340,9 @@ fn codex_inject_no_transport_when_app_server_absent() {
         app_server: None, // no connected rpc.
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        };
     let key = SessionKey {
         id: "thread-abc",
         name: None,
@@ -1449,7 +1475,9 @@ fn ladder_fx<'a>(
         app_server: Some(rpc),
         codex_expected_turn_id: expected,
         acp_client: None,
-        pi_rpc: None,    }
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+        }
 }
 
 #[test]

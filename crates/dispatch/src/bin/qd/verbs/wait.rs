@@ -19,6 +19,7 @@ use dispatch::wait::{
     TurnCompletionProbe, WaitStatusOutcome,
 };
 
+use super::acp_loss;
 use super::common;
 
 /// RESIDUAL #2 (WP-B-CS-1): the prod §6.0 ENTRY-GATE resolver, extracted from
@@ -160,7 +161,16 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
         return run_pi_wait(session, &label, timeout_ms);
     }
 
-    // --- claude path ---------------------------------------------------------
+    run_claude_wait(session, &label, timeout_ms)
+}
+
+/// The claude-code wait loop (status.ts:214-260 + 359-390) — status + transcript-
+/// content keyed poll. Factored out of [`run_wait`] as a parameter generalization
+/// (an arbitrary `Session` rather than always the top-level resolved one) during
+/// Child B (opencode D1), whose floor-drive caller Child D removed — today its
+/// one caller is the plain claude-code arm of `run_wait`, byte-identical to the
+/// pre-factoring behavior.
+fn run_claude_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64) -> i32 {
     // paths_from_home cannot fail here: `common::all_sessions` above already
     // resolved it (same seam), so reaching this line proves it succeeds.
     let paths = match common::paths_from_home(&dispatch::effects::RealEnv) {
@@ -456,8 +466,8 @@ impl dispatch::provider::acp::AcpTurnObserver for OneShotObserver {
 
 fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64) -> i32 {
     use dispatch::provider::acp::{
-        derive_tier, AcpClient, AcpConnection, AcpTurnCompletion, AcpTurnObservation, TerminalReason,
-        Tier,
+        classify_connect_failure, derive_tier, AcpClient, AcpConnection, AcpTurnCompletion,
+        AcpTurnObservation, ConnectFailure, TerminalReason, Tier,
     };
     use dispatch::wait::{TurnCompletion, TurnCompletionProbe};
     use std::io::Write;
@@ -474,6 +484,15 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
     };
 
     let Some(pid) = session.pid.filter(|&p| p != 0) else {
+        // Child D (opencode D1): for acp/claude-code a pid-less row is
+        // already-lost transport (the claude CLI's janitor may have reaped the
+        // registry row entirely) — preserve identity and refuse to the SAME
+        // human-recovery surface as the dead-tier branch below. Any other
+        // acp/* provider keeps the pre-Child-D wording, byte-identical.
+        if session.provider == "acp/claude-code" {
+            acp_loss::preserve_identity(session, "acp session has no live daemon pid at wait entry");
+            return cold(label);
+        }
         eprintln!("Session has no PID (cold/dead). Nothing to wait for.");
         return 1;
     };
@@ -491,13 +510,47 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
         && dispatch::effects::is_pid_alive(pid as i32)
         && dispatch::acp_residence::cmdline_is_our_acp_daemon(cmdline.as_deref(), endpoint.as_deref());
     if derive_tier("acp/claude-code", transport_field.as_deref(), endpoint_alive) != Tier::Acp {
+        // Child D (opencode D1 — clerk-4's Arm-B ratification, bond note
+        // 01KX01BY7G): `acp/claude-code` is a NAMED DIVERGENCE — a dead (or
+        // historically pty-latched) row REFUSES cold with identity preserved in
+        // the qd-owned tombstone store; there is NO floor drive here (Child B's
+        // latched-drive lane was removed, not gated — the latch no longer
+        // selects any behavior beyond this refusal). `qd wait` thus never
+        // spawns anything as a side effect of being asked a question (R5-3's
+        // posture, now unconditional), and `qd resume` stays the one recovery
+        // act. `acp/opencode` (the other provider routed through this fn) keeps
+        // this exact refusal, byte-identical — `preserve_identity` self-gates
+        // on the provider, so it writes nothing.
+        acp_loss::preserve_identity(session, "acp endpoint not reachable at wait entry");
         return cold(label);
     }
     let endpoint = endpoint.expect("Tier::Acp implies a live endpoint");
 
     let conn = match AcpConnection::connect(&endpoint, Duration::from_secs(5)) {
         Ok(c) => c,
-        Err(_) => return cold(label),
+        Err(_) => {
+            // Round-1 TOCTOU fix (same split as run_acp_send's connect arm):
+            // the pre-connect probe cannot confirm liveness across the connect
+            // boundary. Re-probe NOW: a genuine wedge (alive + identity-verified)
+            // refuses with no tombstone — its live-pid row is not janitor-
+            // reapable; a daemon that died in the window is a transport LOSS —
+            // preserve identity, then the same cold refusal. The wedge-dies-later
+            // residual is stated + defended in ladder.rs clause 3.
+            let pid_alive_now = dispatch::effects::is_pid_alive(pid as i32);
+            let cmdline_is_ours_now = dispatch::acp_residence::cmdline_is_our_acp_daemon(
+                dispatch::create_daemon::real_cmdline_probe(pid).as_deref(),
+                Some(endpoint.as_str()),
+            );
+            if classify_connect_failure(pid_alive_now, cmdline_is_ours_now)
+                == ConnectFailure::TransportLost
+            {
+                acp_loss::preserve_identity(
+                    session,
+                    "acp daemon died across the connect boundary (was live at the pre-connect probe)",
+                );
+            }
+            return cold(label);
+        }
     };
 
     // (N-idle, Item 3) ENTRY-IDLE short-circuit: a genuinely-idle session (no turn in
@@ -562,8 +615,16 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
             }
             // Still in flight (streaming / quiet poll) → keep pulling until the terminal.
             TurnCompletionProbe::Pending => continue,
-            // Transport gone before any terminal → source integrity lost → exit 1.
+            // Transport gone before any terminal → source integrity lost →
+            // exit 1 (surface unchanged). Child D: the daemon died UNDER a
+            // camped wait — the same identity-preservation duty as an
+            // entry-lane loss (the janitor will reap the row ~1s from now),
+            // so record the tombstone before surfacing.
             TurnCompletionProbe::Degraded(_) => {
+                acp_loss::preserve_identity(
+                    session,
+                    "acp transport lost mid-wait (channel closed before the turn's terminal)",
+                );
                 eprintln!(" channel closed");
                 return 1;
             }
@@ -788,7 +849,9 @@ fn codex_root_fx<'a>(
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    }
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    }
 }
 
 #[cfg(test)]
@@ -796,6 +859,70 @@ mod tests {
     use super::*;
     use dispatch::wait::{ChannelStatus, WaitContentDeps};
     use std::cell::Cell;
+
+    // Child D structural guard (opencode D1 — clerk-4's Arm-B ratification, bond
+    // note 01KX01BY7G): `run_acp_wait` must have NO reachable auto-deliver/drive
+    // path on transport loss — Child B's latched-drive lane was REMOVED, not
+    // gated (this subsumes R5-3's never-fresh-degrade: wait now never degrades,
+    // latches, or spawns ANYTHING). The replacement disposition is pinned as the
+    // positive control: identity preservation (`acp_loss::preserve_identity`) at
+    // the pid-less entry, the dead-tier entry, the connect-boundary death
+    // (round-1 TOCTOU fix: the re-probe's TransportLost classification), and
+    // the camped-loss (channel closed) exit — each surfacing through an
+    // existing refusal. Structural
+    // (source-text), scoped to `run_acp_wait`'s own body so this test's own
+    // assertion strings can't make it vacuously true. MUTATION EVIDENCE:
+    // reintroducing a floor drive or latch write reds the bans; deleting a
+    // preserve_identity call reds the count.
+    #[test]
+    fn acp_wait_transport_loss_refuses_with_identity_preserved_and_never_drives() {
+        let src = include_str!("wait.rs");
+        let fn_start = src
+            .find("fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64) -> i32 {")
+            .expect("run_acp_wait must still exist verbatim");
+        let after_start = &src[fn_start..];
+        let fn_end = after_start
+            .find("\nenum PiWaitVerdict")
+            .expect("PiWaitVerdict must still follow run_acp_wait");
+        let body = &after_start[..fn_end];
+
+        for banned in [
+            "drive_acp_floor_wait",
+            "ensure_floor_pane",
+            "degrade_and_persist",
+            "degrade_to_pty",
+            "structured_send_issued",
+            "drop_log_line",
+        ] {
+            assert!(
+                !body.contains(banned),
+                "run_acp_wait must never reach `{banned}` — an observation verb neither \
+                 latches, degrades, drives a floor, nor branches on send history; \
+                 acp/claude-code transport loss REFUSES with identity preserved. \
+                 Body:\n{body}"
+            );
+        }
+        let occurrences = body.matches("acp_loss::preserve_identity(").count();
+        assert_eq!(
+            occurrences, 4,
+            "run_acp_wait must preserve identity at exactly its four transport-loss \
+             surfaces (pid-less entry, dead-tier entry, connect-boundary death \
+             [round-1 TOCTOU fix], camped channel-closed) — found {occurrences}. \
+             Body:\n{body}"
+        );
+        // And the refusal surface itself still lands (a body that preserved
+        // identity but silently stopped refusing would pass the counts above).
+        assert!(
+            body.contains("return cold(label);"),
+            "the cold human-recovery refusal must still be the loss surface"
+        );
+        // Round-1 TOCTOU fix pin: the connect-Err arm must classify from a
+        // FRESH re-probe (never trust the stale pre-connect reading).
+        assert!(
+            body.contains("classify_connect_failure(pid_alive_now, cmdline_is_ours_now)"),
+            "run_acp_wait's connect-Err arm must re-probe and classify wedge-vs-loss"
+        );
+    }
 
     /// (N-O3) the wait terminal-detection factored through the SC-2 completion contract:
     /// each `next_update` outcome maps to the right observation AND the SAME completion

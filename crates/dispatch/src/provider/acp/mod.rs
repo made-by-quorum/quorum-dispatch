@@ -31,7 +31,7 @@ pub mod wire;
 
 pub use client::AcpHost;
 pub use wire::{serve, AcpConnection, AcpResident};
-pub use ladder::{degrade_to_pty, derive_tier, drop_log_line, on_inject_error, LadderOutcome, Tier};
+pub use ladder::{classify_connect_failure, derive_tier, ConnectFailure, Tier, PTY_TRANSPORT};
 pub use completion::{
     AcpTurnCompletion, AcpTurnObservation, AcpTurnObserver, ProgressPhase, TurnProgress,
 };
@@ -245,7 +245,8 @@ impl Provider for AcpProvider {
     /// the attributable turn id (LB#5). The queue lives in the host behind `fx.acp_client` (SC-1a
     /// ownership), not reconstructed here. A 2nd inject mid-turn QUEUES (SC-3); a bounded-overflow
     /// maps to `Precondition("queue full")` (SC-1a flow-control). A missing/closed client →
-    /// `NoTransport` (the §4 ladder degrades the row to the PTY floor on this).
+    /// `NoTransport` — the verb layer's transport-loss signal (Child D: the verbs refuse
+    /// and surface on it, identity preserved via `crate::tombstone`; see `ladder.rs`).
     fn inject(
         &self,
         fx: &ProviderFx,
@@ -256,7 +257,15 @@ impl Provider for AcpProvider {
         let client = fx
             .acp_client
             .ok_or_else(|| InjectError::NoTransport(key.id.to_string()))?;
-        client.prompt(key.id, message, from).map_err(|e| match e {
+        // Child B (opencode D1): the verb layer's durable exactly-once marker write,
+        // fired the moment this turn's bytes are confirmed on the wire (see
+        // `AcpClient::prompt`'s `on_dispatched` doc). No-op when the caller supplies none
+        // (e.g. every existing test fixture, and any non-CC-send caller of this trait).
+        let noop = || {};
+        let on_dispatched = fx.acp_pre_dispatch.unwrap_or(&noop);
+        client
+            .prompt(key.id, message, from, on_dispatched)
+            .map_err(|e| match e {
             AcpError::QueueFull => InjectError::Precondition("queue full".to_string()),
             AcpError::Closed | AcpError::Transport(_) => {
                 InjectError::NoTransport(key.id.to_string())

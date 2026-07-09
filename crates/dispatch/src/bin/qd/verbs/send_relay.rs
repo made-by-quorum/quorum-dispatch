@@ -22,6 +22,7 @@ use dispatch::model::Session;
 use dispatch::relay::{self, FastRelayMatch, PidEntryRef, RelayContract, RelayError, RelayReply};
 use dispatch::relay_http::CcRelay;
 
+use super::acp_loss;
 use super::common;
 
 /// Default `--wait` timeout in seconds (send.ts:354, `"120"`).
@@ -357,7 +358,9 @@ fn inject_via_provider(
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     // The send:relay verb keys on NAME+port (the fast path never builds a Session);
     // SessionKey carries the name as the id here (claude inject reads neither for
     // the send — it sends through relay+port). pid is None (not on this surface).
@@ -518,7 +521,9 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
         app_server: Some(rpc_ref),
         codex_expected_turn_id: expected_turn_id.as_deref(),
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     let key = SessionKey {
         id: &thread_id,
         name: session.name.as_deref(),
@@ -558,15 +563,54 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
     }
 }
 
-/// scoped-ACP-CC residence SEND path (S7). The ACP analog of [`run_codex_send`]: re-read
-/// the row's recorded `endpoint`, verify the resident adapter's IDENTITY (pid alive AND
-/// the live `/proc` cmdline carries our `acp-daemon --listen <endpoint>` — S6, defeats PID
-/// reuse), derive the ladder tier from `(provider, transport-field, endpoint-alive)`, and
-/// only on `Tier::Acp` connect a fresh [`AcpConnection`] and drive `AcpProvider::inject`.
-/// A dead/wrong-identity endpoint or a latched-pty row DEGRADES to the SEND "not reachable"
-/// surface — never a hang on a dead endpoint, never a fake.
+/// scoped-ACP-CC residence SEND path (S7). The ACP analog of [`run_codex_send`]:
+/// re-read the row's recorded `endpoint`, verify the resident adapter's IDENTITY
+/// (pid alive AND the live `/proc` cmdline carries our `acp-daemon --listen
+/// <endpoint>` — S6, defeats PID reuse), derive the tier from `(provider,
+/// transport-field, endpoint-alive)`.
+///
+/// **Transport-loss disposition (Child D, opencode D1 — clerk-4's Arm-B
+/// ratification, bond note 01KX01BY7G): `acp/claude-code` is a NAMED DIVERGENCE.
+/// On ANY transport loss this verb REFUSES and surfaces (the same
+/// "not reachable (try qd resume …)" class as `codex`/`acp/opencode`, exit 1) —
+/// with the session's identity first preserved in the qd-owned tombstone store
+/// ([`dispatch::tombstone`]; `acp_loss::preserve_identity`). There is NO
+/// auto-deliver path: Child B's degrade+latch+companion-drive machinery was
+/// REMOVED (not gated), so unreachability is structural.** pi's auto-deliver
+/// floor (`provider/pi/floor.rs`, [`run_pi_send`]) is the deliberately separate,
+/// untouched realization of D1's graceful degrade.
+///
+/// Three refusal-relevant lanes:
+///   - **entry-lane dead** (no live pid, dead endpoint, or a historical
+///     `transport=="pty"` latch — anything but a healthy structured tier) →
+///     preserve identity + refuse. Pre-send vs post-send history no longer
+///     changes the disposition: both refuse (post-send always refused; pre-send
+///     joined it under Arm B).
+///   - **`AcpConnection::connect` fails** → RE-PROBE liveness+identity, then
+///     split (the round-1 TOCTOU fix; ladder's `classify_connect_failure`):
+///     still alive + verified ⇒ a genuine wedge, refuse with NO tombstone
+///     (live-pid row is not janitor-reapable); now dead / identity gone ⇒ the
+///     daemon died across the probe→connect boundary ⇒ preserve identity +
+///     refuse. See the `Err(_)` arm below and ladder.rs clause 3 (including
+///     the stated wedge-dies-later residual).
+///   - **mid-flight `NoTransport`** (a live connect, then the `session/prompt`
+///     dispatch itself fails) → preserve identity + refuse. The
+///     `acp_pre_dispatch` hook may have JUST durably marked
+///     `structured_send_issued=true` before the failure (the exactly-once
+///     dispatch-timing guard, kept intact) — that record is wire-history truth,
+///     it just no longer selects a different disposition.
+///
+/// `QD_ACP_PTY_FLOOR_DISABLE` is now a NO-OP: it gated only the retired floor
+/// drive, and refusal is the unconditional behavior it used to select.
+///
+/// **Scope of the tombstone: `acp/claude-code` only.** `acp_loss::preserve_identity`
+/// self-gates on the provider, so `acp/opencode` (which also routes through this
+/// fn) keeps its byte-identical plain refusal — no store write, no extra output.
 fn run_acp_send(session: &Session, message: &str) -> i32 {
-    use dispatch::provider::acp::{derive_tier, AcpClient, AcpConnection, Tier, ACP_CC_PROVIDER};
+    use dispatch::provider::acp::{
+        classify_connect_failure, derive_tier, AcpClient, AcpConnection, ConnectFailure, Tier,
+        ACP_CC_PROVIDER,
+    };
     use dispatch::provider::{InjectError, Provider, ProviderFx, SessionKey};
 
     let name = session.name.clone().unwrap_or_default();
@@ -583,6 +627,9 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
     };
 
     let Some(pid) = session.pid.filter(|&p| p != 0) else {
+        // A row with no live pid is already-lost transport (the janitor may
+        // have reaped the registry row entirely) — preserve identity, refuse.
+        acp_loss::preserve_identity(session, "acp session has no live daemon pid at send entry");
         return not_reachable(&name);
     };
     // The endpoint + degradation latch live in the row (re-read by pid; NOT on --json).
@@ -600,18 +647,74 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
         && dispatch::effects::is_pid_alive(pid as i32)
         && dispatch::acp_residence::cmdline_is_our_acp_daemon(cmdline.as_deref(), endpoint.as_deref());
 
-    // S7 ladder: drive ONLY on Tier::Acp; else degrade (no drive-on-dead, no hang).
     let tier = derive_tier("acp/claude-code", transport_field.as_deref(), endpoint_alive);
+
     if tier != Tier::Acp {
+        // Entry-lane transport loss (dead endpoint, or a historical pty latch):
+        // the named-divergence disposition — preserve identity (qd-owned store,
+        // acp/claude-code only; a no-op for acp/opencode, whose refusal stays
+        // byte-identical), then refuse to the human-recovery surface. Whether a
+        // structured send was ever issued no longer branches here: pre-send and
+        // post-send loss BOTH refuse (Arm B — the Child-B pre-send auto-deliver
+        // was removed, not gated).
+        acp_loss::preserve_identity(session, "acp endpoint not reachable at send entry");
         return not_reachable(&name);
     }
     let endpoint = endpoint.expect("Tier::Acp implies a live endpoint");
 
     let conn = match AcpConnection::connect(&endpoint, Duration::from_secs(5)) {
         Ok(c) => c,
-        Err(_) => return not_reachable(&name),
+        Err(_) => {
+            // F2 (red-team round 1) + the round-1 TOCTOU fix: `tier == Tier::Acp`
+            // proved `endpoint_alive` BEFORE connect, but that probe cannot
+            // confirm liveness ACROSS the connect boundary — a daemon can die in
+            // the window and its row is then janitor-reapable. So RE-PROBE now
+            // and classify (ladder's `classify_connect_failure`):
+            //   - still alive + identity-verified ⇒ a genuine wedge: refuse with
+            //     NO tombstone (live-pid row is not janitor-reapable; `qd resume`
+            //     kills + restarts — the only safe way to clear a wedge). A
+            //     wedge that dies LATER with no further qd interaction is the
+            //     ACCEPTED residual — stated + defended in ladder.rs clause 3
+            //     (next interaction hits the entry lane; ids.jsonl + the CC
+            //     transcript carry the recovery-critical identity regardless).
+            //   - now dead / identity gone ⇒ it died across the boundary: a
+            //     transport LOSS — preserve identity, then the same refusal.
+            // Never a floor drive either way.
+            let pid_alive_now = dispatch::effects::is_pid_alive(pid as i32);
+            let cmdline_is_ours_now = dispatch::acp_residence::cmdline_is_our_acp_daemon(
+                dispatch::create_daemon::real_cmdline_probe(pid).as_deref(),
+                Some(endpoint.as_str()),
+            );
+            if classify_connect_failure(pid_alive_now, cmdline_is_ours_now)
+                == ConnectFailure::TransportLost
+            {
+                acp_loss::preserve_identity(
+                    session,
+                    "acp daemon died across the connect boundary (was live at the pre-connect probe)",
+                );
+            }
+            return not_reachable(&name);
+        }
     };
     let conn_ref: &dyn AcpClient = &conn;
+    // Child B exactly-once guard: durably mark `structured_send_issued=true` the
+    // MOMENT this turn's bytes are confirmed on the wire (see
+    // `AcpConnection::prompt`) — before we know whether the reply ever arrives.
+    // Never gated on `inject`'s `Ok` return: a crash or socket drop right after
+    // dispatch must still leave this true for the NEXT process to read.
+    let sessions_dir = paths.sessions_dir.clone();
+    let mark_dispatched = || {
+        if let Some(mut e) = dispatch::registry::read_entry(&sessions_dir, pid) {
+            if e.structured_send_issued != Some(true) {
+                e.structured_send_issued = Some(true);
+                if let Err(err) = dispatch::registry::write_entry(&sessions_dir, &e) {
+                    eprintln!(
+                        "qd send:relay: could not persist the structured-send marker: {err}"
+                    );
+                }
+            }
+        }
+    };
     let fx = ProviderFx {
         env: &env,
         paths: &paths,
@@ -625,6 +728,17 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
         codex_expected_turn_id: None,
         acp_client: Some(conn_ref),
         pi_rpc: None,
+        // F3 (red-team round 2, Child B era — the rule KEPT under Child D): this
+        // hook is installed UNCONDITIONALLY. The historical bug was gating it on
+        // the floor's disable flag (`floor_disabled()`, retired with the floor):
+        // a send that dispatched but failed on the reply-read left
+        // `structured_send_issued` unset — a false "never sent" history, which
+        // in the auto-degrade era could double-deliver. The floor and its flag
+        // are gone (every loss now refuses), but the rule stands: recording
+        // that bytes reached the wire is history truth, never gated — the
+        // resume seam consumes it, and a false record misleads any future
+        // reader (registry.rs's field doc carries the current framing).
+        acp_pre_dispatch: Some(&mark_dispatched),
     };
     let key = SessionKey {
         id: &session.session_id,
@@ -642,6 +756,20 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
         Err(InjectError::Precondition(s)) => {
             eprintln!("qd send:relay: \"{name}\": send failed ({s}).");
             1
+        }
+        Err(err @ InjectError::NoTransport(_)) => {
+            // Mid-flight transport loss (a live connect, then the dispatch
+            // itself failed): the same named-divergence refusal as the
+            // entry-lane arm. `mark_dispatched` may have JUST durably recorded
+            // `structured_send_issued=true` (bytes confirmed on the wire before
+            // the failure — the exactly-once guard, kept) — wire-history truth,
+            // but no longer a disposition branch: pre-send and post-send loss
+            // both refuse (Arm B).
+            acp_loss::preserve_identity(
+                session,
+                &format!("acp transport lost mid-flight ({err})"),
+            );
+            not_reachable(&name)
         }
         Err(_) => not_reachable(&name),
     }
@@ -738,6 +866,7 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
         codex_expected_turn_id: None,
         acp_client: None,
         pi_rpc: Some(rpc_ref),
+            acp_pre_dispatch: None,
     };
     let key = SessionKey {
         id: &session.session_id,
@@ -772,8 +901,8 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
 /// child and captures the outcome SCRAPE-FREE from the `turn_end`/`agent_end` ndjson
 /// (see [`dispatch::provider::pi::floor`]). Continuity = `-c` + one dedicated
 /// per-qd-session `--session-dir` (turn-2 resumes turn-1's single appended session
-/// file). The drop is OBSERVABLE (a stderr drop-log line — ACP-ladder parity, never a
-/// silent degrade). pi's OWN settings cred (openai-codex, `~/.pi/agent`) is inherited —
+/// file). The drop is OBSERVABLE (a stderr drop-log line — a degradation is never
+/// silent; pi's own floor doctrine, `provider/pi/floor.rs`). pi's OWN settings cred (openai-codex, `~/.pi/agent`) is inherited —
 /// NEVER a `--provider`/credential override or swap.
 fn run_pi_floor_send(
     session: &Session,
@@ -813,7 +942,8 @@ fn run_pi_floor_send(
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
         });
 
-    // Observable degrade (never silent — the ACP-ladder drop-log parity).
+    // Observable degrade (never silent — pi's floor doctrine; the Child-B ACP
+    // ladder's analogous drop-log was retired with that floor in Child D).
     eprintln!(
         "{}",
         floor::floor_drop_log_line(&name, "native rpc resident not identity-verified")
@@ -866,6 +996,7 @@ fn pi_resolve_fx<'a>(
         codex_expected_turn_id: None,
         acp_client: None,
         pi_rpc: None,
+            acp_pre_dispatch: None,
     }
 }
 
@@ -888,7 +1019,9 @@ fn codex_resolve_fx<'a>(
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    }
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    }
 }
 
 /// Resolve `(relay_port, session_name, provider_id)` for `query`. The port is
@@ -1109,6 +1242,167 @@ fn parse_timeout(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // F2 regression guard (red-team round 1) + the round-1 TOCTOU-fix pin:
+    // `run_acp_send`'s `AcpConnection::connect` failure arm is reached ONLY when
+    // `tier == Tier::Acp` proved `endpoint_alive` BEFORE connect — a reading
+    // that cannot confirm liveness ACROSS the connect boundary. The arm must
+    // therefore (a) never floor-drive (the historical F2 hunt: auto-flooring a
+    // possibly-live daemon risks a second live writer on one transcript), and
+    // (b) RE-PROBE liveness+identity and preserve identity when the daemon died
+    // in the window (`classify_connect_failure` ⇒ `TransportLost` ⇒
+    // `preserve_identity`), refusing either way. This is a structural
+    // (source-text) guard rather than a behavioral one because exercising the
+    // real branch requires a pid that is BOTH genuinely alive AND
+    // identity-verified via a real `/proc/<pid>/cmdline` read
+    // (`cmdline_is_our_acp_daemon`), which every other test in this module
+    // deliberately avoids — this file tests small pure/fake-backed helpers,
+    // never the full verb against real process state. The classification
+    // SEMANTICS are unit-pinned in ladder.rs (`connect_failure_*` tests).
+    // MUTATION EVIDENCE: reintroducing a floor drive in the arm reds the bans;
+    // dropping the re-probe or the loss-path preserve reds the positive
+    // controls.
+    #[test]
+    fn acp_connect_failure_never_consults_the_ladder_or_drives_the_floor() {
+        let src = include_str!("send_relay.rs");
+        let start_marker = "let conn = match AcpConnection::connect(&endpoint, Duration::from_secs(5)) {";
+        let start = src
+            .find(start_marker)
+            .expect("run_acp_send's connect-failure match must still exist verbatim");
+        let after_start = &src[start..];
+        // The match's Err(_) arm body runs from "Err(_) => {" to the matching "};"
+        // that closes the whole `let conn = match ... };` statement — find that by
+        // the next line consisting of only `    };` after the marker.
+        let close = after_start
+            .find("\n    };\n")
+            .expect("the connect match must close with `    };` on its own line");
+        let match_block = &after_start[..close];
+        let err_arm_start = match_block
+            .find("Err(_) => {")
+            .expect("the connect match must still have an Err(_) arm");
+        let err_arm = &match_block[err_arm_start..];
+
+        for banned in [
+            "on_inject_error",
+            "DropToPtyFloor",
+            "degrade_and_persist",
+            "drive_acp_floor_send",
+        ] {
+            assert!(
+                !err_arm.contains(banned),
+                "run_acp_send's AcpConnection::connect failure arm must NEVER reach \
+                 `{banned}` — the acp daemon is confirmed alive at this point (tier==Acp \
+                 already proved endpoint_alive), so auto-flooring here risks a second live \
+                 writer on the same session_id. Arm body:\n{err_arm}"
+            );
+        }
+        // Positive control 1: it DOES call not_reachable (an empty/renamed
+        // arm would vacuously pass the bans above without actually refusing).
+        assert!(
+            err_arm.contains("not_reachable(&name)"),
+            "the arm must still call not_reachable — a silently-removed refusal would also \
+             vacuously pass the bans above. Arm body:\n{err_arm}"
+        );
+        // Positive controls 2+3 (round-1 TOCTOU fix): the arm must classify
+        // from a FRESH post-failure re-probe, and preserve identity on the
+        // loss classification — a connect failure is never blanket-treated as
+        // "confirmed still alive" from the stale pre-connect reading.
+        assert!(
+            err_arm.contains("classify_connect_failure(pid_alive_now, cmdline_is_ours_now)"),
+            "the connect-Err arm must re-probe and classify wedge-vs-loss. Arm body:\n{err_arm}"
+        );
+        assert!(
+            err_arm.contains("acp_loss::preserve_identity("),
+            "the connect-Err arm's TransportLost classification must preserve identity \
+             before refusing. Arm body:\n{err_arm}"
+        );
+    }
+
+    // F3 regression guard (red-team round 2, confirmed real): `run_acp_send`'s
+    // `ProviderFx.acp_pre_dispatch` — the exactly-once history marker's install
+    // point — must be installed UNCONDITIONALLY. Recording that a structured
+    // send genuinely reached the wire is truth about the session's history and
+    // must never be gated (originally: on the retired floor's disable flag).
+    // The disposition no longer branches on it (Child D: pre-send and post-send
+    // loss both refuse), but the durable record still guards any future reader
+    // — e.g. `lifecycle.rs`'s resume seam consumes it — and losing it silently
+    // was exactly the F3 bug. This is a structural (source-text) guard because
+    // exercising the real branch needs a live, identity-verified acp connection
+    // this file's test style deliberately avoids. MUTATION EVIDENCE: gating the
+    // hook (`acp_pre_dispatch: some_condition.then(...)`) reds this test.
+    #[test]
+    fn acp_pre_dispatch_hook_is_installed_unconditionally() {
+        // Scope the check to `run_acp_send`'s OWN body (fn-start to the next
+        // top-level `fn`), NOT the whole file — a whole-file `contains` check
+        // would be VACUOUSLY true here since this test's own assertion string
+        // literal (quoting the exact marker) is itself part of `src`.
+        let src = include_str!("send_relay.rs");
+        let fn_start = src
+            .find("fn run_acp_send(session: &Session, message: &str) -> i32 {")
+            .expect("run_acp_send must still exist verbatim");
+        let after_start = &src[fn_start..];
+        let fn_end = after_start
+            .find("\nfn run_pi_send(")
+            .expect("run_pi_send must still follow run_acp_send");
+        let body = &after_start[..fn_end];
+
+        let unconditional = "acp_pre_dispatch: Some(&mark_dispatched),";
+        assert!(
+            body.contains(unconditional),
+            "run_acp_send's ProviderFx must install acp_pre_dispatch UNCONDITIONALLY as \
+             `{unconditional}`. Function body:\n{body}"
+        );
+    }
+
+    // Child D structural guard (opencode D1 — clerk-4's Arm-B ratification, bond
+    // note 01KX01BY7G): `run_acp_send` must have NO reachable auto-deliver path
+    // on transport loss. Child B's degrade+latch+companion-drive machinery was
+    // REMOVED, not gated — so this guard is structural: the identifiers cannot
+    // appear in the fn body at all. It also pins the replacement disposition:
+    // identity preservation (`acp_loss::preserve_identity`) at all four
+    // transport-loss sites — the no-live-pid entry, the dead-tier entry lane,
+    // the connect-boundary death (round-1 TOCTOU fix: the re-probe's
+    // TransportLost classification), and the mid-flight NoTransport arm — each
+    // followed by the existing human-recovery refusal. MUTATION EVIDENCE:
+    // reintroducing a floor
+    // drive (any banned identifier) reds this even though it compiles; deleting
+    // a preserve_identity call reds the positive control.
+    #[test]
+    fn acp_send_transport_loss_refuses_with_identity_preserved_and_never_auto_delivers() {
+        let src = include_str!("send_relay.rs");
+        let fn_start = src
+            .find("fn run_acp_send(session: &Session, message: &str) -> i32 {")
+            .expect("run_acp_send must still exist verbatim");
+        let after_start = &src[fn_start..];
+        let fn_end = after_start
+            .find("\nfn run_pi_send(")
+            .expect("run_pi_send must still follow run_acp_send");
+        let body = &after_start[..fn_end];
+
+        for banned in [
+            "drive_acp_floor_send",
+            "ensure_floor_pane",
+            "degrade_and_persist",
+            "degrade_to_pty",
+            "on_inject_error",
+            "DropToPtyFloor",
+        ] {
+            assert!(
+                !body.contains(banned),
+                "run_acp_send must have NO auto-deliver machinery — found `{banned}`. \
+                 acp/claude-code is a NAMED DIVERGENCE (refuse-and-surface, identity \
+                 preserved); pi's floor is the only auto-deliver realization. Body:\n{body}"
+            );
+        }
+        let occurrences = body.matches("acp_loss::preserve_identity(").count();
+        assert_eq!(
+            occurrences, 4,
+            "run_acp_send must preserve identity at exactly its four transport-loss \
+             refusals (no-live-pid entry, dead-tier entry, connect-boundary death \
+             [round-1 TOCTOU fix], mid-flight NoTransport) — found {occurrences}. \
+             Body:\n{body}"
+        );
+    }
 
     // F4 regression guard: the relay fast-path daemon-exclusion (the live-surfaced
     // mis-route fix). Reverting `provider_uses_relay_fast_path` to allow codex/acp (or

@@ -57,7 +57,7 @@ fn srt2_terminal_never_overtakes_last_chunk() {
     let session = host
         .new_session(cwd.to_str().unwrap())
         .expect("session/new");
-    let _turn = host.prompt(&session, "go", "test").expect("prompt enqueue+send");
+    let _turn = host.prompt(&session, "go", "test", &|| {}).expect("prompt enqueue+send");
 
     // Drain events until the terminal, recording arrival order.
     let mut events: Vec<AcpEvent> = Vec::new();

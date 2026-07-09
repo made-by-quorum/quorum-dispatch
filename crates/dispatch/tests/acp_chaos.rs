@@ -835,7 +835,7 @@ fn f5_f3b_wedge_after_connect_request_hang_fails_fast() {
     // awaits the daemon's response frame, which never comes (daemon frozen) → the
     // `read_response` deadline (DEFAULT_REQUEST_TIMEOUT) fires.
     let t0 = Instant::now();
-    let hung = conn.prompt(&session, "Reply with the single word PONG.", "acp-chaos-f3b");
+    let hung = conn.prompt(&session, "Reply with the single word PONG.", "acp-chaos-f3b", &|| {});
     let guarded_elapsed = t0.elapsed();
     assert!(hung.is_err(), "the post-connect request to a wedged daemon must fail (no response)");
     assert!(

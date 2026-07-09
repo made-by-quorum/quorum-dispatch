@@ -132,18 +132,40 @@ pub struct RegistryEntry {
     /// `--json` (endpoint stays OUT of the human/agent JSON surface, §9.4).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
-    /// scoped-ACP-CC (A2 §A3-ACP, the F1.1 tier-degradation field): the ONE
-    /// persisted degradation latch for the §4 fallback ladder. Absent = the
-    /// DERIVED tier applies (a healthy session needs NO field — the tier is
-    /// derived per verb from `(provider, transport-field, endpoint-alive)`);
-    /// written ONLY on degradation (e.g. `"pty"` when ACP dropped to the Mode-B
-    /// floor — `InjectError::NoTransport`). skip-None + appended LAST keeps every
-    /// existing row / tombstone / golden byte-stable (the same R1 / `provider` /
-    /// `endpoint` pattern), pinned by the absent-stays-absent round-trip test. On-disk
-    /// key is `transport` (a single lowercase word — `rename_all = "camelCase"` is a
-    /// no-op on it; pinned, not assumed).
+    /// HISTORICAL (Child B's tier-degradation latch, WRITE-RETIRED by Child D —
+    /// opencode D1, clerk-4's Arm-B ratification 01KX01BY7G): `"pty"` recorded
+    /// that a row was degraded to the (since-removed) PTY floor. Nothing writes
+    /// this field anymore — the only Child-B writer was never deployed — and
+    /// `qd resume` still clears it (`transport: None`) on revival. READ-side it
+    /// is interpreted conservatively by `provider::acp::derive_tier`: a row
+    /// bearing `"pty"` is never treated as a healthy structured tier, so the
+    /// verbs refuse it (the named-divergence disposition) rather than trust a
+    /// latch onto a floor that no longer exists. Absent = the derived tier
+    /// applies (a healthy session needs NO field). skip-None + appended LAST
+    /// keeps every existing row / tombstone / golden byte-stable (the same R1 /
+    /// `provider` / `endpoint` pattern), pinned by the absent-stays-absent
+    /// round-trip test. On-disk key is `transport` (a single lowercase word —
+    /// `rename_all = "camelCase"` is a no-op on it; pinned, not assumed).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<String>,
+    /// Child B (opencode D1)'s exactly-once wire marker, KEPT under Child D:
+    /// whether a structured ACP send has EVER been dispatched (bytes confirmed
+    /// handed to the wire) for this session's life. Absent = never dispatched.
+    /// Written by the verb layer's `acp_pre_dispatch` hook (`ProviderFx`) the
+    /// MOMENT a `session/prompt` request is confirmed on the wire, NOT after
+    /// the reply is read — a crash or socket drop between dispatch and
+    /// reply-read must still leave this `true` for the next process to read.
+    /// One-way in practice (never reset false), and carried forward across
+    /// `qd resume` (R4-1). Under Child D the transport-loss DISPOSITION no
+    /// longer branches on it (pre- and post-send loss both refuse —
+    /// `provider/acp/ladder.rs`), but the field stays the durable truth about
+    /// the session's wire history; the resume seam
+    /// (`bin/qd/verbs/lifecycle.rs`, `resume.rs`) consumes it. skip-None +
+    /// appended LAST keeps every existing row/tombstone/golden byte-stable
+    /// (the `provider`/`endpoint`/`transport` precedent). On-disk key is
+    /// `structuredSendIssued` (`rename_all = "camelCase"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_send_issued: Option<bool>,
 }
 
 impl RegistryEntry {
@@ -222,6 +244,15 @@ impl RegistryEntry {
         // instead of dropping the whole row — same R1 discipline as provider/endpoint.
         // The `wrong_typed_transport_number_degrades` test is the mutation evidence.
         field!(entry.transport, Option<String>, "transport", "transport");
+        // Child B (opencode D1): per-field-permissive structured-send-issued read,
+        // same R1 discipline. A wrong-typed `"structuredSendIssued": 1` degrades
+        // (row survives) rather than dropping the row or silently miscounting.
+        field!(
+            entry.structured_send_issued,
+            Option<bool>,
+            "structuredSendIssued",
+            "structuredSendIssued"
+        );
         // Any remaining keys are unknown fields — ignored (permissive).
 
         Some((entry, degraded))
@@ -363,6 +394,19 @@ pub fn pick_live_named_row(
 /// (missing OR corrupt — TS `catch { return undefined }`).
 pub fn read_entry(sessions_dir: &Path, pid: i64) -> Option<RegistryEntry> {
     parse_file(&sessions_dir.join(format!("{pid}.json"))).map(|(entry, _degraded)| entry)
+}
+
+/// Read one TOMBSTONED registry entry by PID (R4-1, conformance round 4): the
+/// `read_entry` analog for `<pid>.json.tombstoned` — `qd stop` tombstones a row
+/// by RENAMING `<pid>.json` to this path, so any carry-forward read that only
+/// consults [`read_entry`] silently misses every ordinarily-stopped session
+/// (only a crash, which leaves the live file in place with a dead pid, is
+/// visible to `read_entry`). Targeted single-file read (not
+/// [`get_tombstoned_entries`]'s directory scan) — the same one-file-per-pid
+/// shape as `read_entry`, for exactly the same reason: a caller wants ONE row,
+/// not a batch.
+pub fn read_tombstoned_entry(sessions_dir: &Path, pid: i64) -> Option<RegistryEntry> {
+    parse_file(&sessions_dir.join(format!("{pid}.json.tombstoned"))).map(|(entry, _degraded)| entry)
 }
 
 /// Get all tombstoned registry files with metadata. Port of
@@ -1190,6 +1234,7 @@ mod tests {
             // populate it directly.
             endpoint: None,
             transport: None,
+            structured_send_issued: None,
         }
     }
 
@@ -1214,6 +1259,7 @@ mod tests {
             provider: Some("codex".into()),
             endpoint: Some("ws://127.0.0.1:18951".into()),
             transport: None,
+            structured_send_issued: None,
         }
     }
 
@@ -1392,6 +1438,46 @@ mod tests {
         fs::write(dir.path().join("5.json"), b"{not json").unwrap();
         assert_eq!(read_entry(dir.path(), 5), None); // corrupt
         assert_eq!(read_entry(dir.path(), 6), None); // missing
+    }
+
+    // R4-1 (conformance round 4): `read_tombstoned_entry` is the `read_entry`
+    // analog for `<pid>.json.tombstoned` — the file `tombstone()` renames a live
+    // row to. `qd stop` uses exactly this rename, so a caller who needs a
+    // pre-stop row's data (e.g. `qd resume`'s structured_send_issued
+    // carry-forward) must read THIS path, not `read_entry`'s live-only one.
+    #[test]
+    fn read_tombstoned_entry_reads_the_renamed_file() {
+        let dir = tempdir().unwrap();
+        let entry = RegistryEntry {
+            pid: Some(4242),
+            session_id: Some("sess-tomb".into()),
+            structured_send_issued: Some(true),
+            ..RegistryEntry::default()
+        };
+        write_entry(dir.path(), &entry).unwrap();
+        assert!(tombstone(dir.path(), 4242), "tombstone must find the live row");
+
+        assert_eq!(
+            read_entry(dir.path(), 4242),
+            None,
+            "the live path is gone after tombstoning"
+        );
+        let tombstoned = read_tombstoned_entry(dir.path(), 4242)
+            .expect("the tombstoned file must be readable");
+        assert_eq!(tombstoned.structured_send_issued, Some(true));
+        assert_eq!(tombstoned.session_id.as_deref(), Some("sess-tomb"));
+    }
+
+    #[test]
+    fn read_tombstoned_entry_returns_none_for_corrupt_and_missing() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("5.json.tombstoned"), b"{not json").unwrap();
+        assert_eq!(read_tombstoned_entry(dir.path(), 5), None); // corrupt
+        assert_eq!(read_tombstoned_entry(dir.path(), 6), None); // missing
+        // A LIVE (non-tombstoned) file for the same pid must NOT be read by
+        // read_tombstoned_entry — the two paths are deliberately distinct.
+        fs::write(dir.path().join("7.json"), br#"{"pid":7}"#).unwrap();
+        assert_eq!(read_tombstoned_entry(dir.path(), 7), None);
     }
 
     #[test]
@@ -1633,6 +1719,66 @@ mod tests {
         );
         let back = read_entry(dir.path(), 4242).unwrap();
         assert_eq!(back.transport, None);
+        assert_eq!(back, entry);
+    }
+
+    // === Child B (opencode D1): RegistryEntry.structured_send_issued
+    // byte-stability (the same R1 / provider / endpoint / transport discipline)
+    // ===
+
+    // A wrong-typed `"structuredSendIssued": 1` DEGRADES (row survives, field
+    // named) instead of dropping the whole row. Mutation evidence: removing the
+    // `field!(entry.structured_send_issued, ...)` line in `from_value` reds this
+    // AND `structured_send_issued_round_trips` below (both regress to reading
+    // back `None` even for a well-typed value — exactly the bug this per-field
+    // parser exists to avoid).
+    #[test]
+    fn wrong_typed_structured_send_issued_number_degrades() {
+        let (e, degraded) = read_blob(r#"{"pid":100,"structuredSendIssued":1}"#);
+        assert_eq!(
+            e.structured_send_issued, None,
+            "wrong-typed structuredSendIssued degrades to None"
+        );
+        assert_eq!(e.pid, Some(100), "the row SURVIVES (sibling preserved)");
+        assert_eq!(degraded, vec!["structuredSendIssued"]);
+    }
+
+    // The on-disk key is `structuredSendIssued` (rename_all = "camelCase"); a
+    // populated value round-trips and the file carries that literal key (pinned,
+    // not assumed) — the SAME per-field manual parser that `transport` and
+    // `endpoint` exercise, since `from_value` (not derive(Deserialize)) is what
+    // actually reads a registry file back (a struct-level-only fix would compile
+    // but silently never round-trip in production).
+    #[test]
+    fn structured_send_issued_round_trips() {
+        let dir = tempdir().unwrap();
+        let mut entry = codex_entry();
+        entry.structured_send_issued = Some(true);
+        write_entry(dir.path(), &entry).unwrap();
+        let text = fs::read_to_string(dir.path().join("90909.json")).unwrap();
+        assert!(text.contains("\"structuredSendIssued\""), "json: {text}");
+        let back = read_entry(dir.path(), 90909).unwrap();
+        assert_eq!(back, entry);
+        assert_eq!(back.structured_send_issued, Some(true));
+    }
+
+    // MUTATION EVIDENCE (byte-stability): a healthy row (never dispatched)
+    // serializes with NO `structuredSendIssued` key — existing rows / tombstones
+    // / goldens stay byte-stable. Removing the `skip_serializing_if` on the field
+    // reds this.
+    #[test]
+    fn absent_structured_send_issued_stays_absent_and_byte_stable() {
+        let dir = tempdir().unwrap();
+        let entry = full_entry(); // a healthy claude row: structured_send_issued None
+        assert_eq!(entry.structured_send_issued, None);
+        write_entry(dir.path(), &entry).unwrap();
+        let text = fs::read_to_string(dir.path().join("4242.json")).unwrap();
+        assert!(
+            !text.contains("structuredSendIssued"),
+            "a None structured_send_issued must NOT appear on disk (byte-stability): {text}"
+        );
+        let back = read_entry(dir.path(), 4242).unwrap();
+        assert_eq!(back.structured_send_issued, None);
         assert_eq!(back, entry);
     }
 

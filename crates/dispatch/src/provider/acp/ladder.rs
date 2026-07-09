@@ -1,197 +1,226 @@
-//! `provider/acp/ladder.rs` — the §4 capability-detection / fallback ladder for the
-//! CC slice (A2 §4 + §5, the `inject` single-call-site Mode-A switch).
+//! `provider/acp/ladder.rs` — tier derivation + the transport-loss disposition
+//! for the `acp/*` verbs.
 //!
-//! The 3-tier ladder is **ACP > native > PTY floor**. In the CC-only scope the live
-//! tiers are **ACP (Tier 1, Mode-A)** and the **PTY/Mode-B floor (Tier 3)** — the
-//! `native` middle tier is codex/pi/opencode and is DEFERRED. The tier is a DERIVED
-//! value recomputed per verb from `(provider, transport-field, endpoint-alive)`
-//! (A2 §4, the resolution of blocker F1.1: there was no `tier` storage, so tier is
-//! derived, with ONE persisted bit for degradation). The ONE persisted bit is
-//! [`crate::registry::RegistryEntry::transport`]: absent = the derived structured
-//! default; `"pty"` = a one-way latch recording that the row was DEGRADED to the
-//! floor (the wedge-revival rule and the "no auto-PTY after a structured send" rule
-//! read it).
+//! **The shipped contract (Child D, opencode D1 — clerk-4's Arm-B ratification,
+//! bond note 01KX01BY7G), exactly:**
 //!
-//! This module is the DECISION authority (pure, fully unit-tested against every A2
-//! §3 LADDER negative control). The actual PTY/Mode-B re-delivery reuses the EXISTING
-//! claude floor UNCHANGED (no-regression) — the verb consults [`derive_tier`] to pick
-//! the lane and [`on_inject_error`] to react to a send-time transport loss.
+//! `acp/claude-code` is a **NAMED DIVERGENCE** from D1's auto-deliver
+//! graceful-degrade goal, joining `codex` and `acp/opencode`:
+//!
+//! 1. **Transport loss REFUSES and surfaces** — pre-send, post-send, or
+//!    mid-wait, `qd send`/`qd wait` refuse with the human-recovery surface
+//!    ("… not reachable (try qd resume …)"), exit 1. There is NO auto-deliver
+//!    fallback: the Child-B PTY-floor drive (latch + companion pane +
+//!    floor delivery) was REMOVED, not gated — a red-team hunting a reachable
+//!    auto-deliver path should find the machinery absent, not disabled
+//!    (`bin/qd/verbs/send_relay.rs::run_acp_send`, `wait.rs::run_acp_wait`).
+//!    Why: the floor drive's only revival seam is `claude --resume
+//!    <session_id>`, which is structurally impossible for the only
+//!    degrade-eligible population (a zero-structured-turn session has no
+//!    conversation to resume — Child C, live-proven), and the Arm-A drive
+//!    redesign was ruled a speculative redesign and DECLINED.
+//! 2. **Identity is PRESERVED across the loss.** Before refusing, the verb
+//!    records the session's identity (session_id, name, pid, cwd, provider,
+//!    endpoint, transcript path, loss reason, timestamps) in the qd-owned
+//!    tombstone store — [`crate::tombstone`],
+//!    `<QD_HOME || ~/.quorum/dispatch>/state/tombstones/<session_id>.json` —
+//!    because the session's own registry row (`~/.claude/sessions/<pid>.json`)
+//!    is claude-CLI-owned and janitor-reaped ~1s after daemon death (Child C,
+//!    live-proven): anything persisted there is structurally unpersistable for
+//!    a dead-pid session. Scope: `acp/claude-code` only; `codex`/`acp/opencode`
+//!    refusals stay byte-identical and write nothing
+//!    (`bin/qd/verbs/acp_loss.rs`).
+//! 3. **A connect failure re-probes, then splits wedge from loss** (red-team
+//!    round 1, TOCTOU finding). Reaching the connect step required `derive_tier`
+//!    to read `endpoint_alive == true` (pid alive, identity-verified cmdline,
+//!    endpoint present) — but that reading is a point-in-time probe taken
+//!    BEFORE connect, and a daemon can die across that boundary. So on connect
+//!    failure the verb re-probes liveness+identity NOW and classifies
+//!    ([`classify_connect_failure`]):
+//!    - **still alive + identity-verified** ⇒ a genuine WEDGE: refuse with NO
+//!      tombstone. The registry row is live-pid, which the claude CLI's
+//!      dead-pid janitor never reaps, so no identity is at risk; `qd resume`
+//!      (kill + restart) is the recovery act.
+//!    - **now dead (or identity no longer verified)** ⇒ the daemon died across
+//!      the boundary: a transport LOSS — identity preserved + refuse, exactly
+//!      like the entry lane.
+//!    **The residual (accepted, stated):** a daemon observed as a genuine wedge
+//!    that dies LATER, with no further qd interaction ever, loses its registry
+//!    row to the janitor with no tombstone written. This is acceptable because
+//!    (a) ANY subsequent qd send/wait on the session after the death hits the
+//!    entry lane (dead pid / empty cmdline ⇒ `Tier::Unavailable`) and writes the
+//!    tombstone then — the only uncovered case is a session nobody ever asks qd
+//!    about again; and (b) even in that case the recovery-critical identity
+//!    survives in qd-owned stores independent of this module: the stable-id ↔
+//!    session_id ↔ name mapping in `<state_dir>/ids.jsonl` (`crate::idstore` —
+//!    append-only, minted at start/backfill, never reaped) and the CC transcript
+//!    under `~/.claude/projects/…/<session_id>.jsonl` (the janitor reaps only
+//!    `sessions/<pid>.json`). The tombstone adds cwd/endpoint/loss-reason
+//!    convenience on top of that durable pair; it is not the sole carrier.
+//!
+//! **Relation to pi's floor** (`provider/pi/floor.rs`): pi is D1's auto-deliver
+//! realization — its latch-free, auto-returning floor regime is ratified live
+//! behavior, deliberately SEPARATE and untouched by this module (disjoint
+//! `provider_id`s, disjoint registry rows). Changing pi's floor is a
+//! preregistered escalation, never build scope here.
+//!
+//! **What remains of the Child-B ladder:** [`derive_tier`] — the per-verb lane
+//! pick (structured ACP vs unavailable), recomputed from `(provider,
+//! transport-field, endpoint-alive)` with no persisted tier. The
+//! [`PTY_TRANSPORT`] latch value is retained READ-side only: nothing writes
+//! `transport="pty"` anymore, but a row bearing one (written by a never-deployed
+//! Child-B dev binary) derives [`Tier::Unavailable`] and refuses — the
+//! conservative interpretation of a row that once dropped to a floor that no
+//! longer exists. `QD_ACP_PTY_FLOOR_DISABLE`, which gated only the retired
+//! drive, is now a NO-OP (refusal is unconditional).
+//!
+//! **Exactly-once history, kept:** the wire dispatch for `session/prompt`
+//! (`provider/acp/wire.rs`) still durably marks
+//! [`crate::registry::RegistryEntry::structured_send_issued`] the moment the
+//! request's bytes are confirmed on the wire (via `ProviderFx::acp_pre_dispatch`,
+//! installed unconditionally — F3). The DISPOSITION no longer branches on it
+//! (pre-send and post-send loss both refuse), but the marker stays truth about
+//! the session's wire history and is consumed elsewhere (e.g. the resume seam,
+//! `bin/qd/verbs/lifecycle.rs`).
 
-/// The persisted degradation-latch value written to
-/// [`crate::registry::RegistryEntry::transport`] when a row drops to the floor.
+/// The historical degradation-latch value on
+/// [`crate::registry::RegistryEntry::transport`]. WRITE-side retired (Child D):
+/// nothing latches anymore; retained so [`derive_tier`] interprets a
+/// previously-latched row conservatively (unavailable ⇒ refuse), never as a
+/// healthy structured tier.
 pub const PTY_TRANSPORT: &str = "pty";
 
-/// The delivery lane for a verb against an ACP-capable session (A2 §4).
+/// The delivery lane for a verb against an ACP-capable session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
-    /// Tier 1 — the structured ACP transport (Mode-A): `inject` enqueues →
+    /// The structured ACP transport (Mode-A): `inject` enqueues →
     /// `session/prompt`.
     Acp,
-    /// Tier 3 — the PTY / Mode-B floor: the universal fallback (the EXISTING claude
-    /// drive path, unchanged). Reached when ACP is unavailable or the row is latched.
-    PtyFloor,
+    /// The structured transport is not available for this row — dead endpoint,
+    /// a historical `"pty"` latch, or a non-acp provider. Child D disposition:
+    /// the verb REFUSES and surfaces (identity preserved for `acp/claude-code`
+    /// via [`crate::tombstone`]); there is no auto-deliver tier.
+    Unavailable,
 }
 
-/// Derive the tier for a verb (A2 §4 — recomputed each verb, cheap). The persisted
-/// `transport` latch wins (one-way): once `"pty"`, the row stays on the floor for its
-/// life (no silent re-upgrade). Otherwise an `acp/*` provider with a LIVE endpoint
-/// gets the ACP tier; anything else (a dead ACP endpoint — the "ACP-claimed-but-dead"
-/// red-team false-positive — or a non-acp provider) falls to the PTY floor.
-pub fn derive_tier(provider_id: &str, transport_field: Option<&str>, endpoint_alive: bool) -> Tier {
-    // The one-way degradation latch reads first: a row degraded to PTY stays PTY.
-    if transport_field == Some(PTY_TRANSPORT) {
-        return Tier::PtyFloor;
+/// What a connect failure on a previously-live-probed endpoint means, decided
+/// from a FRESH liveness+identity re-probe taken AFTER the failure (the module
+/// contract's clause 3; closes the red-team round-1 TOCTOU: the pre-connect
+/// probe cannot "confirm" liveness across the connect boundary).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectFailure {
+    /// The daemon is alive and identity-verified RIGHT NOW: a genuine wedge.
+    /// Refuse without a tombstone — the live-pid registry row is not
+    /// janitor-reapable, so no identity is at risk.
+    WedgeStillAlive,
+    /// The daemon is now dead (or its pid no longer carries our cmdline): it
+    /// died across the probe→connect boundary. A transport LOSS — the verb
+    /// preserves identity before refusing, exactly like the entry lane.
+    TransportLost,
+}
+
+/// Classify a connect failure from the post-failure re-probe readings:
+/// `pid_alive_now` = `is_pid_alive(pid)` taken after the failure;
+/// `cmdline_is_ours_now` = the identity fence (`cmdline_is_our_acp_daemon`)
+/// re-read at the same moment. Both must hold for the wedge classification —
+/// a dead pid OR a pid that no longer carries our daemon's cmdline (exit +
+/// pid reuse inside the window) is a loss.
+pub fn classify_connect_failure(pid_alive_now: bool, cmdline_is_ours_now: bool) -> ConnectFailure {
+    if pid_alive_now && cmdline_is_ours_now {
+        ConnectFailure::WedgeStillAlive
+    } else {
+        ConnectFailure::TransportLost
     }
-    // Only `acp/*` providers have an ACP tier (CC-only scope: codex/pi/opencode
-    // native tiers are deferred). A dead endpoint → the floor (never hang on a
-    // claimed-but-dead structured transport — the negative control).
+}
+
+/// Derive the tier for a verb (recomputed each verb, cheap — no persisted
+/// tier). The historical `transport="pty"` latch reads first: such a row is
+/// never treated as structured (see [`PTY_TRANSPORT`]). Otherwise an `acp/*`
+/// provider with a LIVE endpoint gets the ACP tier; anything else (a dead ACP
+/// endpoint — the "ACP-claimed-but-dead" false-positive — or a non-acp
+/// provider) is unavailable, which the verbs surface as a refusal.
+pub fn derive_tier(provider_id: &str, transport_field: Option<&str>, endpoint_alive: bool) -> Tier {
+    // A historically-latched row is never structured (conservative read).
+    if transport_field == Some(PTY_TRANSPORT) {
+        return Tier::Unavailable;
+    }
+    // Only `acp/*` providers have an ACP tier. A dead endpoint → unavailable
+    // (never hang on a claimed-but-dead structured transport — the negative
+    // control).
     if provider_id.starts_with("acp/") && endpoint_alive {
         return Tier::Acp;
     }
-    Tier::PtyFloor
-}
-
-/// What the verb must do when an `inject` could not be delivered over the structured
-/// (ACP) tier (A2 §3 LADDER + §4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LadderOutcome {
-    /// ACP was unavailable and NO structured send was issued for this turn (the
-    /// `session/prompt` never reached the wire) → it is SAFE to drop to the PTY/Mode-B
-    /// floor and DELIVER this turn (the "must fall to PTY, not fail/hang" negative
-    /// control). The verb latches `transport=pty` ([`degrade_to_pty`]) + logs the drop.
-    DropToPtyFloor,
-    /// A structured send WAS already issued for this turn (or a prior turn on this
-    /// session) → auto-PTY would risk DUPLICATE delivery, so the floor is
-    /// HUMAN-RECOVERY-ONLY here. The verb MUST refuse an automatic PTY retry (A2 §3
-    /// "Structured-delivery-attempted → no silent PTY"; the wedge-revival constraint).
-    HumanRecoveryOnly,
-    /// Not a transport-availability failure (SC-1a bounded-overflow backpressure /
-    /// a structured precondition) → the ladder does NOT degrade the tier; surface the
-    /// error as-is (backpressure ≠ a tier-down; SC-1a ≠ SC-3).
-    Surface,
-}
-
-/// Decide the ladder reaction to an [`crate::provider::InjectError`] from a structured
-/// (ACP-tier) `inject`. `structured_send_issued` is the turn-record bit A2 §3 names:
-/// `true` once a `session/prompt` has been ISSUED for this turn OR a prior structured
-/// turn landed on this session (so an auto-PTY now risks duplicate delivery).
-pub fn on_inject_error(
-    err: &crate::provider::InjectError,
-    structured_send_issued: bool,
-) -> LadderOutcome {
-    use crate::provider::InjectError;
-    match err {
-        // No transport at all (ACP host absent / connection closed): the structured
-        // send did NOT reach the wire for THIS turn. Safe to floor it — UNLESS a
-        // structured turn was already issued on this session (no auto-second-turn PTY).
-        InjectError::NoTransport(_) => {
-            if structured_send_issued {
-                LadderOutcome::HumanRecoveryOnly
-            } else {
-                LadderOutcome::DropToPtyFloor
-            }
-        }
-        // SC-1a backpressure (`Precondition("queue full")`) and any other structured
-        // precondition are NOT transport losses — surface them (do not tier-down).
-        InjectError::Precondition(_) | InjectError::RelayFailed(_) => LadderOutcome::Surface,
-    }
-}
-
-/// Apply the one-way PTY degradation latch to a row's `transport` field (idempotent):
-/// records that the row dropped to the floor so the derived tier stays `PtyFloor` for
-/// the row's life (A2 §4 — no silent re-upgrade).
-pub fn degrade_to_pty(transport: &mut Option<String>) {
-    *transport = Some(PTY_TRANSPORT.to_string());
-}
-
-/// The operator-visible drop log line (A1 §4.3 Trigger 2: a degradation is NEVER
-/// silently swallowed — it is observable). The verb writes this to stderr when it
-/// degrades a row to the floor.
-pub fn drop_log_line(session: &str, reason: &str) -> String {
-    format!("acp: session \"{session}\" dropped to the PTY/Mode-B floor (transport=pty): {reason}")
+    Tier::Unavailable
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::InjectError;
 
-    // A2 §4: a structured acp row with a LIVE endpoint derives Tier 1 (ACP). The
-    // tier-2-preferred invariant — a mutation forcing PtyFloor here would red.
+    // A structured acp row with a LIVE endpoint derives the ACP tier — the
+    // structured-preferred invariant; a mutation forcing Unavailable here reds.
     #[test]
     fn healthy_acp_row_derives_acp_tier() {
         assert_eq!(derive_tier("acp/claude-code", None, true), Tier::Acp);
     }
 
-    // The red-team false-positive control (A2 §3): ACP-CLAIMED-BUT-DEAD (endpoint not
-    // alive) must fall to the floor, NEVER hang on the dead structured transport.
+    // The false-positive control: ACP-CLAIMED-BUT-DEAD (endpoint not alive)
+    // must derive Unavailable — the verbs refuse; nothing may hang on (or
+    // auto-deliver over) a dead structured transport.
     #[test]
-    fn acp_claimed_but_dead_endpoint_falls_to_floor() {
-        assert_eq!(derive_tier("acp/claude-code", None, false), Tier::PtyFloor);
+    fn acp_claimed_but_dead_endpoint_is_unavailable() {
+        assert_eq!(derive_tier("acp/claude-code", None, false), Tier::Unavailable);
     }
 
-    // The one-way latch (A2 §4): a row degraded to `pty` derives the floor even if the
-    // endpoint would now probe alive (no silent re-upgrade).
+    // The historical latch reads conservatively: a row a Child-B dev binary
+    // once degraded to `pty` is never treated as structured — even if the
+    // endpoint would now probe alive — so it lands in the refusal lane.
     #[test]
-    fn pty_latched_row_stays_on_floor_even_if_endpoint_alive() {
+    fn historically_latched_row_is_unavailable_even_if_endpoint_alive() {
         assert_eq!(
             derive_tier("acp/claude-code", Some("pty"), true),
-            Tier::PtyFloor
+            Tier::Unavailable
         );
     }
 
-    // A non-acp provider has no ACP tier in this scope → the floor.
+    // A non-acp provider has no ACP tier.
     #[test]
-    fn non_acp_provider_derives_floor() {
-        assert_eq!(derive_tier("claude-code", None, true), Tier::PtyFloor);
+    fn non_acp_provider_is_unavailable() {
+        assert_eq!(derive_tier("claude-code", None, true), Tier::Unavailable);
     }
 
-    // The "must fall to PTY, not fail/hang" negative control (charge §3): ACP
-    // unavailable BEFORE any structured send → drop to the floor and DELIVER.
+    // Red-team round 1 (TOCTOU): the connect-failure classification keys on
+    // the POST-failure re-probe, never the stale pre-connect reading. Only
+    // alive-AND-identity-verified is a wedge; everything else is a loss that
+    // must preserve identity before refusing.
     #[test]
-    fn no_transport_before_structured_send_drops_to_floor() {
-        let err = InjectError::NoTransport("sess-1".to_string());
-        assert_eq!(on_inject_error(&err, false), LadderOutcome::DropToPtyFloor);
-    }
-
-    // The dup-delivery guard (A2 §3, panel gpt-5.5 2.5/F): once a structured send is
-    // issued, auto-PTY is REFUSED — human recovery only.
-    #[test]
-    fn no_transport_after_structured_send_is_human_recovery_only() {
-        let err = InjectError::NoTransport("sess-1".to_string());
+    fn connect_failure_alive_and_verified_is_a_wedge() {
         assert_eq!(
-            on_inject_error(&err, true),
-            LadderOutcome::HumanRecoveryOnly,
-            "no auto-PTY after a structured send (duplicate-delivery risk)"
+            classify_connect_failure(true, true),
+            ConnectFailure::WedgeStillAlive
         );
     }
 
-    // SC-1a backpressure (`queue full`) is NOT a transport loss → surface, do not
-    // tier-down (backpressure ≠ SC-3 ban, ≠ a degradation).
     #[test]
-    fn queue_full_precondition_surfaces_not_tier_down() {
-        let err = InjectError::Precondition("queue full".to_string());
-        assert_eq!(on_inject_error(&err, false), LadderOutcome::Surface);
+    fn connect_failure_dead_pid_is_a_transport_loss() {
+        assert_eq!(
+            classify_connect_failure(false, false),
+            ConnectFailure::TransportLost,
+            "died across the probe→connect boundary — the S1/S2 TOCTOU window"
+        );
+        assert_eq!(
+            classify_connect_failure(false, true),
+            ConnectFailure::TransportLost,
+            "a dead pid is a loss even if a stale cmdline reading said ours"
+        );
     }
 
-    // The latch is one-way + idempotent.
     #[test]
-    fn degrade_to_pty_is_one_way_idempotent() {
-        let mut t: Option<String> = None;
-        degrade_to_pty(&mut t);
-        assert_eq!(t.as_deref(), Some("pty"));
-        degrade_to_pty(&mut t);
-        assert_eq!(t.as_deref(), Some("pty"), "idempotent");
-        // And a row latched to pty derives the floor — closing the loop.
-        assert_eq!(derive_tier("acp/claude-code", t.as_deref(), true), Tier::PtyFloor);
-    }
-
-    // The drop is observable, not silent (A1 §4.3 Trigger 2).
-    #[test]
-    fn drop_log_line_is_observable() {
-        let line = drop_log_line("sess-1", "acp_client absent (InjectError::NoTransport)");
-        assert!(line.contains("sess-1"));
-        assert!(line.contains("transport=pty"));
-        assert!(line.contains("PTY/Mode-B floor"));
+    fn connect_failure_pid_reuse_inside_the_window_is_a_transport_loss() {
+        assert_eq!(
+            classify_connect_failure(true, false),
+            ConnectFailure::TransportLost,
+            "an alive pid that no longer carries our daemon's cmdline is exit+reuse, not a wedge"
+        );
     }
 }

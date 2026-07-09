@@ -634,7 +634,13 @@ impl AcpClient for AcpHost {
         Ok(session)
     }
 
-    fn prompt(&self, _session: &str, text: &str, from: &str) -> Result<TurnId, AcpError> {
+    fn prompt(
+        &self,
+        _session: &str,
+        text: &str,
+        from: &str,
+        on_dispatched: &dyn Fn(),
+    ) -> Result<TurnId, AcpError> {
         let mut inner = self.inner.borrow_mut();
         if inner.session.is_none() {
             return Err(AcpError::Protocol("no acp session established".to_string()));
@@ -647,6 +653,9 @@ impl AcpClient for AcpHost {
             .ok_or_else(|| AcpError::Protocol("no acp session established".to_string()))?
             .enqueue(text, from)
             .map_err(|_| AcpError::QueueFull)?;
+        // In-process enqueue is a single atomic local step — no dispatch/reply split, so there is
+        // no ambiguous partial-completion window. Fire the hook once the turn is durably queued.
+        on_dispatched();
         // Release+send NOW iff the session is turn-idle (never interrupts an in-flight turn —
         // SC-1); otherwise it sends when the in-flight terminal releases the slot in `next_update`.
         Self::release_next(&mut inner)?;

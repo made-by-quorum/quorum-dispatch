@@ -253,7 +253,9 @@ fn codex_root(env: &JailEnv, paths: &dispatch::paths::QdPaths) -> PathBuf {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     CodexProvider.transcript_root(&fx)
 }
 
@@ -496,7 +498,9 @@ fn codex_full_lifecycle_live_jailed() {
             app_server: Some(rpc_ref),
             codex_expected_turn_id: expected.as_deref(),
             acp_client: None,
-        pi_rpc: None,        };
+            pi_rpc: None,
+            acp_pre_dispatch: None,
+        };
         let turn_id = CodexProvider
             .inject(
                 &fx,

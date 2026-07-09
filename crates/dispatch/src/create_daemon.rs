@@ -562,7 +562,9 @@ fn try_spawn_and_connect<'a>(
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     let req = LaunchRequest {
         name: params.name.clone(),
         cwd: Some(params.cwd.to_string_lossy().into_owned()),
@@ -684,9 +686,13 @@ fn finish_create(
         spawned_by: None,
         provider: Some("codex".to_string()),
         endpoint: Some(endpoint.to_string()),
-        // scoped-ACP-CC: no degradation latch on a freshly-created healthy row
-        // (the tier is DERIVED; only degradation persists transport).
+        // scoped-ACP-CC: no `transport` field on a freshly-created healthy row
+        // (the tier is DERIVED; the field is write-retired — historical
+        // Child-B-era latch, see registry.rs's field doc).
         transport: None,
+        // Child B (opencode D1): no structured send has been issued on a
+        // freshly-created row.
+        structured_send_issued: None,
     };
     if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);

@@ -43,6 +43,8 @@ fn registry_write_roundtrip_through_pipeline() {
         endpoint: None,
         // scoped-ACP-CC: a healthy claude row carries no degradation latch (absent).
         transport: None,
+        // Child B (opencode D1): no structured-send history on this row.
+        structured_send_issued: None,
     };
     registry::write_entry(&paths.sessions_dir, &entry).unwrap();
 

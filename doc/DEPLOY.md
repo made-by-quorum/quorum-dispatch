@@ -7,6 +7,17 @@ cursor fix, faster `qd new`, token counts, all on `main` but invisible to users.
 fix and the user "still sees the old behavior," check the deployed binary's age against the merge
 first.
 
+> **2026-07-07 postmortem — read this even if you skip nothing else.** A cutover deployed
+> `target/debug/qd` as canonical (never `cargo build --release`), apparently a RAM-pressure
+> shortcut under a tight free-memory box. `qd ls` went from sub-second to ~10s — dispatch's
+> pure-Rust marks/ids folds are ~6-7x slower unoptimized at real ledger scale — which blew past
+> frame's hardcoded 10s name-resolution timeout on every resolve and broke message delivery
+> org-wide. This DEPLOY.md already said `cargo build --release` at the time; the doc mandate alone
+> did not stop it. **Step 5 below now routes through `scripts/deploy-gate.sh`, which refuses to
+> install a debug binary or a binary that fails a real-scale latency smoke check — this is no
+> longer a step you can silently skip under pressure**, since a bare `mv` is no longer part of the
+> documented procedure at all.
+
 ## Where the live binary lives (resolve it, don't assume)
 
 The deploy target is wherever `qd` resolves on `PATH` — it differs per machine. **Resolve it; never
@@ -41,14 +52,52 @@ cp target/release/qd "$LIVE.new"
 case "$(uname)" in Darwin) codesign --force --sign - "$LIVE.new" ;; esac
 "$LIVE.new" ls >/dev/null && echo OK
 
-# 5. ATOMIC rename into place (NOT cp — see below). Refresh any canonical rust copy too.
-mv -f "$LIVE.new" "$LIVE"
+# 5. GATED atomic install (NOT a bare mv/cp — see "Why NOT cp" and the deploy gate below).
+# Refuses to install a debug-profile binary, and refuses a binary whose `ls` takes longer
+# than the budget against your real, live ledger (read-only; ls never mutates). Only on
+# success does it `mv -f "$LIVE.new" "$LIVE"`.
+./scripts/deploy-gate.sh "$LIVE.new" "$LIVE" --smoke-args ls --budget-secs 2
 # macOS legacy only: keep ~/.local/bin/qdr in sync as the rollback-source rust binary.
 case "$(uname)" in Darwin) cp target/release/qd ~/.local/bin/qdr && codesign --force --sign - ~/.local/bin/qdr ;; esac
 
 # 6. Verify.
 qd --version && sha256sum "$LIVE" 2>/dev/null | cut -c1-16 || shasum -a 256 "$LIVE" | cut -c1-16
 ```
+
+## The deploy gate: `scripts/deploy-gate.sh`
+
+Step 5 does not `mv` directly — it hands the staged binary and the live path to
+`scripts/deploy-gate.sh`, which performs two independent checks and only then does the atomic
+install itself (so there is no code path in this doc that installs a binary without passing both):
+
+1. **Build-profile check.** Runs `<staged-binary> build-profile` — a hidden verb (`qd
+   build-profile`, dispatched pre-clap like `qrmux-server`/`relay:serve`) that prints `release` or
+   `debug` via `cfg!(debug_assertions)`. Anything other than exactly `release` refuses the install.
+   This is the exact 2026-07-07 cause, caught mechanically instead of by doc reminder.
+2. **Startup-latency smoke check.** Times `<staged-binary> <smoke-args>` (here, `ls`) and refuses
+   the install if it exceeds `--budget-secs` (default 2s; override per call). Run it against your
+   real HOME (the default — `ls` is read-only) or `--fixture-home DIR` for a deterministic CI/dev
+   run. **This is the general-case gate**: it would have caught the 2026-07-07 regression even if
+   the cause had been something other than a debug build, because it measures the actual behavior
+   at real ledger scale rather than trusting the build profile alone. A small synthetic fixture
+   would not have caught this class of bug — the pre-existing small-fixture unit test suite passed
+   throughout the incident; the gate must run against real (or realistically-sized) data.
+
+Either check failing leaves `$LIVE` untouched and exits nonzero (`1` = debug binary, `2` = over
+budget) — see the script's header comment for exact usage and exit codes.
+
+## The other install paths (round 3 of this postmortem)
+
+This gate covers hand-run `qd`/`qf` deploys via this doc. It does not cover every path a binary can
+reach `~/.quorum/bin` by — an exhaustive audit found two more:
+
+- `qrm bootstrap`/`qrm bootstrap --fresh`/`qrm update` place `qd`/`qf` through
+  `qrm::verbs::place_colocated_binary`, now gated in Rust with the same two checks (ported, not
+  shelled out — see `qrm/src/deploy_checks.rs`).
+- `install.sh` and this repo's README "Manual build" section both do a raw shell `install -m 0755`
+  that nothing in Rust can pre-gate — but both end by running `qrm doctor`, which now checks the
+  LIVE installed `~/.quorum/bin/{qd,qf}` for build-profile + real-scale latency and FAILs loud on
+  either. This is the universal post-install backstop for any path that can't be pre-gated in code.
 
 ## Why NOT `cp` straight over the live binary
 

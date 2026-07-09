@@ -252,6 +252,7 @@ fn cf_argv_golden_strips_forbidden_from_env() {
         codex_expected_turn_id: None,
         acp_client: None,
         pi_rpc: None,
+            acp_pre_dispatch: None,
     };
     let req = LaunchRequest {
         name: "wk".to_string(),

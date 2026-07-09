@@ -82,6 +82,17 @@ fn run(argv: &[String]) -> i32 {
         Some("relay:rollback") => {
             return run_relay_rollback();
         }
+        // build-profile: HIDDEN deploy-gate probe (perf-regression postmortem,
+        // 2026-07-07). Prints "release" or "debug" via `cfg!(debug_assertions)`
+        // and exits 0 — a debug build must never answer "release". Dispatched
+        // pre-clap (like the other hidden verbs above) so it can't be shadowed
+        // by a real verb or mangled by commander error mapping. Read by
+        // `scripts/deploy-gate.sh` before any binary is moved into a canonical
+        // bin dir; see dispatch/doc/DEPLOY.md.
+        Some("build-profile") => {
+            println!("{}", if cfg!(debug_assertions) { "debug" } else { "release" });
+            return 0;
+        }
         _ => {}
     }
 

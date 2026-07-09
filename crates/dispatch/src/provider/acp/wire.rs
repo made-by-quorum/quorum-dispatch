@@ -367,7 +367,9 @@ fn dispatch_request(resident: &dyn AcpResident, req: &Value) -> Result<Value, Ac
             let text = req.get("text").and_then(Value::as_str).unwrap_or("");
             let from = req.get("from").and_then(Value::as_str).unwrap_or("");
             // The host ignores the session arg (uses its resident session); pass "".
-            resident.prompt("", text, from).map(|t| json!({ "turn": t }))
+            // Server-side dispatch (in-process to the resident) — the exactly-once
+            // durable marker is a verb-layer (client-side) concern; no-op here.
+            resident.prompt("", text, from, &|| {}).map(|t| json!({ "turn": t }))
         }
         "cancel" => resident.cancel("").map(|()| Value::Null),
         "next_update" => {
@@ -486,9 +488,10 @@ impl AcpConnection {
         id
     }
 
-    /// Send a request `{"id",m,…args}` and correlate the response by id, honoring the
-    /// per-request read deadline (poll-until-deadline, exactly the ws.rs pattern).
-    fn request(&self, method: &str, mut args: Value) -> Result<Value, AcpError> {
+    /// Send a request `{"id",m,…args}`, returning the correlation id once the bytes are
+    /// confirmed handed to the socket (the `request`/`prompt` dispatch-timing split — see
+    /// [`Self::request`] and [`AcpClient::prompt`]'s `on_dispatched`).
+    fn send_request(&self, method: &str, mut args: Value) -> Result<u64, AcpError> {
         let id = self.mint_id();
         if let Some(obj) = args.as_object_mut() {
             obj.insert("id".into(), json!(id));
@@ -500,6 +503,16 @@ impl AcpConnection {
             .borrow_mut()
             .send(Message::Text(text.into()))
             .map_err(map_ws_err)?;
+        Ok(id)
+    }
+
+    /// Send a request and correlate the response by id, honoring the per-request read
+    /// deadline (poll-until-deadline, exactly the ws.rs pattern). A thin wrapper over
+    /// [`Self::send_request`] + [`Self::read_response`] — kept for callers (`initialize`,
+    /// `new_session`, `cancel`, `status_*`) that have no dispatch-timing concern of their
+    /// own; `prompt` calls the two phases separately (see [`AcpClient::prompt`] below).
+    fn request(&self, method: &str, args: Value) -> Result<Value, AcpError> {
+        let id = self.send_request(method, args)?;
         self.read_response(id)
     }
 
@@ -575,8 +588,23 @@ impl AcpClient for AcpConnection {
             .ok_or_else(|| AcpError::Protocol("new_session reply had no session".into()))
     }
 
-    fn prompt(&self, _session: &str, text: &str, from: &str) -> Result<TurnId, AcpError> {
-        let v = self.request("prompt", json!({ "text": text, "from": from }))?;
+    /// Split into `send_request` + `read_response` (rather than the shared `request`
+    /// helper) so `on_dispatched` fires the MOMENT this turn's bytes are confirmed on the
+    /// wire — before we know whether the reply ever arrives. A caller's durable marker
+    /// write happens here, not after `read_response`, so a socket drop between dispatch
+    /// and reply-read still records that this turn's bytes genuinely went out — the
+    /// row's wire-history stays true for any later reader (Child D: no disposition
+    /// branches on it, but the resume seam consumes it).
+    fn prompt(
+        &self,
+        _session: &str,
+        text: &str,
+        from: &str,
+        on_dispatched: &dyn Fn(),
+    ) -> Result<TurnId, AcpError> {
+        let id = self.send_request("prompt", json!({ "text": text, "from": from }))?;
+        on_dispatched();
+        let v = self.read_response(id)?;
         v.get("turn")
             .and_then(Value::as_str)
             .map(str::to_string)
@@ -641,7 +669,8 @@ mod tests {
         fn new_session(&self, _cwd: &str) -> Result<SessionId, AcpError> {
             Ok("sess-1".into())
         }
-        fn prompt(&self, _s: &str, _t: &str, _f: &str) -> Result<TurnId, AcpError> {
+        fn prompt(&self, _s: &str, _t: &str, _f: &str, on_dispatched: &dyn Fn()) -> Result<TurnId, AcpError> {
+            on_dispatched();
             Ok("turn-1".into())
         }
         fn cancel(&self, _s: &str) -> Result<(), AcpError> {
@@ -767,7 +796,7 @@ mod tests {
             let c = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
             assert_eq!(c.initialize().unwrap().agent_name.as_deref(), Some("fake"));
             assert_eq!(c.new_session(".").unwrap(), "sess-1");
-            assert_eq!(c.prompt("", "hi", "tester").unwrap(), "turn-1");
+            assert_eq!(c.prompt("", "hi", "tester", &|| {}).unwrap(), "turn-1");
             c.cancel("").unwrap();
             assert_eq!(c.status_session_id().unwrap().as_deref(), Some("sess-1"));
         });
@@ -896,6 +925,49 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(2),
             "connect must fail FAST (bounded by the handshake timeout), took {elapsed:?}"
+        );
+        let _ = server.join();
+    }
+
+    /// Child B (opencode D1) exactly-once dispatch-timing guard, kept under Child D:
+    /// `on_dispatched` MUST fire once this turn's bytes are confirmed on the wire, even
+    /// when the reply is NEVER read (a socket drop between "bytes sent" and "local read
+    /// of the reply" — the scenario that must never look pre-send in the row's durable
+    /// wire-history). A server that completes the ws handshake, reads the ONE `prompt` frame
+    /// (proving the write left the client), then drops the connection WITHOUT ever
+    /// replying models this. REVERT SEAM: moving `on_dispatched()` to fire only after
+    /// a successful `read_response` (the bug this guards against) would make this
+    /// test's `dispatched.load()` assertion FAIL — the marker would never be set on
+    /// this no-reply path, exactly the double-delivery risk the guard exists to close.
+    #[test]
+    fn prompt_on_dispatched_fires_even_when_no_reply_ever_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            // Read the ONE `prompt` request frame, then drop — never reply.
+            let _ = ws.read();
+        });
+        let url = format!("ws://{addr}");
+        let conn = AcpConnection::connect(&url, Duration::from_secs(2)).unwrap();
+        conn.set_request_timeout(Duration::from_millis(500));
+
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let d = dispatched.clone();
+        let on_dispatched = move || d.store(true, Ordering::SeqCst);
+
+        let result = conn.prompt("sess-1", "hi", "tester", &on_dispatched);
+
+        assert!(
+            result.is_err(),
+            "no reply ever arrives — prompt must surface an error, not hang or fabricate a turn id"
+        );
+        assert!(
+            dispatched.load(Ordering::SeqCst),
+            "on_dispatched must have fired BEFORE the (failed) reply read — a caller's durable \
+             structured_send_issued marker must survive a socket drop right after dispatch, or \
+             the row carries a false never-sent wire-history for every later reader"
         );
         let _ = server.join();
     }

@@ -20,9 +20,25 @@ name = "dispatch"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-# preserve_order: JSON key order is part of the ls --json parity surface (TS
-# JSON.stringify emits keys in object-literal insertion order; see render.rs).
-serde_json = { version = "1", features = ["preserve_order"] }
+# JSON key order is part of the ls --json parity surface (TS JSON.stringify
+# emits keys in object-literal insertion order; see render.rs) — real
+# consumers: telemetry.rs, events.rs, render.rs, bin/qd/verbs/mark.rs. The
+# `preserve_order` feature itself is NOT requested directly here (see
+# [features] below): a normal dependency edge unifies serde_json's features
+# across every crate sharing it in one build, so requesting it unconditionally
+# here would silently flip serde_json::Map's iteration order for ANY OTHER
+# crate that adds a normal path dependency on this one (found the hard way —
+# frame's cloud-archive Atomic C added exactly such an edge and it broke
+# frame's own pinned "JSON key order stable for scripting" conformance test).
+# `json-insertion-order` defaults ON so `qd`'s own binaries are byte-for-byte
+# unaffected; a consumer that must NOT inherit it opts out via
+# `default-features = false`.
+serde_json = { version = "1" }
+# SigV4 request signing for `qd backup`'s S3 client (archive/sigv4.rs). Reuses
+# sha2's own transitive deps (crypto-common/digest/generic-array) — the only
+# new crate the archive feature adds (see archive/http.rs's module doc for why
+# the S3 client itself is hand-rolled over std::net rather than reqwest).
+hmac = "0.12"
 sha2 = "0.10"
 libc = "0.2"
 # clap v4 BUILDER API (no derive) — A3 CLI surface. We map clap's parse errors to
@@ -72,6 +88,13 @@ tempfile = "3"
 portable-pty = "0.9"
 
 [features]
+default = ["json-insertion-order"]
+# Gates `serde_json/preserve_order` (see the dependency comment above) rather
+# than requesting it unconditionally, so a plain path-dependency consumer can
+# opt out via `default-features = false` without affecting dispatch's own
+# binaries, which keep this on by default.
+json-insertion-order = ["serde_json/preserve_order"]
+
 # Negative-control evidence: deliberately-wrong decider outputs that the parity
 # tests MUST catch (gate item 6). Never enabled in normal builds.
 mutation-evidence = []

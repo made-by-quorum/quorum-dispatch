@@ -750,6 +750,31 @@ fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
     }
 }
 
+/// R4-1 (conformance round 4, confirmed real): read the PRE-resume row's
+/// `structured_send_issued` bit so a resume can carry it forward — a session's
+/// send-history is a fact about its whole life, not the connection that just
+/// died, so it must survive `qd resume`. (Under Child D the loss disposition no
+/// longer branches on it — pre- and post-send loss both refuse — but the marker
+/// stays the durable wire-history truth, and losing it on resume would leave a
+/// false "never sent" record for any consumer, present or future.)
+///
+/// Checks the LIVE row first (the crash-path shape: the process died but its
+/// `<pid>.json` was never renamed), falling back to the TOMBSTONED row (the
+/// ordinary `qd stop` shape: `<pid>.json` renamed to `<pid>.json.tombstoned`) —
+/// `qd stop` is the common case, so the fallback is load-bearing, not a rare
+/// edge. `None` (no `pid`, no row either way, or the row never dispatched a
+/// structured send) means "no history to carry" — a genuinely fresh row.
+fn carry_forward_structured_send_issued(
+    sessions_dir: &std::path::Path,
+    pid: Option<i64>,
+) -> Option<bool> {
+    pid.and_then(|pid| {
+        dispatch::registry::read_entry(sessions_dir, pid)
+            .or_else(|| dispatch::registry::read_tombstoned_entry(sessions_dir, pid))
+            .and_then(|e| e.structured_send_issued)
+    })
+}
+
 /// scoped-ACP-CC Item 3 — the acp RESUME path at the verb layer. An acp/* row is a
 /// daemon-hosted resident adapter (+ its `claude-code-acp` bridge); `qd resume` for it
 /// is revive-to-DRIVABLE with NO interactive attach (agents have no TTY). Mirrors
@@ -817,6 +842,41 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     if acp_resume_is_alive(session.pid, current_endpoint.as_deref(), probe) {
         println!("{}", acp_already_running_line(&name));
         return 0;
+    }
+
+    // R5-1 (red-team round 5, confirmed at source): the raw-registry preflights the
+    // non-acp resume path runs (Pete feedback #6, in `run` above) were structurally
+    // bypassed for acp/* rows — the acp arm dispatches BEFORE them, and this
+    // function had no equivalent (`acp_resume_is_alive` probes only the daemon's
+    // OWN pid/identity, never other live holders of the id). Consequence: `qd
+    // resume` of an acp session while another live process holds this SAME
+    // session_id/transcript (Child B's retired floor companion then; today a
+    // leftover dev companion row or a manually-launched `claude --resume`)
+    // would revive a fresh acp daemon (`session/load`, the same transcript
+    // re-opened) BESIDE the live holder — two live writers on one CC
+    // transcript, the precise collision these gates exist to prevent
+    // everywhere else — and silently clear any historical degradation latch
+    // (`transport: None`, below) under it.
+    //
+    // Placed AFTER the Case-1 gate above so the ratified already-running no-op
+    // (exit 0) is unchanged when the single live holder is this session's OWN
+    // identity-verified daemon; any OTHER live holder of the id (a plain twin
+    // on the same transcript, a reused pid on a stale row, a genuine duplicate)
+    // refuses here — recoverable by connecting to the holder, or killing the
+    // holder and resuming again. Both checks run on the RAW registry
+    // (pre-dedup), exactly like the non-acp path, because the join hides
+    // same-id rows.
+    if let Some(code) =
+        common::refuse_id_collision("resume", &session.session_id, &paths.sessions_dir)
+    {
+        return code;
+    }
+    if let Some(holder_pid) = common::alive_pid_for_id(&paths.sessions_dir, &session.session_id) {
+        eprintln!(
+            "qd resume: session \"{name}\" is already alive (PID {holder_pid}). \
+             Use \"qd connect\" instead."
+        );
+        return 1;
     }
 
     // FINDING #3 — CONCURRENT-RESUME ATOMIC CLAIM (acp-only): take an exclusive,
@@ -956,6 +1016,25 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
         endpoint: Some(endpoint.clone()),
         // A resumed healthy row carries NO degradation latch (tier is derived per verb).
         transport: None,
+        // Child B (opencode D1), kept under Child D: a session's send-history
+        // bit must SURVIVE a resume — it is a fact about the whole session's
+        // life, not the old (now-dead) connection. Carry it forward from the
+        // pre-resume row (if any) rather than resetting it, or the resumed row
+        // carries a false "never sent" wire-history (no disposition branches on
+        // it anymore — every loss refuses — but the record is durable truth;
+        // see the R4-1 fn doc above and registry.rs's field doc).
+        //
+        // R4-1 (conformance round 4, confirmed real): the pre-resume row is
+        // almost always TOMBSTONED, not live — `qd stop` tombstones by RENAMING
+        // `<pid>.json` to `<pid>.json.tombstoned`, so a live-only `read_entry`
+        // finds nothing for the ordinary stop→resume path (only a crash, which
+        // leaves the live file in place with a dead pid, was actually covered).
+        // Read the live row first (the crash-path shape), falling back to the
+        // tombstoned row (the ordinary `qd stop` shape) when the live read misses.
+        structured_send_issued: carry_forward_structured_send_issued(
+            &paths.sessions_dir,
+            session.pid,
+        ),
     };
     if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
         spawner.kill(spawned.pid);
@@ -1036,12 +1115,140 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        acp_already_running_line, acp_revived_line, codex_already_running_line, codex_revived_line,
-        resume_boot_unconfirmed_line, revive_launch_failed_line, revive_resume_args,
-        revive_zmx_missing_line, run_detached_revive,
+        acp_already_running_line, acp_revived_line, carry_forward_structured_send_issued,
+        codex_already_running_line, codex_revived_line, resume_boot_unconfirmed_line,
+        revive_launch_failed_line, revive_resume_args, revive_zmx_missing_line,
+        run_detached_revive,
     };
     use dispatch::launch::launch_env_pairs;
     use dispatch::model::{Session, SessionBranch, SessionStatus};
+    use dispatch::registry::RegistryEntry;
+
+    // R4-1 (conformance round 4, confirmed real by source): `structured_send_issued`
+    // was silently lost across the ORDINARY `qd stop` → `qd resume` cycle, because
+    // `qd stop` tombstones a row by RENAMING `<pid>.json` to
+    // `<pid>.json.tombstoned`, and the carry-forward read only ever consulted the
+    // live path. These pin `carry_forward_structured_send_issued` directly against
+    // real registry files (no process spawn needed — this is pure filesystem I/O),
+    // covering both shapes it must handle.
+
+    fn write_registry_row(
+        sessions_dir: &std::path::Path,
+        pid: i64,
+        structured_send_issued: Option<bool>,
+    ) {
+        let entry = RegistryEntry {
+            pid: Some(pid),
+            session_id: Some("sess-r4-1".to_string()),
+            provider: Some("acp/claude-code".to_string()),
+            structured_send_issued,
+            ..RegistryEntry::default()
+        };
+        dispatch::registry::write_entry(sessions_dir, &entry).unwrap();
+    }
+
+    #[test]
+    // R5-1 regression guard (red-team round 5, Child B era — still binding): `run_acp_resume`
+    // must run the SAME two raw-registry preflights the non-acp resume path runs
+    // (Pete feedback #6: `common::refuse_id_collision` + `common::alive_pid_for_id`)
+    // BEFORE its spawn section (`acquire_resume_claim` onward). The acp arm
+    // dispatches before `run`'s own preflights, so without in-body equivalents a
+    // `qd resume` of an acp session while ANOTHER live process holds the same
+    // session_id/transcript (historically Child B's floor companion; today a
+    // leftover dev companion row or a manually-launched `claude --resume`)
+    // revives a SECOND live writer onto one CC transcript. Structural
+    // (source-text), matching this build's established pattern (see send_relay.rs's
+    // F2/F3/R3-1 guards) for the same reason: exercising the real branch needs a
+    // live pid + real registry rows + a full verb-level Session against process
+    // state this file's test style deliberately avoids (the preflight helpers
+    // themselves are behaviorally unit-tested in common.rs against real registry
+    // files and live pids). MUTATION EVIDENCE: deleting the preflight block from
+    // `run_acp_resume` reds this test; so does moving it after the claim/spawn.
+    #[test]
+    fn acp_resume_runs_the_id_collision_preflights_before_any_spawn() {
+        let src = include_str!("resume.rs");
+        let fn_start = src
+            .find("fn run_acp_resume(session: &dispatch::model::Session) -> i32 {")
+            .expect("run_acp_resume must still exist verbatim");
+        let after_start = &src[fn_start..];
+        let fn_end = after_start
+            .find("\n#[cfg(test)]")
+            .expect("the tests module must still follow run_acp_resume");
+        let body = &after_start[..fn_end];
+
+        let collision = body
+            .find("common::refuse_id_collision(\"resume\", &session.session_id")
+            .expect("run_acp_resume must consult common::refuse_id_collision (R5-1)");
+        let already_alive = body
+            .find("common::alive_pid_for_id(&paths.sessions_dir, &session.session_id)")
+            .expect("run_acp_resume must consult common::alive_pid_for_id (R5-1)");
+        let spawn_section = body
+            .find("acquire_resume_claim")
+            .expect("the resume claim (spawn section start) must still exist");
+        assert!(
+            collision < spawn_section && already_alive < spawn_section,
+            "both R5-1 preflights must run BEFORE the claim/spawn section — a check \
+             after the spawn cannot prevent the second live writer"
+        );
+    }
+
+    #[test]
+    fn carries_forward_true_across_the_ordinary_stop_then_resume_tombstone_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sessions_dir = tmp.path();
+        write_registry_row(sessions_dir, 4242, Some(true));
+        // `qd stop`'s tombstone mechanic: rename, don't leave the live file.
+        dispatch::registry::tombstone(sessions_dir, 4242);
+        assert!(
+            dispatch::registry::read_entry(sessions_dir, 4242).is_none(),
+            "the live file must be gone after tombstoning — this is the exact \
+             condition that made the pre-fix read silently miss"
+        );
+
+        assert_eq!(
+            carry_forward_structured_send_issued(sessions_dir, Some(4242)),
+            Some(true),
+            "the ordinary qd stop -> qd resume path must carry the bit forward"
+        );
+    }
+
+    #[test]
+    fn carries_forward_true_across_the_crash_path_live_row_still_present() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sessions_dir = tmp.path();
+        write_registry_row(sessions_dir, 4242, Some(true));
+        // No tombstone — models a crash: the process died but its row was never
+        // renamed. This shape already worked before the R4-1 fix; pinned here as
+        // the non-regression control.
+        assert_eq!(
+            carry_forward_structured_send_issued(sessions_dir, Some(4242)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_genuinely_fresh_row_carries_forward_none() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sessions_dir = tmp.path();
+        write_registry_row(sessions_dir, 4242, None);
+        dispatch::registry::tombstone(sessions_dir, 4242);
+        assert_eq!(carry_forward_structured_send_issued(sessions_dir, Some(4242)), None);
+    }
+
+    #[test]
+    fn no_row_at_all_carries_forward_none() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            carry_forward_structured_send_issued(tmp.path(), Some(9999)),
+            None
+        );
+    }
+
+    #[test]
+    fn no_pid_carries_forward_none() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert_eq!(carry_forward_structured_send_issued(tmp.path(), None), None);
+    }
 
     /// A cold claude registry row carrying a RECORDED `session_id` — the durable
     /// identity the daemon minted onto the child-pid-keyed row (WP-B5-ii-b PROOF 1).

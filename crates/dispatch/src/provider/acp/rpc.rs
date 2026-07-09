@@ -212,7 +212,23 @@ pub trait AcpClient {
     /// correlated response surfaces as [`AcpEvent::Terminal`]`{turn,..}` via [`Self::next_update`].
     /// `from` carries the peer attribution. A 2nd send mid-turn QUEUES (SC-3); a bounded-overflow
     /// → `Err`(mapped to `InjectError::Precondition("queue full")` at the provider, SC-1a).
-    fn prompt(&self, session: &str, text: &str, from: &str) -> Result<TurnId, AcpError>;
+    ///
+    /// `on_dispatched` (Child B, opencode D1 exactly-once guard) is called the moment this
+    /// turn's bytes are confirmed handed to the transport — for [`AcpConnection`](super::wire::AcpConnection)
+    /// that is right after the ws `send()` succeeds, BEFORE the reply is read. A caller durably
+    /// persists its "structured send issued" marker from this callback so a socket drop between
+    /// dispatch and reply-read still leaves the correct history for the next process to read
+    /// (never gated on this call's `Ok` return alone — a crash right after `send()` must not
+    /// leave a false never-sent record in the row's durable wire-history). In-process hosts
+    /// with no dispatch/reply split
+    /// (no ambiguous partial-completion) may call it immediately or ignore it.
+    fn prompt(
+        &self,
+        session: &str,
+        text: &str,
+        from: &str,
+        on_dispatched: &dyn Fn(),
+    ) -> Result<TurnId, AcpError>;
 
     /// `session/cancel` `{sessionId}` (notification) — best-effort interrupt of the in-flight
     /// turn (SC-1a). The bridge resolves the in-flight `prompt` with `cancelled`; a wedged

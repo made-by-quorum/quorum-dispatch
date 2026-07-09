@@ -112,7 +112,7 @@ fn opencode_live_drive_end_to_end() {
 
     // TURN 1: a trivial prompt to a real terminal StopReason.
     let turn = host
-        .prompt(&session, "Reply with exactly the single word PONG and nothing else. Do not use any tools.", "opencode-live")
+        .prompt(&session, "Reply with exactly the single word PONG and nothing else. Do not use any tools.", "opencode-live", &|| {})
         .expect("prompt");
     ev.line(&format!("prompt -> turn={turn}"));
     let (updates, terminal) = drive_to_terminal(&host, Duration::from_secs(120));
@@ -142,7 +142,7 @@ fn opencode_live_drive_end_to_end() {
 
     // TURN 2 + cancel (gate-c bit): a long turn, cancelled mid-stream.
     let turn2 = host
-        .prompt(&session, "Write a detailed 600-word essay about the history of the ocean. Do not use any tools.", "opencode-live")
+        .prompt(&session, "Write a detailed 600-word essay about the history of the ocean. Do not use any tools.", "opencode-live", &|| {})
         .expect("prompt long turn");
     ev.line(&format!("long turn -> turn={turn2}; cancelling mid-stream"));
     let mut saw = false;
@@ -257,7 +257,7 @@ fn opencode_live_daemon_smoke_cross_process() {
 
     // DRIVE one real turn cross-process through the RETAINED ws front (separate driver process).
     let turn = conn
-        .prompt(&session, "Reply with exactly the single word PONG and nothing else. Do not use any tools.", "opencode-smoke")
+        .prompt(&session, "Reply with exactly the single word PONG and nothing else. Do not use any tools.", "opencode-smoke", &|| {})
         .expect("prompt over ws front");
     ev.line(&format!("prompt -> turn={turn}"));
     let (updates, terminal) = {

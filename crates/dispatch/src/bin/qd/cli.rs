@@ -40,7 +40,7 @@ pub fn build_cli() -> Command {
         .subcommands(subcommands())
 }
 
-/// All 24 verb registrations + aliases (spec §3 + qb spec-cli §11). The default
+/// All 25 verb registrations + aliases (spec §3 + qb spec-cli §11). The default
 /// action (bare `qd` → ls) is handled in `verbs::dispatch` when no subcommand
 /// matched.
 fn subcommands() -> Vec<Command> {
@@ -1198,7 +1198,10 @@ mod tests {
         // 24 registrations here (W1 ADD-26 added `connect`; `attach` stays
         // registered+hidden; `init` added with the eval-init shell integration;
         // P0 W1 added `start`/`stop` with `new`/`kill` retained as retired
-        // stubs); config + survey are dispatched pre-clap (hand-parsed).
+        // stubs; transcript-archive-spec.md Atomic B's `backup` was retired by
+        // persist-relocation — transcript persistence now lives in frame as
+        // `qf persist`, in-crate, no cross-binary hop); config + survey are
+        // dispatched pre-clap (hand-parsed).
         assert_eq!(names.len(), 24);
     }
 

@@ -226,6 +226,7 @@ fn acp_resume_faithfulness_spike() {
             &session,
             &format!("Remember this magic word for later: {nonce}. Reply with exactly: OK. Do not use any tools."),
             "spike-pre",
+            &|| {},
         )
         .expect("prompt 1");
     let (_u1, term1) = drive_to_terminal(&host1, Duration::from_secs(120));
@@ -275,6 +276,7 @@ fn acp_resume_faithfulness_spike() {
             &session,
             "What exact magic word did I ask you to remember earlier? Reply with ONLY that word, nothing else. Do not use any tools.",
             "spike-post",
+            &|| {},
         )
         .expect("prompt 2 (post-load)");
     let (_u2, term2) = drive_to_terminal(&host2, Duration::from_secs(120));

@@ -274,30 +274,48 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
     // Deduplicate PID entries by sessionId — keep most-recent updatedAt
     // (session.ts:875-883). TS keys by `p.sessionId`; an entry with no sessionId
     // keys under "" (the empty string) and the same keep-newest rule applies.
-    let mut pid_by_session_id: HashMap<String, &registry::RegistryEntry> = HashMap::new();
+    //
+    // R5-2 (red-team round 5, Child B / opencode D1): the key carries the row's
+    // PROVIDER CLASS (`acp/*` vs everything else) alongside the sessionId. The
+    // collapse exists for one-session-many-process-generations (a codex resume's
+    // stale old row, a claude re-incarnation) — always SAME-class rows. But an
+    // `acp/*` row and a plain `claude-code` row can legitimately share ONE
+    // sessionId (Child B's PTY floor ran such a companion by design; Child D
+    // retired that floor, but the pair still arises from a leftover Child-B-era
+    // dev companion row or a human manually running `claude --resume
+    // <session_id>`). Keying by sessionId alone let the plain twin's liveness
+    // heartbeat permanently shadow the ACP row out of every join-derived
+    // surface (ls, send, wait, resume, connect, info) — hiding the session's
+    // canonical identity (and its refusal surface). Same-class rows keep the
+    // exact old keep-newest collapse; only the cross-class pair coexists.
+    let mut pid_by_session_id: HashMap<(String, bool), &registry::RegistryEntry> = HashMap::new();
     // Preserve first-seen order of sessionIds so the live-row emission order is
     // deterministic (TS iterates a Map whose insertion order is first-seen).
-    let mut order: Vec<String> = Vec::new();
+    let mut order: Vec<(String, bool)> = Vec::new();
+    let provider_class_is_acp = |e: &registry::RegistryEntry| -> bool {
+        e.provider.as_deref().is_some_and(|p| p.starts_with("acp/"))
+    };
     for scanned in &inputs.registry {
         let e = &scanned.entry;
         let sid = e.session_id.clone().unwrap_or_default();
-        match pid_by_session_id.get(&sid) {
+        let key = (sid, provider_class_is_acp(e));
+        match pid_by_session_id.get(&key) {
             Some(existing) => {
                 // p.updatedAt > existing.updatedAt (missing → treated as 0).
                 let new_ua = e.updated_at.unwrap_or(0);
                 let old_ua = existing.updated_at.unwrap_or(0);
                 if new_ua > old_ua {
-                    pid_by_session_id.insert(sid, e);
+                    pid_by_session_id.insert(key, e);
                 }
             }
             None => {
-                order.push(sid.clone());
-                pid_by_session_id.insert(sid, e);
+                order.push(key.clone());
+                pid_by_session_id.insert(key, e);
             }
         }
     }
     let deduped: Vec<&registry::RegistryEntry> =
-        order.iter().map(|sid| pid_by_session_id[sid]).collect();
+        order.iter().map(|key| pid_by_session_id[key]).collect();
 
     // Ancestor walk for zmx matching (session.ts:887, getAncestorPids 3 levels).
     let live_pids: Vec<i32> = deduped
@@ -1219,7 +1237,9 @@ fn gather_codex(
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     let provider = CodexProvider;
     // `$CODEX_HOME/sessions` (the rollout tree root). Its PARENT is `$CODEX_HOME`,
     // which holds `state_5.sqlite`.
@@ -1441,6 +1461,7 @@ mod tests {
                 provider: None,
                 endpoint: None,
                 transport: None,
+                structured_send_issued: None,
             },
             tombstoned: false,
             degraded: Vec::new(),
@@ -1598,6 +1619,73 @@ mod tests {
         assert_eq!(dups.len(), 1, "deduped to one row");
         assert_eq!(dups[0].pid, Some(200));
         assert_eq!(dups[0].name.as_deref(), Some("new"));
+    }
+
+    /// [`live`] with an explicit provider (+ optional transport latch) — the R5-2
+    /// dedup tests need to distinguish an `acp/*` row from its plain-claude floor
+    /// companion sharing the same sessionId.
+    fn live_with_provider(
+        pid: i64,
+        sid: &str,
+        name: Option<&str>,
+        updated: i64,
+        provider: &str,
+        transport: Option<&str>,
+    ) -> ScannedEntry {
+        let mut scanned = live(pid, sid, name, updated);
+        scanned.entry.provider = Some(provider.to_string());
+        scanned.entry.transport = transport.map(str::to_string);
+        scanned
+    }
+
+    // R5-2 (red-team round 5, Child B / opencode D1): an `acp/claude-code` row
+    // and a plain `claude-code` twin resuming the SAME sessionId (Child B's
+    // retired floor companion; post-Child-D, a leftover dev row or a manual
+    // `claude --resume`). The twin's liveness heartbeat keeps bumping its
+    // updatedAt while the dead ACP row's stamp is frozen — with a
+    // sessionId-only dedup key the twin permanently shadowed the ACP row out
+    // of every join surface (ls/send/wait/resume/connect/info), hiding the
+    // session's canonical identity. MUTATION EVIDENCE: reverting the dedup key
+    // to sessionId-only (dropping the provider-class component) reds this test.
+    #[test]
+    fn acp_row_coexists_with_a_plain_twin_sharing_the_session_id() {
+        let mut inputs = base_inputs();
+        inputs.registry = vec![
+            // The ACP original: a Child-B-era latched row shape, stale updatedAt.
+            live_with_provider(100, "shared-sid", Some("base"), 3_000, "acp/claude-code", Some("pty")),
+            // The live plain twin (the Child-B-era companion shape): plain
+            // claude-code, heartbeat keeps it newest.
+            live_with_provider(200, "shared-sid", Some("base-floor"), 9_000, "claude-code", None),
+        ];
+        let out = join_sessions(&inputs, JoinOpts::default());
+        let rows: Vec<&Session> = out.iter().filter(|s| s.session_id == "shared-sid").collect();
+        assert_eq!(
+            rows.len(),
+            2,
+            "the acp original and its plain twin must BOTH survive the dedup \
+             (cross-provider-class rows are two legitimate sessions, not one stale pair): {:?}",
+            out.iter().map(|s| (&s.name, &s.provider)).collect::<Vec<_>>()
+        );
+        let acp = rows.iter().find(|s| s.provider == "acp/claude-code").expect("acp row emitted");
+        let floor = rows.iter().find(|s| s.provider == "claude-code").expect("companion emitted");
+        assert_eq!(acp.name.as_deref(), Some("base"));
+        assert_eq!(floor.name.as_deref(), Some("base-floor"));
+    }
+
+    // R5-2 companion case: SAME-class rows keep the exact old keep-newest collapse —
+    // the legitimate one-session-many-process-generations shape (an acp resume's
+    // stale old row beside the fresh one) must still dedupe to the newest row.
+    #[test]
+    fn same_class_acp_rows_still_collapse_keep_newest() {
+        let mut inputs = base_inputs();
+        inputs.registry = vec![
+            live_with_provider(100, "dup-acp", Some("old"), 3_000, "acp/claude-code", None),
+            live_with_provider(200, "dup-acp", Some("new"), 8_000, "acp/claude-code", None),
+        ];
+        let out = join_sessions(&inputs, JoinOpts::default());
+        let dups: Vec<&Session> = out.iter().filter(|s| s.session_id == "dup-acp").collect();
+        assert_eq!(dups.len(), 1, "same-class rows still dedupe to one");
+        assert_eq!(dups[0].pid, Some(200), "keep-newest still wins within the class");
     }
 
     // --- cold row zmx name-merge ---

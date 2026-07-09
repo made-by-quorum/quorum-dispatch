@@ -1,0 +1,270 @@
+//! A minimal synchronous HTTP/1.1 client over `std::net::TcpStream` — one
+//! request per connection, GET/PUT bodies only, no redirects, no
+//! chunked-request-body support (chunked *responses* are read).
+//!
+//! **Why hand-rolled instead of reqwest/hyper**: those are already resolvable
+//! from this workspace's `Cargo.lock` (pinned via `libduckdb-sys`), but
+//! inspection of the lock file showed that edge is a **build-dependency**
+//! (duckdb's build script fetches a prebuilt binary) — not a normal
+//! dependency of any binary. Adding reqwest as a normal dependency of `qd`
+//! would therefore be genuinely NEW compile surface for this target (async
+//! reqwest + hyper + rustls + tokio's fuller feature set + quinn/http3),
+//! not free reuse of something already built for this binary. With the box's
+//! RAM critically tight at write time (the coordinator's brief: ~140MB free),
+//! this hand-rolled client — using only `std`, plus `sha2`/`hmac` for
+//! signing, both already tiny — was the more conservative call. This is a
+//! DIVERGENCE from the coordinator's suggested "reqwest-based" framing,
+//! flagged here and in the response back.
+//!
+//! **What this does NOT do**: TLS. It speaks plaintext HTTP only — the shape
+//! of garage/minio-style local S3-compatible stores. A direct HTTPS AWS S3
+//! endpoint needs a TLS stream behind the one `request` seam below; that is
+//! Atomic D's concern (real AWS credentials, live-box wiring), not this
+//! atomic's. [`crate::archive::s3::S3Client::new`] rejects a `https://`
+//! endpoint loudly rather than silently trying plaintext to a TLS port.
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
+
+const TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct HttpError(pub String);
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for HttpError {}
+
+/// Issue one HTTP/1.1 request over a fresh plaintext TCP connection.
+/// `authority` is `host:port`. No connection pooling — a persist/upload copy
+/// makes at most three requests per invocation (GET existing, optional
+/// set-aside PUT, PUT canonical); a short-lived CLI process gains nothing
+/// from pooling and loses the complexity of managing a keep-alive
+/// connection's lifetime.
+pub fn request(
+    authority: &str,
+    method: &str,
+    path: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+) -> Result<HttpResponse, HttpError> {
+    let stream = TcpStream::connect(authority)
+        .map_err(|e| HttpError(format!("connect {authority}: {e}")))?;
+    stream
+        .set_read_timeout(Some(TIMEOUT))
+        .map_err(|e| HttpError(format!("set_read_timeout: {e}")))?;
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .map_err(|e| HttpError(format!("set_write_timeout: {e}")))?;
+
+    let mut request_bytes = Vec::with_capacity(body.len() + 512);
+    request_bytes.extend_from_slice(format!("{method} {path} HTTP/1.1\r\n").as_bytes());
+    for (k, v) in headers {
+        request_bytes.extend_from_slice(format!("{k}: {v}\r\n").as_bytes());
+    }
+    request_bytes.extend_from_slice(format!("content-length: {}\r\n", body.len()).as_bytes());
+    request_bytes.extend_from_slice(b"connection: close\r\n\r\n");
+    request_bytes.extend_from_slice(body);
+
+    let mut stream = stream;
+    stream
+        .write_all(&request_bytes)
+        .map_err(|e| HttpError(format!("write to {authority}: {e}")))?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader
+        .read_line(&mut status_line)
+        .map_err(|e| HttpError(format!("read status line from {authority}: {e}")))?;
+    let status = parse_status_line(&status_line)
+        .ok_or_else(|| HttpError(format!("malformed status line: {status_line:?}")))?;
+
+    let mut content_length: Option<usize> = None;
+    let mut chunked = false;
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|e| HttpError(format!("read header from {authority}: {e}")))?;
+        if line.is_empty() {
+            return Err(HttpError(format!(
+                "connection closed before headers completed ({authority})"
+            )));
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = trimmed.split_once(':') {
+            let k = k.trim().to_ascii_lowercase();
+            let v = v.trim();
+            match k.as_str() {
+                "content-length" => content_length = v.parse().ok(),
+                "transfer-encoding" if v.eq_ignore_ascii_case("chunked") => chunked = true,
+                _ => {}
+            }
+        }
+    }
+
+    let body = if chunked {
+        read_chunked_body(&mut reader, authority)?
+    } else if let Some(len) = content_length {
+        let mut buf = vec![0u8; len];
+        reader
+            .read_exact(&mut buf)
+            .map_err(|e| HttpError(format!("read body from {authority}: {e}")))?;
+        buf
+    } else {
+        let mut buf = Vec::new();
+        reader
+            .read_to_end(&mut buf)
+            .map_err(|e| HttpError(format!("read body from {authority}: {e}")))?;
+        buf
+    };
+
+    Ok(HttpResponse { status, body })
+}
+
+fn parse_status_line(line: &str) -> Option<u16> {
+    // "HTTP/1.1 200 OK\r\n"
+    let mut parts = line.split_whitespace();
+    parts.next()?; // HTTP version
+    parts.next()?.parse().ok()
+}
+
+fn read_chunked_body(reader: &mut impl BufRead, authority: &str) -> Result<Vec<u8>, HttpError> {
+    let mut out = Vec::new();
+    loop {
+        let mut size_line = String::new();
+        reader
+            .read_line(&mut size_line)
+            .map_err(|e| HttpError(format!("read chunk size from {authority}: {e}")))?;
+        let size_str = size_line.trim().split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_str, 16)
+            .map_err(|_| HttpError(format!("malformed chunk size: {size_line:?}")))?;
+        if size == 0 {
+            // Optional trailing headers, up to the final blank line.
+            loop {
+                let mut trailer = String::new();
+                reader
+                    .read_line(&mut trailer)
+                    .map_err(|e| HttpError(format!("read chunk trailer from {authority}: {e}")))?;
+                if trailer.trim_end_matches(['\r', '\n']).is_empty() {
+                    break;
+                }
+            }
+            break;
+        }
+        let mut chunk = vec![0u8; size];
+        reader
+            .read_exact(&mut chunk)
+            .map_err(|e| HttpError(format!("read chunk body from {authority}: {e}")))?;
+        out.extend_from_slice(&chunk);
+        let mut crlf = [0u8; 2];
+        reader
+            .read_exact(&mut crlf)
+            .map_err(|e| HttpError(format!("read chunk CRLF from {authority}: {e}")))?;
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::thread;
+
+    /// Spawn a one-shot fake HTTP server: accepts exactly one connection,
+    /// reads the request, hands it to `handler`, writes back the raw
+    /// response bytes `handler` returns. Returns the bound authority.
+    fn one_shot_server(handler: impl FnOnce(String) -> Vec<u8> + Send + 'static) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            // Read whatever the client sent (best-effort: enough for these
+            // small fixed test requests) before responding.
+            let mut buf = [0u8; 8192];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let received = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let response = handler(received);
+            stream.write_all(&response).unwrap();
+        });
+        addr
+    }
+
+    #[test]
+    fn parses_status_and_content_length_body() {
+        let addr = one_shot_server(|_req| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec()
+        });
+        let resp = request(&addr, "GET", "/bucket/key", &[], &[]).unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"hello");
+    }
+
+    #[test]
+    fn parses_404_with_empty_body() {
+        let addr = one_shot_server(|_req| {
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
+        });
+        let resp = request(&addr, "GET", "/bucket/missing", &[], &[]).unwrap();
+        assert_eq!(resp.status, 404);
+        assert!(resp.body.is_empty());
+    }
+
+    #[test]
+    fn parses_chunked_response_body() {
+        let addr = one_shot_server(|_req| {
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+                .to_vec()
+        });
+        let resp = request(&addr, "GET", "/bucket/key", &[], &[]).unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"hello world");
+    }
+
+    #[test]
+    fn sends_headers_and_body_and_content_length() {
+        let addr = one_shot_server(|req| {
+            assert!(req.starts_with("PUT /bucket/key HTTP/1.1\r\n"));
+            assert!(req.contains("x-amz-date: 20260707T000000Z\r\n"));
+            assert!(req.contains("content-length: 4\r\n"));
+            assert!(req.ends_with("body"));
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec()
+        });
+        let resp = request(
+            &addr,
+            "PUT",
+            "/bucket/key",
+            &[("x-amz-date".to_string(), "20260707T000000Z".to_string())],
+            b"body",
+        )
+        .unwrap();
+        assert_eq!(resp.status, 200);
+    }
+
+    #[test]
+    fn connect_failure_is_a_loud_error_not_a_panic() {
+        // Port 0 after binding-and-dropping is unlikely to be reachable;
+        // instead connect to a closed listener for a deterministic refusal.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        drop(listener); // now nothing is listening on `addr`
+        let err = request(&addr, "GET", "/x/y", &[], &[]).unwrap_err();
+        assert!(err.0.contains(&addr) || err.0.to_lowercase().contains("connect"));
+    }
+}

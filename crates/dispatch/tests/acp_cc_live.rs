@@ -144,7 +144,7 @@ fn acp_terminal_correlation_through_real_subprocess() {
     assert_eq!(session, "fake-sess-1");
 
     // Send a turn → get its attributable id back IMMEDIATELY (SC-1, does not block).
-    let turn = host.prompt(&session, "ping", "correlation-test").expect("prompt");
+    let turn = host.prompt(&session, "ping", "correlation-test", &|| {}).expect("prompt");
 
     // The single reader correlates: first an Update (the stream), then the terminal
     // whose rpc id maps back to THIS turn.
@@ -212,6 +212,7 @@ fn acp_host_queue_overflow_honors_configured_capacity() {
         codex_expected_turn_id: None,
         acp_client: Some(&host),
         pi_rpc: None,
+            acp_pre_dispatch: None,
     };
     let provider = provider_for("acp/claude-code").expect("acp/claude-code registered");
     let key = SessionKey { id: &session, name: Some("cap"), cwd: Some("/work/proj"), pid: None };
@@ -303,6 +304,7 @@ fn acp_cc_live_full_lifecycle() {
         codex_expected_turn_id: None,
         acp_client: Some(&host),
         pi_rpc: None,
+            acp_pre_dispatch: None,
     };
     provider
         .boot_waiter(&fx)

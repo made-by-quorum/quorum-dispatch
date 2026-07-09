@@ -2,6 +2,7 @@
 //! file routes a parsed clap `ArgMatches` to the right backend, and the default
 //! action (bare `qd` → ls, index.ts:202-204) when no subcommand matched.
 
+mod acp_loss;
 mod bootstrap;
 mod common;
 mod connect;

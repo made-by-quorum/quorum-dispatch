@@ -692,7 +692,9 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     let boot_waiter = provider_impl.boot_waiter(&boot_fx);
 
     let deps = NewDeps {
@@ -1323,6 +1325,34 @@ fn run_new_pi_daemon(
     }
 }
 
+/// Drive the optional create-time prompt over `conn`, returning whether a structured
+/// send was DISPATCHED (bytes confirmed on the wire — `AcpClient::prompt`'s
+/// `on_dispatched`, fired before the reply is read). Factored out of
+/// `run_new_acp_daemon` (Child B, opencode D1, F1 fix) so the dispatch-to-marker
+/// wiring is unit-testable against a fake `AcpClient`, without a real acp
+/// connection: the caller must persist the returned bool into the freshly-created
+/// row's `structured_send_issued` (`Some(true)` iff dispatched), or a session
+/// created with `--prompt` carries a false "never sent" wire-history forever
+/// (in the retired Child-B auto-degrade era that meant double-delivery risk;
+/// under Child D every loss refuses and the marker is durable history — the
+/// resume seam consumes it; registry.rs's field doc carries the framing).
+fn drive_create_prompt(
+    conn: &dyn dispatch::provider::acp::AcpClient,
+    session_id: &str,
+    prompt: Option<&str>,
+    name: &str,
+) -> bool {
+    let dispatched = std::cell::Cell::new(false);
+    if let Some(p) = prompt.filter(|s| !s.is_empty()) {
+        let mark_dispatched = || dispatched.set(true);
+        if let Err(e) = conn.prompt(session_id, p, name, &mark_dispatched) {
+            eprintln!("qd start: acp create-prompt enqueue failed: {e}");
+            // The session is up; do not tear it down over a prompt-enqueue error.
+        }
+    }
+    dispatched.get()
+}
+
 /// scoped-ACP-CC daemon-residence create path (S5). Allocates a loopback port, spawns the
 /// resident `qd acp-daemon` adapter DETACHED (reusing the codex `RealDaemonSpawner`'s
 /// `process_group(0)` discipline — so a later group-kill reaps adapter + bridge together),
@@ -1343,7 +1373,6 @@ fn run_new_acp_daemon(
     use dispatch::acp_residence::{build_adapter_argv, connect_ready};
     use dispatch::create_daemon::{real_alloc_port, DaemonSpawner, RealDaemonSpawner};
     use dispatch::effects::Clock;
-    use dispatch::provider::acp::AcpClient;
 
     // 1. allocate a loopback port → the resident ws endpoint.
     let port = match real_alloc_port() {
@@ -1405,12 +1434,15 @@ fn run_new_acp_daemon(
 
     // 5. optional create-time prompt: drive it over the SAME connection (the resident
     //    keeps streaming after we disconnect). Non-blocking — `wait` observes the turn.
-    if let Some(p) = prompt.as_deref().filter(|s| !s.is_empty()) {
-        if let Err(e) = conn.prompt(&session_id, p, name) {
-            eprintln!("qd start: acp create-prompt enqueue failed: {e}");
-            // The session is up; do not tear it down over a prompt-enqueue error.
-        }
-    }
+    //
+    // F1 (red-team round 1, Child B era): the registry row doesn't exist yet at
+    // this point (written at step 6, below) — but a dispatched create-time prompt
+    // is EXACTLY the "a structured send was issued" case `structured_send_issued`
+    // exists to record. Getting this wrong leaves a false "never sent"
+    // wire-history on the row (in the retired auto-degrade era that meant
+    // double-delivery risk; under Child D the record is history truth the
+    // resume seam consumes).
+    let dispatched = drive_create_prompt(&conn, &session_id, prompt.as_deref(), name);
     drop(conn); // resident stays up; this was a short-lived create connection.
 
     // 6. write the registry row (the endpoint is the residence reconnect handle, S5).
@@ -1434,9 +1466,15 @@ fn run_new_acp_daemon(
         // verbs (kill/wait/resume/send:relay) route + re-derive the bridge from the row.
         provider: Some(provider_impl.id().to_string()),
         endpoint: Some(endpoint),
-        // A freshly-created healthy row carries NO degradation latch (the tier is
-        // DERIVED per verb; only a drop-to-floor persists `transport`).
+        // A freshly-created healthy row carries NO `transport` field (the tier
+        // is DERIVED per verb; the field is write-retired — historical
+        // Child-B-era latch, see registry.rs's field doc).
         transport: None,
+        // Child B (opencode D1), F1 fix: `Some(true)` iff the create-time prompt
+        // was DISPATCHED above — i.e. a structured send genuinely went out for
+        // this session before its row ever existed. `None` only for a truly
+        // prompt-less create.
+        structured_send_issued: dispatched.then_some(true),
     };
     if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
         spawner.kill(spawned.pid);
@@ -2120,6 +2158,125 @@ fn poll_stdin(timeout_ms: i32) -> bool {
 mod tests {
     use super::map_deliver_outcome;
     use dispatch::submit::DeliverOutcome;
+
+    // -------------------------------------------------------------------------
+    // Child B (opencode D1), F1 fix: `drive_create_prompt`'s dispatch-to-marker
+    // wiring. Red-team round 1 found that a create-time `--prompt` dispatched a
+    // real structured send but the row was ALWAYS written with
+    // `structured_send_issued: None` — making the session look pre-send forever,
+    // so its first transport loss would incorrectly auto-degrade to the floor
+    // instead of refusing (conditions 3/4). These pin the fix directly: a fake
+    // `AcpClient` stands in for a real acp connection, so the exact
+    // dispatch-confirmed-on-the-wire → `true` mapping is testable without a
+    // socket.
+    // -------------------------------------------------------------------------
+    use super::drive_create_prompt;
+
+    /// A fake `AcpClient` whose `prompt` invokes `on_dispatched` before returning
+    /// `Ok` (mirrors `AcpConnection::prompt`'s real dispatch-timing contract —
+    /// the SAME fixture shape as `tests/acp_fallback.rs`'s `FakeDispatchingClient`).
+    struct FakeDispatchingClient;
+    impl dispatch::provider::acp::AcpClient for FakeDispatchingClient {
+        fn initialize(
+            &self,
+        ) -> Result<dispatch::provider::acp::InitializeResult, dispatch::provider::acp::AcpError>
+        {
+            unimplemented!()
+        }
+        fn new_session(&self, _cwd: &str) -> Result<String, dispatch::provider::acp::AcpError> {
+            unimplemented!()
+        }
+        fn prompt(
+            &self,
+            _session: &str,
+            _text: &str,
+            _from: &str,
+            on_dispatched: &dyn Fn(),
+        ) -> Result<String, dispatch::provider::acp::AcpError> {
+            on_dispatched();
+            Ok("turn-1".to_string())
+        }
+        fn cancel(&self, _session: &str) -> Result<(), dispatch::provider::acp::AcpError> {
+            unimplemented!()
+        }
+        fn next_update(
+            &self,
+            _timeout: std::time::Duration,
+        ) -> Result<
+            Option<dispatch::provider::acp::AcpEvent>,
+            dispatch::provider::acp::AcpError,
+        > {
+            unimplemented!()
+        }
+    }
+
+    /// A fake `AcpClient` whose `prompt` ALWAYS fails WITHOUT ever invoking
+    /// `on_dispatched` — models a genuine pre-send failure (never reached the
+    /// wire), the negative control for the dispatched case below.
+    struct FakeNonDispatchingClient;
+    impl dispatch::provider::acp::AcpClient for FakeNonDispatchingClient {
+        fn initialize(
+            &self,
+        ) -> Result<dispatch::provider::acp::InitializeResult, dispatch::provider::acp::AcpError>
+        {
+            unimplemented!()
+        }
+        fn new_session(&self, _cwd: &str) -> Result<String, dispatch::provider::acp::AcpError> {
+            unimplemented!()
+        }
+        fn prompt(
+            &self,
+            _session: &str,
+            _text: &str,
+            _from: &str,
+            _on_dispatched: &dyn Fn(),
+        ) -> Result<String, dispatch::provider::acp::AcpError> {
+            Err(dispatch::provider::acp::AcpError::Closed)
+        }
+        fn cancel(&self, _session: &str) -> Result<(), dispatch::provider::acp::AcpError> {
+            unimplemented!()
+        }
+        fn next_update(
+            &self,
+            _timeout: std::time::Duration,
+        ) -> Result<
+            Option<dispatch::provider::acp::AcpEvent>,
+            dispatch::provider::acp::AcpError,
+        > {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn create_time_prompt_that_dispatches_reports_true() {
+        let client = FakeDispatchingClient;
+        let dispatched = drive_create_prompt(&client, "sess-1", Some("hello"), "my-session");
+        assert!(
+            dispatched,
+            "a create-time prompt whose bytes reach the wire MUST report dispatched=true, \
+             so the row's structured_send_issued becomes Some(true) — the F1 regression"
+        );
+    }
+
+    #[test]
+    fn create_time_prompt_that_never_dispatches_reports_false() {
+        let client = FakeNonDispatchingClient;
+        let dispatched = drive_create_prompt(&client, "sess-1", Some("hello"), "my-session");
+        assert!(
+            !dispatched,
+            "a prompt that failed before reaching the wire must report dispatched=false \
+             (structured_send_issued stays None — a genuinely pre-send session)"
+        );
+    }
+
+    #[test]
+    fn no_create_time_prompt_reports_false() {
+        let client = FakeDispatchingClient;
+        // None and empty-string both mean "no create-time prompt" (the same
+        // `.filter(|s| !s.is_empty())` gate the production call site uses).
+        assert!(!drive_create_prompt(&client, "sess-1", None, "my-session"));
+        assert!(!drive_create_prompt(&client, "sess-1", Some(""), "my-session"));
+    }
 
     // -------------------------------------------------------------------------
     // punch item 11: fork-target transcript preflight.

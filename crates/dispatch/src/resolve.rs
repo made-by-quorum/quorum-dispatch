@@ -160,6 +160,15 @@ pub fn resolve_session_with_liveness<'a>(
             return Resolution::One(id_match[0]);
         }
         if id_match.len() > 1 {
+            // R5-2: an acp original + plain twin on ONE sessionId (Child B's
+            // retired floor companion; today a leftover dev row or a manual
+            // `claude --resume`) share one stable id — resolve to the original
+            // BEFORE the liveness refinement (the acp original's pid is
+            // typically dead, so `refine` would silently pick the live twin —
+            // the shadow again).
+            if let Some(original) = acp_floor_original(&id_match) {
+                return Resolution::One(original);
+            }
             return refine(id_match.clone()).unwrap_or(Resolution::Many(id_match));
         }
     }
@@ -221,6 +230,14 @@ pub fn resolve_session_with_liveness<'a>(
         return Resolution::One(name_prefix[0]);
     }
     if name_prefix.len() > 1 {
+        // R5-2: "bas" prefix-matches both "base" (the acp original) and its
+        // plain twin (e.g. a Child-B-era "base-floor" leftover) — one
+        // conversation, not an ambiguity. An UNRELATED third prefix-match
+        // (e.g. "base2") has a different sessionId, so the pair rule stands
+        // down and the loud Many is preserved.
+        if let Some(original) = acp_floor_original(&name_prefix) {
+            return Resolution::One(original);
+        }
         return Resolution::Many(name_prefix);
     }
 
@@ -238,6 +255,11 @@ pub fn resolve_session_with_liveness<'a>(
             return Resolution::One(qdid_prefix[0]);
         }
         if qdid_prefix.len() > 1 {
+            // R5-2: the acp original and its plain twin share one stable id
+            // (ids are minted per sessionId) — prefer the original, never Many.
+            if let Some(original) = acp_floor_original(&qdid_prefix) {
+                return Resolution::One(original);
+            }
             return Resolution::Many(qdid_prefix);
         }
     }
@@ -251,6 +273,11 @@ pub fn resolve_session_with_liveness<'a>(
         return Resolution::One(id_prefix[0]);
     }
     if id_prefix.len() > 1 {
+        // R5-2: a UUID(-prefix) query for the shared sessionId hits both halves
+        // of the acp/plain-twin pair — one conversation; prefer the acp original.
+        if let Some(original) = acp_floor_original(&id_prefix) {
+            return Resolution::One(original);
+        }
         return Resolution::Many(id_prefix);
     }
 
@@ -272,6 +299,38 @@ pub fn resolve_session_with_liveness<'a>(
     }
 
     Resolution::None
+}
+
+/// R5-2 (red-team round 5, Child B / opencode D1) — the ONE legitimate
+/// same-sessionId multi-match: an `acp/*` session and a plain-claude session
+/// resuming the SAME sessionId (they therefore also share the stable id — ids
+/// are minted per sessionId). Child B's PTY floor created this pair by design
+/// (a companion pane resuming the degraded original's transcript); Child D
+/// (opencode D1 — the refuse-and-surface named divergence) RETIRED that floor,
+/// but the shape stays reachable — a leftover Child-B-era dev companion row,
+/// or a human manually running `claude --resume <session_id>` beside a dead
+/// acp row — so the resolution rule stays. When a tier multi-matches EXACTLY
+/// that shape — every match carries one (non-empty) sessionId and exactly ONE
+/// of them is an `acp/*` row — the query names one conversation, not an
+/// ambiguity, and the `acp/*` row is its canonical identity (the plain twin
+/// stays addressable by its own distinct name). Returns that original, or
+/// `None` to leave the tier's normal One/Many/refine behavior.
+///
+/// Deliberately NOT liveness-gated: the acp original's pid is typically dead
+/// (that is why a twin exists at all), so a live-over-dead refinement would
+/// re-create the exact shadow this rule exists to remove. Genuine collisions
+/// keep their loud `Many`: two `acp/*` rows sharing an id (acp count != 1) and
+/// two plain rows sharing an id (acp count == 0) both stand down here.
+fn acp_floor_original<'a>(matched: &[&'a Session]) -> Option<&'a Session> {
+    let mut acp_rows = matched.iter().copied().filter(|s| s.provider.starts_with("acp/"));
+    let original = acp_rows.next()?;
+    if acp_rows.next().is_some() || original.session_id.is_empty() {
+        return None;
+    }
+    matched
+        .iter()
+        .all(|s| s.session_id == original.session_id)
+        .then_some(original)
 }
 
 /// Replicate JS `parseInt(s)` (radix 10): skip leading whitespace, take an
@@ -891,5 +950,147 @@ mod tests {
             detect_live_id_collision("", &alive),
             LiveIdCollision::Resumable
         );
+    }
+
+    // --- R5-2 (red-team round 5): the acp-original + plain-twin pair --------
+    //
+    // An acp/claude-code row and a plain-claude twin can share one sessionId
+    // (and hence one stable id): Child B's retired floor ran such a companion
+    // by design; post-Child-D the shape still arises from a leftover dev row
+    // or a manual `claude --resume <session_id>`. Resolution must treat that
+    // pair as ONE conversation whose canonical identity is the acp row —
+    // NEVER an "Ambiguous" refusal, and NEVER a silent live-over-dead pick of
+    // the twin (the acp original's pid is typically dead; picking the twin
+    // re-creates the join-shadow this fix removed, hiding the session's
+    // canonical identity and its refusal/tombstone surface). MUTATION
+    // EVIDENCE: removing any single `acp_floor_original` consultation from its
+    // tier reds the matching test below; inverting the preference (returning
+    // the twin) reds all four.
+
+    /// The acp original: dead pid, named "base".
+    fn acp_original() -> Session {
+        let mut s = base("shared-uuid-1234", SessionStatus::Idle);
+        s.name = Some("base".to_string());
+        s.qd_id = Some("ab3kx9mq".to_string());
+        s.pid = Some(100); // dead in every test below (is_alive says so)
+        s.provider = "acp/claude-code".to_string();
+        s
+    }
+
+    /// The live plain twin (the Child-B-era companion shape): plain
+    /// claude-code, same sessionId/stable id, its own distinct "-floor" name.
+    fn floor_companion() -> Session {
+        let mut s = base("shared-uuid-1234", SessionStatus::Busy);
+        s.name = Some("base-floor".to_string());
+        s.qd_id = Some("ab3kx9mq".to_string());
+        s.pid = Some(200); // alive in every test below
+        s.provider = "claude-code".to_string();
+        s
+    }
+
+    /// The pair's liveness truth: the companion's pid (200) is alive, the
+    /// degraded original's (100) is dead — exactly the degraded steady state.
+    fn pair_liveness(s: &Session) -> bool {
+        s.pid == Some(200)
+    }
+
+    #[test]
+    fn full_stable_id_resolves_the_pair_to_the_acp_original() {
+        let sessions = vec![acp_original(), floor_companion()];
+        let r = resolve_session_with_liveness("ab3kx9mq", &sessions, pair_liveness);
+        match r {
+            Resolution::One(s) => assert_eq!(
+                s.provider, "acp/claude-code",
+                "the full stable id names the conversation — its canonical identity is the \
+                 acp original (the row carrying the refusal/tombstone surface), never the \
+                 live twin the liveness refinement would otherwise pick"
+            ),
+            other => panic!("expected One(acp original), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn name_prefix_resolves_the_pair_to_the_acp_original() {
+        // "bas" prefix-matches both "base" and "base-floor" — one conversation.
+        let sessions = vec![acp_original(), floor_companion()];
+        let r = resolve_session_with_liveness("bas", &sessions, pair_liveness);
+        match r {
+            Resolution::One(s) => assert_eq!(s.name.as_deref(), Some("base")),
+            other => panic!("expected One(acp original), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn name_prefix_with_an_unrelated_third_match_stays_loudly_ambiguous() {
+        // "bas" also matches an UNRELATED live "base2" (different sessionId) —
+        // the pair rule must stand down; ambiguity stays an error, never a guess.
+        let mut other = base("other-uuid-9999", SessionStatus::Busy);
+        other.name = Some("base2".to_string());
+        other.pid = Some(300);
+        let sessions = vec![acp_original(), floor_companion(), other];
+        let is_alive = |s: &Session| s.pid == Some(200) || s.pid == Some(300);
+        match resolve_session_with_liveness("bas", &sessions, is_alive) {
+            Resolution::Many(m) => assert_eq!(m.len(), 3),
+            other => panic!("expected Many (genuine ambiguity), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stable_id_prefix_resolves_the_pair_to_the_acp_original() {
+        let sessions = vec![acp_original(), floor_companion()];
+        match resolve_session_with_liveness("ab3k", &sessions, pair_liveness) {
+            Resolution::One(s) => assert_eq!(s.provider, "acp/claude-code"),
+            other => panic!("expected One(acp original), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_uuid_prefix_resolves_the_pair_to_the_acp_original() {
+        let sessions = vec![acp_original(), floor_companion()];
+        match resolve_session_with_liveness("shared-uuid", &sessions, pair_liveness) {
+            Resolution::One(s) => assert_eq!(s.provider, "acp/claude-code"),
+            other => panic!("expected One(acp original), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exact_name_still_resolves_each_half_of_the_pair_directly() {
+        // The tier-(c) exact-name path is untouched: "base" is the original,
+        // "base-floor" is the companion — each singly, no preference involved.
+        let sessions = vec![acp_original(), floor_companion()];
+        match resolve_session_with_liveness("base", &sessions, pair_liveness) {
+            Resolution::One(s) => assert_eq!(s.provider, "acp/claude-code"),
+            other => panic!("expected One(base), got {other:?}"),
+        }
+        match resolve_session_with_liveness("base-floor", &sessions, pair_liveness) {
+            Resolution::One(s) => assert_eq!(s.provider, "claude-code"),
+            other => panic!("expected One(base-floor), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_acp_rows_sharing_an_id_stay_loudly_ambiguous() {
+        // A GENUINE collision (two acp/* rows, one id) is exactly what
+        // refuse_id_collision exists for — the pair preference must stand down
+        // (acp count != 1), leaving the loud Many for both-alive rows.
+        let mut a = acp_original();
+        a.pid = Some(400);
+        let b = acp_original(); // second acp row, same sessionId/qd_id, pid 100
+        let sessions = vec![a, b];
+        let both_alive = |_: &Session| true;
+        match resolve_session_with_liveness("ab3kx9mq", &sessions, both_alive) {
+            Resolution::Many(m) => assert_eq!(m.len(), 2),
+            other => panic!("expected Many (genuine acp-acp collision), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn acp_floor_original_ignores_empty_session_ids() {
+        // Two rows with "" sessionIds (ZmxOnly-shaped) where one happens to be
+        // acp-providered must not be "paired" — empty ids correlate nothing.
+        let mut a = base("", SessionStatus::Idle);
+        a.provider = "acp/claude-code".to_string();
+        let b = base("", SessionStatus::Idle);
+        assert!(acp_floor_original(&[&a, &b]).is_none());
     }
 }

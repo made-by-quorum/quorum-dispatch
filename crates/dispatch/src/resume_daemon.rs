@@ -777,7 +777,9 @@ fn try_spawn_and_connect<'a>(
         app_server: None,
         codex_expected_turn_id: None,
         acp_client: None,
-        pi_rpc: None,    };
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     let req = LaunchRequest {
         name: params.name.clone(),
         cwd: Some(cwd.to_string()),
@@ -897,6 +899,8 @@ fn finish_revive(
         endpoint: Some(endpoint.to_string()),
         // scoped-ACP-CC: a resumed healthy daemon row carries no degradation latch.
         transport: None,
+        // Child B (opencode D1): a resumed healthy row carries no send-history bit.
+        structured_send_issued: None,
     };
     if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);

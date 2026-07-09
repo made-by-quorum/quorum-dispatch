@@ -466,6 +466,7 @@ fn battery_inject_map() -> Vec<RedFinding> {
             codex_expected_turn_id: None,
             acp_client: None,
             pi_rpc: Some(&fake),
+            acp_pre_dispatch: None,
         };
         let r = PI_PROVIDER.inject(&fx, &key, "hello", "from");
         let mapped_ok = match &r {
@@ -486,6 +487,7 @@ fn battery_inject_map() -> Vec<RedFinding> {
         env: &env, paths: &paths, socket_dir: paths.sessions_dir.clone(), mux: None, clock: None,
         sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None,
         acp_client: None, pi_rpc: None,
+            acp_pre_dispatch: None,
     };
     let r = PI_PROVIDER.inject(&fx, &key, "hello", "from");
     out.push(if matches!(r, Err(InjectError::NoTransport(_))) {
@@ -520,6 +522,7 @@ fn battery_frame_injection() -> Vec<RedFinding> {
         env: &env, paths: &paths, socket_dir: paths.sessions_dir.clone(), mux: None, clock: None,
         sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None,
         acp_client: None, pi_rpc: Some(&cap),
+            acp_pre_dispatch: None,
     };
     let r = PI_PROVIDER.inject(&fx, &key, evil, "from");
     let seen = cap.seen.borrow().clone();
@@ -683,6 +686,7 @@ fn battery_tail_deep(workdir: &Path) -> Vec<RedFinding> {
             env: &env, paths: &paths, socket_dir: paths.sessions_dir.clone(), mux: None, clock: None,
             sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None,
             acp_client: None, pi_rpc: Some(&cap),
+            acp_pre_dispatch: None,
         };
         let r = PI_PROVIDER.inject(&fx, &key, evil, "from");
         let seen = cap.seen.borrow().clone();
