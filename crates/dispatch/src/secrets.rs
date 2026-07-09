@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// (`0d0fa9e:src/secrets.ts:25-27`).
 pub const KNOWN_KEYS: &[(&str, &str)] = &[("openrouter-key", "OPENROUTER_API_KEY")];
 
-/// PLAIN (non-secret) config keys (qb punch item 7). These live ONLY in the
+/// PLAIN (non-secret) config keys (qf punch item 7). These live ONLY in the
 /// file tier — as TOP-LEVEL `key = "value"` lines in `~/.quorum/dispatch/config.toml` (the
 /// `claude_flags` precedent), NEVER the keychain (they are not secrets) and
 /// NEVER the `[secrets]` table. `qd config set/get/unset` accepts them like any
@@ -699,7 +699,7 @@ fn emit_locked_diag_once(deps: &SecretDeps) {
 /// Read a secret from the active backend (None = not set).
 /// (`0d0fa9e:src/secrets.ts:223-225`, extended for ADR 0010 keychain fallback.)
 ///
-/// qb punch B4 item 1 (TIER-STRANDING fix, orc-ratified read-side fallthrough):
+/// qf punch B4 item 1 (TIER-STRANDING fix, orc-ratified read-side fallthrough):
 /// a keychain-SELECTED read that cleanly MISSES (unlocked, item absent) now
 /// FALLS THROUGH to the file backend instead of reporting "not set". The strand:
 /// writers legitimately land file-tier values (ADR-0010 locked-set fallback;
@@ -1197,8 +1197,8 @@ mod tests {
 
     #[test]
     fn config_path_honors_qd_home() {
-        let env = map_env(&[("QD_HOME", "/tmp/qb-test")]);
-        assert_eq!(resolve_config_path(&env), "/tmp/qb-test/config.toml");
+        let env = map_env(&[("QD_HOME", "/tmp/qf-test")]);
+        assert_eq!(resolve_config_path(&env), "/tmp/qf-test/config.toml");
     }
     #[test]
     fn config_path_defaults_to_dot_qd_under_home() {
@@ -2054,7 +2054,12 @@ mod tests {
             .iter()
             .any(|(p, m)| p == "/quorum/qd/config.toml" && *m == 0o600));
         // Stored as a TOP-LEVEL line, not in [secrets].
-        let text = fs.files.borrow().get("/quorum/qd/config.toml").cloned().unwrap();
+        let text = fs
+            .files
+            .borrow()
+            .get("/quorum/qd/config.toml")
+            .cloned()
+            .unwrap();
         assert_eq!(text, "render-default = \"alt-screen\"\n");
     }
 
@@ -2079,7 +2084,12 @@ mod tests {
         // Insert: lands at the end of the top-level region, BEFORE [secrets].
         h.run(|deps| set_secret("render-default", "inline", deps))
             .unwrap();
-        let text = fs.files.borrow().get("/quorum/qd/config.toml").cloned().unwrap();
+        let text = fs
+            .files
+            .borrow()
+            .get("/quorum/qd/config.toml")
+            .cloned()
+            .unwrap();
         assert_eq!(
             text,
             "# hand comment\nclaude_flags = \"--a --b\"\nrender-default = \"inline\"\n[secrets]\nopenrouter-key = \"sk-x\"\n"
@@ -2087,7 +2097,12 @@ mod tests {
         // Update: replaced in place.
         h.run(|deps| set_secret("render-default", "alt-screen", deps))
             .unwrap();
-        let text = fs.files.borrow().get("/quorum/qd/config.toml").cloned().unwrap();
+        let text = fs
+            .files
+            .borrow()
+            .get("/quorum/qd/config.toml")
+            .cloned()
+            .unwrap();
         assert!(text.contains("render-default = \"alt-screen\""));
         assert!(!text.contains("render-default = \"inline\""));
         // The secrets table reads back unchanged through the secrets path.
@@ -2097,7 +2112,12 @@ mod tests {
         );
         // Unset: back to the original bytes.
         h.run(|deps| delete_secret("render-default", deps));
-        let text = fs.files.borrow().get("/quorum/qd/config.toml").cloned().unwrap();
+        let text = fs
+            .files
+            .borrow()
+            .get("/quorum/qd/config.toml")
+            .cloned()
+            .unwrap();
         assert_eq!(text, initial);
     }
 
@@ -2160,7 +2180,12 @@ mod tests {
         };
         h.run(|deps| set_secret("openrouter-key", "sk-new", deps))
             .unwrap();
-        let text = fs.files.borrow().get("/quorum/qd/config.toml").cloned().unwrap();
+        let text = fs
+            .files
+            .borrow()
+            .get("/quorum/qd/config.toml")
+            .cloned()
+            .unwrap();
         assert_eq!(
             text,
             "# qd config -- managed by `qd config`. Do not hand-edit secret values.\n\
@@ -2191,7 +2216,12 @@ mod tests {
         };
         h.run(|deps| set_secret("openrouter-key", "sk-x", deps))
             .unwrap();
-        let text = fs.files.borrow().get("/quorum/qd/config.toml").cloned().unwrap();
+        let text = fs
+            .files
+            .borrow()
+            .get("/quorum/qd/config.toml")
+            .cloned()
+            .unwrap();
         assert_eq!(
             text,
             serialize_secrets_toml(&[("openrouter-key".to_string(), "sk-x".to_string())])
@@ -2218,7 +2248,7 @@ mod tests {
     }
 
     // ========================================================================
-    // qb punch B4 item 1 — TIER-STRANDING fix (Phase-1 repro → Phase-2 fix).
+    // qf punch B4 item 1 — TIER-STRANDING fix (Phase-1 repro → Phase-2 fix).
     //
     // PHASE-1 verdict (orc-ratified): the divergence reproduced as
     // TIER-STRANDING. All store readers share one precedence, but a
@@ -2542,7 +2572,10 @@ mod tests {
         assert_eq!(r.source, Some(Source::File));
 
         // plain file-tier key: File, no env/keychain consulted.
-        let fs4 = FakeFs::with(&[("/quorum/qd/config.toml", "render-default = \"alt-screen\"\n")]);
+        let fs4 = FakeFs::with(&[(
+            "/quorum/qd/config.toml",
+            "render-default = \"alt-screen\"\n",
+        )]);
         let exec4 = ScriptedExec::new();
         let h_plain = keychain_harness(&fs4, &exec4, &[("QD_HOME", "/quorum/qd")]);
         let r = h_plain.run(|deps| resolve_config_tier("render-default", deps));
