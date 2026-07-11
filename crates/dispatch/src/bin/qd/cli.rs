@@ -69,6 +69,7 @@ fn subcommands() -> Vec<Command> {
         cmd_update(),
         cmd_ping(),
         cmd_mark(),
+        cmd_delivery_recover(),
     ]
 }
 
@@ -554,6 +555,25 @@ fn cmd_mark() -> Command {
         .about("Append an opaque mark to the session's mark stream")
         .arg(positional("session"))
         .arg(positional("payload"))
+}
+
+// --- 23. delivery:recover [--send-id X] (NET-NEW, delivery contract §C2, D1) ---
+// One-shot, dispatch-only recovery of DEAD-DANGLING pty/new-p sends: append a
+// terminal for every initiated send whose writer incarnation is gone. Enforces the
+// is_dead_dangling liveness fence — a still-LIVE send is never touched. Minimal
+// scope: the only option narrows the sweep to one send_id; no scheduling/residency
+// (that is the deferred recovery_coordinator).
+fn cmd_delivery_recover() -> Command {
+    Command::new("delivery:recover")
+        .about(
+            "Recover dead-dangling sends: append a terminal for each initiated send \
+             whose writer is gone (a still-live send is left untouched). One-shot.",
+        )
+        .arg(long_val(
+            "send-id",
+            "send_id",
+            "Recover only this send_id (default: sweep all dead-dangling sends)",
+        ))
 }
 
 // --- arg builder helpers ---
@@ -1195,14 +1215,15 @@ mod tests {
         ] {
             assert!(names.contains(&v), "missing verb {v}");
         }
-        // 24 registrations here (W1 ADD-26 added `connect`; `attach` stays
+        // 25 registrations here (W1 ADD-26 added `connect`; `attach` stays
         // registered+hidden; `init` added with the eval-init shell integration;
         // P0 W1 added `start`/`stop` with `new`/`kill` retained as retired
         // stubs; transcript-archive-spec.md Atomic B's `backup` was retired by
         // persist-relocation — transcript persistence now lives in frame as
-        // `qf persist`, in-crate, no cross-binary hop); config + survey are
-        // dispatched pre-clap (hand-parsed).
-        assert_eq!(names.len(), 24);
+        // `qf persist`, in-crate, no cross-binary hop); the delivery/receipt
+        // contract (D1) added `delivery:recover`, the dead-dangling recovery
+        // verb; config + survey are dispatched pre-clap (hand-parsed).
+        assert_eq!(names.len(), 25);
     }
 
     #[test]

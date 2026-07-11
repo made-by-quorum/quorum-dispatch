@@ -103,7 +103,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// Note (§3): `anchor-timeout` is terminal FOR THE WATCH, not an immutable
 /// delivery fact — a later recovery-read MAY append a late `turn-anchored` after
 /// it; readers take the FIRST terminal in file-read order as the verdict.
-pub const TERMINAL_EVENTS: [&str; 6] = [
+pub const TERMINAL_EVENTS: [&str; 7] = [
     "turn-anchored",
     "turn-anchored-mismatch",
     "anchor-timeout",
@@ -114,6 +114,12 @@ pub const TERMINAL_EVENTS: [&str; 6] = [
     // deliberately NOT here — it is non-terminal (the relay analog of chunks-delivered).
     "message-seen",
     "seen-failed",
+    // §C1 (delivery contract) — the DOOR-failure terminal. Terminal so first-terminal-
+    // wins resolves a failed send AND the rotation reserve band protects it (a failure
+    // record must never be rotated out). A relay-door `send-failed` carries no send_id,
+    // so it never joins by send_id (the door failure is synchronous — the invoker holds
+    // the exit path); it is nonetheless a terminal-CLASS record for rotation purposes.
+    "send-failed",
 ];
 
 /// Is `event` a member of the normative terminal set (§3)? `await_received`
@@ -288,8 +294,24 @@ pub enum Payload {
     /// §2.3.5 — producer-emitted positive timeout (terminal).
     AnchorTimeout { send_id: String, waited_ms: u64 },
     /// §2.3.6 — watch ended without a terminal verdict (terminal).
-    /// reason: "watch-interrupted" | "session-died" | "recovery-no-candidate".
-    PendingAbandoned { send_id: String, reason: String },
+    /// reason: "watch-interrupted" | "session-died" | "recovery-no-candidate" |
+    /// "recovery-unattributable".
+    ///
+    /// `recovered` / `attribution` are ADDITIVE disclosure flags (R6 seam ruling
+    /// 01KX8MDPDX): the recovery-terminus SEARCHED-no-match closer (§6.4) stamps
+    /// `recovered: Some(true)` + the search `attribution` ("offset" | "time-window"),
+    /// making a landed-but-abandoned send read through D4's disclosed "recovered
+    /// (attributed)" category — never a hard "failed". Door/verdict emitters that are
+    /// NOT a searched-best-effort recovery (WatchGuard `watch-interrupted`, the legacy
+    /// `recovery-unattributable`, `session-died`) pass `None`/`None` (serialized
+    /// identically to the pre-R6 bare form — backward-compatible; kind-keyed readers
+    /// such as `verdict_from_terminal` are unaffected).
+    PendingAbandoned {
+        send_id: String,
+        reason: String,
+        recovered: Option<bool>,
+        attribution: Option<String>,
+    },
     /// §2.3.7 — weak screen-derived corroborator, advisory (non-terminal).
     ComposerCleared { send_id: String },
     /// §2.3.8 — boot readiness timeout (§5). phase: "pid-file" | "idle". No
@@ -312,6 +334,22 @@ pub enum Payload {
         send_id: String,
         content_sha256: String,
     },
+    /// C5/C3 (3-phase delivery, DAEMON lanes) — the daemon-arm DELIVERED ack;
+    /// NON-terminal (the codex / `acp/*` / pi analog of `relay-delivered`). Emitted
+    /// SENDER-side into the TARGET's log the moment the resident ACCEPTS the turn
+    /// (the `inject` ACK returns the resident-minted turn id — send_relay.rs
+    /// `run_codex_send`/`run_acp_send`/`run_pi_send`). Its C3 delivered-STRENGTH is
+    /// "turn-accepted" — the resident took the prompt as a turn — deliberately
+    /// distinct from relay's queue-receipt and pty's chunks-acked, and NEVER
+    /// conflated with landed: only the TERMINAL (`message-seen` for the pi/codex
+    /// rollout observer; the StopReason-mapped terminal for ACP) says landed.
+    /// `send_id` = the resident turn id; `content_sha256` carries the sent bytes'
+    /// hash for correlation (the same key the observer/consumer matches on). Never
+    /// carries prose. Additive (spec interpretation (ii) / gate item 1).
+    TurnAccepted {
+        send_id: String,
+        content_sha256: String,
+    },
     /// §X.3.4 (3-phase delivery) — on-received, TERMINAL (success). The uniform
     /// "the recipient pulled it into working context" signal for BOTH transports
     /// (relay: a recipient-side transcript observer; pty: the W8 ungate). Deliberately
@@ -330,6 +368,25 @@ pub enum Payload {
     /// PENDING). `reason` ∈ "recipient-gone" | "transport-error" (extend additively).
     /// `send_id` MANDATORY.
     SeenFailed { send_id: String, reason: String },
+    /// C1 (delivery contract, spec §C1) — a DOOR failure BEFORE wire activity,
+    /// TERMINAL (failure). Emitted when a send against a RESOLVED target session
+    /// fails before it reaches the wire (relay `no_relay_exit`; the daemon arms'
+    /// dead-adapter / refused-ws / session=None surfaces) — the "no silent failures
+    /// at the door" record that replaces stderr-only exits.
+    ///
+    /// `send_id` is OPTIONAL (spec-verbatim `send-failed { send_id?, reason }`): a
+    /// relay `send_id` is the SERVER-minted `message_id` returned by the POST, which
+    /// has NOT happened at a pre-wire door failure — omitted, never client-invented.
+    /// A door failure is SYNCHRONOUS: the invoker learns it from the exit path it
+    /// already holds; joinability is not required pre-wire (every post-wire terminal
+    /// carries a mandatory `send_id`). `content_sha256` is ALWAYS carried (the door
+    /// has the message bytes in hand) for correlation. `reason` is a short token
+    /// (e.g. "no-relay"); extend additively. NEVER carries prose.
+    SendFailed {
+        send_id: Option<String>,
+        content_sha256: String,
+        reason: String,
+    },
     /// R3d (recovery-ladder forensics) — a recovery RUNG was ENTERED for a session.
     /// NON-terminal (recovery telemetry, not a send terminal); carries NO send_id
     /// (recovery is session-scoped). `rung` is the lowercase [`crate::recovery::Rung`]
@@ -374,8 +431,10 @@ impl Payload {
             Payload::StatusTransition { .. } => "status-transition",
             Payload::EventsTruncated => "events-truncated",
             Payload::RelayDelivered { .. } => "relay-delivered",
+            Payload::TurnAccepted { .. } => "turn-accepted",
             Payload::MessageSeen { .. } => "message-seen",
             Payload::SeenFailed { .. } => "seen-failed",
+            Payload::SendFailed { .. } => "send-failed",
             Payload::RungEntered { .. } => "rung-entered",
             Payload::RungSucceeded { .. } => "rung-succeeded",
             Payload::RungTimeout { .. } => "rung-timeout",
@@ -492,9 +551,22 @@ impl Payload {
                 obj.insert("send_id".into(), Value::String(send_id.clone()));
                 obj.insert("waited_ms".into(), Value::from(*waited_ms));
             }
-            Payload::PendingAbandoned { send_id, reason } => {
+            Payload::PendingAbandoned {
+                send_id,
+                reason,
+                recovered,
+                attribution,
+            } => {
                 obj.insert("send_id".into(), Value::String(send_id.clone()));
                 obj.insert("reason".into(), Value::String(reason.clone()));
+                // Additive R6 disclosure flags — mirror TurnAnchored/TurnAnchoredMismatch:
+                // emit "recovered":true only when set, attribution only when Some. A bare
+                // watch-interrupted / session-died / unattributable terminal serializes
+                // exactly as before (no new keys).
+                if *recovered == Some(true) {
+                    obj.insert("recovered".into(), Value::Bool(true));
+                }
+                insert_opt_str(obj, "attribution", attribution);
             }
             Payload::ComposerCleared { send_id } => {
                 obj.insert("send_id".into(), Value::String(send_id.clone()));
@@ -521,6 +593,18 @@ impl Payload {
                     Value::String(content_sha256.clone()),
                 );
             }
+            // C5/C3 daemon-lane delivered ack. Same key order as RelayDelivered
+            // (send_id, then content_sha256); NON-terminal, both required.
+            Payload::TurnAccepted {
+                send_id,
+                content_sha256,
+            } => {
+                obj.insert("send_id".into(), Value::String(send_id.clone()));
+                obj.insert(
+                    "content_sha256".into(),
+                    Value::String(content_sha256.clone()),
+                );
+            }
             Payload::MessageSeen {
                 send_id,
                 content_sha256,
@@ -533,6 +617,22 @@ impl Payload {
             }
             Payload::SeenFailed { send_id, reason } => {
                 obj.insert("send_id".into(), Value::String(send_id.clone()));
+                obj.insert("reason".into(), Value::String(reason.clone()));
+            }
+            // §C1 door failure. Key order: send_id? (OMITTED when None, §2.2 absent-
+            // never-null), then content_sha256, then reason. `send_id` is optional at
+            // this door (no server-minted id pre-wire); content_sha256 is always
+            // carried for correlation.
+            Payload::SendFailed {
+                send_id,
+                content_sha256,
+                reason,
+            } => {
+                insert_opt_str(obj, "send_id", send_id);
+                obj.insert(
+                    "content_sha256".into(),
+                    Value::String(content_sha256.clone()),
+                );
                 obj.insert("reason".into(), Value::String(reason.clone()));
             }
             // R3d recovery-ladder forensics. Key order: session_id first, then the
@@ -615,9 +715,14 @@ fn build_record_line(env: &Envelope, payload: &Payload, sha_cap: usize) -> Strin
 /// else `byname-<name>` (the §10 D5 fallback the caller composes via
 /// [`byname_key`]). `byname-` cannot collide with a sessionId (uuid alphabet).
 pub fn events_path(state_dir: &Path, key: &str) -> PathBuf {
-    state_dir
-        .join("sessions")
-        .join(format!("{key}.events.jsonl"))
+    events_dir(state_dir).join(format!("{key}.events.jsonl"))
+}
+
+/// The directory holding every session's `*.events.jsonl` file (§4.1). Single
+/// source of truth for the `sessions/` subdir, so the recovery sweep
+/// ([`crate::events`] consumers) enumerates the SAME place [`events_path`] writes.
+pub fn events_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join("sessions")
 }
 
 /// The §4.1 D5 byname fallback key: `byname-<name>` for when sessionId is
@@ -1319,7 +1424,20 @@ pub trait RecoveryDeps {
     fn now_ms(&self) -> i64;
 }
 
-/// The §6 recovery verdict.
+/// The §6 recovery verdict — the FOUR epistemically-distinct terminus states
+/// (R6 seam ruling 01KX8MDPDX). The verb's terminus closes on **exhausted
+/// best-effort + disclosure**, never on "provably didn't land" (structurally
+/// unattainable from the recovery keys). Positive matches self-evidence; absence
+/// is evidence ONLY relative to a searched, NON-EMPTY window — so the single
+/// pre-R6 foreclosing `Abandoned` splits by epistemic state:
+/// - (a) [`SourceUnavailable`] — could not read/resolve → NO terminal;
+/// - (b) [`EmptyWindow`] — read OK, zero candidates past the anchor → NO terminal
+///   (still growable — busy-turn flush lag / rotation-in-place);
+/// - (c) [`Abandoned`] — candidates existed, none matched → the disclosed
+///   best-effort closer (`pending-abandoned{recovery-no-candidate}` +
+///   `recovered:true` + attribution);
+/// - (d) [`Unattributable`] — no `content_sha256`, a search can never run →
+///   `pending-abandoned{recovery-unattributable}`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecoveryVerdict {
     /// An exact-sha candidate landed (§6.2). Carries the anchor + attribution.
@@ -1331,8 +1449,30 @@ pub enum RecoveryVerdict {
         actual_sha: String,
         attribution: String,
     },
-    /// No candidate (§6.4).
-    Abandoned,
+    /// (c) SEARCHED, no match (§6.4): candidates existed past the anchor; none
+    /// matched exact-sha (§6.2) or chunk-prefix (§6.3). Exhausted best-effort — the
+    /// strongest non-delivery evidence the recovery keys can yield. Emits the
+    /// DISCLOSED `pending-abandoned{recovery-no-candidate}` stamped `recovered:true`
+    /// + the search `attribution` (offset | time-window). The ONLY legitimate
+    /// foreclosing recovery terminal.
+    Abandoned { attribution: String },
+    /// (a) read/resolve FAILURE (§6.1 `build_window` → None): the transcript could
+    /// not be read or resolved. Undetermined → emits NO terminal; the send stays
+    /// dead-dangling-recoverable for a later run.
+    SourceUnavailable,
+    /// (b) EMPTY window (§6.1): the read succeeded but ZERO candidate user-records
+    /// exist past the send's anchor / in the time-window. The recipient has not
+    /// demonstrably progressed past the send — nothing was searched and the window
+    /// is still GROWABLE (busy-turn flush lag below the 30s eligibility gate;
+    /// rotation-in-place leaving a readable shorter file with the offset past EOF).
+    /// Undetermined, exactly like SourceUnavailable in kind → emits NO terminal; a
+    /// later sweep resolves it once the window grows.
+    EmptyWindow,
+    /// (d) MISSING `content_sha256` (§6): a legacy/foreign `send-initiated` with no
+    /// recovery key — a search can never run (trivially exhausted). Closing is
+    /// legitimate but must NOT claim "no-candidate"; emits
+    /// `pending-abandoned{recovery-unattributable}` (no `recovered`/attribution).
+    Unattributable,
 }
 
 /// The window source for recovery-read (§6.1): offset-present (strong) vs
@@ -1364,9 +1504,11 @@ struct Candidate {
 /// `deps`.
 pub fn recovery_read(deps: &dyn RecoveryDeps, si: &EventRecord) -> RecoveryVerdict {
     // Pull the recovery inputs off the send-initiated record.
+    // (d) MISSING content_sha256 — a legacy/foreign record with no recovery key; a
+    // search can never run. Close honestly as UNATTRIBUTABLE (never "no-candidate").
     let content_sha = match si.str_field("content_sha256") {
         Some(s) => s,
-        None => return RecoveryVerdict::Abandoned,
+        None => return RecoveryVerdict::Unattributable,
     };
     let content_len = si.u64_field("content_len").unwrap_or(0);
     let chunk_shas: Vec<String> = match si.obj.get("chunk_sha256s") {
@@ -1378,13 +1520,21 @@ pub fn recovery_read(deps: &dyn RecoveryDeps, si: &EventRecord) -> RecoveryVerdi
     };
 
     // §6.1 — build the candidate window.
+    // (a) read/resolve FAILURE — could not read the offset-present transcript, or
+    // could not resolve/read the offset-absent one. UNDETERMINED → NO terminal.
     let window = match build_window(deps, si) {
         Some(w) => w,
-        None => return RecoveryVerdict::Abandoned,
+        None => return RecoveryVerdict::SourceUnavailable,
     };
     let (transcript, attribution, candidates) = window_candidates(deps, window, si);
+    // (b) EMPTY window — the read SUCCEEDED but zero candidate user-records sit past
+    // the send's anchor / in the time-window. The recipient has not demonstrably
+    // progressed past the send; nothing was searched; the window is still growable
+    // (flush lag / rotation-in-place). UNDETERMINED, like (a) → NO terminal. This is
+    // DISTINCT from (c) below — the crux of R6: absence is evidence only relative to
+    // a searched, NON-EMPTY window.
     if candidates.is_empty() {
-        return RecoveryVerdict::Abandoned;
+        return RecoveryVerdict::EmptyWindow;
     }
 
     // §6.2 — exact match (first candidate whose sha == content_sha256).
@@ -1424,8 +1574,12 @@ pub fn recovery_read(deps: &dyn RecoveryDeps, si: &EventRecord) -> RecoveryVerdi
         };
     }
 
-    // §6.4 — no candidate qualifies.
-    RecoveryVerdict::Abandoned
+    // (c) §6.4 — candidates existed but NONE matched exact-sha or chunk-prefix. The
+    // recipient demonstrably consumed turns past the send's offset and the content is
+    // not among them: exhausted best-effort. The disclosed closer, carrying the
+    // search `attribution` so the terminal reads through D4's "recovered (attributed)"
+    // category, never a hard "failed".
+    RecoveryVerdict::Abandoned { attribution }
 }
 
 /// Count how many FULL leading chunks of `text` (re-chunked with CHUNK_BYTES)
@@ -1592,27 +1746,40 @@ fn extract_candidates(
     out
 }
 
-/// Build the late terminal event a recovery verdict produces (§6.2-6.4),
-/// stamped `recovered: true` + the attribution. Used by [`emit_recovery_verdict`]
-/// and by `await_received`'s inline recovery.
-pub fn recovery_event(send_id: &str, content_sha256: &str, verdict: &RecoveryVerdict) -> Payload {
+/// Build the late terminal event a recovery verdict produces, or `None` when the
+/// verdict mints NO terminal (R6 seam ruling 01KX8MDPDX). Used by
+/// [`emit_recovery_verdict`] and by `await_received`'s inline recovery.
+///
+/// - Anchored/Truncated (§6.2-6.3) → the recovered anchor terminals (unchanged).
+/// - (c) `Abandoned` (§6.4 searched-no-match) → `pending-abandoned{recovery-no-
+///   candidate}` STAMPED `recovered:true` + the search `attribution` — the disclosed
+///   best-effort closer (D4's "recovered (attributed)" category).
+/// - (d) `Unattributable` → `pending-abandoned{recovery-unattributable}`, NO
+///   `recovered`/attribution (no search ran; never claims "no-candidate").
+/// - (a) `SourceUnavailable` / (b) `EmptyWindow` → `None`: NO terminal, the send
+///   stays dead-dangling-recoverable for a later run (like the G/B door arms).
+pub fn recovery_event(
+    send_id: &str,
+    content_sha256: &str,
+    verdict: &RecoveryVerdict,
+) -> Option<Payload> {
     match verdict {
         RecoveryVerdict::Anchored {
             anchor,
             attribution,
-        } => Payload::TurnAnchored {
+        } => Some(Payload::TurnAnchored {
             send_id: send_id.to_string(),
             content_sha256: content_sha256.to_string(),
             anchor: anchor.clone(),
             recovered: true,
             attribution: Some(attribution.clone()),
-        },
+        }),
         RecoveryVerdict::Truncated {
             expected_len,
             actual_len,
             actual_sha,
             attribution,
-        } => Payload::TurnAnchoredMismatch {
+        } => Some(Payload::TurnAnchoredMismatch {
             send_id: send_id.to_string(),
             expected_sha: content_sha256.to_string(),
             actual_sha: actual_sha.clone(),
@@ -1620,11 +1787,26 @@ pub fn recovery_event(send_id: &str, content_sha256: &str, verdict: &RecoveryVer
             actual_len: *actual_len,
             recovered: true,
             attribution: Some(attribution.clone()),
-        },
-        RecoveryVerdict::Abandoned => Payload::PendingAbandoned {
+        }),
+        // (c) DISCLOSED best-effort closer — the ONLY legitimate foreclosing recovery
+        // terminal. recovered:true + attribution route a reader to D4's attributed
+        // category (QS-1 converse: no UNDISCLOSED false-abandoned).
+        RecoveryVerdict::Abandoned { attribution } => Some(Payload::PendingAbandoned {
             send_id: send_id.to_string(),
             reason: "recovery-no-candidate".to_string(),
-        },
+            recovered: Some(true),
+            attribution: Some(attribution.clone()),
+        }),
+        // (d) legacy/foreign no-key record — closes honestly WITHOUT claiming a search
+        // ran (no recovered/attribution; distinct reason).
+        RecoveryVerdict::Unattributable => Some(Payload::PendingAbandoned {
+            send_id: send_id.to_string(),
+            reason: "recovery-unattributable".to_string(),
+            recovered: None,
+            attribution: None,
+        }),
+        // (a),(b) UNDETERMINED → NO terminal (dead-dangling-recoverable).
+        RecoveryVerdict::SourceUnavailable | RecoveryVerdict::EmptyWindow => None,
     }
 }
 
@@ -1642,15 +1824,75 @@ pub fn emit_recovery_verdict(
 ) -> Result<RecoveryVerdict, String> {
     let send_id = si.send_id().ok_or("send-initiated has no send_id")?;
     let content_sha = si.str_field("content_sha256").unwrap_or_default();
+    // recovery_read is a pure TRANSCRIPT read (never touches the events file), so it
+    // stays OUTSIDE the lock — its verdict is only USED if no terminal raced in.
     let verdict = recovery_read(deps, si);
-    // Idempotence re-check: re-read NOW; if a terminal raced in, take it.
+    // §C2 / F2 — serialize the re-check→emit critical section ACROSS PROCESSES. The
+    // v1 idempotence was a lock-free read-then-append: two concurrent `qd
+    // delivery:recover` runs (or one racing the deferred `recovery_coordinator`) both
+    // passed the re-check and both appended → TWO terminals for one send_id (C2
+    // "exactly one" broken, red-team F2). An exclusive advisory flock on the emit
+    // target, held across the re-check AND the emit, forces the second caller to
+    // BLOCK until the first releases; it then re-reads, observes the first's terminal,
+    // and takes the idempotent adopt-path. This also closes the round-1 outcome-FLIP
+    // (differing verdicts): the second caller adopts the first's terminal regardless
+    // of its own recovery_read result. Fail-safe: a flock failure returns Err and
+    // emits nothing (the send stays dangling-recoverable, best-effort §4.2). The
+    // FENCE never reaches here for a live writer, so the live-writer-refusal path
+    // never touches the lock.
+    let _lock = RecoveryEmitLock::acquire(writer.path())?;
+    // Idempotence re-check UNDER the lock: re-read NOW; if a terminal raced in, take it.
     let merged = ctx.read();
     if let Some(existing) = first_terminal_for(&merged.records, &send_id) {
         return Ok(verdict_from_terminal(&existing));
     }
-    let payload = recovery_event(&send_id, &content_sha, &verdict);
-    writer.emit(clock, &payload)?;
+    // SourceUnavailable / EmptyWindow → recovery_event returns None: emit NO terminal,
+    // leaving the send dead-dangling-recoverable (R6 (a)/(b)). We still ran the lock +
+    // idempotence re-check above, so if another run resolved it (its read succeeded) we
+    // already adopted that terminal on the raced-in path. Every other verdict emits its
+    // (disclosed) terminal.
+    if let Some(payload) = recovery_event(&send_id, &content_sha, &verdict) {
+        writer.emit(clock, &payload)?;
+    }
     Ok(verdict)
+}
+
+/// Cross-process advisory lock over the recovery re-check→emit critical section
+/// (§C2 / F2). `flock(LOCK_EX)` on the emit-target events file, held for the guard's
+/// life and released when the owned `File` drops (every early return of
+/// [`emit_recovery_verdict`]). Mirrors [`crate::idstore`]'s `open_locked` — the same
+/// read-check-then-append-under-one-lock idiom. Advisory (flock) locks only contend
+/// with OTHER flock callers, so the normal O_APPEND emission sites (send-initiated,
+/// chunks-delivered, …) are unaffected — only recovery emitters serialize, which is
+/// exactly the scope C2 needs (the fence already excludes a live sender racing).
+struct RecoveryEmitLock {
+    _file: std::fs::File,
+}
+
+impl RecoveryEmitLock {
+    fn acquire(events_path: &Path) -> Result<Self, String> {
+        use std::os::unix::io::AsRawFd;
+        if let Some(parent) = events_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(events_path)
+            .map_err(|e| format!("recovery lock: open {} failed: {e}", events_path.display()))?;
+        // Blocking exclusive lock (LOCK_EX) — the second caller waits here, then its
+        // re-check sees the first's terminal. Released on `File` drop.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            return Err(format!(
+                "recovery lock: flock {} failed: {}",
+                events_path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(RecoveryEmitLock { _file: file })
+    }
 }
 
 /// Map an existing terminal record back to a [`RecoveryVerdict`] (the idempotence
@@ -1679,7 +1921,18 @@ fn verdict_from_terminal(rec: &EventRecord) -> RecoveryVerdict {
             actual_sha: rec.str_field("actual_sha").unwrap_or_default(),
             attribution: rec.str_field("attribution").unwrap_or_default(),
         },
-        _ => RecoveryVerdict::Abandoned,
+        // §C1 — a door `send-failed` is a failure with no anchor: Abandoned for the
+        // recovery caller (explicit, not via the catch-all — the terminal set grew).
+        "send-failed" => RecoveryVerdict::Abandoned {
+            attribution: String::new(),
+        },
+        // anchor-timeout / pending-abandoned / message-seen / seen-failed → no anchor.
+        // A raced-in disclosed `pending-abandoned{recovery-no-candidate}` carries an
+        // `attribution`; adopt it (others default empty). This is the idempotence
+        // adopt-path — the returned verdict only informs the caller a terminal exists.
+        _ => RecoveryVerdict::Abandoned {
+            attribution: rec.str_field("attribution").unwrap_or_default(),
+        },
     }
 }
 
@@ -1703,6 +1956,14 @@ pub enum Received {
     AnchoredMismatch,
     AnchorTimeout,
     Abandoned,
+    /// §C1 — a `send-failed` door terminal resolved the await (an explicit pre-wire
+    /// failure). Distinct from `Abandoned` (a watch that ended with no verdict): the
+    /// door failed loudly. `reason` carries the door's token (forensics). A
+    /// consumer must treat it as a FAILURE, never a success — and never hang: a
+    /// `send-failed` is a terminal, so it satisfies the await.
+    SendFailed {
+        reason: String,
+    },
     /// The await budget was exhausted with no terminal AND no dead-dangling
     /// resolution. `last_stage` carries the furthest non-terminal stage seen
     /// (forensics) — NEVER a success (§8 / G4 cheap-event trap).
@@ -1774,11 +2035,18 @@ pub fn await_received(
             last_stage = "chunks-delivered";
         }
 
-        // §7 dead-dangling check: run recovery inline + return its verdict.
+        // §7 dead-dangling check: run recovery inline + return its verdict — UNLESS the
+        // transcript was unreadable/unresolvable or the window was empty this poll
+        // ((a)/(b) → received_from_verdict None): no terminal was emitted, so keep
+        // polling (a later poll may resolve it; else the budget exhausts to a positive
+        // anchor-timeout below). This is the inline-recovery mirror of the recover verb
+        // leaving such a send dead-dangling (R6).
         if let Some(si) = send_initiated_for(&merged.records, send_id) {
             if is_dead_dangling(&merged.records, &si, clock.now_ms()) {
                 if let Ok(verdict) = emit_recovery_verdict(deps, writer, clock, ctx, &si) {
-                    return received_from_verdict(&verdict);
+                    if let Some(received) = received_from_verdict(&verdict) {
+                        return received;
+                    }
                 }
             }
         }
@@ -1809,6 +2077,11 @@ fn received_from_terminal(rec: &EventRecord) -> Received {
         "turn-anchored-mismatch" => Received::AnchoredMismatch,
         "anchor-timeout" => Received::AnchorTimeout,
         "pending-abandoned" => Received::Abandoned,
+        // §C1 — the door-failure terminal. A KNOWN terminal now, so it maps to an
+        // explicit failure (never the unknown-terminal catch-all, never a success).
+        "send-failed" => Received::SendFailed {
+            reason: rec.str_field("reason").unwrap_or_default(),
+        },
         // is_terminal gated the caller, so this is unreachable; be safe.
         _ => Received::BudgetExhausted {
             last_stage: "unknown-terminal",
@@ -1816,12 +2089,20 @@ fn received_from_terminal(rec: &EventRecord) -> Received {
     }
 }
 
-/// Map a recovery verdict to a [`Received`] (§7 inline-recovery return).
-fn received_from_verdict(v: &RecoveryVerdict) -> Received {
+/// Map a recovery verdict to a [`Received`] (§7 inline-recovery return), or `None`
+/// when the verdict minted NO terminal — (a) `SourceUnavailable` / (b) `EmptyWindow`:
+/// undetermined this poll, no resolution, so [`await_received`] must NOT return; it
+/// keeps polling (a later poll may resolve it once the transcript is readable / the
+/// window grows; else the budget exhausts to a positive `anchor-timeout`). The
+/// terminal-minting verdicts (Anchored / Truncated / (c) Abandoned / (d)
+/// Unattributable) resolve the await.
+fn received_from_verdict(v: &RecoveryVerdict) -> Option<Received> {
     match v {
-        RecoveryVerdict::Anchored { .. } => Received::Anchored,
-        RecoveryVerdict::Truncated { .. } => Received::AnchoredMismatch,
-        RecoveryVerdict::Abandoned => Received::Abandoned,
+        RecoveryVerdict::Anchored { .. } => Some(Received::Anchored),
+        RecoveryVerdict::Truncated { .. } => Some(Received::AnchoredMismatch),
+        RecoveryVerdict::Abandoned { .. } => Some(Received::Abandoned),
+        RecoveryVerdict::Unattributable => Some(Received::Abandoned),
+        RecoveryVerdict::SourceUnavailable | RecoveryVerdict::EmptyWindow => None,
     }
 }
 
@@ -1886,6 +2167,10 @@ impl<C: Clock> Drop for WatchGuard<'_, C> {
                 &Payload::PendingAbandoned {
                     send_id: self.send_id.clone(),
                     reason: "watch-interrupted".to_string(),
+                    // NOT a searched-best-effort recovery verdict — no disclosure flags
+                    // (serializes exactly as the pre-R6 bare form; R6 disclosure detail).
+                    recovered: None,
+                    attribution: None,
                 },
             );
         }
@@ -2269,6 +2554,8 @@ mod tests {
                 Payload::PendingAbandoned {
                     send_id: "s".into(),
                     reason: "session-died".into(),
+                    recovered: None,
+                    attribution: None,
                 },
                 "pending-abandoned",
             ),
@@ -2877,6 +3164,8 @@ mod tests {
                 &Payload::PendingAbandoned {
                     send_id: "s".into(),
                     reason: "session-died".into(),
+                    recovered: None,
+                    attribution: None,
                 },
             )
             .unwrap();
@@ -3173,7 +3462,8 @@ mod tests {
 
     #[test]
     fn g5_absent_abandoned() {
-        // No matching candidate in the transcript → Abandoned.
+        // (c) SEARCHED-no-match: a NON-matching candidate exists past the anchor →
+        // the disclosed Abandoned closer, carrying the search attribution ("offset").
         let transcript = format!("{}\n", user_line("a completely different message", None));
         let si = si_record(
             "the original message",
@@ -3187,7 +3477,12 @@ mod tests {
             path: "/t.jsonl".into(),
             now: 0,
         };
-        assert_eq!(recovery_read(&deps, &si), RecoveryVerdict::Abandoned);
+        assert_eq!(
+            recovery_read(&deps, &si),
+            RecoveryVerdict::Abandoned {
+                attribution: "offset".into()
+            }
+        );
     }
 
     #[test]
@@ -3223,8 +3518,11 @@ mod tests {
 
     #[test]
     fn g5_offset_absent_pre_send_timestamp_excluded() {
-        // Offset-absent path: a candidate timestamped BEFORE the send is EXCLUDED
-        // (no false-Anchor on an identical earlier copy — R6).
+        // Offset-absent path: a candidate timestamped BEFORE the send is EXCLUDED (no
+        // false-Anchor on an identical earlier copy — R6). With the only record
+        // excluded, the searched window is EMPTY → (b) EmptyWindow → NO terminal (the
+        // recipient hasn't demonstrably progressed past the send; still growable), NOT
+        // a foreclosing Abandoned.
         let msg = "identical content";
         // Earlier copy (before send) + no later copy.
         let earlier = user_line(msg, Some("2026-06-06T05:00:00.000Z"));
@@ -3241,8 +3539,8 @@ mod tests {
             path: "/t.jsonl".into(),
             now: 0,
         };
-        // The earlier copy is excluded → Abandoned (no false-Anchor).
-        assert_eq!(recovery_read(&deps, &si), RecoveryVerdict::Abandoned);
+        // The earlier copy is excluded → empty searched window → EmptyWindow (no terminal).
+        assert_eq!(recovery_read(&deps, &si), RecoveryVerdict::EmptyWindow);
     }
 
     #[test]
@@ -3343,7 +3641,9 @@ mod tests {
 
     #[test]
     fn g5_foreign_record_yields_abandoned_not_false_anchor() {
-        // Negative control: a foreign record (different content) → Abandoned.
+        // Negative control: a foreign record (different content) sits past the anchor
+        // → (c) SEARCHED-no-match → disclosed Abandoned (attribution "offset"), NOT a
+        // false-Anchor.
         let transcript = format!("{}\n", user_line("totally unrelated text here", None));
         let si = si_record(
             "our actual message",
@@ -3357,7 +3657,124 @@ mod tests {
             path: "/t.jsonl".into(),
             now: 0,
         };
-        assert_eq!(recovery_read(&deps, &si), RecoveryVerdict::Abandoned);
+        assert_eq!(
+            recovery_read(&deps, &si),
+            RecoveryVerdict::Abandoned {
+                attribution: "offset".into()
+            }
+        );
+    }
+
+    #[test]
+    fn g5_source_unavailable_when_transcript_unreadable() {
+        // (a) build_window None (read/resolve failure) → SourceUnavailable (NO terminal),
+        // NOT Abandoned. text:None → read_transcript AND resolve_transcript both yield
+        // None, exercising BOTH build_window arms.
+        let msg = "the send whose transcript we cannot read";
+        let sha = vec![sha256_hex(msg.as_bytes())];
+        let deps = PlantedDeps {
+            text: None,
+            path: "/gone.jsonl".into(),
+            now: 0,
+        };
+        // offset-PRESENT read-failure arm.
+        let si_offset = si_record(
+            msg,
+            sha.clone(),
+            Some("/gone.jsonl"),
+            Some(0),
+            "2026-06-06T06:00:00.000Z",
+        );
+        assert_eq!(
+            recovery_read(&deps, &si_offset),
+            RecoveryVerdict::SourceUnavailable,
+            "offset-present read-failure → SourceUnavailable, not Abandoned"
+        );
+        // offset-ABSENT resolve-failure arm.
+        let si_absent = si_record(msg, sha, None, None, "2026-06-06T06:00:00.000Z");
+        assert_eq!(
+            recovery_read(&deps, &si_absent),
+            RecoveryVerdict::SourceUnavailable,
+            "offset-absent resolve-failure → SourceUnavailable, not Abandoned"
+        );
+    }
+
+    #[test]
+    fn g5_empty_window_no_terminal() {
+        // (b) read SUCCEEDED but ZERO candidate records past the anchor → EmptyWindow
+        // (NO terminal) — still growable, NOT the foreclosing Abandoned. A readable but
+        // empty transcript, offset 0.
+        let si = si_record(
+            "landed later, not yet flushed",
+            vec![sha256_hex(b"landed later, not yet flushed")],
+            Some("/t.jsonl"),
+            Some(0),
+            "2026-06-06T06:00:00.000Z",
+        );
+        let deps = PlantedDeps {
+            text: Some(String::new()),
+            path: "/t.jsonl".into(),
+            now: 0,
+        };
+        assert_eq!(recovery_read(&deps, &si), RecoveryVerdict::EmptyWindow);
+    }
+
+    #[test]
+    fn g5_missing_content_sha_unattributable() {
+        // (d) a send-initiated lacking content_sha256 can never be searched →
+        // Unattributable (a search that never ran; never "no-candidate").
+        let line = r#"{"v":1,"ts":"2026-06-06T06:00:00.000Z","pid":1,"seq":0,"session":"sid","event":"send-initiated","send_id":"s","verb":"send:pty","transcript":"/t.jsonl","transcript_offset":0}"#;
+        let si = parse_one(line).unwrap();
+        let deps = PlantedDeps {
+            text: Some(format!("{}\n", user_line("anything", None))),
+            path: "/t.jsonl".into(),
+            now: 0,
+        };
+        assert_eq!(recovery_read(&deps, &si), RecoveryVerdict::Unattributable);
+    }
+
+    #[test]
+    fn g5_recovery_event_lattice_disclosure_and_no_terminal() {
+        // (c) discloses recovered:true + attribution; (d) unattributable, NO flags;
+        // (a)/(b) mint NO terminal.
+        match recovery_event(
+            "s",
+            "sha",
+            &RecoveryVerdict::Abandoned {
+                attribution: "offset".into(),
+            },
+        )
+        .expect("(c) mints a terminal")
+        {
+            Payload::PendingAbandoned {
+                reason,
+                recovered,
+                attribution,
+                ..
+            } => {
+                assert_eq!(reason, "recovery-no-candidate");
+                assert_eq!(recovered, Some(true));
+                assert_eq!(attribution.as_deref(), Some("offset"));
+            }
+            other => panic!("expected disclosed PendingAbandoned, got {other:?}"),
+        }
+        match recovery_event("s", "sha", &RecoveryVerdict::Unattributable)
+            .expect("(d) mints a terminal")
+        {
+            Payload::PendingAbandoned {
+                reason,
+                recovered,
+                attribution,
+                ..
+            } => {
+                assert_eq!(reason, "recovery-unattributable");
+                assert_eq!(recovered, None);
+                assert!(attribution.is_none());
+            }
+            other => panic!("expected unattributable PendingAbandoned, got {other:?}"),
+        }
+        assert!(recovery_event("s", "sha", &RecoveryVerdict::SourceUnavailable).is_none());
+        assert!(recovery_event("s", "sha", &RecoveryVerdict::EmptyWindow).is_none());
     }
 
     // ---------------------------------------------------------------------
@@ -4010,5 +4427,270 @@ mod tests {
             "the deletion-shaped output FAILS the row predicate — deleting the \
              Drop emission REDs the WatchGuard row"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // D1 (delivery contract): send-failed terminal (§C1) + reader-side handling
+    // + queued honesty (§C4/§C2)
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn d1_send_failed_is_terminal_and_queued_kinds_are_not() {
+        // §C1: send-failed joins the terminal set (first-terminal-wins, rotation-
+        // protected). §C4: the queued/non-terminal kinds stay NON-terminal — a
+        // busy-queued initiation and its relay/chunk acks are never "landed".
+        assert!(is_terminal("send-failed"), "send-failed is terminal (§C1)");
+        assert!(TERMINAL_EVENTS.contains(&"send-failed"));
+        for non in [
+            "send-initiated",
+            "chunks-delivered",
+            "relay-delivered",
+            "turn-accepted",
+            "composer-cleared",
+        ] {
+            assert!(!is_terminal(non), "{non} must stay NON-terminal (queued is honest)");
+        }
+    }
+
+    #[test]
+    fn d2_turn_accepted_serializes_non_terminal_send_id_and_content_sha() {
+        // C5/C3 (daemon-lane delivered): turn-accepted is NON-terminal and carries
+        // send_id (the resident turn id) + content_sha256 (the correlation key),
+        // same key order/shape as relay-delivered. It must never be conflated with
+        // landed — only the terminal says landed.
+        assert!(
+            !is_terminal("turn-accepted"),
+            "turn-accepted is NON-terminal (delivered, not landed)"
+        );
+        assert!(
+            !TERMINAL_EVENTS.contains(&"turn-accepted"),
+            "turn-accepted is not in the terminal set"
+        );
+        let dir = tempdir().unwrap();
+        let state = dir.path();
+        let writer = EventWriter::for_key(state, "sid", Some("sid".into()), None);
+        let clock = FixedClock(1_000_000);
+        writer
+            .emit(
+                &clock,
+                &Payload::TurnAccepted {
+                    send_id: "turn-7".into(),
+                    content_sha256: sha256_hex(b"steer body"),
+                },
+            )
+            .unwrap();
+        let text = std::fs::read_to_string(events_path(state, "sid")).unwrap();
+        let v: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(v["event"], "turn-accepted");
+        assert_eq!(v["v"], 1);
+        assert_eq!(v["send_id"], "turn-7");
+        assert_eq!(v["content_sha256"], sha256_hex(b"steer body"));
+        assert!(
+            v.get("reason").is_none(),
+            "turn-accepted carries no reason/prose"
+        );
+    }
+
+    #[test]
+    fn d1_send_failed_serializes_with_optional_send_id() {
+        let dir = tempdir().unwrap();
+        let state = dir.path();
+        let writer = EventWriter::for_key(state, "sid", Some("sid".into()), None);
+        let clock = FixedClock(1_000_000);
+        // send_id OMITTED (the relay-door shape): content_sha256 + reason present.
+        writer
+            .emit(
+                &clock,
+                &Payload::SendFailed {
+                    send_id: None,
+                    content_sha256: sha256_hex(b"m"),
+                    reason: "no-relay".into(),
+                },
+            )
+            .unwrap();
+        // send_id PRESENT (a door that already has one): included.
+        writer
+            .emit(
+                &clock,
+                &Payload::SendFailed {
+                    send_id: Some("s1".into()),
+                    content_sha256: sha256_hex(b"m"),
+                    reason: "no-relay".into(),
+                },
+            )
+            .unwrap();
+        let text = std::fs::read_to_string(events_path(state, "sid")).unwrap();
+        let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines[0]["event"], "send-failed");
+        assert!(
+            lines[0].get("send_id").is_none(),
+            "send_id OMITTED when None (§2.2 absent-never-null)"
+        );
+        assert_eq!(lines[0]["content_sha256"], sha256_hex(b"m"));
+        assert_eq!(lines[0]["reason"], "no-relay");
+        assert_eq!(lines[1]["send_id"], "s1");
+    }
+
+    #[test]
+    fn d1_send_failed_maps_to_failure_not_catchall() {
+        // received_from_terminal maps send-failed to an EXPLICIT failure (never the
+        // unknown-terminal catch-all, never a success); verdict_from_terminal →
+        // Abandoned (a door failure has no anchor).
+        let env = Envelope {
+            v: 1,
+            ts: "2026-06-06T06:00:00.000Z".into(),
+            pid: 1,
+            seq: 0,
+            session: Some("sid".into()),
+            name: None,
+            start_ms: None,
+        };
+        let p = Payload::SendFailed {
+            send_id: Some("s".into()),
+            content_sha256: sha256_hex(b"m"),
+            reason: "no-relay".into(),
+        };
+        let rec = parse_one(&build_record_line(&env, &p, CHUNK_SHA_CAP)).unwrap();
+        assert_eq!(
+            received_from_terminal(&rec),
+            Received::SendFailed {
+                reason: "no-relay".into()
+            }
+        );
+        assert_eq!(
+            verdict_from_terminal(&rec),
+            RecoveryVerdict::Abandoned {
+                attribution: String::new()
+            }
+        );
+    }
+
+    #[test]
+    fn d1_await_received_resolves_on_send_failed_never_hangs() {
+        // A joinable send-failed (carries send_id) SATISFIES the await — the consumer
+        // returns a failure immediately, never hanging for another terminal, never a
+        // success. (The reader-sweep requirement, for the joinable door case.)
+        let dir = tempdir().unwrap();
+        let state = dir.path();
+        let writer = EventWriter::for_key(state, "sid-sf", Some("sid-sf".into()), None);
+        let clock = FixedClock(1_000_000);
+        writer
+            .emit(
+                &clock,
+                &Payload::SendInitiated {
+                    send_id: "s".into(),
+                    verb: "send:pty".into(),
+                    send_path: "idle".into(),
+                    content_sha256: sha256_hex(b"x"),
+                    content_len: 1,
+                    chunks: 1,
+                    chunk_sha256s: vec![sha256_hex(b"x")],
+                    chunk_sha256s_capped: false,
+                    transcript: None,
+                    transcript_offset: None,
+                    content_preview: None,
+                },
+            )
+            .unwrap();
+        writer
+            .emit(
+                &clock,
+                &Payload::SendFailed {
+                    send_id: Some("s".into()),
+                    content_sha256: sha256_hex(b"x"),
+                    reason: "no-relay".into(),
+                },
+            )
+            .unwrap();
+        let deps = NoRecoveryDeps {
+            now: AtomicI64::new(1_000_000),
+        };
+        let budget = AwaitBudget {
+            poll_ms: 1,
+            max_polls: 3,
+        };
+        let ctx = ReaderCtx {
+            state_dir: state,
+            session_id: Some("sid-sf"),
+            name: None,
+        };
+        let got = await_received(&deps, &clock, &writer, ctx, "s", budget);
+        assert_eq!(
+            got,
+            Received::SendFailed {
+                reason: "no-relay".into()
+            }
+        );
+        assert!(
+            !matches!(got, Received::Anchored | Received::AnchoredMismatch),
+            "a door failure must never read as success"
+        );
+    }
+
+    #[test]
+    fn d1_busy_queued_resolves_to_exactly_one_terminal() {
+        // §C4/§C2: a busy-queued initiation is NON-terminal; the send then resolves to
+        // EXACTLY ONE terminal (here the happy turn-anchored landing). The queued phase
+        // is never itself presented as landed. (Post R5 seam ruling 01KX88WKGP the pty
+        // partial-write door mints NO terminal — a busy-queued send that fails to fully
+        // write stays dead-dangling and is closed by `qd delivery:recover`, proven in
+        // tests/delivery_recover_verb.rs, not by a door terminal here.)
+        let dir = tempdir().unwrap();
+        let state = dir.path();
+        let writer = EventWriter::for_key(state, "sid-q", Some("sid-q".into()), None);
+        let clock = FixedClock(1_000_000);
+        writer
+            .emit(
+                &clock,
+                &Payload::SendInitiated {
+                    send_id: "q".into(),
+                    verb: "send:pty".into(),
+                    send_path: "busy-queued".into(),
+                    content_sha256: sha256_hex(b"x"),
+                    content_len: 1,
+                    chunks: 1,
+                    chunk_sha256s: vec![sha256_hex(b"x")],
+                    chunk_sha256s_capped: false,
+                    transcript: None,
+                    transcript_offset: None,
+                    content_preview: None,
+                },
+            )
+            .unwrap();
+        // The queued initiation is NOT a terminal.
+        let merged0 = read_merged(state, Some("sid-q"), None);
+        assert!(
+            first_terminal_for(&merged0.records, "q").is_none(),
+            "busy-queued is non-terminal — never presented as delivered"
+        );
+        // Resolve with exactly one terminal (the happy landing).
+        writer
+            .emit(
+                &clock,
+                &Payload::TurnAnchored {
+                    send_id: "q".into(),
+                    content_sha256: sha256_hex(b"x"),
+                    anchor: Anchor {
+                        transcript: "/t".into(),
+                        start_offset: 0,
+                        line_index: 0,
+                    },
+                    recovered: false,
+                    attribution: None,
+                },
+            )
+            .unwrap();
+        let merged1 = read_merged(state, Some("sid-q"), None);
+        let terms: Vec<&EventRecord> = merged1
+            .records
+            .iter()
+            .filter(|r| is_terminal(&r.event) && r.send_id().as_deref() == Some("q"))
+            .collect();
+        assert_eq!(
+            terms.len(),
+            1,
+            "exactly one terminal for the queued send (C2)"
+        );
+        assert_eq!(terms[0].event, "turn-anchored");
     }
 }

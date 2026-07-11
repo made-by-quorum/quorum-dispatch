@@ -1102,35 +1102,40 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             }
         }
 
-        // §9: deliver outcome → terminal events (Accepted single-chunk emits NO
-        // terminal — written+accepted, anchor comes from verify only; it stays
-        // dangling by design). Stalled → anchor-timeout (the deliver budget);
-        // PidFileMissing → pending-abandoned{session-died}. The exit codes /
-        // stdout / stderr from map_deliver_outcome are UNCHANGED.
+        // §9 / §C2 (R5 seam ruling 01KX88WKGP + amend rider 3, red-team finding G):
+        // the deliver outcome mints NO foreclosing terminal on ANY arm. All three
+        // outcomes fire in the SAME post-deliver-attempt match, and deliver_prompt
+        // writes the message to the pty (send_message: chunks + `\r`, submit.rs:579 /
+        // lifecycle.rs RecordingDeliverDeps::send_message) BEFORE it can reach ANY of
+        // these outcomes — so each is a post-wire, possibly-LANDED priming send whose
+        // fate is in-band-undeterminable here:
+        //   - Accepted (single-chunk, or chunked-with-degraded-verify): NO terminal —
+        //     written+accepted; the anchor comes from verify only (the two verify arms
+        //     above already emitted turn-anchored / -mismatch on POSITIVE observation).
+        //   - Stalled: the deliver budget (DELIVER_TIMEOUT_S) expired while watching for
+        //     turn-start — the bytes were written + `\r` submitted, so the turn may yet
+        //     commit. An `anchor-timeout` here would FALSE-FAIL a possibly-landed prime
+        //     and FORECLOSE recovery (same class as the send:pty TimedOut arm).
+        //   - PidFileMissing: `find_pid_file` returned None AFTER send_message already
+        //     wrote the chunks + `\r` (deliver_prompt: send_message at submit.rs:579
+        //     precedes the None return at :583-584) — the registry row vanished
+        //     post-write, so the bytes may have landed before the session died. A
+        //     `pending-abandoned{session-died}` here would FALSE-FAIL a possibly-landed
+        //     prime and FORECLOSE recovery (same class as the send:pty Died arm). This
+        //     CORRECTS the door-inventory's "priming send already covered" — only the
+        //     Accepted arm was non-foreclosing; its failure arms foreclosed.
+        // So NO terminal on any arm: the priming send stays dead-dangling once the
+        // caller exits, and `qd delivery:recover` (its sweep includes verb "new-p")
+        // closes it from the transcript — turn-anchored{recovered} if it landed, else
+        // pending-abandoned{recovery-no-candidate}. The LOUD operator signal + exit
+        // codes (Stalled → 10 WARNING; PidFileMissing → 1 ERROR) from
+        // map_deliver_outcome are UNCHANGED — the C1 account is the standing
+        // send-initiated + that loud synchronous exit + C2's PENDING-closable state.
+        // The exhaustive match is kept so any future DeliverOutcome variant is forced
+        // back through this same discriminator (F3's coverage-hole lesson).
         match outcome {
-            dispatch::submit::DeliverOutcome::Stalled => {
-                events::warn_emit(
-                    &writer,
-                    &clock,
-                    &Payload::AnchorTimeout {
-                        send_id: send_id.clone(),
-                        // The deliver budget (DELIVER_TIMEOUT_S) is the watch bound.
-                        waited_ms: dispatch::submit::DELIVER_TIMEOUT_S * 1000,
-                    },
-                );
-            }
-            dispatch::submit::DeliverOutcome::PidFileMissing => {
-                events::warn_emit(
-                    &writer,
-                    &clock,
-                    &Payload::PendingAbandoned {
-                        send_id: send_id.clone(),
-                        reason: "session-died".to_string(),
-                    },
-                );
-            }
-            // Accepted (single-chunk, or chunked-with-degraded-verify): NO terminal
-            // — the send remains dangling by design (§9 "written" row).
+            dispatch::submit::DeliverOutcome::Stalled => {}
+            dispatch::submit::DeliverOutcome::PidFileMissing => {}
             dispatch::submit::DeliverOutcome::Accepted => {}
         }
         guard.disarm();

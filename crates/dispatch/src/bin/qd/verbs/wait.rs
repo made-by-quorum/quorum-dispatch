@@ -464,6 +464,201 @@ impl dispatch::provider::acp::AcpTurnObserver for OneShotObserver {
     }
 }
 
+/// The DELIVERY disposition for an ACP terminal, WIRED to the SETTLED in-tree
+/// classification `TerminalReason` (rpc.rs `StopReason::to_terminal_reason` +
+/// completion.rs — commit 94a827a1) — ASSERTED verbatim in conformance, NEVER
+/// re-derived here. Option B (coord ruling; a new success-with-reason terminal
+/// kind is a gate-item-5 vocabulary change deferred to C6/D3): a clean EndTurn
+/// (Completed — the STRONG turn-consumption reading, the StopReason answers the
+/// session/prompt that carried the message) AND a MaxTokens/MaxTurnRequests limit
+/// are both LANDED → `message-seen`; the limit reason is preserved in
+/// `TerminalReason` (conformance asserts MaxTokens ≠ Completed), never laundered
+/// into a clean completion. Cancelled / Refusal / terminal-time Failed (a
+/// correlated JSON-RPC error response) / Crashed / TransportLost / unparseable are
+/// delivery-FAILURE candidates — but rider-3 REFINES the R5 assumption that an
+/// interrupted turn "never proves entry": these are POST-delivery, so
+/// `emit_acp_terminal` LANDING-CHECKS them against the ACP `~/.claude/projects`
+/// record (a Cancelled turn adds the user prompt BEFORE interrupting the response),
+/// and only a provably-not-landed one becomes `seen-failed`.
+enum AcpDeliveryDisposition {
+    /// Delivered + landed → `message-seen` (no landing check — a completed/limit
+    /// turn consumed the prompt).
+    Seen,
+    /// A FAILURE StopReason — its `seen-failed` reason IF the rider-3 landing check
+    /// proves the prompt did NOT land; landed → `message-seen`; ambiguous →
+    /// recoverable (see `emit_acp_terminal`).
+    Failed(&'static str),
+}
+
+fn acp_delivery_disposition(
+    reason: dispatch::provider::acp::TerminalReason,
+) -> AcpDeliveryDisposition {
+    use dispatch::provider::acp::TerminalReason as R;
+    match reason {
+        R::Completed | R::MaxTokens => AcpDeliveryDisposition::Seen,
+        R::Cancelled => AcpDeliveryDisposition::Failed("cancelled"),
+        R::Refusal => AcpDeliveryDisposition::Failed("refusal"),
+        R::Failed => AcpDeliveryDisposition::Failed("failed"),
+        R::Crashed => AcpDeliveryDisposition::Failed("crashed"),
+        R::TransportLost => AcpDeliveryDisposition::Failed("transport-lost"),
+    }
+}
+
+/// The turn id carried by a terminal `AcpEvent` (the delivery `send_id`), if any.
+fn acp_terminal_turn_id(
+    raw: &Result<Option<dispatch::provider::acp::AcpEvent>, dispatch::provider::acp::AcpError>,
+) -> Option<String> {
+    use dispatch::provider::acp::AcpEvent;
+    match raw {
+        Ok(Some(AcpEvent::Terminal { turn, .. }))
+        | Ok(Some(AcpEvent::TerminalError { turn, .. })) => Some(turn.clone()),
+        _ => None,
+    }
+}
+
+/// rider-3 landing verdict for a POST-delivery ACP FAILURE StopReason: did the
+/// prompt LAND in the session's `~/.claude/projects` record (the native CC store
+/// the ACP bridge writes CC-shaped JSONL into — provider/acp/mod.rs)?
+enum AcpLanded {
+    /// The prompt is present as a USER record (content-keyed) → it entered context.
+    Yes,
+    /// The transcript is resolvable + readable and the prompt is ABSENT. This is a
+    /// `No` ONLY under the write-ordering assumption (user record precedes the
+    /// terminal response) — which is UNPROVABLE on this box (bridge absent). So at
+    /// R6 the `No` arm is DEGRADED and treated exactly like `Unknown` (recoverable);
+    /// the variant is kept so the hard-fail is a one-line re-enable once the ordering
+    /// is pinned by the live cell.
+    No,
+    /// The transcript is not resolvable / unreadable → we cannot prove either way →
+    /// leave the send RECOVERABLE (never a foreclosing hard fail).
+    Unknown,
+}
+
+/// rider-3 (qd-ctl3's tripwire ruling) — the content-keyed LANDING check for the
+/// ACP lane, modeled on the relay observer's `landed_message_ids`
+/// (relay_server/mod.rs): resolve the session's CC transcript under `projects_dir`,
+/// then look for a USER record whose text matches the prompt's `content_sha256`.
+/// The ACP inject sends the RAW prompt text as a single `ContentBlock` — no channel
+/// wrapper, no `from` prefix (provider/acp/client.rs) — so `sha256(user text) ==
+/// content_sha256` for a landed prompt. Same extractor (`sendpty::user_record_text`)
+/// the relay observer uses on the recipient's CC transcript.
+fn acp_prompt_landed(
+    projects_dir: &std::path::Path,
+    session_id: &str,
+    content_sha256: &str,
+) -> AcpLanded {
+    let Some(path) = dispatch::jsonl::find_jsonl_path(projects_dir, session_id, None) else {
+        return AcpLanded::Unknown; // transcript not resolvable → recoverable
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return AcpLanded::Unknown; // unreadable → recoverable
+    };
+    for p in dispatch::sendpty::parse_jsonl_slice(&content) {
+        let rec: dispatch::sendpty::JsonlRecord =
+            serde_json::from_value(p.value.clone()).unwrap_or_default();
+        if let Some(text) = dispatch::sendpty::user_record_text(&rec) {
+            if dispatch::events::sha256_hex(text.as_bytes()) == content_sha256 {
+                return AcpLanded::Yes;
+            }
+        }
+    }
+    AcpLanded::No // readable, prompt absent (degraded to recoverable at R6 — see emit_acp_terminal)
+}
+
+/// C3/C5 (D2 obligation (b)) + rider-3 — emit the ACP delivery TERMINAL keyed to
+/// the send by its turn id, best-effort, into the TARGET's delivery log.
+/// content_sha256 is read by the send_id-join from the correlated `send-initiated`
+/// (run_acp_wait holds the turn id, not the sent bytes; the join is the
+/// protocol-native correlation ACP's turn id gives us). A SUCCESS StopReason
+/// (Completed/MaxTokens) → `message-seen` (the completed turn consumed the prompt).
+/// A FAILURE StopReason is POST-delivery, so it is LANDING-CHECKED against the ACP
+/// session's `~/.claude/projects` record (rider-3): landed → `message-seen`. R6
+/// DEGRADE (write-ordering unprovable on brano — bridge absent): NOT-landed and
+/// ambiguous BOTH → NO terminal (the send stays RECOVERABLE, disclosed as a C6
+/// pending-forever residual) — never a foreclosing hard fail on an unprovable
+/// not-landed. So this path emits ONLY `message-seen` (never `seen-failed`).
+/// Idempotent:
+/// first-terminal-wins skips a send that already has a terminal. A landed turn with
+/// NO correlated send-initiated emits nothing — there is no send to terminate.
+fn emit_acp_terminal(
+    env: &dyn dispatch::effects::Env,
+    target: &dispatch::model::Session,
+    send_id: &str,
+    reason: dispatch::provider::acp::TerminalReason,
+) {
+    // QD_HOME-consistency (delivery-lie fix): resolve the delivery-log `state_dir`
+    // (and the landing-check `projects_dir`) with the QD_HOME-HONORING `from_home_env`
+    // — EXACTLY as the ACP send-phase emitters do (send_relay.rs) and the pi terminal
+    // does. run_acp_wait's `common::paths_from_home` uses `from_home`, which IGNORES
+    // QD_HOME (paths.rs:48-51), so under any QD_HOME override ≠ <HOME>/.quorum/dispatch
+    // the terminal landed in a DIFFERENT delivery log than its send-initiated/
+    // turn-accepted phases → an orphaned / pending-forever send (the terminal never
+    // joins by send_id). Best-effort (no HOME → return), as the send emitters are.
+    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let paths = dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env);
+    let log = std::fs::read_to_string(dispatch::events::events_path(
+        &paths.state_dir,
+        &target.session_id,
+    ))
+    .unwrap_or_default();
+    let records = dispatch::events::parse_events(&log).records;
+    if dispatch::events::first_terminal_for(&records, send_id).is_some() {
+        return; // first-terminal-wins → idempotent
+    }
+    // content_sha256 from the correlated send-initiated — needed for message-seen
+    // AND the rider-3 landing check. No correlated send → nothing to terminate.
+    let Some(content_sha256) = records
+        .iter()
+        .find(|r| r.event == "send-initiated" && r.send_id().as_deref() == Some(send_id))
+        .and_then(|r| r.str_field("content_sha256"))
+    else {
+        return;
+    };
+    let seen = || dispatch::events::Payload::MessageSeen {
+        send_id: send_id.to_string(),
+        content_sha256: content_sha256.clone(),
+    };
+    let payload = match acp_delivery_disposition(reason) {
+        // A completed / limit turn CONSUMED the prompt → landed (the strong reading).
+        AcpDeliveryDisposition::Seen => seen(),
+        // rider-3: a FAILURE StopReason is POST-delivery (the inject succeeded, the
+        // prompt reached the resident). A Cancelled turn ADDS the user prompt to the
+        // session (landed) and interrupts only the RESPONSE; Failed/Crashed/
+        // TransportLost can likewise fire AFTER the prompt was consumed. So NEVER
+        // hard-fail without checking the ACP record (content-keyed) — a landed send
+        // must never read a permanent hard FAILED (D1's F3 lie-shape).
+        AcpDeliveryDisposition::Failed(_reason_tok) => {
+            match acp_prompt_landed(&paths.projects_dir, &target.session_id, &content_sha256) {
+                // Landed → message-seen (it entered context; the turn just did not
+                // complete cleanly — the reason is preserved in the settled
+                // terminal_reason classification, option B).
+                AcpLanded::Yes => seen(),
+                // rider-3 R6 DEGRADE (companion ruling 01KX8MP43N, condition 1): the
+                // `No → seen-failed` arm rests on "the bridge writes the user record
+                // BEFORE the terminal response" — UNPROVABLE on this box (the
+                // claude-code-acp bridge is absent, so the required cancel-mid-turn
+                // conformance cell cannot run cred-free). A readable-but-absent record
+                // could be an UNFLUSHED landing (the empty-window shape — the ws
+                // Terminal can arrive before the transcript fsync). So NEITHER absent
+                // nor unresolvable is hard-failed: both leave the send RECOVERABLE (no
+                // foreclosing terminal), disclosed as a C6 pending-forever residual
+                // (condition 2 = B). Re-enable `No → seen-failed{_reason_tok}` when the
+                // write-ordering is pinned by the live cell (bridge installed).
+                AcpLanded::No | AcpLanded::Unknown => return,
+            }
+        }
+    };
+    let writer = dispatch::events::EventWriter::for_key(
+        &paths.state_dir,
+        &target.session_id,
+        Some(target.session_id.clone()),
+        target.name.clone(),
+    );
+    dispatch::events::warn_emit(&writer, &RealClock, &payload);
+}
+
 fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64) -> i32 {
     use dispatch::provider::acp::{
         classify_connect_failure, derive_tier, AcpClient, AcpConnection, AcpTurnCompletion,
@@ -584,7 +779,9 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
         // the SAME `next_update` pull onto an observation, then let `AcpTurnCompletion`
         // render the verdict (behaviorally identical to the prior inline match — Terminal
         // → done/0, TerminalError → failed/1, Update/None → keep polling, Err → closed).
-        let obs = acp_wait_observation(conn.next_update(remaining));
+        let raw = conn.next_update(remaining);
+        let turn_id = acp_terminal_turn_id(&raw);
+        let obs = acp_wait_observation(raw);
         let observer = OneShotObserver(obs.clone());
         let completion = AcpTurnCompletion::new(&observer);
         match completion.poll_completion() {
@@ -593,6 +790,18 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
             // next` must not proceed on a failed turn); every other terminal is a clean
             // completion (end_turn / cancelled / max — all exit 0, as before).
             TurnCompletionProbe::Visible => {
+                // C3/C5 (D2 obligation (b)): emit the delivery terminal, wired to
+                // the SETTLED terminal_reason classification (never re-derived),
+                // keyed to the send by its turn id. Best-effort — never changes
+                // the wait's own exit below.
+                if let (Some(tid), Some((reason, _))) =
+                    (turn_id.as_deref(), completion.terminal_reason())
+                {
+                    // env (RealEnv) — emit_acp_terminal resolves its delivery-log
+                    // state_dir via the QD_HOME-honoring from_home_env itself, so it
+                    // shares the log with the send phases under any QD_HOME.
+                    emit_acp_terminal(&env, session, tid, reason);
+                }
                 if matches!(completion.terminal_reason(), Some((TerminalReason::Failed, _))) {
                     let msg = match &obs {
                         AcpTurnObservation::Failed(m) => m.clone(),
@@ -710,6 +919,9 @@ fn run_pi_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64)
     match remote.observe() {
         Ok(obs) => {
             if pi_wait_verdict(obs.is_streaming) == PiWaitVerdict::Release {
+                // C5/C3 (obligation (c)): at turn close, content-key the rollout
+                // and emit message-seen for any pending pi send that landed.
+                pi_observe_landed_sends(&env, &paths, session);
                 eprintln!("{label} is idle.");
                 usage_wait(&session.session_id, session.name.as_deref());
                 return 0;
@@ -739,6 +951,10 @@ fn run_pi_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64)
         match remote.observe() {
             Ok(obs) => match pi_wait_verdict(obs.is_streaming) {
                 PiWaitVerdict::Release => {
+                    // C5/C3 (obligation (c)): the turn closed — content-key the
+                    // rollout and emit message-seen for any pending pi send that
+                    // landed (incl. a steer's text in the just-closed turn).
+                    pi_observe_landed_sends(&env, &paths, session);
                     eprintln!(" done");
                     usage_wait(&session.session_id, session.name.as_deref());
                     return 0;
@@ -753,6 +969,136 @@ fn run_pi_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64)
             }
         }
     }
+}
+
+// ===========================================================================
+// C5/C3 — the pi CONTENT-KEYED rollout OBSERVER (D2 obligation (c))
+// ===========================================================================
+//
+// A resident pi send is FIRE-AND-FORGET: run_pi_send emits sent (send-initiated) +
+// delivered (turn-accepted) at the inject ACK and returns; the success TERMINAL is
+// the OBSERVER's job. The observer confirms ENTRY by finding the SENT BYTES as a
+// USER-turn record in the provider's rollout jsonl, matched on the send's
+// content_sha256 (the SAME key relay message-seen matches on) — NEVER on the turn
+// terminal (a steer into an open turn yields a terminal that says nothing about
+// whether the steered text was consumed; obligation (c) point 1). pi lazy-writes
+// its session jsonl only after a turn, and dispatch keeps one-shot writers off the
+// resident's OPEN file (single-writer discipline), so the observer reads READ-ONLY
+// at/after turn close; mid-turn confirmation is structurally unavailable ((c) pt 2).
+// The emitted message-seen is the FLOOR (record-presence) reading; the reader
+// recovers "floor vs strong" from the paired send-initiated's send_path (the lane)
+// + D4's per-carrier reading table (C3 honesty).
+
+// The content-keyed LANDING test (obligation (c) point 1) lives in the pi provider
+// (`dispatch::provider::pi::floor::rollout_landed`) — the home of pi session-file
+// format knowledge — so the RESIDENT observer here and the DEAD-ONLY floor
+// (`run_pi_floor_send`) share ONE matcher. It matches a USER-turn record's text
+// against the send's content_sha256; a steer's text lands as its own user record,
+// and an assistant echo is never a landing.
+
+/// The pending pi sends whose content has LANDED — pure over the delivery-log
+/// records + the rollout. A pending pi send = a `send-initiated` on the pi lane
+/// (send_path=="pi") with NO terminal yet (first-terminal-wins); it has LANDED when
+/// its content_sha256 is present as a user-turn record in the rollout. Returns
+/// (send_id, content_sha256) for each — exactly one message-seen apiece.
+fn pi_pending_landed_sends(
+    records: &[dispatch::events::EventRecord],
+    rollout_jsonl: &str,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for rec in records {
+        if rec.event != "send-initiated" {
+            continue;
+        }
+        // pi lane only; other lanes have their own terminal path.
+        if rec.str_field("send_path").as_deref() != Some("pi") {
+            continue;
+        }
+        let Some(sid) = rec.send_id() else {
+            continue;
+        };
+        // Un-terminated only (first-terminal-wins) — never a second terminal.
+        if dispatch::events::first_terminal_for(records, &sid).is_some() {
+            continue;
+        }
+        let Some(sha) = rec.str_field("content_sha256") else {
+            continue;
+        };
+        if dispatch::provider::pi::floor::rollout_landed(rollout_jsonl, &sha) {
+            out.push((sid, sha));
+        }
+    }
+    out
+}
+
+/// Emit `message-seen{send_id, content_sha256}` for each pending pi send whose
+/// content has LANDED in `rollout_jsonl`, into the TARGET's delivery log (keyed by
+/// uuid). Pure over its (env, target, delivery-log text, rollout text) inputs so
+/// the observer is hermetically testable. Best-effort: a write failure warns and
+/// never changes the wait outcome. Returns the count emitted.
+fn emit_pi_seen_for_landed(
+    env: &dyn dispatch::effects::Env,
+    target: &dispatch::model::Session,
+    delivery_log: &str,
+    rollout_jsonl: &str,
+) -> usize {
+    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
+        return 0;
+    };
+    let state_dir =
+        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
+    let records = dispatch::events::parse_events(delivery_log).records;
+    let landed = pi_pending_landed_sends(&records, rollout_jsonl);
+    if landed.is_empty() {
+        return 0;
+    }
+    let writer = dispatch::events::EventWriter::for_key(
+        &state_dir,
+        &target.session_id,
+        Some(target.session_id.clone()),
+        target.name.clone(),
+    );
+    let clock = RealClock;
+    for (send_id, content_sha256) in &landed {
+        dispatch::events::warn_emit(
+            &writer,
+            &clock,
+            &dispatch::events::Payload::MessageSeen {
+                send_id: send_id.clone(),
+                content_sha256: content_sha256.clone(),
+            },
+        );
+    }
+    landed.len()
+}
+
+/// Drive the pi content-keyed observer from the wait seam (at/after turn close):
+/// read the resident's rollout jsonl (READ-ONLY, via the row's recorded
+/// `jsonl_path`) + the target's delivery log, then emit message-seen for every
+/// pending pi send whose content LANDED. Best-effort; never changes the wait exit.
+/// Resident lane only. (The deferred live steer-into-open-turn cell exercises this
+/// end-to-end under pi OAuth; the observer's CORRECTNESS is proven hermetically via
+/// `emit_pi_seen_for_landed`.)
+fn pi_observe_landed_sends(
+    env: &RealEnv,
+    paths: &dispatch::paths::QdPaths,
+    session: &dispatch::model::Session,
+) {
+    let Some(rollout_path) = session
+        .jsonl_path
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+    else {
+        return;
+    };
+    let Ok(rollout_jsonl) = std::fs::read_to_string(&rollout_path) else {
+        return;
+    };
+    let delivery_log =
+        std::fs::read_to_string(dispatch::events::events_path(&paths.state_dir, &session.session_id))
+            .unwrap_or_default();
+    let _ = emit_pi_seen_for_landed(env, session, &delivery_log, &rollout_jsonl);
 }
 
 /// FINDING #2 PART 2 — the cold-path VERIFY-THE-BRIDGE consumer. Returns `Some(exit)`
@@ -1184,6 +1530,615 @@ mod tests {
         assert!(
             consulted3.get(),
             "channel-down must consult the disk closure"
+        );
+    }
+
+    // =======================================================================
+    // C5/C3 — the pi content-keyed rollout OBSERVER (D2 obligation (c)),
+    // proven HERMETICALLY (cred-free, no model): a fixture rollout + delivery
+    // log drive the real observer emission. The full live steer-into-open-turn
+    // cell is deferred on pi OAuth; the observer's CORRECTNESS holds here.
+    // =======================================================================
+
+    fn pi_target(uuid: &str) -> dispatch::model::Session {
+        dispatch::model::Session {
+            name: Some("pi-obs-1".to_string()),
+            user_named: None,
+            session_id: uuid.to_string(),
+            code: None,
+            qd_id: None,
+            pid: Some(9191),
+            status: dispatch::model::SessionStatus::Idle,
+            zmx_name: None,
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: 0,
+            tokens: 0,
+            cwd: None,
+            last_active_ms: None,
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: None,
+            last_turns: None,
+            provider: "pi".to_string(),
+            entrypoint: None,
+            lineage: None,
+            which_branch: dispatch::model::SessionBranch::LiveRegistry,
+        }
+    }
+
+    /// A pi session-jsonl with ONE user-turn record carrying `user_text` (the
+    /// pi `appendMessage` shape), plus the assistant turn + agent_end. If
+    /// `include_user` is false, the user record is omitted (the "not flushed yet
+    /// / not landed" case) but the assistant still ECHOES `user_text` — the
+    /// false-positive guard: an assistant echo must NOT be read as landed.
+    fn pi_rollout(user_text: &str, include_user: bool) -> String {
+        let mut s = String::new();
+        s.push_str("{\"type\":\"session\",\"version\":3,\"id\":\"s1\"}\n");
+        s.push_str("{\"type\":\"agent_start\"}\n{\"type\":\"turn_start\"}\n");
+        if include_user {
+            let user = serde_json::json!({
+                "type": "message", "id": "m1", "parentId": null, "timestamp": "t",
+                "message": {"role": "user", "content": [{"type": "text", "text": user_text}]}
+            });
+            s.push_str(&serde_json::to_string(&user).unwrap());
+            s.push('\n');
+        }
+        let asst = serde_json::json!({
+            "type": "turn_end",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": user_text}], "stopReason": "stop"}
+        });
+        s.push_str(&serde_json::to_string(&asst).unwrap());
+        s.push_str("\n{\"type\":\"agent_end\",\"messages\":[],\"willRetry\":false}\n");
+        s
+    }
+
+    /// Emit a pending pi send-initiated (send_path=pi, no terminal) into the
+    /// target's log and return (env, target, delivery_log text, content_sha256).
+    fn seed_pending_pi_send(
+        home: &std::path::Path,
+        uuid: &str,
+        send_id: &str,
+        message: &str,
+    ) -> (dispatch::effects::MapEnv, dispatch::model::Session, String, String) {
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("HOME".to_string(), home.to_string_lossy().to_string());
+        let env = dispatch::effects::MapEnv { vars, uid: 501 };
+        let state_dir =
+            dispatch::paths::QdPaths::from_home_env(home, &env).state_dir;
+        let target = pi_target(uuid);
+        let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
+        let writer = dispatch::events::EventWriter::for_key(
+            &state_dir,
+            uuid,
+            Some(uuid.to_string()),
+            target.name.clone(),
+        );
+        // A daemon-lane send-initiated on the pi lane, no recovery keys.
+        writer
+            .emit(
+                &RealClock,
+                &dispatch::events::Payload::SendInitiated {
+                    send_id: send_id.to_string(),
+                    verb: "send:relay".to_string(),
+                    send_path: "pi".to_string(),
+                    content_sha256: content_sha256.clone(),
+                    content_len: message.as_bytes().len() as u64,
+                    chunks: 1,
+                    chunk_sha256s: vec![content_sha256.clone()],
+                    chunk_sha256s_capped: false,
+                    transcript: None,
+                    transcript_offset: None,
+                    content_preview: None,
+                },
+            )
+            .unwrap();
+        let delivery_log = std::fs::read_to_string(dispatch::events::events_path(&state_dir, uuid))
+            .unwrap();
+        (env, target, delivery_log, content_sha256)
+    }
+
+    #[test]
+    fn pi_observer_content_keyed_landing_emits_message_seen() {
+        let home = tempfile::tempdir().unwrap();
+        let uuid = "cccccccc-1111-2222-3333-444444444444";
+        let msg = "steer: land this exact text mid-turn";
+        let (env, target, delivery_log, sha) =
+            seed_pending_pi_send(home.path(), uuid, "turn-9", msg);
+
+        // The sent bytes ARE present as a user record → landed → message-seen.
+        let rollout = pi_rollout(msg, true);
+        let n = emit_pi_seen_for_landed(&env, &target, &delivery_log, &rollout);
+        assert_eq!(n, 1, "one landed pi send → one message-seen");
+
+        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
+        let raw = std::fs::read_to_string(dispatch::events::events_path(&state_dir, uuid)).unwrap();
+        let ms: serde_json::Value =
+            serde_json::from_str(raw.lines().find(|l| l.contains("message-seen")).unwrap()).unwrap();
+        assert_eq!(ms["event"], "message-seen");
+        assert_eq!(ms["send_id"], "turn-9", "keyed to the send's turn id");
+        assert_eq!(ms["content_sha256"].as_str().unwrap(), sha);
+        assert!(
+            dispatch::events::is_terminal("message-seen"),
+            "message-seen is the terminal success"
+        );
+    }
+
+    #[test]
+    fn pi_observer_no_terminal_when_content_absent_or_only_echoed() {
+        let home = tempfile::tempdir().unwrap();
+        let uuid = "dddddddd-1111-2222-3333-555555555555";
+        let msg = "steer: this must not false-land";
+        let (env, target, delivery_log, _sha) =
+            seed_pending_pi_send(home.path(), uuid, "turn-10", msg);
+
+        // NO user record (not flushed / not landed) — even though the ASSISTANT
+        // echoes the exact text. A steer's landing is a USER record, never an
+        // assistant echo (the false-positive guard) → NO message-seen (PENDING).
+        let rollout = pi_rollout(msg, false);
+        let n = emit_pi_seen_for_landed(&env, &target, &delivery_log, &rollout);
+        assert_eq!(n, 0, "assistant echo / absent user record is NOT landed");
+
+        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
+        let raw = std::fs::read_to_string(dispatch::events::events_path(&state_dir, uuid)).unwrap();
+        assert!(
+            !raw.contains("message-seen"),
+            "no success terminal until the SENT bytes land as a user record"
+        );
+        // And the pure content-keyed check agrees (shared pi-provider matcher).
+        use dispatch::provider::pi::floor::rollout_landed;
+        assert!(rollout_landed(&pi_rollout(msg, true), &_sha), "present user record → landed");
+        assert!(!rollout_landed(&pi_rollout(msg, false), &_sha), "absent user record → not landed");
+    }
+
+    #[test]
+    fn pi_observer_is_idempotent_never_double_terminal() {
+        let home = tempfile::tempdir().unwrap();
+        let uuid = "eeeeeeee-1111-2222-3333-666666666666";
+        let msg = "steer: land once";
+        let (env, target, _log0, _sha) =
+            seed_pending_pi_send(home.path(), uuid, "turn-11", msg);
+        let rollout = pi_rollout(msg, true);
+        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
+
+        // First observe → emits one message-seen.
+        let log1 = std::fs::read_to_string(dispatch::events::events_path(&state_dir, uuid)).unwrap();
+        assert_eq!(emit_pi_seen_for_landed(&env, &target, &log1, &rollout), 1);
+        // Second observe re-reads the (now-terminated) log → first-terminal-wins
+        // skips it → NO second message-seen.
+        let log2 = std::fs::read_to_string(dispatch::events::events_path(&state_dir, uuid)).unwrap();
+        assert_eq!(
+            emit_pi_seen_for_landed(&env, &target, &log2, &rollout),
+            0,
+            "a send that already has a terminal is never re-terminated (first-terminal-wins)"
+        );
+    }
+
+    // =======================================================================
+    // C3/C5 — the ACP variant-exact delivery-terminal mapping (D2 obligation
+    // (b)), ASSERTED against the SETTLED classification (never re-derived), +
+    // the emission/correlation/idempotence. All hermetic, no model.
+    // =======================================================================
+
+    #[test]
+    fn acp_delivery_terminal_mapping_is_variant_exact() {
+        use dispatch::provider::acp::{StopReason, TerminalReason as R};
+        // (1) The SETTLED StopReason → TerminalReason classification (rpc.rs,
+        //     commit 94a827a1) — ASSERTED, not re-derived. D2 wires the delivery
+        //     EMISSION to THIS.
+        assert_eq!(StopReason::EndTurn.to_terminal_reason(), R::Completed);
+        assert_eq!(StopReason::MaxTokens.to_terminal_reason(), R::MaxTokens);
+        assert_eq!(StopReason::MaxTurnRequests.to_terminal_reason(), R::MaxTokens);
+        assert_eq!(StopReason::Cancelled.to_terminal_reason(), R::Cancelled);
+        assert_eq!(StopReason::Refusal.to_terminal_reason(), R::Refusal);
+        // (2) The D2 delivery mapping (the charge's verbatim table), keyed off
+        //     the settled TerminalReason:
+        assert!(
+            matches!(acp_delivery_disposition(R::Completed), AcpDeliveryDisposition::Seen),
+            "EndTurn → message-seen (STRONG turn-consumption reading)"
+        );
+        assert!(
+            matches!(acp_delivery_disposition(R::MaxTokens), AcpDeliveryDisposition::Seen),
+            "MaxTokens/MaxTurnRequests → message-seen (graded success, landed)"
+        );
+        assert!(
+            matches!(
+                acp_delivery_disposition(R::Cancelled),
+                AcpDeliveryDisposition::Failed("cancelled")
+            ),
+            "Cancelled → seen-failed (an interrupt never proves entry)"
+        );
+        assert!(matches!(
+            acp_delivery_disposition(R::Refusal),
+            AcpDeliveryDisposition::Failed("refusal")
+        ));
+        assert!(
+            matches!(acp_delivery_disposition(R::Failed), AcpDeliveryDisposition::Failed("failed")),
+            "terminal-time JSON-RPC error response → seen-failed (post-wire), never the door send-failed"
+        );
+        assert!(
+            matches!(
+                acp_delivery_disposition(R::TransportLost),
+                AcpDeliveryDisposition::Failed("transport-lost")
+            ),
+            "unparseable stop / transport lost → seen-failed, never success"
+        );
+        assert!(matches!(
+            acp_delivery_disposition(R::Crashed),
+            AcpDeliveryDisposition::Failed("crashed")
+        ));
+        // (3) Reason preservation / non-laundering: MaxTurnRequests is NOT
+        //     laundered into a clean completion (terminal_reason stays MaxTokens).
+        assert_ne!(StopReason::MaxTurnRequests.to_terminal_reason(), R::Completed);
+    }
+
+    #[test]
+    fn acp_observation_wires_through_completion_to_disposition() {
+        // The full chain obs → (SETTLED) terminal_reason → D2 disposition, incl.
+        // the failure observations that arrive OUTSIDE a StopReason (the (b) split).
+        use dispatch::provider::acp::{AcpTurnCompletion, AcpTurnObservation, StopReason};
+        let disp = |obs: AcpTurnObservation| -> AcpDeliveryDisposition {
+            let observer = OneShotObserver(obs);
+            let (reason, _) = AcpTurnCompletion::new(&observer)
+                .terminal_reason()
+                .expect("terminal");
+            acp_delivery_disposition(reason)
+        };
+        assert!(matches!(
+            disp(AcpTurnObservation::Terminal(StopReason::EndTurn)),
+            AcpDeliveryDisposition::Seen
+        ));
+        assert!(matches!(
+            disp(AcpTurnObservation::Terminal(StopReason::Cancelled)),
+            AcpDeliveryDisposition::Failed("cancelled")
+        ));
+        // terminal-time JSON-RPC error RESPONSE → Failed (a DIFFERENT moment than
+        // the send-time door send-failed).
+        assert!(matches!(
+            disp(AcpTurnObservation::Failed("internalError".into())),
+            AcpDeliveryDisposition::Failed("failed")
+        ));
+        assert!(matches!(
+            disp(AcpTurnObservation::TransportLost("gone".into())),
+            AcpDeliveryDisposition::Failed("transport-lost")
+        ));
+        // Pending is non-terminal → no disposition.
+        let observer = OneShotObserver(AcpTurnObservation::Pending);
+        assert!(AcpTurnCompletion::new(&observer).terminal_reason().is_none());
+    }
+
+    fn acp_target(uuid: &str) -> dispatch::model::Session {
+        let mut s = pi_target(uuid);
+        s.name = Some("acp-obs-1".to_string());
+        s.provider = "acp/claude-code".to_string();
+        s
+    }
+
+    /// Emit a pending daemon send-initiated (given send_path, no terminal) into the
+    /// target's log; return its content_sha256.
+    fn emit_pending_si(
+        state_dir: &std::path::Path,
+        uuid: &str,
+        name: Option<String>,
+        send_id: &str,
+        message: &str,
+        send_path: &str,
+    ) -> String {
+        let sha = dispatch::events::sha256_hex(message.as_bytes());
+        let writer =
+            dispatch::events::EventWriter::for_key(state_dir, uuid, Some(uuid.to_string()), name);
+        writer
+            .emit(
+                &RealClock,
+                &dispatch::events::Payload::SendInitiated {
+                    send_id: send_id.to_string(),
+                    verb: "send:relay".to_string(),
+                    send_path: send_path.to_string(),
+                    content_sha256: sha.clone(),
+                    content_len: message.as_bytes().len() as u64,
+                    chunks: 1,
+                    chunk_sha256s: vec![sha.clone()],
+                    chunk_sha256s_capped: false,
+                    transcript: None,
+                    transcript_offset: None,
+                    content_preview: None,
+                },
+            )
+            .unwrap();
+        sha
+    }
+
+    #[test]
+    fn acp_terminal_emission_correlated_and_idempotent() {
+        use dispatch::provider::acp::TerminalReason;
+        let home = tempfile::tempdir().unwrap();
+        let uuid = "ffffffff-1111-2222-3333-777777777777";
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
+        let env = dispatch::effects::MapEnv { vars, uid: 501 };
+        let paths = dispatch::paths::QdPaths::from_home_env(home.path(), &env);
+        let target = acp_target(uuid);
+        let name = target.name.clone();
+
+        // A completed turn → message-seen, content_sha256 read by send_id-join.
+        let sha = emit_pending_si(&paths.state_dir, uuid, name.clone(), "turn-42", "acp body", "acp/claude-code");
+        emit_acp_terminal(&env, &target, "turn-42", TerminalReason::Completed);
+        let raw = std::fs::read_to_string(dispatch::events::events_path(&paths.state_dir, uuid)).unwrap();
+        let ms: serde_json::Value =
+            serde_json::from_str(raw.lines().find(|l| l.contains("message-seen")).unwrap()).unwrap();
+        assert_eq!(ms["send_id"], "turn-42");
+        assert_eq!(
+            ms["content_sha256"].as_str().unwrap(),
+            sha,
+            "content_sha256 read by send_id-join from the correlated send-initiated"
+        );
+
+        // Idempotent: a second terminal call is a no-op (first-terminal-wins).
+        emit_acp_terminal(&env, &target, "turn-42", TerminalReason::Completed);
+        let raw2 = std::fs::read_to_string(dispatch::events::events_path(&paths.state_dir, uuid)).unwrap();
+        assert_eq!(raw2.matches("\"message-seen\"").count(), 1, "never a second terminal");
+
+        // A DIFFERENT send, Cancelled + readable-but-absent. R6 DEGRADE (the
+        // write-ordering is unprovable → NOT hard-failed): NO terminal, RECOVERABLE.
+        emit_pending_si(&paths.state_dir, uuid, name, "turn-43", "interrupted body", "acp/claude-code");
+        let proj = paths.projects_dir.join("proj-slug");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(
+            proj.join(format!("{uuid}.jsonl")),
+            "{\"type\":\"user\",\"message\":{\"content\":\"an unrelated earlier prompt\"}}\n",
+        )
+        .unwrap();
+        emit_acp_terminal(&env, &target, "turn-43", TerminalReason::Cancelled);
+        let raw3 = std::fs::read_to_string(dispatch::events::events_path(&paths.state_dir, uuid)).unwrap();
+        assert!(
+            !raw3.contains("seen-failed"),
+            "R6 degrade: a readable-but-absent Cancelled is RECOVERABLE, never a hard seen-failed"
+        );
+        assert!(
+            dispatch::events::first_terminal_for(
+                &dispatch::events::parse_events(&raw3).records,
+                "turn-43"
+            )
+            .is_none(),
+            "turn-43 stays non-terminal (recoverable) after the degraded Cancelled"
+        );
+
+        // A landed turn with NO correlated send-initiated emits nothing.
+        emit_acp_terminal(&env, &target, "turn-nonexistent", TerminalReason::Completed);
+        let raw4 = std::fs::read_to_string(dispatch::events::events_path(&paths.state_dir, uuid)).unwrap();
+        assert!(
+            !raw4.contains("turn-nonexistent"),
+            "no send-initiated for that turn → nothing to terminate"
+        );
+    }
+
+    // =======================================================================
+    // rider-3 (qd-ctl3's tripwire ruling) — ACP FAILURE-terminal FORECLOSURE
+    // HONESTY: a POST-delivery failure StopReason is LANDING-CHECKED, so a
+    // landed-but-interrupted send is NEVER a permanent hard FAILED (D1's F3
+    // lie-shape). Covers ALL failure reasons (boundary 1). Hermetic — a fixture
+    // CC-shaped ~/.claude/projects transcript, no model.
+    // =======================================================================
+
+    /// Jail an ACP session + a pending send-initiated + (optionally) a CC-shaped
+    /// projects transcript, drive `emit_acp_terminal(reason)`, and return the
+    /// emitted terminal (event, reason) — or None if none (recoverable/PENDING).
+    /// `landed_prompt`: Some(text) writes a projects transcript whose USER record
+    /// carries `text`; None writes NO transcript (find_jsonl_path → Unknown).
+    fn drive_acp_failure(
+        reason: dispatch::provider::acp::TerminalReason,
+        uuid: &str,
+        prompt: &str,
+        landed_prompt: Option<&str>,
+    ) -> Option<(String, Option<String>)> {
+        let home = tempfile::tempdir().unwrap();
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
+        let env = dispatch::effects::MapEnv { vars, uid: 501 };
+        let paths = dispatch::paths::QdPaths::from_home_env(home.path(), &env);
+        let target = acp_target(uuid);
+        emit_pending_si(
+            &paths.state_dir,
+            uuid,
+            target.name.clone(),
+            "turn-x",
+            prompt,
+            "acp/claude-code",
+        );
+        if let Some(text) = landed_prompt {
+            // A CC-shaped transcript under a project slug dir (find_jsonl_path scans
+            // subdirs for <uuid>.jsonl). The USER record is what user_record_text
+            // matches; the assistant record is a red-herring (never a landing).
+            let proj = paths.projects_dir.join("proj-slug");
+            std::fs::create_dir_all(&proj).unwrap();
+            let user_rec = serde_json::json!({"type":"user","message":{"content":text}});
+            let asst_rec = serde_json::json!({"type":"assistant","message":{"content":prompt}});
+            std::fs::write(
+                proj.join(format!("{uuid}.jsonl")),
+                format!("{user_rec}\n{asst_rec}\n"),
+            )
+            .unwrap();
+        }
+        emit_acp_terminal(&env, &target, "turn-x", reason);
+        let raw =
+            std::fs::read_to_string(dispatch::events::events_path(&paths.state_dir, uuid)).unwrap();
+        for line in raw.lines() {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            let ev = v["event"].as_str().unwrap();
+            if ev == "message-seen" || ev == "seen-failed" {
+                return Some((
+                    ev.to_string(),
+                    v.get("reason").and_then(|r| r.as_str()).map(String::from),
+                ));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn acp_failure_foreclosure_honesty_all_reasons() {
+        use dispatch::provider::acp::TerminalReason as R;
+        // boundary 1: EVERY failure StopReason gets the landing check — no sibling
+        // arm left foreclosing.
+        let reasons = [
+            (R::Cancelled, "cancelled"),
+            (R::Refusal, "refusal"),
+            (R::Failed, "failed"),
+            (R::Crashed, "crashed"),
+            (R::TransportLost, "transport-lost"),
+        ];
+        for (i, (reason, tok)) in reasons.iter().enumerate() {
+            let prompt = format!("prompt-{i}-{tok}");
+
+            // LANDED (the prompt IS a user record in the projects transcript) →
+            // message-seen, NEVER a foreclosing seen-failed (the F3 lie-shape).
+            let landed = drive_acp_failure(
+                *reason,
+                &format!("aaaaaaaa-0000-0000-0000-00000000000{i}"),
+                &prompt,
+                Some(&prompt),
+            );
+            assert_eq!(
+                landed,
+                Some(("message-seen".to_string(), None)),
+                "{tok}: a LANDED failure turn → message-seen, never a foreclosing hard fail"
+            );
+
+            // READABLE-BUT-ABSENT (transcript readable, a DECOY user record — the
+            // prompt is absent). R6 DEGRADE (write-ordering unprovable on brano):
+            // this is NOT hard-failed (it could be an unflushed landing) → NO
+            // terminal, RECOVERABLE. NEVER a foreclosing seen-failed.
+            let not_landed = drive_acp_failure(
+                *reason,
+                &format!("bbbbbbbb-0000-0000-0000-00000000000{i}"),
+                &prompt,
+                Some("a completely different prompt"),
+            );
+            assert_eq!(
+                not_landed, None,
+                "{tok}: R6 degrade — readable-but-absent → RECOVERABLE, never a hard seen-failed"
+            );
+
+            // AMBIGUOUS (no projects transcript resolvable → Unknown) → NO terminal:
+            // the send stays RECOVERABLE, never a foreclosing hard fail.
+            let ambiguous = drive_acp_failure(
+                *reason,
+                &format!("cccccccc-0000-0000-0000-00000000000{i}"),
+                &prompt,
+                None,
+            );
+            assert_eq!(
+                ambiguous, None,
+                "{tok}: unresolvable record → RECOVERABLE (no foreclosing terminal)"
+            );
+
+            // The failure path emits ONLY message-seen (landed) or nothing — NEVER
+            // a hard seen-failed at R6 (the foreclosure-honesty invariant).
+            assert!(
+                not_landed != Some(("seen-failed".to_string(), Some(tok.to_string()))),
+                "{tok}: the degraded arm must never mint seen-failed"
+            );
+        }
+    }
+
+    #[test]
+    fn acp_landed_failure_preserves_reason_not_laundered() {
+        // boundary 3 (option-B discipline): a landed CANCELLED → message-seen (the
+        // delivery event), BUT the reason is PRESERVED in the SETTLED terminal_reason
+        // classification (Cancelled != Completed) — never laundered into a clean
+        // completion, exactly as MaxTokens→message-seen preserves its limit reason.
+        // No new terminal kind / field (boundary 4).
+        use dispatch::provider::acp::{AcpTurnCompletion, AcpTurnObservation, StopReason, TerminalReason as R};
+        let landed = drive_acp_failure(
+            R::Cancelled,
+            "dddddddd-0000-0000-0000-000000000001",
+            "the cancelled prompt",
+            Some("the cancelled prompt"),
+        );
+        assert_eq!(
+            landed,
+            Some(("message-seen".to_string(), None)),
+            "landed-cancelled → message-seen (entered context; the turn just didn't complete cleanly)"
+        );
+        // The reason is preserved in the classification, not laundered.
+        let observer = OneShotObserver(AcpTurnObservation::Terminal(StopReason::Cancelled));
+        let (tr, _) = AcpTurnCompletion::new(&observer).terminal_reason().unwrap();
+        assert_eq!(tr, R::Cancelled, "terminal_reason preserved as Cancelled");
+        assert_ne!(tr, R::Completed, "a landed-cancelled is NEVER laundered into a clean Completed");
+        assert!(
+            matches!(acp_delivery_disposition(R::Cancelled), AcpDeliveryDisposition::Failed("cancelled")),
+            "the disposition carries the cancelled reason for the not-landed branch"
+        );
+    }
+
+    /// QD_HOME store-resolution regression (the delivery-lie / orphaned-terminal
+    /// class): the ACP TERMINAL must land in the SAME delivery log as its SEND
+    /// phases under a QD_HOME override ≠ <HOME>/.quorum/dispatch — join-by-send_id
+    /// survives QD_HOME. Before the fix, the terminal resolved state_dir via
+    /// `from_home` (QD_HOME-ignorant) while the send phases used `from_home_env`, so
+    /// under QD_HOME the terminal orphaned into a different log. FAILS on the
+    /// divergence, passes after the fix.
+    #[test]
+    fn acp_terminal_shares_delivery_log_with_send_phases_under_qd_home() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let qd_home = root.path().join("qd"); // ≠ <HOME>/.quorum/dispatch
+        std::fs::create_dir_all(&home).unwrap();
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("HOME".to_string(), home.to_string_lossy().to_string());
+        vars.insert("QD_HOME".to_string(), qd_home.to_string_lossy().to_string());
+        let env = dispatch::effects::MapEnv { vars, uid: 501 };
+
+        let uuid = "99999999-0000-0000-0000-000000000077";
+        let msg = "acp turn under a QD_HOME override";
+        // The QD_HOME-honoring delivery log (where the send phases + terminal MUST land).
+        let qd_state = dispatch::paths::QdPaths::from_home_env(&home, &env).state_dir;
+        // The from_home (QD_HOME-IGNORANT) log a regressed terminal would orphan into.
+        let bad_state = dispatch::paths::QdPaths::from_home(&home).state_dir;
+        assert_ne!(qd_state, bad_state, "the QD_HOME override must diverge from from_home");
+
+        // Seed the SEND phase (send-initiated) into the QD_HOME log, as the send
+        // emitters (from_home_env) do.
+        let sha = emit_pending_si(
+            &qd_state,
+            uuid,
+            Some("acp-qdh".into()),
+            "turn-77",
+            msg,
+            "acp/claude-code",
+        );
+
+        // The TERMINAL: emit_acp_terminal now resolves its own state_dir via
+        // from_home_env(env) → the QD_HOME log. A completed turn → message-seen.
+        let target = acp_target(uuid);
+        emit_acp_terminal(
+            &env,
+            &target,
+            "turn-77",
+            dispatch::provider::acp::TerminalReason::Completed,
+        );
+
+        // The terminal joins its send phase in the QD_HOME log by send_id.
+        let qd_log =
+            std::fs::read_to_string(dispatch::events::events_path(&qd_state, uuid)).unwrap();
+        let ms: serde_json::Value =
+            serde_json::from_str(qd_log.lines().find(|l| l.contains("message-seen")).unwrap())
+                .unwrap();
+        assert_eq!(ms["send_id"], "turn-77");
+        assert_eq!(ms["content_sha256"].as_str().unwrap(), sha);
+        assert!(
+            qd_log.contains("send-initiated") && qd_log.contains("message-seen"),
+            "the ACP send phase + terminal share the ONE QD_HOME delivery log (join survives QD_HOME)"
+        );
+
+        // Regression guard: the terminal must NOT orphan into the from_home log.
+        let bad_log = dispatch::events::events_path(&bad_state, uuid);
+        assert!(
+            !bad_log.exists()
+                || !std::fs::read_to_string(&bad_log).unwrap().contains("message-seen"),
+            "the terminal must NOT land in the QD_HOME-ignorant from_home log (the delivery-lie)"
         );
     }
 }

@@ -14,6 +14,7 @@ mod ls;
 mod mark;
 mod ping;
 mod reconcile;
+mod recover;
 mod resume;
 mod send;
 mod send_relay;
@@ -57,6 +58,8 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         Some(("update", _)) => update::run(),
         Some(("ping", m)) => ping::run(m),
         Some(("mark", m)) => mark::run(m),
+        // §C2 (delivery contract) — the one-shot, dispatch-only recovery verb (D1).
+        Some(("delivery:recover", m)) => recover::run(m),
         // Unknown subcommand never reaches here (clap rejects it pre-dispatch).
         Some((other, _)) => {
             eprintln!("error: unknown command '{other}'");

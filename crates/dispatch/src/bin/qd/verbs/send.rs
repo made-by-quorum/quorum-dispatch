@@ -431,6 +431,21 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                 // SHORT-CIRCUIT here: exit 11 loud, no composer-cleared remediation,
                 // no --wait watch (all "future events for this send"). send-initiated
                 // already emitted; chunks-delivered correctly absent.
+                //
+                // §C2 (delivery contract, R5 seam ruling 01KX88WKGP): a partial write
+                // is an IN-BAND-UNDETERMINABLE outcome, NOT a determinate failure — a
+                // chunk's `mux.send` Err is a client-side ack-timeout that can fire
+                // strictly AFTER the daemon's non-cancellable write+flush landed the
+                // bytes (F3-VERDICT), and the unconditional `\r` submits the turn. So
+                // this door must NOT mint a terminal: a `pending-abandoned` here would
+                // permanently FALSE-FAIL a send that actually landed, and (once
+                // written) forecloses the recovery-read the verb exists to run. We
+                // fail loud (exit 11; record-then-fail-loud preserved — the C1 account
+                // is the standing send-initiated + the loud synchronous exit + C2's
+                // PENDING-closable state) but emit NO terminal: the send stays
+                // dead-dangling once the sender exits, and `qd delivery:recover` closes
+                // it from the transcript — a disclosed turn-anchored{recovered} if the
+                // content landed, else pending-abandoned{recovery-no-candidate}.
                 return write_failed_exit(acks);
             }
 
@@ -619,6 +634,14 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                 // verify read-back, no --wait watch (a verify/watch on a failed write
                 // is a guaranteed failure). send-initiated already emitted;
                 // chunks-delivered correctly absent.
+                //
+                // §C2 (R5 seam ruling 01KX88WKGP): the STRUCTURALLY IDENTICAL
+                // partial-write on the idle path. Same disposition as the busy arm
+                // above — a partial write is in-band-undeterminable, so this door emits
+                // NO terminal (a `pending-abandoned` here would false-fail an
+                // ack-timeout-but-landed send and foreclose recovery). Fail loud (exit
+                // 11) and leave the send dead-dangling; `qd delivery:recover` closes it
+                // from the transcript.
                 return write_failed_exit(idle_acks);
             }
 
@@ -843,9 +866,14 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
         }),
     };
 
-    // §9 / rev C row 24 WatchGuard: armed for the duration of the --wait watch;
-    // an early return / panic without a terminal emission Drops it →
-    // pending-abandoned{watch-interrupted}. Disarmed on each terminal below.
+    // §9 / rev C row 24 WatchGuard: armed for the duration of the --wait watch as
+    // a panic/early-return safety net — an unwind that skips the disarm below Drops
+    // it → pending-abandoned{watch-interrupted}. Disarmed UNCONDITIONALLY once the
+    // wait resolves (post amend rider 3, the Died / TimedOut / SourceError arms ALL
+    // resolve to NO terminal — the send is left dead-dangling-recoverable, so the
+    // disarm is what stops Drop from re-minting the foreclosing terminal on those
+    // paths). SIGKILL bypasses Drop and is covered by the reader-side dead-writer
+    // rule (§7), same as those non-foreclosing paths now are.
     let guard = WatchGuard::arm(&writer, &clock, &send_id);
     let outcome = run_wait_loop(&deps, message, timeout_ms(timeout), 500);
 
@@ -859,30 +887,45 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
 
     let code = match outcome {
         WaitOutcome::Died => {
-            // §9: --wait Died → pending-abandoned{session-died} (terminal).
-            events::warn_emit(
-                &writer,
-                &clock,
-                &Payload::PendingAbandoned {
-                    send_id: send_id.clone(),
-                    reason: "session-died".to_string(),
-                },
-            );
+            // §C2 (R5 seam ruling 01KX88WKGP + amend rider 3, red-team finding G): a
+            // --wait watch that observes the session die is an IN-BAND-UNDETERMINABLE
+            // outcome, NOT a determinate failure — and often PROVABLY LANDED. By this
+            // point the send's bytes were fully acked (chunks-delivered emitted) and
+            // the unconditional `\r` submitted the accumulated turn; `run_wait_loop`
+            // FINDS the anchor first (sendpty.rs:376-378) and only THEN returns Died on
+            // an unreadable status (:380-382) — so the message may already be committed
+            // to the transcript (committed proof:
+            // wait_loop_unreadable_after_anchor_still_died). So this arm must NOT mint a
+            // terminal: a `pending-abandoned{session-died}` here would permanently
+            // FALSE-FAIL a send that actually landed and (first-terminal-wins) FORECLOSE
+            // the recovery-read the verb exists to run — the exact F3/B lie-shape at the
+            // Died arm. We fail loud (exit 1; the operator signal below is preserved —
+            // the C1 account is the standing send-initiated + the loud synchronous exit +
+            // C2's PENDING-closable state) but emit NO terminal: the send stays
+            // dead-dangling once the sender exits, and `qd delivery:recover` closes it
+            // from the transcript — a disclosed turn-anchored{recovered} if the content
+            // landed, else pending-abandoned{recovery-no-candidate}. The unconditional
+            // `guard.disarm()` below keeps this path from re-minting the terminal via Drop.
             eprintln!(" session died");
             eprintln!("Session exited while waiting for response.");
             1
         }
         WaitOutcome::TimedOut { anchored } => {
-            // §9: --wait TimedOut → anchor-timeout (terminal). waited_ms = the
-            // configured outer bound (the loop ran to the deadline).
-            events::warn_emit(
-                &writer,
-                &clock,
-                &Payload::AnchorTimeout {
-                    send_id: send_id.clone(),
-                    waited_ms: timeout_ms(timeout).max(0) as u64,
-                },
-            );
+            // §C2 (R5 seam ruling 01KX88WKGP + amend rider 3, red-team finding G): a
+            // --wait watch that hits its deadline is IN-BAND-UNDETERMINABLE, not a
+            // determinate failure. When `anchored` is true the message PROVABLY LANDED
+            // (the anchor was found — sendpty.rs:376-378, :402-404) and the response is
+            // merely slow; when un-anchored it is still queued behind the session's
+            // current turn ("processed when the turn ends"). Either way the turn may yet
+            // commit, so this arm must NOT mint a terminal: an `anchor-timeout` here would
+            // FALSE-FAIL a landed-or-still-queued send and (first-terminal-wins) FORECLOSE
+            // the recovery-read the verb exists to run — the exact F3/B/G lie-shape at the
+            // TimedOut arm. We fail loud (exit 1; the operator signal below is preserved —
+            // both `anchored` branches — the C1 account is the standing send-initiated +
+            // the loud synchronous exit + C2's PENDING-closable state) but emit NO
+            // terminal: the send stays dead-dangling once the sender exits, and
+            // `qd delivery:recover` closes it from the transcript. The unconditional
+            // `guard.disarm()` below keeps Drop from re-minting the terminal.
             eprintln!(" timeout");
             if anchored {
                 eprintln!("Timed out waiting for response.");
@@ -946,15 +989,27 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
             }
         }
         WaitOutcome::SourceError(reason) => {
-            // §9: SourceError → pending-abandoned{watch-interrupted} (terminal).
-            events::warn_emit(
-                &writer,
-                &clock,
-                &Payload::PendingAbandoned {
-                    send_id: send_id.clone(),
-                    reason: "watch-interrupted".to_string(),
-                },
-            );
+            // §C2 (R5 seam ruling 01KX88WKGP, red-team finding B): a watch
+            // interrupted while confirming turn-completion is an
+            // IN-BAND-UNDETERMINABLE outcome, NOT a determinate abandonment. By
+            // this point the send's bytes were FULLY acked (chunks-delivered
+            // emitted → on the pty) and the unconditional `\r` submitted the
+            // accumulated turn; a JSONL integrity loss only means we can no longer
+            // OBSERVE whether the turn committed — the turn may well have landed.
+            // So this door must NOT mint a terminal: a
+            // `pending-abandoned{watch-interrupted}` here would permanently
+            // FALSE-FAIL a send that actually landed and (once written) FORECLOSES
+            // the recovery-read the verb exists to run — the exact F3 lie-shape at
+            // the watch phase (partial-write door, commit 4ed923de). We fail loud
+            // (exit 1; the loud operator signal below is preserved — the C1
+            // account is the standing send-initiated + the loud synchronous exit +
+            // C2's PENDING-closable state) but emit NO terminal: the send stays
+            // dead-dangling once the sender exits, and `qd delivery:recover` closes
+            // it from the transcript — a disclosed turn-anchored{recovered} if the
+            // content landed, else pending-abandoned{recovery-no-candidate}. The
+            // WatchGuard mechanism is untouched (the daemon bytes-written path is
+            // deferred to C6); the unconditional `guard.disarm()` below keeps this
+            // path from re-minting the terminal via Drop.
             // ADD-8 W5: integrity loss on the JSONL source — loud, never a
             // silent whole-file re-anchor. Rust-only guard (TS has the silent
             // fallback class; named in the A4 matrix).
@@ -963,7 +1018,12 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
             1
         }
     };
-    // A terminal was emitted on every arm above → disarm (no Drop emission).
+    // Post amend rider 3: the Died / TimedOut / SourceError arms emit NO terminal —
+    // they leave the send dead-dangling-recoverable (findings G/B), and only the
+    // Complete arm mints a (success) turn-anchored. Disarm UNCONDITIONALLY so
+    // WatchGuard's Drop never re-mints a foreclosing pending-abandoned{watch-
+    // interrupted} on the non-foreclosing paths (that is exactly why B kept it).
+    // SIGKILL bypasses Drop and is covered by the reader-side dead-writer rule (§7).
     guard.disarm();
     code
 }

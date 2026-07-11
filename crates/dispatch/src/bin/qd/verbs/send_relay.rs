@@ -73,8 +73,9 @@ fn run_with_client(
         let Some(session) = session else {
             // Structurally unreachable: the fast path never yields "codex" (it
             // resolves claude relays only). Defensive — degrade to the no-relay
-            // wording rather than panic.
-            return no_relay_exit(&session_name);
+            // wording rather than panic. §C1: emit send-failed (session unknown →
+            // byname-keyed) then fail loud.
+            return no_relay_exit(&session_name, message, None);
         };
         return run_codex_send(&session, message);
     }
@@ -84,7 +85,7 @@ fn run_with_client(
     // AcpProvider::inject) BEFORE the relay-port-None check, exactly as the codex arm does.
     if provider_id.starts_with("acp/") {
         let Some(session) = session else {
-            return no_relay_exit(&session_name);
+            return no_relay_exit(&session_name, message, None);
         };
         return run_acp_send(&session, message);
     }
@@ -96,7 +97,7 @@ fn run_with_client(
     // codex/acp SEND arms are. A5 flips the A2 graceful-deferred arm deferred→live.
     if provider_id == "pi" {
         let Some(session) = session else {
-            return no_relay_exit(&session_name);
+            return no_relay_exit(&session_name, message, None);
         };
         return run_pi_send(&session, message);
     }
@@ -112,7 +113,9 @@ fn run_with_client(
     // REPORTED: NoTransport is NOT re-routed through InjectError (the existing
     // pre-inject check is byte-identical and simpler).
     let Some(port) = relay_port else {
-        return no_relay_exit(&session_name);
+        // §C1: the resolved full-scan `session` row (when present) keys the
+        // send-failed log to the target uuid; else byname. Record-then-fail.
+        return no_relay_exit(&session_name, message, session.as_ref());
     };
 
     // --- send the message THROUGH the provider seam (send.ts:411-435) --------
@@ -256,6 +259,172 @@ fn emit_relay_send_events_with_env(
     );
 }
 
+/// C5/C3 (3-phase delivery, DAEMON lanes) — emit the SENT + DELIVERED phases into
+/// the TARGET's log on inject-SUCCESS, for the codex / `acp/*` / pi resident arms.
+/// `send-initiated` (sent — the REUSED `Payload::SendInitiated` with daemon values:
+/// verb `send:relay`, `send_path` the lane, `send_id` the resident-minted turn id)
+/// + `turn-accepted` (delivered, NON-terminal — the resident took the prompt as a
+/// turn). The success TERMINAL lands later at the OBSERVATION seam (`run_acp_wait`
+/// StopReason-mapped; `run_pi_wait` content-keyed rollout observer), NEVER here —
+/// so between this and observation the send reads as non-terminal DELIVERED =
+/// PENDING (gate item 3), honest.
+///
+/// NO `transcript`/`transcript_offset` recovery keys are carried: a resident send
+/// is OBSERVER-closed, and `qd delivery:recover`'s sweep is verb-gated to
+/// {`send:pty`, `new-p`} (recover.rs) — so this `send-initiated` (verb `send:relay`)
+/// is out of that sweep by construction and can never be mistaken for a
+/// transcript-recoverable pty dangling. `content_sha256` = sha256(raw message),
+/// the SAME key the observer/consumer matches on. BEST-EFFORT: a write failure is
+/// logged by `warn_emit` and never affects the send result.
+fn emit_daemon_send_events(
+    target_name: &str,
+    target_session: Option<&Session>,
+    message: &str,
+    turn_id: &str,
+    send_path: &str,
+) {
+    emit_daemon_send_events_with_env(
+        &RealEnv,
+        target_name,
+        target_session,
+        message,
+        turn_id,
+        send_path,
+    );
+}
+
+fn emit_daemon_send_events_with_env(
+    env: &dyn Env,
+    target_name: &str,
+    target_session: Option<&Session>,
+    message: &str,
+    turn_id: &str,
+    send_path: &str,
+) {
+    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let state_dir =
+        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
+    // Key to the TARGET, exactly as the relay + door emitters do.
+    let writer = match target_session {
+        Some(s) => dispatch::events::EventWriter::for_key(
+            &state_dir,
+            &s.session_id,
+            Some(s.session_id.clone()),
+            s.name.clone(),
+        ),
+        None => dispatch::events::EventWriter::for_key(
+            &state_dir,
+            &dispatch::events::byname_key(target_name),
+            None,
+            Some(target_name.to_string()),
+        ),
+    };
+    let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
+    let clock = RealClock;
+    // sent — REUSE Payload::SendInitiated with daemon values (no recovery keys).
+    dispatch::events::warn_emit(
+        &writer,
+        &clock,
+        &dispatch::events::Payload::SendInitiated {
+            send_id: turn_id.to_string(),
+            verb: "send:relay".to_string(),
+            send_path: send_path.to_string(),
+            content_sha256: content_sha256.clone(),
+            content_len: message.as_bytes().len() as u64,
+            chunks: 1,
+            chunk_sha256s: vec![content_sha256.clone()],
+            chunk_sha256s_capped: false,
+            transcript: None,
+            transcript_offset: None,
+            content_preview: None,
+        },
+    );
+    // delivered — turn-accepted (NON-terminal): the resident accepted the turn.
+    dispatch::events::warn_emit(
+        &writer,
+        &clock,
+        &dispatch::events::Payload::TurnAccepted {
+            send_id: turn_id.to_string(),
+            content_sha256,
+        },
+    );
+}
+
+/// C5/C3 — emit the daemon-lane success TERMINAL `message-seen{send_id,
+/// content_sha256}` (the FLOOR / record-presence reading) into the TARGET's log,
+/// best-effort. Used by the pi structured FLOOR (`run_pi_floor_send`, the dead-only
+/// sub-lane) once the sent bytes are confirmed present in the appended session
+/// record (content-keyed). The RESIDENT lanes emit their terminal at the
+/// wait/observe seam instead (never here). A reader recovers the floor-vs-strong
+/// reading from the paired send-initiated's send_path + D4's table.
+fn emit_daemon_seen(
+    target_name: &str,
+    target_session: Option<&Session>,
+    send_id: &str,
+    content_sha256: &str,
+) {
+    emit_daemon_seen_with_env(&RealEnv, target_name, target_session, send_id, content_sha256);
+}
+
+fn emit_daemon_seen_with_env(
+    env: &dyn Env,
+    target_name: &str,
+    target_session: Option<&Session>,
+    send_id: &str,
+    content_sha256: &str,
+) {
+    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let state_dir =
+        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
+    let writer = match target_session {
+        Some(s) => dispatch::events::EventWriter::for_key(
+            &state_dir,
+            &s.session_id,
+            Some(s.session_id.clone()),
+            s.name.clone(),
+        ),
+        None => dispatch::events::EventWriter::for_key(
+            &state_dir,
+            &dispatch::events::byname_key(target_name),
+            None,
+            Some(target_name.to_string()),
+        ),
+    };
+    dispatch::events::warn_emit(
+        &writer,
+        &RealClock,
+        &dispatch::events::Payload::MessageSeen {
+            send_id: send_id.to_string(),
+            content_sha256: content_sha256.to_string(),
+        },
+    );
+}
+
+/// Concatenate every `*.jsonl` in the pi floor's dedicated `--session-dir` (pi
+/// writes ONE appended session file there under `-c`). The floor content-keys THIS
+/// (the appended record) for its success terminal — not the stdout, which need not
+/// carry the user prompt record.
+fn floor_session_jsonl(session_dir: &std::path::Path) -> String {
+    let mut out = String::new();
+    let Ok(entries) = std::fs::read_dir(session_dir) else {
+        return out;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) == Some("jsonl") {
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                out.push_str(&s);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
 /// B2 item 5 — derive the `from_session` channel-header identity. Ratified
 /// precedence (Q3; the from_session NAMESPACE is the claude session uuid —
 /// reply routing keys on it, so step 1 RESOLVES to a uuid, never emits the
@@ -379,8 +548,10 @@ fn inject_via_provider(
         }
         Err(InjectError::NoTransport(_)) => {
             // Defensive (unreachable: port is Some here). Same wording as the
-            // pre-inject port-None check (send.ts:406-409).
-            Err(no_relay_exit(session_name))
+            // pre-inject port-None check (send.ts:406-409). §C1: the door emits
+            // send-failed (byname-keyed — no Session row in scope here) via
+            // no_relay_exit before failing loud, like every relay-door exit.
+            Err(no_relay_exit(session_name, message, None))
         }
         Err(InjectError::Precondition(reason)) => {
             // Unreachable for claude (daemon-only). Total-match safety.
@@ -421,6 +592,19 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
         .clone()
         .unwrap_or_else(|| session.session_id.clone());
 
+    // §C1 (door-inventory B1) — record-then-fail-loud for the codex door's
+    // "not reachable" exits: emit a `send-failed` terminal (best-effort, keyed to
+    // the TARGET session, `send_id` omitted pre-wire) BEFORE the loud exit, so no
+    // codex-door failure is stderr-only. Distinct-wording exits (no-thread-id,
+    // inject error) emit inline. The emit never alters the exit path.
+    let not_reachable = || {
+        emit_door_failure(&name, Some(session), message, "daemon-unreachable");
+        eprintln!(
+            "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
+        );
+        1
+    };
+
     let env = RealEnv;
     let paths = match common::paths_from_home(&env) {
         Ok(p) => p,
@@ -430,6 +614,8 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
     // The thread id (m2 — the REAL uuid the daemon assigned) is the row's sessionId.
     let thread_id = session.session_id.clone();
     if thread_id.is_empty() {
+        // §C1: cold/dead session — no reachable daemon; record then fail loud.
+        emit_door_failure(&name, Some(session), message, "daemon-unreachable");
         eprintln!("qd send:relay: \"{name}\": this codex session has no thread id (cold/dead).");
         return 1;
     }
@@ -438,8 +624,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
     // --json surface — re-read the row by pid). A dead/cold row (no live pid) has
     // no daemon to reach.
     let Some(pid) = session.pid.filter(|&p| p != 0) else {
-        eprintln!("qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})");
-        return 1;
+        return not_reachable();
     };
     let endpoint = match dispatch::registry::read_entry(&paths.sessions_dir, pid)
         .and_then(|e| e.endpoint)
@@ -447,10 +632,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
     {
         Some(ep) => ep,
         None => {
-            eprintln!(
-                "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
-            );
-            return 1;
+            return not_reachable();
         }
     };
 
@@ -460,10 +642,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
         Err(_e) => {
             // Daemon unreachable (connect failed): the same SEND-vocabulary surface
             // as a missing endpoint (§7.5).
-            eprintln!(
-                "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
-            );
-            return 1;
+            return not_reachable();
         }
     };
     {
@@ -473,10 +652,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
             version: "0".to_string(),
         };
         if rpc.initialize(&client).is_err() {
-            eprintln!(
-                "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
-            );
-            return 1;
+            return not_reachable();
         }
         let _ = rpc.initialized();
     }
@@ -541,6 +717,9 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
 
     match result {
         Ok(turn_id) => {
+            // C5/C3: sent + delivered (turn-accepted) into the TARGET's log on the
+            // inject ACK; the success terminal lands later at the observe seam.
+            emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
             // The async-send analog: print the id (turn id here), append usage.
             println!("{turn_id}");
             usage_send_relay(&name);
@@ -548,15 +727,13 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
         }
         Err(InjectError::NoTransport(_)) => {
             // Structurally unreachable (we set app_server Some) — defensive.
-            eprintln!(
-                "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
-            );
-            1
+            not_reachable()
         }
         Err(e) => {
             // A protocol/precondition failure. SEND-vocabulary only (InjectError's
             // Display carries no start/steer tokens; the rpc-layer error text is
-            // W2-sanitized).
+            // W2-sanitized). §C1: record the door failure before the loud exit.
+            emit_door_failure(&name, Some(session), message, "inject-failed");
             eprintln!("qd send:relay: \"{name}\": send failed ({e}).");
             1
         }
@@ -619,7 +796,14 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
         Ok(p) => p,
         Err(code) => return code,
     };
-    let not_reachable = |name: &str| {
+    // §C1 (door-inventory B2) — record-then-fail-loud: every acp-door "not
+    // reachable" exit leaves a `send-failed` account (best-effort, keyed to the
+    // TARGET session, `send_id` omitted pre-wire) BEFORE the loud exit, so no
+    // acp-door failure is stderr-only. `reason` names the surface. Serves BOTH
+    // acp/claude-code AND acp/opencode (both route through this arm). The emit
+    // never alters the exit path; the identity-preservation tombstone is unchanged.
+    let not_reachable = |reason: &str| {
+        emit_door_failure(&name, Some(session), message, reason);
         eprintln!(
             "qd send:relay: \"{name}\": acp session daemon not reachable (try qd resume {name})"
         );
@@ -630,7 +814,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
         // A row with no live pid is already-lost transport (the janitor may
         // have reaped the registry row entirely) — preserve identity, refuse.
         acp_loss::preserve_identity(session, "acp session has no live daemon pid at send entry");
-        return not_reachable(&name);
+        return not_reachable("daemon-unreachable");
     };
     // The endpoint + degradation latch live in the row (re-read by pid; NOT on --json).
     let entry = dispatch::registry::read_entry(&paths.sessions_dir, pid);
@@ -658,7 +842,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
         // post-send loss BOTH refuse (Arm B — the Child-B pre-send auto-deliver
         // was removed, not gated).
         acp_loss::preserve_identity(session, "acp endpoint not reachable at send entry");
-        return not_reachable(&name);
+        return not_reachable("daemon-unreachable");
     }
     let endpoint = endpoint.expect("Tier::Acp implies a live endpoint");
 
@@ -693,7 +877,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
                     "acp daemon died across the connect boundary (was live at the pre-connect probe)",
                 );
             }
-            return not_reachable(&name);
+            return not_reachable("daemon-unreachable");
         }
     };
     let conn_ref: &dyn AcpClient = &conn;
@@ -749,11 +933,17 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
     let from = derive_from_session(&RealEnv);
     match ACP_CC_PROVIDER.inject(&fx, &key, message, &from) {
         Ok(turn_id) => {
+            // C5/C3: sent + delivered (turn-accepted) into the TARGET's log on the
+            // inject ACK; the StopReason-mapped terminal lands later in run_acp_wait.
+            emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
             println!("{turn_id}");
             usage_send_relay(&name);
             0
         }
         Err(InjectError::Precondition(s)) => {
+            // §C1: a refused/precondition inject (queue full, etc.) — record the
+            // door failure before the loud exit.
+            emit_door_failure(&name, Some(session), message, "inject-failed");
             eprintln!("qd send:relay: \"{name}\": send failed ({s}).");
             1
         }
@@ -769,9 +959,9 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
                 session,
                 &format!("acp transport lost mid-flight ({err})"),
             );
-            not_reachable(&name)
+            not_reachable("transport-lost")
         }
-        Err(_) => not_reachable(&name),
+        Err(_) => not_reachable("daemon-unreachable"),
     }
 }
 
@@ -801,7 +991,12 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
         Ok(p) => p,
         Err(code) => return code,
     };
-    let not_reachable = |name: &str| {
+    // §C1 (door-inventory B3, resident door) — record-then-fail-loud: every
+    // pi-door "not reachable" exit leaves a `send-failed` account (best-effort,
+    // keyed to the target session, `send_id` omitted pre-wire) BEFORE the loud
+    // exit. `reason` names the surface; the emit never alters the exit path.
+    let not_reachable = |reason: &str| {
+        emit_door_failure(&name, Some(session), message, reason);
         eprintln!(
             "qd send:relay: \"{name}\": pi session daemon not reachable (try qd resume {name})"
         );
@@ -850,7 +1045,7 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
     // fail-fast discipline — a contended connect fails fast rather than hanging).
     let remote = match PiRemote::connect(&endpoint, Duration::from_secs(5)) {
         Ok(r) => r,
-        Err(_) => return not_reachable(&name),
+        Err(_) => return not_reachable("daemon-unreachable"),
     };
     let rpc_ref: &dyn PiRpc = &remote;
     let fx = ProviderFx {
@@ -880,6 +1075,10 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
     let _ = remote.close();
     match result {
         Ok(turn_id) => {
+            // C5/C3: sent + delivered (turn-accepted) into the TARGET's log on the
+            // inject ACK; the content-keyed rollout terminal lands later at turn
+            // close (run_pi_wait observer). PENDING in the meantime — honest.
+            emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
             // The async-send analog: print the minted turn id, append usage.
             println!("{turn_id}");
             usage_send_relay(&name);
@@ -887,10 +1086,12 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
         }
         Err(InjectError::Precondition(s)) => {
             // A refused/timed-out prompt (PA9: the sink stays idle) — SEND-vocabulary only.
+            // §C1: record the door failure before the loud exit.
+            emit_door_failure(&name, Some(session), message, "inject-failed");
             eprintln!("qd send:relay: \"{name}\": send failed ({s}).");
             1
         }
-        Err(_) => not_reachable(&name),
+        Err(_) => not_reachable("daemon-unreachable"),
     }
 }
 
@@ -930,6 +1131,8 @@ fn run_pi_floor_send(
     // sessions so `-c`'s most-recent pick is unambiguous + turn-2 resumes turn-1.
     let session_dir = floor::floor_session_dir(&sessions_root, &session.session_id);
     if let Err(e) = std::fs::create_dir_all(&session_dir) {
+        // §C1 (door-inventory B4, dead-only floor door) — record then fail loud.
+        emit_door_failure(&name, Some(session), message, "floor-setup-failed");
         eprintln!("qd send:relay: \"{name}\": pi floor could not create session dir: {e}");
         return 1;
     }
@@ -958,6 +1161,22 @@ fn run_pi_floor_send(
     };
     match floor::run_floor_turn(&turn, floor::DEFAULT_FLOOR_TIMEOUT) {
         Ok(outcome) => {
+            // C5/C3 (obligation (c), the DEAD-ONLY floor sub-lane): emit the three
+            // phases into the target's log. The floor is a SYNCHRONOUS one-shot, so
+            // sent + delivered + the success TERMINAL all resolve here — but the
+            // terminal is CONTENT-KEYED against the APPENDED session record (the
+            // floor's own observation seam; its `stopReason` readback is NOT the
+            // resident observer). A minted send_id anchors all three (the floor has
+            // no resident turn id). Best-effort; never alters the exit.
+            let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
+            let send_id = dispatch::events::mint_send_id(&RealClock);
+            emit_daemon_send_events(&name, Some(session), message, &send_id, "pi");
+            if dispatch::provider::pi::floor::rollout_landed(
+                &floor_session_jsonl(&session_dir),
+                &content_sha256,
+            ) {
+                emit_daemon_seen(&name, Some(session), &send_id, &content_sha256);
+            }
             // Best-effort structured delivery: the turn landed and was captured
             // scrape-free. The outcome persists in the appended session file (the
             // transcript-read analog of the async rpc send). Confirm delivery on
@@ -970,6 +1189,8 @@ fn run_pi_floor_send(
             0
         }
         Err(e) => {
+            // §C1: the dead-only floor turn failed to deliver — record then fail loud.
+            emit_door_failure(&name, Some(session), message, "floor-failed");
             eprintln!("qd send:relay: \"{name}\": pi floor delivery failed ({e}).");
             1
         }
@@ -1147,9 +1368,81 @@ fn fast_lookup(query: &str) -> Option<FastRelayMatch> {
 }
 
 /// `Session "<name>" has no relay.` exit 1 (send.ts:407-408).
-fn no_relay_exit(name: &str) -> i32 {
+///
+/// §C1 (delivery contract) — the RELAY DOOR. A resolved target session with no
+/// relay transport fails BEFORE any wire activity. RECORD-THEN-FAIL: emit the
+/// additive `send-failed` terminal into the TARGET's delivery log (best-effort),
+/// THEN fail loud byte-identical (the `eprintln!` wording + `exit 1` are
+/// unchanged). Every relay-door exit funnels through here (the four pre-wire
+/// call sites + the structurally-unreachable NoTransport arm), so baking the
+/// emission here means no relay-door path — present or future — is ever silent
+/// (door-inventory §A). `target_session` keys the log to the target uuid when the
+/// full-scan row is known, else the `byname-<target>` file.
+fn no_relay_exit(name: &str, message: &str, target_session: Option<&Session>) -> i32 {
+    emit_door_failure(name, target_session, message, "no-relay");
     eprintln!("Session \"{name}\" has no relay.");
     1
+}
+
+/// §C1 — emit a single `send-failed` terminal at a send DOOR (best-effort).
+/// Serves BOTH the relay door (`no_relay_exit`, D1) AND the daemon protocol arms
+/// (codex/`acp/*`/pi — D2's `run_codex_send`/`run_acp_send`/`run_pi_send`/
+/// `run_pi_floor_send`): every carrier's door failure funnels its `send-failed`
+/// here, so no door reads as "someone else's child" (door-inventory §A/§B).
+/// Mirrors [`emit_relay_send_events`]'s target-keying and content hashing but
+/// emits ONE failure record instead of the success pair. `send_id` is OMITTED
+/// (spec `send-failed { send_id?, reason }`): a resolved pre-wire door has no
+/// server-minted / resident-minted id yet — never client-invented. `content_sha256`
+/// is carried for correlation; `reason` is a short surface token (extend additively).
+fn emit_door_failure(
+    target_name: &str,
+    target_session: Option<&Session>,
+    message: &str,
+    reason: &str,
+) {
+    emit_door_failure_with_env(&RealEnv, target_name, target_session, message, reason);
+}
+
+fn emit_door_failure_with_env(
+    env: &dyn Env,
+    target_name: &str,
+    target_session: Option<&Session>,
+    message: &str,
+    reason: &str,
+) {
+    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
+        // No HOME → cannot resolve the state dir; emission is best-effort.
+        return;
+    };
+    let state_dir =
+        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
+    // Key to the TARGET (not the sender): full-scan → target uuid; else the
+    // `byname-<target>` file (session omitted), exactly as the success path keys.
+    let writer = match target_session {
+        Some(s) => dispatch::events::EventWriter::for_key(
+            &state_dir,
+            &s.session_id,
+            Some(s.session_id.clone()),
+            s.name.clone(),
+        ),
+        None => dispatch::events::EventWriter::for_key(
+            &state_dir,
+            &dispatch::events::byname_key(target_name),
+            None,
+            Some(target_name.to_string()),
+        ),
+    };
+    let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
+    let clock = RealClock;
+    dispatch::events::warn_emit(
+        &writer,
+        &clock,
+        &dispatch::events::Payload::SendFailed {
+            send_id: None,
+            content_sha256,
+            reason: reason.to_string(),
+        },
+    );
 }
 
 /// `--wait` long-poll loop (send.ts:442-474). Returns the process exit code.
@@ -1299,7 +1592,7 @@ mod tests {
         // Positive control 1: it DOES call not_reachable (an empty/renamed
         // arm would vacuously pass the bans above without actually refusing).
         assert!(
-            err_arm.contains("not_reachable(&name)"),
+            err_arm.contains("not_reachable("),
             "the arm must still call not_reachable — a silently-removed refusal would also \
              vacuously pass the bans above. Arm body:\n{err_arm}"
         );
@@ -1788,5 +2081,256 @@ mod tests {
         }
 
         handle.shutdown();
+    }
+
+    /// D2 §C1 (door-inventory §B) — a daemon-arm DOOR FAILURE emits exactly one
+    /// `send-failed` terminal into the TARGET's delivery log: keyed to the target
+    /// uuid, `send_id` OMITTED (pre-wire, spec `send-failed { send_id? }`),
+    /// `content_sha256` over the raw message, `reason` the surface token. This is
+    /// the single emission ALL four daemon-arm doors (codex/acp/pi/floor) funnel
+    /// through (`emit_door_failure` → this `_with_env`); the per-lane end-to-end
+    /// door INJECTIONS live in the conformance suite. No record is hand-written.
+    #[test]
+    fn door_failure_emits_send_failed_terminal_keyed_to_target() {
+        let home = tempfile::tempdir().unwrap();
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
+        let env = MapEnv { vars, uid: 501 };
+        let target_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let message = "steer: please ack";
+        let target = Session {
+            name: Some("codex-dead-1".to_string()),
+            user_named: None,
+            session_id: target_uuid.to_string(),
+            code: None,
+            qd_id: None,
+            pid: None,
+            status: dispatch::model::SessionStatus::Idle,
+            zmx_name: None,
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: 0,
+            tokens: 0,
+            cwd: None,
+            last_active_ms: None,
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: None,
+            last_turns: None,
+            provider: "codex".to_string(),
+            entrypoint: None,
+            lineage: None,
+            which_branch: dispatch::model::SessionBranch::LiveRegistry,
+        };
+        emit_door_failure_with_env(&env, "codex-dead-1", Some(&target), message, "daemon-unreachable");
+
+        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
+        let log = state_dir
+            .join("sessions")
+            .join(format!("{target_uuid}.events.jsonl"));
+        let raw = std::fs::read_to_string(&log)
+            .unwrap_or_else(|e| panic!("target log {log:?} must exist: {e}"));
+        let recs = parse_events(&raw).records;
+
+        let kinds: Vec<&str> = recs.iter().map(|r| r.event.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["send-failed"],
+            "exactly one send-failed at the door; got {kinds:?}"
+        );
+
+        let sf: serde_json::Value =
+            serde_json::from_str(raw.lines().find(|l| l.contains("send-failed")).unwrap()).unwrap();
+        assert_eq!(sf["event"], "send-failed");
+        assert_eq!(sf["v"], 1);
+        assert_eq!(sf["reason"], "daemon-unreachable");
+        assert_eq!(
+            sf["content_sha256"].as_str().unwrap(),
+            sha256_hex(message.as_bytes()),
+            "content_sha256 over the raw message bytes (the consumer's join key)"
+        );
+        assert!(
+            sf.get("send_id").is_none(),
+            "send_id OMITTED at a pre-wire door (spec `send-failed {{ send_id? }}`)"
+        );
+        assert_eq!(
+            sf["session"].as_str().unwrap(),
+            target_uuid,
+            "keyed to the TARGET uuid"
+        );
+        assert!(
+            dispatch::events::is_terminal("send-failed"),
+            "send-failed is a terminal (§C1)"
+        );
+    }
+
+    /// D2 §C5/C3 (daemon-lane phases) — a daemon inject-SUCCESS emits exactly
+    /// `send-initiated` (sent — daemon values: verb `send:relay`, `send_path` the
+    /// lane, `send_id` the resident turn id, NO recovery transcript keys) then
+    /// `turn-accepted` (delivered, NON-terminal), keyed to the TARGET uuid, in that
+    /// order. The success TERMINAL is deliberately NOT emitted here — it lands at
+    /// the observe seam (run_acp_wait / run_pi_wait). The absent transcript keys +
+    /// verb `send:relay` keep this send OUT of the recover verb's pty/new-p sweep.
+    #[test]
+    fn daemon_send_emits_send_initiated_then_turn_accepted() {
+        let home = tempfile::tempdir().unwrap();
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
+        let env = MapEnv { vars, uid: 501 };
+        let target_uuid = "12121212-3434-5656-7878-909090909090";
+        let message = "steer: land this mid-turn";
+        let turn_id = "turn-abc";
+        let target = Session {
+            name: Some("acp-live-1".to_string()),
+            user_named: None,
+            session_id: target_uuid.to_string(),
+            code: None,
+            qd_id: None,
+            pid: Some(4242),
+            status: dispatch::model::SessionStatus::Idle,
+            zmx_name: None,
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: 0,
+            tokens: 0,
+            cwd: None,
+            last_active_ms: None,
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: None,
+            last_turns: None,
+            provider: "acp/claude-code".to_string(),
+            entrypoint: None,
+            lineage: None,
+            which_branch: dispatch::model::SessionBranch::LiveRegistry,
+        };
+        emit_daemon_send_events_with_env(
+            &env,
+            "acp-live-1",
+            Some(&target),
+            message,
+            turn_id,
+            "acp/claude-code",
+        );
+
+        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
+        let log = state_dir
+            .join("sessions")
+            .join(format!("{target_uuid}.events.jsonl"));
+        let raw = std::fs::read_to_string(&log)
+            .unwrap_or_else(|e| panic!("target log {log:?} must exist: {e}"));
+        let recs = parse_events(&raw).records;
+
+        let kinds: Vec<&str> = recs.iter().map(|r| r.event.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["send-initiated", "turn-accepted"],
+            "daemon inject-success emits sent then delivered (no terminal here); got {kinds:?}"
+        );
+        for r in &recs {
+            assert_eq!(
+                r.send_id().as_deref(),
+                Some(turn_id),
+                "send_id == the resident turn id on both records"
+            );
+        }
+        let want_sha = sha256_hex(message.as_bytes());
+
+        let si: serde_json::Value =
+            serde_json::from_str(raw.lines().find(|l| l.contains("send-initiated")).unwrap())
+                .unwrap();
+        assert_eq!(si["verb"], "send:relay");
+        assert_eq!(si["send_path"], "acp/claude-code", "send_path names the lane");
+        assert_eq!(si["content_sha256"].as_str().unwrap(), want_sha);
+        assert!(
+            si.get("transcript").is_none() && si.get("transcript_offset").is_none(),
+            "NO recovery transcript keys → out of the recover verb's pty/new-p sweep"
+        );
+        assert_eq!(si["session"].as_str().unwrap(), target_uuid, "keyed to TARGET uuid");
+
+        let ta: serde_json::Value =
+            serde_json::from_str(raw.lines().find(|l| l.contains("turn-accepted")).unwrap())
+                .unwrap();
+        assert_eq!(ta["event"], "turn-accepted");
+        assert_eq!(ta["content_sha256"].as_str().unwrap(), want_sha);
+        assert!(
+            !dispatch::events::is_terminal("turn-accepted"),
+            "turn-accepted is NON-terminal delivered — only the terminal says landed"
+        );
+    }
+
+    /// D2 §C5/C3 (obligation (c), the DEAD-ONLY floor sub-lane) — the floor's
+    /// success terminal is CONTENT-KEYED against the APPENDED session record:
+    /// `floor_session_jsonl` reads the dedicated `--session-dir`, the shared
+    /// `rollout_landed` confirms the sent bytes as a user record, and
+    /// `emit_daemon_seen` appends the message-seen terminal. Hermetic — the live
+    /// floor drive needs pi/OAuth (deferred).
+    #[test]
+    fn floor_content_keyed_seen_from_appended_session_record() {
+        let home = tempfile::tempdir().unwrap();
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
+        let env = MapEnv { vars, uid: 501 };
+        let uuid = "abababab-cdcd-efef-0101-232323232323";
+        let msg = "floor prompt that must land";
+        let target = Session {
+            name: Some("pi-floor-1".to_string()),
+            user_named: None,
+            session_id: uuid.to_string(),
+            code: None,
+            qd_id: None,
+            pid: None,
+            status: dispatch::model::SessionStatus::Idle,
+            zmx_name: None,
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: 0,
+            tokens: 0,
+            cwd: None,
+            last_active_ms: None,
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: None,
+            last_turns: None,
+            provider: "pi".to_string(),
+            entrypoint: None,
+            lineage: None,
+            which_branch: dispatch::model::SessionBranch::LiveRegistry,
+        };
+
+        // A dedicated floor `--session-dir` holding the appended user record.
+        let session_dir = home.path().join("floordir");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let user = serde_json::json!({
+            "type": "message",
+            "message": {"role": "user", "content": [{"type": "text", "text": msg}]}
+        });
+        std::fs::write(
+            session_dir.join("sess.jsonl"),
+            format!("{}\n", serde_json::to_string(&user).unwrap()),
+        )
+        .unwrap();
+
+        let jsonl = floor_session_jsonl(&session_dir);
+        let sha = sha256_hex(msg.as_bytes());
+        assert!(
+            dispatch::provider::pi::floor::rollout_landed(&jsonl, &sha),
+            "the appended user record makes the send content-keyed LANDED"
+        );
+
+        emit_daemon_seen_with_env(&env, "pi-floor-1", Some(&target), "floor-send-1", &sha);
+        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
+        let raw = std::fs::read_to_string(dispatch::events::events_path(&state_dir, uuid)).unwrap();
+        let ms: serde_json::Value =
+            serde_json::from_str(raw.lines().find(|l| l.contains("message-seen")).unwrap()).unwrap();
+        assert_eq!(ms["event"], "message-seen");
+        assert_eq!(ms["send_id"], "floor-send-1");
+        assert_eq!(ms["content_sha256"].as_str().unwrap(), sha);
     }
 }

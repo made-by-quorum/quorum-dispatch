@@ -61,26 +61,35 @@ fn emit_prefix(w: &EventWriter, clock: &FixedClock, send_id: &str) {
     .unwrap();
 }
 
-/// M-1 claim 3 (G3 wait-loop anchor-timeout deletion): the G3 timeout row's
-/// EXACT-sequence assert (`[send-initiated, chunks-delivered, anchor-timeout]`)
-/// is satisfied by the emitted stream and FAILED by the deletion-shaped stream
-/// (the same two events, no anchor-timeout — exactly what deleting the
-/// `WaitOutcome::TimedOut` arm's emission in send.rs produces). Deleting the
-/// emission REDs `g3_seq_sendpty_wait_timeout_emits_anchor_timeout`.
+/// M-1 claim 3 (G3 wait-loop NON-foreclosure, INVERTED at amend rider 3): post
+/// finding G the `WaitOutcome::TimedOut` arm mints NO terminal, so the G3 timeout
+/// row's EXACT-sequence assert is now `[send-initiated, chunks-delivered]`. That is
+/// satisfied by the real (non-foreclosing) stream and FAILED by the MUTATION-shaped
+/// stream that RE-ADDS a foreclosing anchor-timeout — exactly what re-introducing the
+/// arm's emission in send.rs would produce. Re-adding the emission REDs
+/// `g3_seq_sendpty_wait_timeout_no_foreclosing_terminal`.
 #[test]
-fn me_g3_wait_timeout_deletion_shape_fails_exact_sequence() {
+fn me_g3_wait_timeout_readd_terminal_fails_exact_sequence() {
     let clock = FixedClock(1_781_241_549_123);
-    let expected = vec![
-        "send-initiated".to_string(),
-        "chunks-delivered".to_string(),
-        "anchor-timeout".to_string(),
-    ];
+    // Post amend rider 3 the row forbids ANY terminal: the exact sequence is the
+    // two-event prefix.
+    let expected = vec!["send-initiated".to_string(), "chunks-delivered".to_string()];
 
-    // Emitted shape (the real TimedOut arm).
+    // The real (non-foreclosing) shape — the TimedOut arm emits no terminal.
     let dir_a = tempfile::tempdir().unwrap();
     let w_a = EventWriter::for_key(dir_a.path(), "sid-a", Some("sid-a".into()), None);
     emit_prefix(&w_a, &clock, "id-1");
-    w_a.emit(
+    assert_eq!(
+        seq_for(w_a.path(), "id-1"),
+        expected,
+        "the non-foreclosing stream satisfies the G3 timeout row"
+    );
+
+    // Mutation shape (a foreclosing anchor-timeout RE-ADDED at the arm).
+    let dir_b = tempfile::tempdir().unwrap();
+    let w_b = EventWriter::for_key(dir_b.path(), "sid-b", Some("sid-b".into()), None);
+    emit_prefix(&w_b, &clock, "id-1");
+    w_b.emit(
         &clock,
         &Payload::AnchorTimeout {
             send_id: "id-1".into(),
@@ -88,20 +97,10 @@ fn me_g3_wait_timeout_deletion_shape_fails_exact_sequence() {
         },
     )
     .unwrap();
-    assert_eq!(
-        seq_for(w_a.path(), "id-1"),
-        expected,
-        "the emitted stream satisfies the G3 timeout row"
-    );
-
-    // Deletion shape (the arm's emission removed).
-    let dir_b = tempfile::tempdir().unwrap();
-    let w_b = EventWriter::for_key(dir_b.path(), "sid-b", Some("sid-b".into()), None);
-    emit_prefix(&w_b, &clock, "id-1");
     assert_ne!(
         seq_for(w_b.path(), "id-1"),
         expected,
-        "the deletion-shaped stream FAILS the exact-sequence assert — deleting \
+        "the mutation-shaped stream FAILS the exact-sequence assert — re-adding \
          the anchor-timeout emission REDs the G3 timeout row"
     );
 }

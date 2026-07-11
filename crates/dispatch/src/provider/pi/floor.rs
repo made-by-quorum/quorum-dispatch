@@ -109,6 +109,44 @@ fn content_text(content: &Value) -> String {
     out
 }
 
+/// C5/C3 (D2 obligation (c)) — the content-keyed LANDING test, shared by the pi
+/// RESIDENT observer (`run_pi_wait`) and the DEAD-ONLY structured floor
+/// (`run_pi_floor_send`): is a send's content PRESENT as a USER-turn record in a
+/// pi session jsonl, matched on its `content_sha256` (the SAME key relay
+/// message-seen matches on)? A user prompt / a steer's text lands as a
+/// `{"type":"message","message":{"role":"user","content":[{"type":"text",
+/// "text":…}]}}` record (pi `session-manager.js appendMessage`). An ASSISTANT
+/// record is NEVER a landing — this guards against the assistant echoing the
+/// prompt (the false-positive). NEVER terminal-keyed. READ-ONLY.
+pub fn rollout_landed(session_jsonl: &str, content_sha256: &str) -> bool {
+    for line in session_jsonl.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(msg) = v.get("message") else {
+            continue;
+        };
+        if msg.get("role").and_then(Value::as_str) != Some("user") {
+            continue;
+        }
+        let Some(content) = msg.get("content") else {
+            continue;
+        };
+        let text = content_text(content);
+        if !text.is_empty() && crate::events::sha256_hex(text.as_bytes()) == content_sha256 {
+            return true;
+        }
+    }
+    false
+}
+
 // ===========================================================================
 // One-shot delivery driver (the floor lane). The pure argv/path builders are
 // unit-tested offline; the live spawn is RUN-not-read by the gated
@@ -476,5 +514,33 @@ mod tests {
         assert!(line.contains("sess-1"));
         assert!(line.contains("floor"));
         assert!(line.contains("provably dead"));
+    }
+
+    #[test]
+    fn rollout_landed_content_keys_user_records_only() {
+        let prompt = "steer: land this exact floor text";
+        let sha = crate::events::sha256_hex(prompt.as_bytes());
+        let user_rec = serde_json::to_string(&json!({
+            "type": "message",
+            "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        }))
+        .unwrap();
+        let asst_echo = serde_json::to_string(&json!({
+            "type": "turn_end",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": prompt}], "stopReason": "stop"}
+        }))
+        .unwrap();
+
+        // A USER record carrying the sent bytes → landed.
+        let with_user = format!("{{\"type\":\"session\",\"id\":\"s\"}}\n{user_rec}\n{asst_echo}\n{{\"type\":\"agent_end\"}}\n");
+        assert!(rollout_landed(&with_user, &sha), "user record with the sent bytes → landed");
+        // ONLY an assistant ECHO of the prompt (no user record) → NOT landed
+        // (the false-positive guard — a steer's landing is a USER record).
+        assert!(
+            !rollout_landed(&asst_echo, &sha),
+            "assistant echo is never a landing"
+        );
+        // Absent content / torn lines → not landed, never fatal.
+        assert!(!rollout_landed("{\"type\":\"turn_start\"}\nnot json\n", &sha));
     }
 }

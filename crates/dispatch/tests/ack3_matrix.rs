@@ -407,9 +407,17 @@ fn pred_engine_initiated_no_chunks(recs: &[EventRecord], send_id: &str) -> bool 
     seq.contains(&"send-initiated".to_string()) && !seq.contains(&"chunks-delivered".to_string())
 }
 
-/// M3/M4 engine exact sequence: [send-initiated, chunks-delivered, anchor-timeout].
-fn pred_engine_anchor_timeout_seq(recs: &[EventRecord], send_id: &str) -> bool {
-    engine_seq(recs, send_id) == ["send-initiated", "chunks-delivered", "anchor-timeout"]
+/// M3/M4 engine exact sequence (amend rider 3, finding G): [send-initiated,
+/// chunks-delivered] and NO terminal. A daemon-side swallow (M3) or child-side eat
+/// (M4) is INDISTINGUISHABLE in-band from a slow-but-landed turn — the daemon acked
+/// (pty-bytes-written present), the sender saw the ack, --wait merely timed out — so
+/// the `WaitOutcome::TimedOut` arm mints NO foreclosing terminal. The send stays
+/// dead-dangling-recoverable; `qd delivery:recover` closes it from the transcript
+/// (pending-abandoned{recovery-no-candidate} here, since the swallowed/eaten content
+/// never became a user record). An anchor-timeout at the door would false-fail a
+/// possibly-landed send — the exact lie-shape the ruling forbids.
+fn pred_engine_written_no_terminal_seq(recs: &[EventRecord], send_id: &str) -> bool {
+    engine_seq(recs, send_id) == ["send-initiated", "chunks-delivered"]
 }
 
 /// M5 engine exact sequence: [send-initiated, chunks-delivered,
@@ -641,6 +649,18 @@ fn m2_pty_write_error_event_streams() {
         "M2 engine: send-initiated present, chunks-delivered absent — seq {:?}",
         engine_seq(&recs, &sid)
     );
+    // R5 seam ruling 01KX88WKGP: the pty partial-write door mints NO terminal. A
+    // chunk `mux.send` Err can be an ack-timeout that fired after the daemon's write
+    // landed, so a door terminal would false-fail an ack-timeout-but-landed send and
+    // foreclose recovery. The send stays dead-dangling and is closed by
+    // `qd delivery:recover`. Real-daemon proof the door is terminal-free here.
+    assert!(
+        !engine_seq(&recs, &sid)
+            .iter()
+            .any(|e| dispatch::events::is_terminal(e)),
+        "M2 engine: partial write must mint NO terminal at the door (R5) — seq {:?}",
+        engine_seq(&recs, &sid)
+    );
 
     assert_canary_absent(&jail, &canary);
     jail.teardown();
@@ -794,23 +814,22 @@ fn m3_silent_swallow_event_streams() {
         "M3 daemon: pty-bytes-written present (swallow reports success) — got {daemon:?}"
     );
 
-    // Engine EXACT sequence: send-initiated → chunks-delivered → anchor-timeout
-    // with waited_ms == 3000.
+    // Engine EXACT sequence (amend rider 3, finding G): send-initiated →
+    // chunks-delivered → NO terminal. The TimedOut arm forecloses nothing — the
+    // swallow is in-band-undeterminable, so the send is left dead-dangling-recoverable.
     let recs = jail.engine_records();
     let sid = send_id_for(&recs, "send:pty", None).expect("M3 send-initiated");
     assert!(
-        pred_engine_anchor_timeout_seq(&recs, &sid),
+        pred_engine_written_no_terminal_seq(&recs, &sid),
         "M3 engine exact sequence — got {:?}",
         engine_seq(&recs, &sid)
     );
-    let at = recs
-        .iter()
-        .find(|r| r.event == "anchor-timeout" && r.send_id().as_deref() == Some(&sid))
-        .unwrap();
-    assert_eq!(
-        at.u64_field("waited_ms"),
-        Some(3000),
-        "M3 waited_ms == 3000"
+    assert!(
+        !engine_seq(&recs, &sid)
+            .iter()
+            .any(|e| dispatch::events::is_terminal(e)),
+        "M3: the TimedOut arm must mint NO terminal (recovery closes it) — got {:?}",
+        engine_seq(&recs, &sid)
     );
 
     // Child corroboration: the fakerepl report shows NO burst/turn carrying the
@@ -919,12 +938,20 @@ fn m4_eat_input_event_streams() {
         "M4 daemon: pty-bytes-written present (bytes reached the PTY) — got {daemon:?}"
     );
 
-    // Engine EXACT sequence (same as M3).
+    // Engine EXACT sequence (same as M3): send-initiated → chunks-delivered → NO
+    // terminal (amend rider 3, finding G — the TimedOut arm forecloses nothing).
     let recs = jail.engine_records();
     let sid = send_id_for(&recs, "send:pty", None).expect("M4 send-initiated");
     assert!(
-        pred_engine_anchor_timeout_seq(&recs, &sid),
+        pred_engine_written_no_terminal_seq(&recs, &sid),
         "M4 engine exact sequence — got {:?}",
+        engine_seq(&recs, &sid)
+    );
+    assert!(
+        !engine_seq(&recs, &sid)
+            .iter()
+            .any(|e| dispatch::events::is_terminal(e)),
+        "M4: the TimedOut arm must mint NO terminal (recovery closes it) — got {:?}",
         engine_seq(&recs, &sid)
     );
 
@@ -1213,8 +1240,16 @@ fn engine_kind_disposition(p: &dispatch::events::Payload) -> Option<Delegation> 
         ChunksDelivered { .. } => None,      // M3/M4/N-rows
         TurnAnchored { .. } => None,         // N-twins + R-REC-anchored
         TurnAnchoredMismatch { .. } => None, // M5 + R-REC-truncated
-        AnchorTimeout { .. } => None,        // M3/M4
-        PendingAbandoned { .. } => None,     // R-REC-abandoned
+        // amend rider 3 (finding G): M3/M4's TimedOut arm no longer mints
+        // anchor-timeout (a timed-out --wait is in-band-undeterminable → NO
+        // foreclosing terminal). No dispatch-side send door emits it anymore; its
+        // sole remaining emitter is the C6-deferred `await_received` budget-exhaustion
+        // path (events.rs:1931). DELEGATED to the kind's roundtrip coverage.
+        AnchorTimeout { .. } => Some(Delegation {
+            file: "crates/dispatch/src/events.rs",
+            test_fn: "g1_representative_of_each_kind_roundtrips",
+        }),
+        PendingAbandoned { .. } => None, // R-REC-abandoned (recovery verb, not a door)
         // DELEGATED (not produced here; named in-repo carriers):
         ComposerCleared { .. } => Some(Delegation {
             file: "crates/dispatch/src/events.rs",
@@ -1246,6 +1281,24 @@ fn engine_kind_disposition(p: &dispatch::events::Payload) -> Option<Delegation> 
         SeenFailed { .. } => Some(Delegation {
             file: "crates/dispatch/src/events.rs",
             test_fn: "x3_seen_failed_key_order_and_terminal",
+        }),
+        // C5/C3 (daemon-lane delivered phase) — the NON-terminal turn-accepted kind
+        // added by D2 (tip 88616710); not produced by this pty matrix. DELEGATED to
+        // D2's serialization test. NOTE: D2's tip added this Payload variant WITHOUT
+        // updating this exhaustive match or engine_all below — that left the
+        // ack3_matrix test non-compiling at the tip; this arm + the engine_all entry
+        // restore the build (surfaced to the coordinator as a cross-child fix-up).
+        TurnAccepted { .. } => Some(Delegation {
+            file: "crates/dispatch/src/events.rs",
+            test_fn: "d2_turn_accepted_serializes_non_terminal_send_id_and_content_sha",
+        }),
+        // §C1 (delivery contract) — the DOOR-failure terminal. Not produced by this
+        // pty matrix (it is a relay-door / daemon-arm kind); DELEGATED to the events.rs
+        // shape+optional-send_id unit test, and exercised end-to-end by the recover-verb
+        // integration proofs (tests/delivery_recover_verb.rs).
+        SendFailed { .. } => Some(Delegation {
+            file: "crates/dispatch/src/events.rs",
+            test_fn: "d1_send_failed_serializes_with_optional_send_id",
         }),
         // R3d recovery-ladder forensics — not produced by this matrix; DELEGATED to
         // the events.rs replay tests (emit the kinds, read the file back, replay).
@@ -1368,6 +1421,14 @@ fn coverage_inventory_every_event_kind_exercised() {
         dispatch::events::Payload::PendingAbandoned {
             send_id: "s".into(),
             reason: "recovery-no-candidate".into(),
+            recovered: Some(true),
+            attribution: Some("offset".into()),
+        },
+        // D2 (tip 88616710) turn-accepted — instantiated so the exhaustive match +
+        // delegation are visited (see the disposition arm above).
+        dispatch::events::Payload::TurnAccepted {
+            send_id: "s".into(),
+            content_sha256: sha256_hex(b"x"),
         },
         dispatch::events::Payload::ComposerCleared {
             send_id: "s".into(),
@@ -1392,6 +1453,11 @@ fn coverage_inventory_every_event_kind_exercised() {
         dispatch::events::Payload::SeenFailed {
             send_id: "s".into(),
             reason: "recipient-gone".into(),
+        },
+        dispatch::events::Payload::SendFailed {
+            send_id: None,
+            content_sha256: sha256_hex(b"x"),
+            reason: "no-relay".into(),
         },
         dispatch::events::Payload::RungEntered {
             session_id: "s".into(),

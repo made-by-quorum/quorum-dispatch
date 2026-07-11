@@ -574,17 +574,23 @@ fn r_rec_truncated_recovers_mismatch() {
 }
 
 // ===========================================================================
-// R-REC-abandoned: EAT_INPUT=1 → no user record ever.
-// Verdict: pending-abandoned{reason:"recovery-no-candidate"}.
+// R-REC-empty-window (R6 (b), seam ruling 01KX8MDPDX): EAT_INPUT=1 → the recipient
+// wrote NO user record past the send's offset → an EMPTY window. An empty window is
+// UNDETERMINED (still growable — the recipient hasn't demonstrably progressed past
+// the send), so recovery mints NO terminal: it must NOT false-abandon (the pre-R6
+// behavior this test formerly asserted, `recovery-no-candidate`, was exactly the
+// systematic false-abandon R6 removes). Driven through the bounded await, the empty
+// window never resolves → the await's §8 budget exhausts to a POSITIVE anchor-timeout
+// (the await's own timeout, C6-deferred — NOT a recovery foreclosure).
 // ===========================================================================
 
 #[test]
-fn r_rec_abandoned_recovers_no_candidate() {
+fn r_rec_empty_window_stays_recoverable() {
     require_bins();
     let jail = Jail::establish("rrab");
     let name = "rrab";
     let msg = format!(
-        "ACK3-RREC-abandoned-{}",
+        "ACK3-RREC-empty-window-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -596,23 +602,31 @@ fn r_rec_abandoned_recovers_no_candidate() {
         ("QD_FAKEREPL_BUSY_MS", "10000".to_string()),
     ];
     let si = drive_and_kill(&jail, name, &msg, &extra)
-        .expect("R-REC-abandoned: kill landed after chunks-delivered");
+        .expect("R-REC-empty-window: kill landed after chunks-delivered");
     let sid = si.send_id().unwrap();
     let (got, recs) = resolve_after_kill(&jail, &si, &sid);
 
+    // R6 (b): an empty window is recoverable, not abandoned. Recovery emits nothing;
+    // the bounded await exhausts its budget to a POSITIVE anchor-timeout.
     assert_eq!(
         got,
-        Received::Abandoned,
-        "R-REC-abandoned verdict is Abandoned"
+        Received::AnchorTimeout,
+        "R6 (b): an empty window stays recoverable → the bounded await times out positively, NOT Abandoned"
     );
-    let pa = recs
-        .iter()
-        .find(|r| r.event == "pending-abandoned" && r.send_id().as_deref() == Some(&sid))
-        .expect("late pending-abandoned appended");
-    assert_eq!(
-        pa.str_field("reason").as_deref(),
-        Some("recovery-no-candidate"),
-        "reason recovery-no-candidate (the eaten input left no user record)"
+    // Recovery must NOT have minted a pending-abandoned (no false-abandon of an empty,
+    // still-growable window).
+    assert!(
+        !recs
+            .iter()
+            .any(|r| r.event == "pending-abandoned" && r.send_id().as_deref() == Some(&sid)),
+        "empty window must NOT foreclose with pending-abandoned (R6 (b)); recs: {:?}",
+        recs.iter().map(|r| r.event.clone()).collect::<Vec<_>>()
+    );
+    // The only terminal for the send is the await's positive §8 anchor-timeout.
+    assert!(
+        recs.iter()
+            .any(|r| r.event == "anchor-timeout" && r.send_id().as_deref() == Some(&sid)),
+        "the bounded await emits a positive anchor-timeout on budget exhaustion"
     );
     jail.teardown();
 }

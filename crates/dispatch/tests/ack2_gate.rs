@@ -695,15 +695,22 @@ fn g3_seq_sendpty_wait_complete_anchored_with_status_transitions() {
     jail.teardown();
 }
 
-/// G3 --wait timeout (THE WAIT-LOOP anchor-timeout): fakerepl under ABSORB never
-/// submits our send → `qd send:pty --wait --timeout 3` times out → anchor-timeout
-/// with waited_ms == the --timeout value (3000). NO turn-anchored for this send.
+/// G3 --wait timeout (THE WAIT-LOOP non-foreclosure): fakerepl under ABSORB never
+/// submits our send → `qd send:pty --wait --timeout 3` times out → the `WaitOutcome::
+/// TimedOut` arm emits NO terminal (amend rider 3, red-team finding G: a timed-out
+/// --wait watch is in-band-UNDETERMINABLE — `anchored:true` is provably-landed, the
+/// un-anchored path is still-queued-behind-the-turn — so foreclosing it with
+/// anchor-timeout would FALSE-FAIL a possibly-landed send and foreclose recovery).
+/// The send stays dead-dangling-recoverable; exit 1 + the timeout stderr are
+/// unchanged. NO turn-anchored AND NO anchor-timeout for this send.
 ///
-/// MUTATION CONTROL (G3, spec-mandated): with this row in place, deleting the
-/// anchor-timeout emission in send.rs's `WaitOutcome::TimedOut` arm makes this row
-/// RED. Live-fired + reverted by the implementer; see the gate report.
+/// MUTATION CONTROL (INVERTED post amend rider 3): the EXACT-sequence assert now
+/// forbids ANY terminal — RE-ADDING a foreclosing anchor-timeout at the
+/// `WaitOutcome::TimedOut` arm makes this row RED (a spurious terminal can never hide
+/// in an exact-sequence assert). Paired with delivery_recover_verb.rs, which proves
+/// the compiled verb closes such a dead-dangling send from the transcript.
 #[test]
-fn g3_seq_sendpty_wait_timeout_emits_anchor_timeout() {
+fn g3_seq_sendpty_wait_timeout_no_foreclosing_terminal() {
     require_bins();
     let jail = Jail::establish("g3wt");
     let name = "g3wt";
@@ -748,24 +755,23 @@ fn g3_seq_sendpty_wait_timeout_emits_anchor_timeout() {
     let recs = events_of(&jail).records;
     let sid = send_id_for(&recs, "send:pty", Some("idle")).expect("send-initiated present");
     let seq = seq_for(&recs, &sid);
-    // m-1 tightening: EXACT sequence (chunks still mux-acked under ABSORB — the
-    // absorption is CR-level; the never-going-busy path skips the W8 verify via
-    // verify_eligible=false, then the wait loop times out). A spurious extra
-    // terminal (incl. a duplicate turn-anchored) can never hide in an exact assert.
+    // m-1 tightening + amend rider 3: EXACT sequence (chunks still mux-acked under
+    // ABSORB — the absorption is CR-level; the never-going-busy path skips the W8
+    // verify via verify_eligible=false, then the wait loop times out). Post finding
+    // G the TimedOut arm mints NO terminal, so the exact sequence is the two-event
+    // prefix — a spurious terminal (a re-added anchor-timeout, or any other) can
+    // never hide in an exact assert.
     assert_eq!(
         seq,
-        vec!["send-initiated", "chunks-delivered", "anchor-timeout"],
-        "G3 --wait timeout EXACT sequence"
+        vec!["send-initiated", "chunks-delivered"],
+        "G3 --wait timeout EXACT sequence — the TimedOut arm forecloses nothing (amend rider 3, finding G)"
     );
-    // THE WAIT-LOOP one: waited_ms == the --timeout value in ms.
-    let at = recs
-        .iter()
-        .find(|r| r.event == "anchor-timeout" && r.send_id().as_deref() == Some(&sid))
-        .unwrap();
-    assert_eq!(
-        at.u64_field("waited_ms"),
-        Some(timeout_s * 1000),
-        "anchor-timeout.waited_ms == the --timeout value (the wait-loop emission)"
+    // No foreclosing terminal of ANY kind — the send is dead-dangling-recoverable,
+    // and `qd delivery:recover` (proven in delivery_recover_verb.rs) is its closer.
+    assert!(
+        !seq.iter()
+            .any(|e| e == "anchor-timeout" || e == "pending-abandoned" || e == "turn-anchored"),
+        "the TimedOut arm must mint NO terminal (recovery, not the door, closes it): {seq:?}"
     );
 
     assert_no_canary_in_events(&jail, &canary);
@@ -834,8 +840,16 @@ fn g7a_pipeline_arm_nn_anchored() {
 /// G7(b) MEASUREMENT ARM (the non-vacuous tooth): fakerepl ABSORB_ALL_CRS (the
 /// remediation CRs are absorbed too → the swallow is INDUCED + unrecoverable) →
 /// `qd start -p <chunked>` → exit 10 (Stalled, unchanged contract) AND the events
-/// file shows send-initiated + chunks-delivered + anchor-timeout and NO
-/// turn-anchored — the written-never-anchored signature COUNTED from the file.
+/// file shows send-initiated + chunks-delivered and NO terminal — the
+/// written-never-anchored signature COUNTED from the file.
+///
+/// Post amend rider 3 (finding G): the lifecycle Stalled arm mints NO terminal. The
+/// deliver bytes were written + `\r` submitted, so the turn may yet commit — an
+/// `anchor-timeout` here would false-fail a possibly-landed prime and foreclose
+/// recovery. So the swallow signature is now the two-event prefix with NO
+/// turn-anchored AND NO anchor-timeout; exit 10 + the loud WARNING stderr are
+/// unchanged (map_deliver_outcome), and `qd delivery:recover` is the closer
+/// (delivery_recover_verb.rs). RE-ADDING a foreclosing terminal here REDs this row.
 ///
 /// SLOW (~50s): the stalled deliver_prompt exhausts its full DELIVER_TIMEOUT_S
 /// remediation budget against a never-accepting fakerepl. Kept in-suite (under the
@@ -858,13 +872,20 @@ fn g7b_measurement_arm_induced_swallow_counted() {
     let recs = events_of(&jail).records;
     let sid = send_id_for(&recs, "new-p", Some("idle")).expect("send-initiated present");
     let seq = seq_for(&recs, &sid);
-    // The COUNTED written-never-anchored signature — m-1 tightening: EXACT
-    // sequence (written = send-initiated + chunks-delivered; never-anchored =
-    // anchor-timeout and nothing else; no spurious terminal can hide).
+    // The COUNTED written-never-anchored signature — m-1 tightening + amend rider 3:
+    // EXACT sequence (written = send-initiated + chunks-delivered; never-anchored =
+    // NO terminal, the Stalled arm forecloses nothing; no spurious terminal can
+    // hide). The signature is the two-event prefix with no turn-anchored terminal.
     assert_eq!(
         seq,
-        vec!["send-initiated", "chunks-delivered", "anchor-timeout"],
-        "G7(b) written-never-anchored EXACT sequence: {seq:?}"
+        vec!["send-initiated", "chunks-delivered"],
+        "G7(b) written-never-anchored EXACT sequence — Stalled forecloses nothing (finding G): {seq:?}"
+    );
+    // No foreclosing terminal of ANY kind — dead-dangling-recoverable.
+    assert!(
+        !seq.iter()
+            .any(|e| e == "anchor-timeout" || e == "pending-abandoned" || e == "turn-anchored"),
+        "the lifecycle Stalled arm must mint NO terminal (recovery closes it): {seq:?}"
     );
 
     assert_no_canary_in_events(&jail, &canary);
