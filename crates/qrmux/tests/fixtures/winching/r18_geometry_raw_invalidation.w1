@@ -1,0 +1,67 @@
+# Round-18 structural geometry invalidation: qualified and raw-only pending
+# share one clear seam, while unchanged geometry retains c59 raw motion.
+
+case r18_matched_1049_width_change_clears_saved_raw_only
+size 5 3 100
+emit 10
+print ABCDE
+ech 1
+alt-enter
+resize 3 3
+alt-exit
+print Z
+expect 0 0 ABZ
+end
+
+case r18_stale_cross_mode_width_change_clears_saved_pending_before_raw_demotion
+size 5 3 100
+emit 10
+print ABCDE
+decsc
+alt-47-enter
+resize 3 3
+alt-exit
+print Z
+expect 0 0 ABZ
+end
+
+case r18_live_vertical_grow_clears_raw_only
+size 5 2 100
+emit 10
+print ABCDE
+ech 1
+resize 5 3
+print Z
+expect 0 0 ABCDZ
+end
+
+case r18_live_same_size_resize_clears_raw_only
+size 5 2 100
+emit 10
+print ABCDE
+ech 1
+resize 5 2
+print Z
+expect 0 0 ABCDZ
+end
+
+case r18_alt_height_shrink_removes_raw_only_source
+size 5 3 100
+emit 10
+alt-47-enter
+cup 3 1
+print ABCDE
+ech 1
+resize 5 2
+print Z
+expect 0 0 |<space><space><space><space>Z
+end
+
+case r18_unchanged_geometry_preserves_c59_raw_motion_control
+size 5 2 100
+emit 10
+print ABCDE
+ech 1
+print Z
+expect 0 0 ABCD|Z
+end

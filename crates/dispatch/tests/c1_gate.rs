@@ -6,7 +6,7 @@
 //!
 //! `tests/embedded_mux_live.rs` (M4) exercises the `EmbeddedMux` ADAPTER crate
 //! API directly. THIS suite is ENGINE-LEVEL: every row drives the real `qd`
-//! binary's verbs (`qd new` / `qd connect` / `qd send:pty` / `qd ls --json` /
+//! binary's verbs (`qd new` / `qd attach` / `qd send:pty` / `qd ls --json` /
 //! `qd kill` / `qd wait`) so the FULL engine path (selector → gather/MuxDirs →
 //! mux trait → protocol → daemon) is under test, not a mock.
 //!
@@ -434,9 +434,8 @@ fn run_qd_env(jail: &Jail, args: &[&str], extra: &[(&str, &str)]) -> (i32, Strin
     )
 }
 
-/// A running `qd connect <name>` on a real PTY (was `qd attach` — the verb is a
-/// retired stub since STATE 22; connect drives the SAME attach mechanic for a
-/// live session): a reader thread drains the master into `output`; `writer` is
+/// A running `qd attach <name>` on a real PTY: a reader thread drains the master
+/// into `output`; `writer` is
 /// the master write half for keystrokes (detach key, scroll, etc.). The ENGINE
 /// attach path (embedded_mux::attach → connect_for stdio-inherit) renders onto
 /// this PTY.
@@ -474,7 +473,7 @@ impl QdAttach {
             .expect("openpty");
 
         let mut cmd = CommandBuilder::new(qd_bin());
-        cmd.arg("connect");
+        cmd.arg("attach");
         cmd.arg(name);
         jail.apply_embedded_pty(&mut cmd);
         for (k, v) in extra_env {
@@ -482,7 +481,7 @@ impl QdAttach {
         }
         cmd.cwd(&jail.home);
 
-        let child = pair.slave.spawn_command(cmd).expect("spawn qd connect");
+        let child = pair.slave.spawn_command(cmd).expect("spawn qd attach");
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().expect("clone reader");

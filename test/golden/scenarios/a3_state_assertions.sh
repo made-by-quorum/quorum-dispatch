@@ -137,23 +137,23 @@ MARKS="$QD_DATA/state/marks.jsonl"
 PAYLOAD='{"k1":"v1","nested":{"a":[1,2,3]},"u":"café ☕"}'
 run_qd mark alpha-worker "$PAYLOAD"
 if [ "$RC" = "0" ] && [ -f "$MARKS" ]; then
-    # A7 ratchet fix (2026-06-05): A6 telemetry (merge-ruled 13:20) appends a
-    # USAGE event line at every mark verb — `qd mark` now writes 2 lines (the
+    # A7 ratchet fix (2026-06-05): A6 telemetry (merge-ruled 13:20) appends an
+    # INVOKED event line at every mark verb — `qd mark` now writes 2 lines (the
     # mark line FIRST, then {event,verb:"mark",...}). Pre-A6 this expected 1.
     nlines="$(wc -l < "$MARKS" | tr -d ' ')"
     if [ "$nlines" = "2" ]; then
-        pass SA-mark-1 "exit=0, mark line + A6 usage line appended (2 lines)"
+        pass SA-mark-1 "exit=0, mark line + A6 invoked line appended (2 lines)"
     else
-        fail SA-mark-1 "exit=0 but $nlines lines (expected 2: mark + A6 usage)"
+        fail SA-mark-1 "exit=0 but $nlines lines (expected 2: mark + A6 invoked)"
     fi
-    usage_ok="$(sed -n '2p' "$MARKS" | python3 -c '
+    invoked_ok="$(sed -n '2p' "$MARKS" | python3 -c '
 import sys,json
 o=json.load(sys.stdin)
-assert "event" in o and o.get("verb")=="mark", "line 2 not a mark-verb usage event"
+assert "event" in o and o.get("verb")=="mark", "line 2 not a mark-verb invoked event"
 print("OK")' 2>/dev/null)"
-    [ "$usage_ok" = "OK" ] \
-        && pass SA-mark-usage "line 2 is the A6 usage event (verb=mark)" \
-        || fail SA-mark-usage "line 2 is not the A6 mark usage event"
+    [ "$invoked_ok" = "OK" ] \
+        && pass SA-mark-invoked "line 2 is the A6 invoked event (verb=mark)" \
+        || fail SA-mark-invoked "line 2 is not the A6 mark invoked event"
     # Line parses as JSON with ts + sessionId + payload; payload round-trips byte-identical.
     line="$(head -1 "$MARKS")"
     parsed_ok="$(printf '%s' "$line" | python3 -c '
@@ -181,8 +181,8 @@ fi
 # rider 1: org-vocabulary payload passes through UNINTERPRETED (no key behavior).
 ORG_PAYLOAD='{"on_behalf_of":"x","role_claimed":"y","reports_to":"z","succeeds":"w"}'
 run_qd mark alpha-worker "$ORG_PAYLOAD"
-# A7 ratchet fix: 2 marks × (mark line + A6 usage line) = 4 lines; the second
-# mark's PAYLOAD line is line 3 (tail -1 would grab its usage event).
+# A7 ratchet fix: 2 marks × (mark line + A6 invoked line) = 4 lines; the second
+# mark's PAYLOAD line is line 3 (tail -1 would grab its invoked event).
 nlines2="$(wc -l < "$MARKS" | tr -d ' ')"
 if [ "$RC" = "0" ] && [ "$nlines2" = "4" ]; then
     line2="$(sed -n '3p' "$MARKS")"
@@ -199,7 +199,7 @@ print("OK")
         && pass SA-mark-org "org-vocab payload appended UNINTERPRETED (rider 1): byte-identical, no key behavior" \
         || fail SA-mark-org "org payload was interpreted/altered (line=$line2)"
 else
-    fail SA-mark-org "exit=$RC, lines=$nlines2 (expected exit0/4 lines: 2 marks + 2 A6 usage)"
+    fail SA-mark-org "exit=$RC, lines=$nlines2 (expected exit0/4 lines: 2 marks + 2 A6 invoked)"
 fi
 
 # mark failure cases leave the file UNCHANGED.
@@ -236,10 +236,10 @@ qdhome_marks="$QDH/state/marks.jsonl"
 default_marks="$HOME/.quorum/dispatch/state/marks.jsonl"
 if [ "$RC" = "0" ] && [ -f "$qdhome_marks" ] && [ ! -f "$default_marks" ]; then
     nlqd="$(wc -l < "$qdhome_marks" | tr -d ' ')"
-    # A7 ratchet fix: mark line + A6 usage line (see SA-mark-1).
+    # A7 ratchet fix: mark line + A6 invoked line (see SA-mark-1).
     [ "$nlqd" = "2" ] \
-        && pass SA-mark-qdhome-set "QD_HOME set → marks under <QD_HOME>/state (mark + usage), NOT <HOME>/.quorum/dispatch/state" \
-        || fail SA-mark-qdhome-set "QD_HOME marks present but $nlqd lines (expected 2: mark + A6 usage)"
+        && pass SA-mark-qdhome-set "QD_HOME set → marks under <QD_HOME>/state (mark + invoked), NOT <HOME>/.quorum/dispatch/state" \
+        || fail SA-mark-qdhome-set "QD_HOME marks present but $nlqd lines (expected 2: mark + A6 invoked)"
 else
     fail SA-mark-qdhome-set "exit=$RC qdhome_marks=$( [ -f "$qdhome_marks" ] && echo yes || echo no ) default_marks=$( [ -f "$default_marks" ] && echo yes || echo no )"
 fi

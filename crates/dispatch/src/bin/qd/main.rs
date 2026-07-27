@@ -82,6 +82,22 @@ fn run(argv: &[String]) -> i32 {
         Some("relay:rollback") => {
             return run_relay_rollback();
         }
+        // adoption:stop: the per-session Claude Stop hook target. It appends a
+        // durable boundary event under qd's state dir and emits no stdout (hook
+        // stdout is protocol-significant to Claude Code). Hidden pre-clap so a
+        // hook cannot be reshaped by the user-facing command parser.
+        Some("adoption:stop") => {
+            return run_adoption_stop(&rest[1..]);
+        }
+        // adoption:relaunch: hidden programmatic relaunch verb used by
+        // `qd adopt`'s external-adoption flow. Bypasses registry resolution so
+        // the relaunch succeeds even when the original session's registry row was
+        // deleted on exit (zero-turn bare sessions leave no tombstone or JSONL).
+        // Takes: --session-id <uuid> --name <name> [--cwd <cwd>]
+        // Dispatched pre-clap so it never enters the user-facing surface.
+        Some("adoption:relaunch") => {
+            return run_adoption_relaunch(&rest[1..]);
+        }
         // build-profile: HIDDEN deploy-gate probe (perf-regression postmortem,
         // 2026-07-07). Prints "release" or "debug" via `cfg!(debug_assertions)`
         // and exits 0 — a debug build must never answer "release". Dispatched
@@ -101,6 +117,168 @@ fn run(argv: &[String]) -> i32 {
     match cmd.try_get_matches_from(argv) {
         Ok(matches) => verbs::dispatch(&matches),
         Err(e) => cli::map_clap_error_with_argv(e, argv),
+    }
+}
+
+fn run_adoption_stop(args: &[String]) -> i32 {
+    use dispatch::effects::Env;
+
+    let [session_id] = args else {
+        eprintln!("adoption:stop: expected exactly one session id");
+        return 1;
+    };
+    if session_id.is_empty() {
+        eprintln!("adoption:stop: session id is empty");
+        return 1;
+    }
+    let env = dispatch::effects::RealEnv;
+    let Some(home) = env.var("HOME").filter(|value| !value.is_empty()) else {
+        eprintln!("adoption:stop: HOME is not set");
+        return 1;
+    };
+    let home = std::path::PathBuf::from(home);
+    let paths = dispatch::paths::QdPaths::from_home_env(&home, &env);
+    let observed_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0);
+    match dispatch::adoption::record_stop_hook_event(
+        &paths.state_dir,
+        session_id,
+        observed_at_ms,
+        std::process::id(),
+    ) {
+        Ok(_) => 0,
+        Err(error) => {
+            eprintln!("adoption:stop: {error}");
+            1
+        }
+    }
+}
+
+/// `qd adoption:relaunch`: hidden verb used by the external-adoption flow to
+/// relaunch a session's Claude process without depending on a live registry row.
+///
+/// When `qd adopt` SIGTERMs a bare session and the process exits, Claude may
+/// delete its own registry row on exit (zero-turn sessions that never wrote a
+/// JSONL file leave no tombstone at all). `qd resume <name>` would fail with
+/// "No session matching" because the row is gone. This verb bypasses that
+/// resolution by building the Session struct from the known UUID + name + cwd
+/// (all captured in the AdoptRecord before SIGTERM was sent) and calling
+/// `revive_claude` directly.
+///
+/// Args: `--session-id <uuid> --name <name> [--cwd <cwd>]`
+fn run_adoption_relaunch(args: &[String]) -> i32 {
+    let mut session_id: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut cwd: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--session-id" => {
+                i += 1;
+                session_id = args.get(i).cloned();
+            }
+            "--name" => {
+                i += 1;
+                name = args.get(i).cloned();
+            }
+            "--cwd" => {
+                i += 1;
+                cwd = args.get(i).cloned();
+            }
+            other => {
+                eprintln!("adoption:relaunch: unknown argument {other:?}");
+                return 1;
+            }
+        }
+        i += 1;
+    }
+
+    let session_id = match session_id.filter(|s| !s.is_empty()) {
+        Some(id) => id,
+        None => {
+            eprintln!("adoption:relaunch: --session-id is required and must be non-empty");
+            return 1;
+        }
+    };
+    let name = match name.filter(|s| !s.is_empty()) {
+        Some(n) => n,
+        None => {
+            eprintln!("adoption:relaunch: --name is required and must be non-empty");
+            return 1;
+        }
+    };
+
+    // Build a minimal Session struct from the known adoption facts. Status is
+    // set to Cold so revive_claude's "no session id" guard is the only check
+    // that can gate (and we've already verified session_id is non-empty). The
+    // cwd from the AdoptRecord is used directly; revive_claude will reality-check
+    // it and error if it has vanished (no silent fallback).
+    use dispatch::model::{Session, SessionBranch, SessionStatus};
+    let session = Session {
+        name: Some(name),
+        user_named: Some(true),
+        session_id,
+        code: None,
+        qd_id: None,
+        pid: None,
+        status: SessionStatus::Cold,
+        zmx_name: None,
+        zmx_clients: None,
+        socket_dir: None,
+        relay_port: None,
+        turns: 0,
+        tokens: 0,
+        cwd,
+        last_active_ms: None,
+        version: None,
+        started_at_ms: None,
+        git_branch: None,
+        jsonl_path: None,
+        last_turns: None,
+        provider: "claude-code".to_string(),
+        entrypoint: None,
+        lineage: None,
+        which_branch: SessionBranch::LiveRegistry,
+    };
+
+    // Zero-turn bare sessions never write a JSONL transcript; claude's --resume
+    // fails with "No conversation found" when no JSONL exists. Branch on JSONL
+    // presence: use --session-id (fresh start under the same UUID) when there's
+    // no transcript to preserve, --resume (restore conversation) when one exists.
+    let fresh = {
+        use dispatch::effects::Env;
+        let env = dispatch::effects::RealEnv;
+        match env.var("HOME").filter(|s| !s.is_empty()) {
+            Some(home) => {
+                let home = std::path::PathBuf::from(home);
+                let paths = dispatch::paths::QdPaths::from_home(&home);
+                dispatch::jsonl::find_jsonl_path(
+                    &paths.projects_dir,
+                    &session.session_id,
+                    session.cwd.as_deref(),
+                )
+                .is_none()
+            }
+            // HOME unset: can't locate JSONL; assume zero-turn (safer default).
+            None => true,
+        }
+    };
+
+    use dispatch::launch::RenderMode;
+    match verbs::resume::revive_claude(&session, None, RenderMode::Inline, fresh) {
+        Ok(handle) => {
+            println!(
+                "Resumed session \"{}\" from {} (detached); attach with \"qd attach {}\".",
+                handle.zmx_name,
+                dispatch::fmt::truncate_id_default(&session.session_id),
+                handle.zmx_name
+            );
+            0
+        }
+        Err(code) => code,
     }
 }
 

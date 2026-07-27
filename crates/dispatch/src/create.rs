@@ -404,7 +404,7 @@ impl std::fmt::Display for NewError {
                 f,
                 "ERROR: Session \"{name}\" did not reach idle state within timeout.\n\
                  The zmx session exists but Claude Code may not have booted.\n  \
-                 Check: qd ls\n  Attach: qd connect {name}\n  ({detail})"
+                 Check: qd ls\n  Attach: qd attach {name}\n  ({detail})"
             ),
             // F1 fail-closed (spec §2.2): `detail` is the io error only — no value.
             NewError::EnvFileWriteFailed { name, detail } => write!(

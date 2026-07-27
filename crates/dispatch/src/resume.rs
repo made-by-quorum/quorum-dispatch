@@ -82,9 +82,9 @@ pub fn validate_session_name(name: &str) -> Option<String> {
 /// `stats.name`), which routinely contains spaces and punctuation — e.g.
 /// "gdb debug helper". Feeding that straight into the zmx name (which also becomes
 /// an env-file path component and a `bash -lc` single-quoted token) is what
-/// `validate_session_name` rejects, so a `resume`/`connect` of an auto-named cold
+/// `validate_session_name` rejects, so a `resume`/`attach` of an auto-named cold
 /// session used to die with "Session name … contains unsafe characters". Pete's
-/// ruling: connect/resume must "just work" — we must not punish the user for a
+/// ruling: attach/resume must "just work" — we must not punish the user for a
 /// title claude generated. So we MAP unsafe bytes to `-` (then collapse runs and
 /// trim edge dashes for readability) instead of refusing.
 ///
@@ -260,7 +260,7 @@ mod tests {
         );
     }
 
-    // --- sanitize_zmx_name + auto-named derivation (the connect/resume "spaces in
+    // --- sanitize_zmx_name + auto-named derivation (the attach/resume "spaces in
     //     the name" fix) ---
 
     #[test]

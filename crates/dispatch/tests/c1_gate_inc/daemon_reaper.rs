@@ -93,10 +93,15 @@ fn record_daemon_pid(run_root: &Path, pid: u32, identity: &str) {
 fn record_engine_daemons(run_root: &Path, dir: &Path) {
     let out = match Command::new("/bin/ps").args(["-axo", "pid=,args="]).output() {
         Ok(o) => o,
-        Err(e) => {
-            eprintln!("[daemon-reaper] warn: ps failed recording engine daemons: {e}");
-            return;
-        }
+        // C-4 (a): do NOT silently swallow. A ps failure here is indistinguishable
+        // from "found zero daemons", so a silent warn+return would let engine
+        // daemons leak AND suppress the teardown-evidence collection with no signal.
+        // `/bin/ps` always exists on the gate box, so a failure is a genuine
+        // environment fault — fail loudly rather than hide an incomplete reap.
+        Err(e) => panic!(
+            "[daemon-reaper] ps FAILED recording engine daemons ({e}) — recording is incomplete; \
+             refusing to silently continue (would leak daemons and hide teardown evidence)"
+        ),
     };
     let want_dir = dir.to_string_lossy();
     for line in String::from_utf8_lossy(&out.stdout).lines() {

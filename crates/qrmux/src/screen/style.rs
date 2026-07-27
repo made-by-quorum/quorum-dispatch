@@ -15,7 +15,9 @@ impl StyleId {
 }
 
 /// Underline style variant.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum UnderlineStyle {
     #[default]
     None,
@@ -54,7 +56,9 @@ impl UnderlineStyle {
 }
 
 /// SGR text attributes and foreground/background colors for a cell.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Style {
     pub bold: bool,
     pub dim: bool,
@@ -70,7 +74,7 @@ pub struct Style {
 }
 
 /// Terminal color, either a 256-color palette index or direct RGB.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Color {
     /// 256-color palette index (0-255).
     Indexed(u8),

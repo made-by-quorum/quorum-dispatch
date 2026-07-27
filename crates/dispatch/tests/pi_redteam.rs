@@ -15,6 +15,9 @@
 //! layer carries POST-gate run-evidence (the captured real-pi responses) per the
 //! live-gated-test-noop-pass discipline — a gate-off early-return proves nothing.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -25,7 +28,7 @@ use dispatch::provider::pi::redteam::{run_fixture_battery, RedFinding, RedReport
 use dispatch::provider::pi::{PiRpc, PiRpcError, PiStdio};
 
 fn live() -> bool {
-    std::env::var("QD_PI_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_PI_LIVE", "pi_redteam")
 }
 
 fn round() -> u32 {

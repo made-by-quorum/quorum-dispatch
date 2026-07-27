@@ -24,6 +24,9 @@
 //! otherwise. Run:
 //!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p quorum-dispatch --test acp_resume_roundtrip_live -- --nocapture --test-threads=1
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -36,7 +39,7 @@ use dispatch::resume_daemon::kill_acp;
 use tempfile::TempDir;
 
 fn live() -> bool {
-    std::env::var("QD_ACP_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_ACP_LIVE", "acp_resume_roundtrip_live")
 }
 
 /// The bridge `.bin` dir, prepended to PATH so the adapter's default `claude-code-acp`

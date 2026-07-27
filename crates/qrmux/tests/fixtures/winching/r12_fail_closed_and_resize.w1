@@ -1,0 +1,90 @@
+# Round-12 raw-pending, REP-combining, per-row resize, and styled-blank chop.
+
+case r12_ri_raw_pending_is_untracked
+size 5 3 100
+emit 5
+print A<space>BCD
+ri
+print <space><space>
+expect 0 0 |<space><space>BCD
+end
+
+case r12_ech_raw_pending_is_untracked
+size 5 2 100
+emit 5
+cup 2 1
+print A<space>BCD
+cup 1 1
+print ABCDE
+ech 1
+print <space><space>
+expect 0 0 ABCD|<space><space>BCD
+end
+
+case r12_csi_s_moved_pending_is_untracked
+size 5 3 100
+emit 5
+print ABCDE
+scroll-up 1
+print Z
+expect 0 0 ABCDE||Z
+end
+
+case r12_decawm_off_rewrite_demotes_raw_pending
+size 5 3 100
+emit 5
+print ABCDE
+decawm off
+print Z
+decawm on
+print Y
+expect 0 0 ABCDZ|Y
+end
+
+case r12_combining_rep_uses_true_last_char
+size 5 2 100
+emit 5
+cup 2 1
+print E
+cup 1 1
+print ABCDE
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+rep default
+expect 0 0 ABCDÉ́́́́́́́́́́́́́́́|E
+end
+
+case r12_restored_row_resizes_at_unchanged_global_cols
+size 5 2 100
+emit 10
+print ABCDEFGHIJKLMNOP
+resize 10 2
+resize 10 3
+expect 0 3 ABCDE|FGHIJ|KLMNO|P
+end
+
+case r12_styled_blank_bottom_is_chopped
+size 5 3 0
+emit 5
+print ABCDEF
+style blue-bg
+cup 3 1
+erase-line
+cup 2 1
+resize 5 2
+expect 1 0 ABCDEF
+end

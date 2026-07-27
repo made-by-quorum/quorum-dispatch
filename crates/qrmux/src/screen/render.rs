@@ -22,6 +22,15 @@ pub struct RenderCache {
     /// mouse tracking on and local scrolling dead — see
     /// doc/inbox/2026-06-10-qrmux-phone-scroll-regression.md.
     last_alt: Option<bool>,
+    /// attended-UX M2: the banner row text last overlaid for THIS client, or
+    /// `None` when no banner is currently shown. Purely presentational, per-client
+    /// (like `last_alt`): the compose step reads it to (a) skip a repaint when the
+    /// text is unchanged and the grid produced no output this frame (no-op
+    /// preserved), and (b) know it must ERASE the row when the banner clears. Not
+    /// reset by `invalidate()` — a full repaint redraws the real row and the
+    /// compose step re-asserts the banner on top; clearing it here would be
+    /// harmless but pointless.
+    last_banner: Option<String>,
 }
 
 impl Default for RenderCache {
@@ -40,7 +49,16 @@ impl RenderCache {
             last_cursor: None,
             last_cursor_visible: None,
             last_alt: None,
+            last_banner: None,
         }
+    }
+
+    /// attended-UX M2: is a banner row currently painted for this client (not yet
+    /// erased)? The relay's periodic tick keys on this to render ONE final erase
+    /// frame on the active→inactive transition — a quiet session where a toast's
+    /// display window elapses with no other render to clear it (red-team r1 F1).
+    pub fn has_banner(&self) -> bool {
+        self.last_banner.is_some()
     }
 
     /// Invalidate the cache so the next render is a full redraw.
@@ -107,6 +125,37 @@ pub(super) fn render_line(row: &Row, styles: &StyleTable) -> Vec<u8> {
         out.extend_from_slice(b"\x1b[0m");
     }
     out
+}
+
+/// Freeze one physical row for the logical transport surface. Wide-early
+/// omission authority is supplied only by the caller's validated live edge;
+/// it is never inferred from a blank cell.
+pub(super) fn logical_cells_for_row(
+    row: &Row,
+    styles: &StyleTable,
+    wide_early_padding: usize,
+) -> Vec<super::LogicalCell> {
+    let marker_start = row.len().saturating_sub(wide_early_padding);
+    row.iter()
+        .enumerate()
+        .map(|(index, cell)| super::LogicalCell {
+            ch: cell.c,
+            display_width: cell.width,
+            combining: row.combining(index as u16).iter().collect(),
+            style: styles.get(cell.style_id),
+            wide_early_padding: wide_early_padding > 0 && index >= marker_start,
+        })
+        .collect()
+}
+
+pub(super) fn logical_cells_are_omittable_blank(cells: &[super::LogicalCell]) -> bool {
+    cells.iter().all(|cell| {
+        cell.ch == ' '
+            && cell.display_width == 1
+            && cell.combining.is_empty()
+            && cell.style == super::Style::default()
+            && !cell.wide_early_padding
+    })
 }
 
 /// Emit a single boolean DEC private mode sequence.
@@ -528,6 +577,104 @@ fn render_screen_impl(
     // Close synchronized output block.
     out.extend_from_slice(b"\x1b[?2026l");
     out
+}
+
+/// attended-UX M2 — overlay the polite-delivery banner status row onto an
+/// already-rendered frame (`base`), per client.
+///
+/// This is a pure PRESENTATION overlay: it appends ANSI to `base` and NEVER
+/// touches the `Grid` (the shared screen model the fire's plain-composer verify
+/// reads). It is drawn on **row 1** (the harness composer lives at the bottom, so
+/// a bottom overlay would hide the very draft the human is typing), with the
+/// cursor saved back to the grid's real position afterward.
+///
+/// # The HARD scrolling clause
+/// - **scrollback:** the overlay is appended AFTER the whole frame (including any
+///   `render_scrollback` native-scrollback injection, which runs before the sync
+///   block), so it only ever paints the live top row — it is NEVER one of the
+///   lines pushed into native scrollback. Scrolling back shows clean history.
+/// - **alt-screen:** when the hosted app is in the alt screen the banner
+///   SUPPRESSES itself (yields to the fullscreen TUI). On alt-entry the `?1049h`
+///   switch already removed it from view, so we clear the cache without emitting
+///   into the alt buffer; on exit the forced full repaint + this compose
+///   re-assert it on the main screen.
+///
+/// No-op preservation (QS-7): when the banner is idle and none is cached, nothing
+/// is appended — the byte stream is identical to the pre-M2 behavior.
+pub(super) fn compose_banner(
+    grid: &Grid,
+    in_alt_screen: bool,
+    base: &mut Vec<u8>,
+    banner: Option<&str>,
+    cache: &mut RenderCache,
+) {
+    // Suppress entirely under alt-screen (yield to a fullscreen TUI).
+    let desired = if in_alt_screen { None } else { banner };
+
+    match (desired, cache.last_banner.as_deref()) {
+        (Some(text), last) => {
+            // Repaint when the text changed OR the grid painted this frame (which
+            // may have overwritten row 1); otherwise leave the frame untouched.
+            if last != Some(text) || !base.is_empty() {
+                append_banner_row(grid, base, Some(text));
+                cache.last_banner = Some(text.to_string());
+            }
+        }
+        (None, Some(_)) => {
+            // Hide: restore the real row-1 content over the stale banner. Under
+            // alt-screen the buffer switch already cleared it — just forget it.
+            if !in_alt_screen {
+                append_banner_row(grid, base, None);
+            }
+            cache.last_banner = None;
+        }
+        (None, None) => {} // nothing shown, nothing stale → true no-op preserved
+    }
+}
+
+/// Append the row-1 overlay to `base`: hide cursor, position at row 1, paint the
+/// banner text (reverse-video) OR — when `banner` is `None` — repaint the real
+/// grid row 0 to ERASE a stale banner, then restore the grid's cursor + visibility.
+fn append_banner_row(grid: &Grid, base: &mut Vec<u8>, banner: Option<&str>) {
+    base.extend_from_slice(b"\x1b[?25l"); // hide cursor while painting the overlay
+    // Row 1, col 1 (absolute), reset SGR.
+    //
+    // KNOWN-LIMITATION CORRECTNESS RESIDUAL (red-team r1 F3 — NOT a taste residual):
+    // this CUP is interpreted region-relative under DECOM (`?6h`) + a custom scroll
+    // region, so a MAIN-SCREEN app that sets origin mode would see the banner painted
+    // at the region top, not physical row 1. Deferred, not fixed: the banner shows
+    // only on the main screen (it suppresses under alt-screen, where full-screen
+    // DECOM/region apps live), and the target composers (claude/codex) do not set
+    // DECOM on the main screen → effectively unreachable today. A defensive DECOM
+    // reset around the overlay was rejected: toggling `?6l`/`?6h` mid-frame re-homes
+    // the cursor on some terminals and would risk NEW corruption on the common path
+    // to fix an unreachable one. Re-entry: a main-screen DECOM composer appearing.
+    base.extend_from_slice(b"\x1b[1;1H\x1b[0m");
+    match banner {
+        Some(text) => {
+            base.extend_from_slice(b"\x1b[7m"); // reverse video — status-line look
+            base.extend_from_slice(text.as_bytes());
+            base.extend_from_slice(b"\x1b[0m\x1b[K");
+        }
+        None => {
+            // Erase: repaint the true row-0 content, then clear its tail.
+            if let Some(row0) = grid.visible_rows().next() {
+                let line = render_line(row0, grid.style_table());
+                base.extend_from_slice(&line);
+            }
+            base.extend_from_slice(b"\x1b[0m\x1b[K");
+        }
+    }
+    // Restore the cursor to the grid's real position + visibility.
+    let (cx, cy) = grid.cursor_pos();
+    base.extend_from_slice(b"\x1b[");
+    write_u16(base, cy + 1);
+    base.push(b';');
+    write_u16(base, cx + 1);
+    base.push(b'H');
+    if grid.cursor_visible() {
+        base.extend_from_slice(b"\x1b[?25h");
+    }
 }
 
 /// ANSI escape sequence renderer.

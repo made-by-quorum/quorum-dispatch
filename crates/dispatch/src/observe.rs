@@ -1,8 +1,8 @@
-//! WP-B-CS-2 — the HUMAN / observe command surface (`qd connect` against a
+//! WP-B-CS-2 — the HUMAN / observe command surface (`qd attach` against a
 //! headless agent-driven session). The PURE, seam-testable core: it consumes the
 //! daemon's `ServerMsg::Republish*` CONTROL FACTS and never the agent's assistant
 //! text, models the read-only dashboard STATE, the 1/2/3 action menu, the
-//! turn-boundary cutover PRIMITIVE (+ its input buffer), and the connect dispatch
+//! turn-boundary cutover PRIMITIVE (+ its input buffer), and the attach dispatch
 //! discriminant. No I/O, no `claude`, no daemon — every decision is a pure fold so
 //! the whole surface is unit-tested deterministically (the same effects-seam
 //! discipline as `driver`/`liveness`).
@@ -21,7 +21,7 @@
 //! ## B5 boundary
 //! A LIVE headless `qd start` writes no addressable registry row yet (B5, Fork C
 //! ratified — `lifecycle.rs` "launched-but-not-yet-addressable until B5"). So the
-//! connect dispatch ([`connect_dispatch`]) keys on a [`TargetMode`] DISCRIMINANT,
+//! attach dispatch ([`attach_dispatch`]) keys on a [`TargetMode`] DISCRIMINANT,
 //! proven here with SYNTHETIC values; B5 populates the discriminant from the real
 //! row. The renderer + cutover primitive are standalone, fed by synthetic frames.
 
@@ -173,8 +173,8 @@ impl DashboardState {
 // The 1 / 2 / 3 action menu (S-B rulings — the headless-target menu)
 // ===========================================================================
 
-/// The well-labelled action menu offered when `qd connect` lands on a headless
-/// (agent-driven) target (S-B-COMMAND-SURFACE-RULINGS §"qd connect").
+/// The well-labelled action menu offered when `qd attach` lands on a headless
+/// (agent-driven) target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuChoice {
     /// 1 — send a message via relay (async, non-disruptive; the agent stays
@@ -279,7 +279,7 @@ pub struct CutoverGate {
 }
 
 impl CutoverGate {
-    /// A gate that starts mid-turn (the common case: `qd connect` lands on a
+    /// A gate that starts mid-turn (the common case: `qd attach` lands on a
     /// session whose turn is already in flight). Use [`Self::default`] for an
     /// idle-start gate.
     pub fn in_turn() -> Self {
@@ -353,11 +353,11 @@ impl CutoverGate {
 }
 
 // ===========================================================================
-// Connect dispatch discriminant (B5-deferred live row population)
+// Attach dispatch discriminant (B5-deferred live row population)
 // ===========================================================================
 
-/// How a resolved `qd connect` target is hosted / driven — the discriminant the
-/// dispatch branches on (S-B rulings §"qd connect": mode auto-follows the target).
+/// How a resolved `qd attach` target is hosted / driven — the discriminant the
+/// dispatch branches on (mode auto-follows the target).
 /// B5 populates this from the real registry row (live headless addressability);
 /// today it is a SYNTHETIC value, since a headless `qd start` writes no addressable
 /// row yet (lifecycle.rs defers identity to B5). The renderer + cutover primitive
@@ -365,20 +365,20 @@ impl CutoverGate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetMode {
     /// Human-driven interactive/TUI session (a live mux pane) → attach to DRIVE
-    /// directly (today's connect-to-live path).
+    /// directly (today's attach-to-live path).
     InteractiveTui,
     /// Agent-driven HEADLESS (stream-json) session → OBSERVE mode (the read-only
     /// dashboard + 1/2/3 menu). The B5 surface: no row resolves to this yet.
     HeadlessAgent,
     /// No live pane / producer (cold) → auto-revive then attach (today's
-    /// connect-cold path).
+    /// attach-cold path).
     Cold,
 }
 
-/// The action `qd connect` takes for a resolved target — the pure decision keyed
+/// The action `qd attach` takes for a resolved target — the pure decision keyed
 /// on [`TargetMode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectAction {
+pub enum AttachAction {
     /// Attach the live native TUI and DRIVE (today's live-pane behavior).
     AttachDrive,
     /// Enter the read-only OBSERVE dashboard + menu (the B-CS-2 surface).
@@ -387,20 +387,20 @@ pub enum ConnectAction {
     ReviveThenAttach,
 }
 
-/// `qd connect`'s mode dispatch (S-B rulings): the human verb's I/O follows the
+/// `qd attach`'s mode dispatch (S-B rulings): the human verb's I/O follows the
 /// target. A pure discriminant decision — coherent without B5's row shape, so it
 /// is built + tested now (synthetic `TargetMode`), and B5 only has to feed the
 /// real discriminant in.
-pub fn connect_dispatch(mode: TargetMode) -> ConnectAction {
+pub fn attach_dispatch(mode: TargetMode) -> AttachAction {
     match mode {
-        TargetMode::InteractiveTui => ConnectAction::AttachDrive,
-        TargetMode::HeadlessAgent => ConnectAction::Observe,
-        TargetMode::Cold => ConnectAction::ReviveThenAttach,
+        TargetMode::InteractiveTui => AttachAction::AttachDrive,
+        TargetMode::HeadlessAgent => AttachAction::Observe,
+        TargetMode::Cold => AttachAction::ReviveThenAttach,
     }
 }
 
-/// The `qd connect` target-mode resolver: map a resolved registry row to its
-/// [`TargetMode`] from liveness, so `connect` routes a target by what it actually
+/// The `qd attach` target-mode resolver: map a resolved registry row to its
+/// [`TargetMode`] from liveness, so `attach` routes a target by what it actually
 /// is.
 ///
 /// P4DB drive-burn (T1/T2): the `claude -p` stream-json drive — and the
@@ -745,24 +745,24 @@ mod tests {
         assert!(gate.poll_fire().is_some());
     }
 
-    // --- connect dispatch (synthetic discriminant) --------------------------
+    // --- attach dispatch (synthetic discriminant) ---------------------------
 
-    /// §6 — the connect dispatch keyed on the SYNTHETIC `TargetMode` discriminant:
+    /// §6 — the attach dispatch keyed on the SYNTHETIC `TargetMode` discriminant:
     /// interactive → drive, headless → observe, cold → revive-then-attach. Proven
     /// without B5's row shape (a pure discriminant decision).
     #[test]
-    fn connect_dispatch_routes_by_mode() {
+    fn attach_dispatch_routes_by_mode() {
         assert_eq!(
-            connect_dispatch(TargetMode::InteractiveTui),
-            ConnectAction::AttachDrive
+            attach_dispatch(TargetMode::InteractiveTui),
+            AttachAction::AttachDrive
         );
         assert_eq!(
-            connect_dispatch(TargetMode::HeadlessAgent),
-            ConnectAction::Observe
+            attach_dispatch(TargetMode::HeadlessAgent),
+            AttachAction::Observe
         );
         assert_eq!(
-            connect_dispatch(TargetMode::Cold),
-            ConnectAction::ReviveThenAttach
+            attach_dispatch(TargetMode::Cold),
+            AttachAction::ReviveThenAttach
         );
     }
 
@@ -777,13 +777,13 @@ mod tests {
         // Live interactive pane → InteractiveTui → AttachDrive.
         let m = resolve_target_mode(None, true, true);
         assert_eq!(m, TargetMode::InteractiveTui);
-        assert_eq!(connect_dispatch(m), ConnectAction::AttachDrive);
+        assert_eq!(attach_dispatch(m), AttachAction::AttachDrive);
 
         // No live pane → Cold (revive-then-attach), regardless of the (now-ignored)
         // entrypoint / pid_alive inputs.
         assert_eq!(resolve_target_mode(None, false, false), TargetMode::Cold);
         assert_eq!(resolve_target_mode(Some("headless"), true, false), TargetMode::Cold);
-        assert_eq!(connect_dispatch(TargetMode::Cold), ConnectAction::ReviveThenAttach);
+        assert_eq!(attach_dispatch(TargetMode::Cold), AttachAction::ReviveThenAttach);
     }
 
     // --- concurrency / latency on the fold (DoD #5) -------------------------

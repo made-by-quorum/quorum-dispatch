@@ -1,0 +1,19 @@
+# G8 cell 2: unchanged-width counterpart survives; horizontal restore severs.
+case g8_2_unchanged_width_survives
+size 5 3 100
+emit 10
+print ABCDEF
+alt-enter
+alt-exit
+expect 1 0 ABCDEF
+end
+
+case g8_2_horizontal_resize_severs
+size 5 3 100
+emit 10
+print ABCDEF
+alt-enter
+resize 3 3
+alt-exit
+expect 0 1 ABC|F
+end

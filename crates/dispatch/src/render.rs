@@ -794,6 +794,55 @@ mod tests {
         );
     }
 
+    /// N2 (M1 residual → M5/T4): the qrmux mux emitter carries a HAND-PORTED copy
+    /// of `epoch_ms_to_iso` (`qrmux::attended::emitter::epoch_ms_to_iso`) — the mux
+    /// is leaf-crate-free and cannot import `dispatch::render`, so the two are
+    /// character-identical BY MAINTENANCE, not by a shared definition. This
+    /// differential test pins them byte-equal across a wide input sweep (epoch,
+    /// pre-epoch/negative, ms sub-second boundaries, leap days, century/era edges,
+    /// far future) so a future edit to either copy that drifts the emitted `ts`
+    /// bytes — a byte-identity break in the delivery ledger — fails HERE loudly.
+    #[test]
+    fn epoch_ms_to_iso_is_byte_equal_to_the_qrmux_mux_emitter_copy() {
+        // Fixed, representative instants (not random — deterministic gate).
+        let fixed: &[i64] = &[
+            0,                    // epoch
+            -1,                   // one ms pre-epoch (div_euclid/rem_euclid arm)
+            1,                    // one ms post-epoch
+            999,                  // sub-second boundary
+            1000,                 // exact second
+            -1000,                // exact second pre-epoch
+            -86_400_000,          // one day pre-epoch
+            1_709_209_845_678,    // leap day 2024-02-29T12:30:45.678Z
+            1_717_495_200_123,    // 2024-06-04T10:00:00.123Z
+            951_782_400_000,      // 2000-02-29 (leap century)
+            4_102_444_800_000,    // 2100-01-01 (non-leap century)
+            -2_208_988_800_000,   // 1900-01-01
+            253_402_300_799_999,  // 9999-12-31T23:59:59.999Z (far future)
+        ];
+        for &ms in fixed {
+            assert_eq!(
+                epoch_ms_to_iso(ms),
+                qrmux::attended::emitter::epoch_ms_to_iso(ms),
+                "epoch_ms_to_iso drift at ms={ms}: dispatch::render vs qrmux mux emitter"
+            );
+        }
+        // A dense stride sweep (every ~7h over ~40 years, straddling many
+        // month/leap/DST-irrelevant-UTC boundaries) to catch a civil-math drift the
+        // fixed points might miss.
+        let mut ms: i64 = -1_000_000_000_000;
+        let end: i64 = 1_500_000_000_000;
+        let step: i64 = 25_000_000; // ~6.9h
+        while ms < end {
+            assert_eq!(
+                epoch_ms_to_iso(ms),
+                qrmux::attended::emitter::epoch_ms_to_iso(ms),
+                "epoch_ms_to_iso drift at ms={ms} (sweep)"
+            );
+            ms += step;
+        }
+    }
+
     #[test]
     fn amz_date_strips_separators_and_millis() {
         // Same instants as `iso_matches_bun` — the amz-date form is the ISO

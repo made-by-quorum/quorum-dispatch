@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test/golden/scenarios/a6_telemetry.sh — A6 D3 telemetry GATE driver (impl-B).
 #
-# Drives the spec §7 G-A3 (fault-model) + G-A6 (opaque-payload / usage / dirty-
+# Drives the spec §7 G-A3 (fault-model) + G-A6 (opaque-payload / invoked / dirty-
 # state) rows fully JAILED, against the qd-under-test binary. Every qd invocation
 # runs through the jail env (jail_qd) and touches ONLY the jail HOME/QD_HOME — the
 # `qd mark`/`ls`/`info` engine invocations with stub state are sanctioned (spec:
@@ -60,20 +60,20 @@ seed_registry() {
 }
 
 # ===========================================================================
-# G-A6a — `qd mark` appends a payload line AND a usage line (spec §4.1). The
+# G-A6a — `qd mark` appends a payload line AND an invoked line (spec §4.1). The
 # opaque payload carries an INNER "event" key + org vocabulary; it must round-
 # trip verbatim and NOT collide with engine event lines.
 # ===========================================================================
-hdr "G-A6a qd mark: payload line + usage line, opaque inner event key"
+hdr "G-A6a qd mark: payload line + invoked line, opaque inner event key"
 seed_registry 999001 "${JAIL_PREFIX}alpha" "sid-alpha"
 : > "$MARKS"  # start clean
 jail_qd mark "${JAIL_PREFIX}alpha" '{"event":"create","on_behalf_of":"lead","backend":"SPOOF"}' >/dev/null 2>&1
 mark_rc=$?
-# Two lines: one mark (top-level "payload"), one usage (top-level "event":"usage").
+# Two lines: one mark (top-level "payload"), one invoked (top-level "event":"invoked").
 line_count="$(wc -l < "$MARKS" | tr -d ' ')"
 mark_line="$(countf '"payload"' "$MARKS")"
-usage_line="$(countf '"event":"usage"' "$MARKS")"
-usage_verb="$(grep '"event":"usage"' "$MARKS" 2>/dev/null | grep -c '"verb":"mark"' 2>/dev/null; true)"
+invoked_line="$(countf '"event":"invoked"' "$MARKS")"
+invoked_verb="$(grep '"event":"invoked"' "$MARKS" 2>/dev/null | grep -c '"verb":"mark"' 2>/dev/null; true)"
 # The inner "event":"create" + "backend":"SPOOF" stayed INSIDE the payload object
 # (no TOP-LEVEL create event line was emitted by `qd mark`). A line-level grep
 # can't tell a NESTED "event":"create" from a top-level one, so parse each line's
@@ -94,11 +94,11 @@ for ln in open(sys.argv[1]):
 print(n)
 PY
 )"
-printf '    rc=%s lines=%s mark=%s usage=%s usage-verb-mark=%s top-create=%s\n' \
-    "$mark_rc" "$line_count" "$mark_line" "$usage_line" "$usage_verb" "$spoof_top"
+printf '    rc=%s lines=%s mark=%s invoked=%s invoked-verb-mark=%s top-create=%s\n' \
+    "$mark_rc" "$line_count" "$mark_line" "$invoked_line" "$invoked_verb" "$spoof_top"
 if [ "$mark_rc" = "0" ] && [ "$line_count" = "2" ] && [ "$mark_line" = "1" ] \
-   && [ "$usage_line" = "1" ] && [ "$usage_verb" = "1" ] && [ "$spoof_top" = "0" ]; then
-    row_pass "G-A6a" "mark payload + usage line; inner event key did not promote"
+   && [ "$invoked_line" = "1" ] && [ "$invoked_verb" = "1" ] && [ "$spoof_top" = "0" ]; then
+    row_pass "G-A6a" "mark payload + invoked line; inner event key did not promote"
 else
     row_fail "G-A6a" "see excerpt above; marks=$(cat "$MARKS")"
 fi

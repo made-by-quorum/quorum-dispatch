@@ -22,6 +22,9 @@
 //! otherwise, so the default suite never spends budget. Run:
 //!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p quorum-dispatch --test acp_resume_faithfulness_spike -- --nocapture --include-ignored
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -30,7 +33,7 @@ use dispatch::provider::acp::{AcpClient, AcpEvent, AcpHost, StopReason};
 use tempfile::TempDir;
 
 fn live() -> bool {
-    std::env::var("QD_ACP_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_ACP_LIVE", "acp_resume_faithfulness_spike")
 }
 
 fn node_program() -> Option<String> {

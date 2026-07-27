@@ -1,0 +1,54 @@
+# G8 cell 4: boundary source + saved target share A6's per-edge predicate.
+case g8_4_boundary_unchanged_survives
+size 5 2 100
+emit 10
+print ABCDEF
+lf
+alt-enter
+alt-exit
+expect 1 0 ABCDEF
+end
+
+# No explicit LF: the wrap leaves history-source -> saved-target sequential
+# authorization live across an unchanged alt excursion.
+case g8_4_boundary_unchanged_sequential_continues
+size 5 1 100
+emit 10
+print ABCDEF
+alt-enter
+alt-exit
+print G
+expect 1 0 ABCDEFG
+end
+
+case g8_4_boundary_source_clear_severs
+size 5 2 100
+emit 10
+print ABCDEF
+lf
+alt-enter
+ed3
+alt-exit
+expect 0 1 F
+end
+
+case g8_4_boundary_target_width_severs
+size 5 2 100
+emit 10
+print ABCDEF
+lf
+alt-enter
+resize 3 2
+alt-exit
+expect 0 1 ABCDE|F
+end
+
+# G8 retained-topology cap cell: eviction removes the oldest edge's source
+# without leaving a dangling reference, while the two later co-moving edges
+# remain live. The small cap is evidence-bearing: eviction actually executes.
+case g8_scrollback_cap_evicts_oldest_preserves_later_edges
+size 5 2 1
+emit 20
+print ABCDEFGHIJKLMNOP
+expect 2 1 FGHIJKLMNOP
+end

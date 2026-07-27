@@ -16,10 +16,11 @@ use std::time::Duration;
 
 use clap::ArgMatches;
 
-use dispatch::effects::{Env, RealClock, RealEnv, RealProcessTable};
+use dispatch::adoption::{Management, SessionAccess};
+use dispatch::effects::{Env, RealClock, RealEnv};
 use dispatch::exec::RealExec;
 use dispatch::model::Session;
-use dispatch::relay::{self, FastRelayMatch, PidEntryRef, RelayContract, RelayError, RelayReply};
+use dispatch::relay::{self, PidEntryRef, RelayContract, RelayError, RelayReply};
 use dispatch::relay_http::CcRelay;
 
 use super::acp_loss;
@@ -46,6 +47,85 @@ pub fn run(m: &ArgMatches) -> i32 {
     run_with_client(query, message, wait, timeout_s, &client)
 }
 
+/// Unified-send entry into the existing Claude relay injection path. The
+/// unified selector supplies the port captured from the already-resolved
+/// registry row, so this function performs no fast lookup or second target
+/// resolution. A failed POST is returned as a relay failure; this function has
+/// no PTY fallback branch.
+pub(super) fn run_claude_relay_unified(
+    session: &Session,
+    message: &str,
+    relay_port: u16,
+) -> i32 {
+    use dispatch::provider::{InjectError, ProviderFx, SessionKey};
+
+    let name = session
+        .name
+        .clone()
+        .unwrap_or_else(|| session.session_id.clone());
+    let Some(provider_impl) = dispatch::provider::provider_for("claude-code") else {
+        eprintln!(
+            "qd send: unknown provider \"claude-code\" — relay delivery is unavailable."
+        );
+        return 1;
+    };
+    let client = CcRelay::new();
+    let from_session = derive_from_session(&RealEnv);
+
+    // Build ProviderFx inline (same as inject_via_provider) so we can supply the
+    // resolved session UUID as SessionKey.id, keeping display name separate.
+    // inject_via_provider uses name as both id and name (send:relay fast path has
+    // no Session row); unified send always has the full resolved Session.
+    let env = RealEnv;
+    let home = env.var("HOME").filter(|s| !s.is_empty());
+    let paths = dispatch::paths::QdPaths::from_home(std::path::Path::new(
+        home.as_deref().unwrap_or("/"),
+    ));
+    let fx = ProviderFx {
+        env: &env,
+        paths: &paths,
+        socket_dir: paths.sessions_dir.clone(),
+        mux: None,
+        clock: None,
+        sleeper: None,
+        relay: Some(&client),
+        relay_port: Some(relay_port),
+        app_server: None,
+        codex_expected_turn_id: None,
+        acp_client: None,
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
+    // QS-2 identity: resolved UUID pins the injection identity; name is display only.
+    let key = SessionKey {
+        id: &session.session_id,
+        name: Some(&name),
+        cwd: None,
+        pid: None,
+    };
+    let message_id = match provider_impl.inject(&fx, &key, message, &from_session) {
+        Ok(id) => id,
+        Err(InjectError::RelayFailed(e)) => {
+            eprintln!("Failed to send message: {}", send_err_text(&e));
+            return 1;
+        }
+        Err(InjectError::NoTransport(_)) => {
+            return no_relay_exit(&name, message, None);
+        }
+        Err(InjectError::Precondition(reason)) => {
+            eprintln!("Failed to send message: {reason}");
+            return 1;
+        }
+    };
+
+    // Reuse the relay carrier's existing evidence and output semantics. A POST
+    // acknowledgement is represented as queued/delivered, never as a reply.
+    emit_relay_send_events(&name, Some(session), message, &message_id);
+    println!("{message_id}");
+    invoked_send_relay(&name);
+    0
+}
+
 /// The verb body, parameterized on the relay client so tests inject a fake.
 fn run_with_client(
     query: &str,
@@ -55,10 +135,29 @@ fn run_with_client(
     client: &dyn RelayContract,
 ) -> i32 {
     // --- resolve the relay port (fast path, then full-scan fallback) ---
-    let (relay_port, session_name, provider_id, session) = match resolve_relay_port(query) {
+    let (relay_port, session_name, provider_id, session, target_uuid, access) =
+        match resolve_relay_port(query) {
         Ok(v) => v,
         Err(code) => return code,
     };
+
+    // Self-send guard: compare resolved stable session UUIDs.
+    // If the caller's UUID equals the target's UUID, reject before any delivery activity.
+    // If either UUID is unresolved, make no same-or-distinct claim (no fabricated guard result).
+    let caller_uuid = caller_uuid_from_env(&RealEnv);
+    if is_self_send(caller_uuid.as_deref(), target_uuid.as_deref()) {
+        eprintln!(
+            "qd send:relay: \"{session_name}\": target is this session — send rejected."
+        );
+        return 1;
+    }
+
+    // A live registry row + MCP sidecar does not prove the development channel
+    // is loaded. Refuse before POST unless the process snapshot positively proved
+    // receivability; a bare session must never silently accept/lose a message.
+    if access.management == Management::Bare {
+        return bare_destination_exit(&session_name, message, session.as_ref());
+    }
 
     // codex P2 W6 (codex-p2-spec section 7.5): a codex row is a DAEMON-hosted
     // protocol thread, not a relay session — it carries no relay port. Route it to
@@ -157,15 +256,15 @@ fn run_with_client(
     if !wait {
         // Async: print the message_id and exit 0 (send.ts:437-440).
         println!("{message_id}");
-        usage_send_relay(&session_name);
+        invoked_send_relay(&session_name);
         return 0;
     }
 
     // --- --wait long-poll (send.ts:442-474) ---
     let code = wait_for_reply(client, port, &message_id, timeout_s);
     if code == 0 {
-        // A6 §4.1: a usage line on the SUCCESSFUL (exit-0) --wait reply too.
-        usage_send_relay(&session_name);
+        // A6 §4.1: an invoked line on the SUCCESSFUL (exit-0) --wait reply too.
+        invoked_send_relay(&session_name);
     }
     code
 }
@@ -461,16 +560,40 @@ fn derive_from_session(env: &dyn Env) -> String {
         .unwrap_or_else(|| "cli".to_string())
 }
 
-/// Append a content-free A6 usage line for a SUCCESSFUL `send:relay`. The fast
-/// path yields only a NAME (no sessionId), so we key the usage line by name —
+/// Resolve the caller's session UUID via the QD identity chain: `QD_SESSION_ID`
+/// → idstore → UUID. Returns `None` if absent, malformed, or unmapped.
+/// This is the SAME resolution chain as `qd whoami`'s env path, per the
+/// spec requirement (S4: resolved-identity comparison uses the shared chain).
+fn caller_uuid_from_env(env: &dyn Env) -> Option<String> {
+    let stable = env.var("QD_SESSION_ID").filter(|s| !s.is_empty())?;
+    let home = env.var("HOME").filter(|s| !s.is_empty())?;
+    let paths = dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env);
+    let ids = dispatch::idstore::fold(&dispatch::idstore::ids_path(&paths.state_dir));
+    dispatch::idstore::resolve_to_uuid(&ids, &stable)
+}
+
+fn is_self_send(caller_uuid: Option<&str>, target_uuid: Option<&str>) -> bool {
+    matches!((caller_uuid, target_uuid), (Some(caller), Some(target)) if caller == target)
+}
+
+fn fallback_target_uuid(session: &Session) -> Option<String> {
+    if session.session_id.is_empty() {
+        None
+    } else {
+        Some(session.session_id.clone())
+    }
+}
+
+/// Append a content-free A6 invoked line for a SUCCESSFUL `send:relay`. The fast
+/// path yields only a NAME (no sessionId), so we key the invoked line by name —
 /// the fold accepts either. Best-effort: a failure warns but NEVER changes the
 /// verb's exit code (spec §4.1).
-fn usage_send_relay(name: &str) {
+fn invoked_send_relay(name: &str) {
     use dispatch::effects::RealClock;
     if let Err(e) =
-        dispatch::telemetry::append_usage(&RealEnv, &RealClock, "send", None, Some(name))
+        dispatch::telemetry::append_invoked(&RealEnv, &RealClock, "send", None, Some(name))
     {
-        eprintln!("WARNING: telemetry usage append failed (non-fatal): {e}");
+        eprintln!("WARNING: telemetry invoked append failed (non-fatal): {e}");
     }
 }
 
@@ -578,10 +701,10 @@ fn inject_via_provider(
 ///
 /// Returns the process exit code. On success the turn id is printed (the async
 /// `send:relay` prints the message id; the codex analog prints the turn id) and a
-/// usage line is appended. EVERY user-facing string here is SEND-vocabulary — NO
+/// invoked line is appended. EVERY user-facing string here is SEND-vocabulary — NO
 /// `turn/start`, `turn/steer`, or `expectedTurnId` ever appears (W2 enforces it in
 /// the rpc layer; the verb keeps it too).
-fn run_codex_send(session: &Session, message: &str) -> i32 {
+pub(super) fn run_codex_send(session: &Session, message: &str) -> i32 {
     use dispatch::provider::codex::{
         open_turn_id, read_lines, AppServerRpc, ClientInfo, WsAppServer,
     };
@@ -720,9 +843,9 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
             // C5/C3: sent + delivered (turn-accepted) into the TARGET's log on the
             // inject ACK; the success terminal lands later at the observe seam.
             emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
-            // The async-send analog: print the id (turn id here), append usage.
+            // The async-send analog: print the id (turn id here), append invoked.
             println!("{turn_id}");
-            usage_send_relay(&name);
+            invoked_send_relay(&name);
             0
         }
         Err(InjectError::NoTransport(_)) => {
@@ -783,7 +906,7 @@ fn run_codex_send(session: &Session, message: &str) -> i32 {
 /// **Scope of the tombstone: `acp/claude-code` only.** `acp_loss::preserve_identity`
 /// self-gates on the provider, so `acp/opencode` (which also routes through this
 /// fn) keeps its byte-identical plain refusal — no store write, no extra output.
-fn run_acp_send(session: &Session, message: &str) -> i32 {
+pub(super) fn run_acp_send(session: &Session, message: &str) -> i32 {
     use dispatch::provider::acp::{
         classify_connect_failure, derive_tier, AcpClient, AcpConnection, ConnectFailure, Tier,
         ACP_CC_PROVIDER,
@@ -937,7 +1060,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
             // inject ACK; the StopReason-mapped terminal lands later in run_acp_wait.
             emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
             println!("{turn_id}");
-            usage_send_relay(&name);
+            invoked_send_relay(&name);
             0
         }
         Err(InjectError::Precondition(s)) => {
@@ -980,7 +1103,7 @@ fn run_acp_send(session: &Session, message: &str) -> i32 {
 /// turn OUTCOME reads the registry/transcript, not the send reply. A dead/wrong-identity
 /// endpoint or a failed connect DEGRADES to the SEND "not reachable" surface — never a hang
 /// on a dead endpoint, never a fake.
-fn run_pi_send(session: &Session, message: &str) -> i32 {
+pub(super) fn run_pi_send(session: &Session, message: &str) -> i32 {
     use dispatch::provider::pi::residence::cmdline_is_our_pi_daemon;
     use dispatch::provider::pi::{PiProvider, PiRemote, PiRpc};
     use dispatch::provider::{InjectError, Provider, ProviderFx, SessionKey};
@@ -1079,9 +1202,9 @@ fn run_pi_send(session: &Session, message: &str) -> i32 {
             // inject ACK; the content-keyed rollout terminal lands later at turn
             // close (run_pi_wait observer). PENDING in the meantime — honest.
             emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
-            // The async-send analog: print the minted turn id, append usage.
+            // The async-send analog: print the minted turn id, append invoked.
             println!("{turn_id}");
-            usage_send_relay(&name);
+            invoked_send_relay(&name);
             0
         }
         Err(InjectError::Precondition(s)) => {
@@ -1185,7 +1308,7 @@ fn run_pi_floor_send(
                 "qd send:relay: \"{name}\": delivered via pi structured floor (stopReason={}).",
                 outcome.stop_reason.as_deref().unwrap_or("?")
             );
-            usage_send_relay(&name);
+            invoked_send_relay(&name);
             0
         }
         Err(e) => {
@@ -1260,11 +1383,35 @@ fn codex_resolve_fx<'a>(
 /// validated row provider (refuse_unknown_provider above already guaranteed it is
 /// claude-code/opencode; opencode never reaches here with a port).
 #[allow(clippy::type_complexity)]
-fn resolve_relay_port(query: &str) -> Result<(Option<u16>, String, String, Option<Session>), i32> {
+fn resolve_relay_port(
+    query: &str,
+) -> Result<
+    (
+        Option<u16>,
+        String,
+        String,
+        Option<Session>,
+        Option<String>,
+        SessionAccess,
+    ),
+    i32,
+> {
     // Fast path: pid entries + relays + ppid map. Provider is claude-code by
     // construction (no Session row exists; the relay scan only knows claude relays).
     if let Some(fast) = fast_lookup(query) {
-        return Ok((Some(fast.port), fast.name, "claude-code".to_string(), None));
+        let target_uuid = if fast.session_id.is_empty() {
+            None
+        } else {
+            Some(fast.session_id.clone())
+        };
+        return Ok((
+            Some(fast.port),
+            fast.name,
+            "claude-code".to_string(),
+            None,
+            target_uuid,
+            fast.access,
+        ));
     }
 
     // Fallback: cold / out-of-cap / tombstoned targets carry no live relay port, so
@@ -1307,11 +1454,15 @@ fn resolve_relay_port(query: &str) -> Result<(Option<u16>, String, String, Optio
         .name
         .clone()
         .unwrap_or_else(|| session.session_id.clone());
+    let target_uuid = fallback_target_uuid(session);
+    let (access, relay_port) = real_session_access(session);
     Ok((
-        session.relay_port,
+        relay_port.or(session.relay_port),
         name,
         session.provider.clone(),
         Some(session.clone()),
+        target_uuid,
+        access,
     ))
 }
 
@@ -1331,7 +1482,14 @@ fn provider_uses_relay_fast_path(provider: Option<&str>) -> bool {
     p != "codex" && !p.starts_with("acp/")
 }
 
-fn fast_lookup(query: &str) -> Option<FastRelayMatch> {
+struct FastLookup {
+    port: u16,
+    session_id: String,
+    name: String,
+    access: SessionAccess,
+}
+
+fn fast_lookup(query: &str) -> Option<FastLookup> {
     let env = RealEnv;
     let paths = common::paths_from_home(&env).ok()?;
 
@@ -1355,16 +1513,62 @@ fn fast_lookup(query: &str) -> Option<FastRelayMatch> {
 
     // Relay ports: sidecars, then the real HTTP probe fallback.
     let probe = dispatch::relay_http::HttpRelayProbe::new();
-    let relays = relay::get_relay_ports(&paths.relay_dir, &probe);
+    let relay_candidates = relay::get_relay_ports(&paths.relay_dir, &probe);
 
-    // ppid map for the ancestry walk.
-    let pt = RealProcessTable::new(RealExec);
-    let ppid_map = {
-        use dispatch::effects::ProcessTable;
-        pt.ppid_map().unwrap_or_default()
+    // ONE process snapshot drives both ancestry resolution and the channel-argv
+    // proof, so a target cannot flip classifications between two `ps` reads.
+    let rows = dispatch::effects::process_rows(&RealExec).ok()?;
+    let relays = dispatch::adoption::verify_live_relays(
+        &relay_candidates,
+        &CcRelay::new(),
+        &dispatch::effects::is_pid_alive,
+    );
+    let ppid_map = rows.iter().map(|(pid, row)| (*pid, row.ppid)).collect();
+    let matched = relay::fast_relay_lookup(query, &pid_entries, &relays, &ppid_map)?;
+    let access = dispatch::adoption::classify_live_claude(
+        &matched.session_id,
+        matched.pid,
+        &relays,
+        &rows,
+        &dispatch::effects::is_pid_alive,
+    );
+    Some(FastLookup {
+        port: matched.port,
+        session_id: matched.session_id,
+        name: matched.name,
+        access,
+    })
+}
+
+fn real_session_access(session: &Session) -> (SessionAccess, Option<u16>) {
+    let env = RealEnv;
+    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
+        return (
+            SessionAccess {
+                management: Management::Bare,
+                relay_port: None,
+            },
+            None,
+        );
     };
-
-    relay::fast_relay_lookup(query, &pid_entries, &relays, &ppid_map)
+    let paths = dispatch::paths::QdPaths::from_home(std::path::Path::new(&home));
+    let rows = dispatch::effects::process_rows(&RealExec).unwrap_or_default();
+    let relay_candidates = relay::get_relay_ports(
+        &paths.relay_dir,
+        &dispatch::relay_http::HttpRelayProbe::new(),
+    );
+    let relays = dispatch::adoption::verify_live_relays(
+        &relay_candidates,
+        &CcRelay::new(),
+        &dispatch::effects::is_pid_alive,
+    );
+    let access = dispatch::adoption::classify_session(
+        session,
+        &relays,
+        &rows,
+        &dispatch::effects::is_pid_alive,
+    );
+    (access, access.relay_port)
 }
 
 /// `Session "<name>" has no relay.` exit 1 (send.ts:407-408).
@@ -1381,6 +1585,21 @@ fn fast_lookup(query: &str) -> Option<FastRelayMatch> {
 fn no_relay_exit(name: &str, message: &str, target_session: Option<&Session>) -> i32 {
     emit_door_failure(name, target_session, message, "no-relay");
     eprintln!("Session \"{name}\" has no relay.");
+    1
+}
+
+fn bare_destination_message(name: &str) -> String {
+    format!(
+        "Destination \"{name}\" is non-receivable (bare); no message was queued. \
+         Ask the human to have that Claude Code session run `qd adopt {name}`. \
+         Adoption requires a manual qrmux restart with `qd relay:serve` and \
+         `--dangerously-load-development-channels server:relay`."
+    )
+}
+
+fn bare_destination_exit(name: &str, message: &str, target_session: Option<&Session>) -> i32 {
+    emit_door_failure(name, target_session, message, "non-receivable-bare");
+    eprintln!("{}", bare_destination_message(name));
     1
 }
 
@@ -1536,6 +1755,43 @@ fn parse_timeout(s: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn fallback_empty_session_id_does_not_trigger_self_send_guard() {
+        let session = Session {
+            name: Some("zmx-only".to_string()),
+            user_named: None,
+            session_id: String::new(),
+            code: None,
+            qd_id: None,
+            pid: None,
+            status: dispatch::model::SessionStatus::Idle,
+            zmx_name: Some("zmx-only".to_string()),
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: 0,
+            tokens: 0,
+            cwd: None,
+            last_active_ms: None,
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: None,
+            last_turns: None,
+            provider: "claude-code".to_string(),
+            entrypoint: None,
+            lineage: None,
+            which_branch: dispatch::model::SessionBranch::ZmxOnly,
+        };
+
+        let target_uuid = fallback_target_uuid(&session);
+        assert_eq!(target_uuid, None, "an empty fallback id is unresolved");
+        assert!(
+            !is_self_send(Some("caller-uuid"), target_uuid.as_deref()),
+            "an unresolved target must not trigger self-send rejection"
+        );
+    }
+
     // F2 regression guard (red-team round 1) + the round-1 TOCTOU-fix pin:
     // `run_acp_send`'s `AcpConnection::connect` failure arm is reached ONLY when
     // `tier == Tier::Acp` proved `endpoint_alive` BEFORE connect — a reading
@@ -1635,7 +1891,7 @@ mod tests {
             .expect("run_acp_send must still exist verbatim");
         let after_start = &src[fn_start..];
         let fn_end = after_start
-            .find("\nfn run_pi_send(")
+            .find("fn run_pi_send(")
             .expect("run_pi_send must still follow run_acp_send");
         let body = &after_start[..fn_end];
 
@@ -1668,7 +1924,7 @@ mod tests {
             .expect("run_acp_send must still exist verbatim");
         let after_start = &src[fn_start..];
         let fn_end = after_start
-            .find("\nfn run_pi_send(")
+            .find("fn run_pi_send(")
             .expect("run_pi_send must still follow run_acp_send");
         let body = &after_start[..fn_end];
 
@@ -1722,6 +1978,15 @@ mod tests {
         assert_eq!(parse_timeout("30abc"), Some(30));
         assert_eq!(parse_timeout("abc"), None);
         assert_eq!(parse_timeout(""), None);
+    }
+
+    #[test]
+    fn adopt_guidance_for_bare_destination_is_actionable_and_non_queuing() {
+        let message = bare_destination_message("bare-one");
+        assert_eq!(
+            message,
+            "Destination \"bare-one\" is non-receivable (bare); no message was queued. Ask the human to have that Claude Code session run `qd adopt bare-one`. Adoption requires a manual qrmux restart with `qd relay:serve` and `--dangerously-load-development-channels server:relay`."
+        );
     }
 
     #[test]
@@ -1818,10 +2083,7 @@ mod tests {
         std::fs::create_dir_all(&state).unwrap();
         std::fs::write(state.join("ids.jsonl"), ids_lines).unwrap();
         let mut vars = std::collections::HashMap::new();
-        vars.insert(
-            "HOME".to_string(),
-            home.path().to_string_lossy().to_string(),
-        );
+        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
         if let Some(v) = qd_session_id {
             vars.insert("QD_SESSION_ID".to_string(), v.to_string());
         }
@@ -2094,7 +2356,10 @@ mod tests {
     fn door_failure_emits_send_failed_terminal_keyed_to_target() {
         let home = tempfile::tempdir().unwrap();
         let mut vars = std::collections::HashMap::new();
-        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
+        vars.insert(
+            "HOME".to_string(),
+            home.path().to_string_lossy().to_string(),
+        );
         let env = MapEnv { vars, uid: 501 };
         let target_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         let message = "steer: please ack";

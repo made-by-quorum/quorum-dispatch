@@ -252,6 +252,79 @@ mod tests {
         }
     }
 
+    /// **v5 (attended-UX M1).** The appended polite-delivery frames round-trip
+    /// with full field fidelity through the length-prefixed bincode codec, incl.
+    /// arbitrary (non-UTF8) `data` bytes and the optional fields in both states.
+    #[test]
+    fn v5_pending_delivery_round_trips_all_fields() {
+        let msg = ClientMsg::PendingDelivery {
+            send_id: "71234-1781241549123-10".into(),
+            data: (0u16..=255).map(|b| b as u8).collect(), // every byte value
+            content_sha256: "c9946a075fd077dde6476a4669e543ca6bcd59064ccc1173477f7b4c9d005825"
+                .into(),
+            content_len: 256,
+            transcript: Some("/path/to/transcript.jsonl".into()),
+            transcript_offset: Some(4096),
+            session: Some("11111111-2222-3333-4444-555555555555".into()),
+            name: "alpha".into(),
+            priority: true,
+        };
+        let encoded = encode(&msg).unwrap();
+        let (data, consumed) = decode_frame(&encoded).unwrap().unwrap();
+        assert_eq!(consumed, encoded.len());
+        let decoded: ClientMsg = decode(data).unwrap();
+        assert_eq!(decoded, msg, "PendingDelivery must round-trip byte-exact");
+    }
+
+    /// **v5.** `DeliverNow` round-trips in both the targeted and
+    /// earliest-accepted (`send_id: None`) forms.
+    #[test]
+    fn v5_deliver_now_round_trips_both_forms() {
+        for send_id in [Some("71234-1781241549123-3".to_string()), None] {
+            let msg = ClientMsg::DeliverNow {
+                name: "alpha".into(),
+                send_id: send_id.clone(),
+            };
+            let encoded = encode(&msg).unwrap();
+            let (data, _) = decode_frame(&encoded).unwrap().unwrap();
+            let decoded: ClientMsg = decode(data).unwrap();
+            assert_eq!(decoded, msg);
+        }
+    }
+
+    /// **v5.** The server-side receipt + outcome frames round-trip.
+    #[test]
+    fn v5_server_delivery_frames_round_trip() {
+        let queued = ServerMsg::DeliveryQueued {
+            send_id: "71234-1781241549123-10".into(),
+        };
+        let encoded = encode(&queued).unwrap();
+        let (data, _) = decode_frame(&encoded).unwrap().unwrap();
+        assert_eq!(decode::<ServerMsg>(data).unwrap(), queued);
+
+        let outcome = ServerMsg::DeliveryOutcome {
+            send_id: "71234-1781241549123-10".into(),
+            terminal_kind: "message-seen".into(),
+        };
+        let encoded = encode(&outcome).unwrap();
+        let (data, _) = decode_frame(&encoded).unwrap().unwrap();
+        assert_eq!(decode::<ServerMsg>(data).unwrap(), outcome);
+    }
+
+    /// **v5 layout guard.** Appending the delivery frames must NOT shift the
+    /// FROZEN `ServerMsg::Error` positional index (the cross-version contract).
+    /// A bincode-encoded `Error` still decodes as `Error` after the append.
+    #[test]
+    fn v5_append_preserves_frozen_error_index() {
+        let msg = ServerMsg::Error("protocol error".into());
+        let encoded = encode(&msg).unwrap();
+        let (data, _) = decode_frame(&encoded).unwrap().unwrap();
+        match decode::<ServerMsg>(data).unwrap() {
+            ServerMsg::Error(s) => assert_eq!(s, "protocol error"),
+            other => panic!("Error index shifted — appended variant broke layout: {other:?}"),
+        }
+    }
+
     #[test]
     fn decode_incomplete_frame() {
         let msg = ClientMsg::Detach;
@@ -518,6 +591,16 @@ mod tests {
                 caps: vec![],
                 session: "s1".into(),
             },
+            ServerMsg::HistoryLogical(vec![crate::screen::LogicalHistoryChunk {
+                cells: vec![crate::screen::LogicalCell {
+                    ch: 'x',
+                    display_width: 1,
+                    combining: String::new(),
+                    style: crate::screen::Style::default(),
+                    wide_early_padding: false,
+                }],
+                end_of_line: true,
+            }]),
         ];
         for msg in &messages {
             let encoded = encode(msg).unwrap();

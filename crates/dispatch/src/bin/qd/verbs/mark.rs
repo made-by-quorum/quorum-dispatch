@@ -83,13 +83,13 @@ pub fn run(m: &ArgMatches) -> i32 {
     // single write, then close (ADD-3 JSONL discipline).
     match append_mark(&marks_path, &line) {
         Ok(()) => {
-            // A6 §4.1: mark appends its payload line AND a usage line, on the SAME
-            // SUCCESSFUL invocation. Best-effort: a usage-append failure warns but
+            // A6 §4.1: mark appends its payload line AND an invoked line, on the SAME
+            // SUCCESSFUL invocation. Best-effort: an invoked-append failure warns but
             // NEVER changes the verb's exit code (telemetry must not break mark).
             if let Err(e) =
-                dispatch::telemetry::append_usage(&env, &RealClock, "mark", Some(&session_id), None)
+                dispatch::telemetry::append_invoked(&env, &RealClock, "mark", Some(&session_id), None)
             {
-                eprintln!("qd mark: telemetry usage append failed (non-fatal): {e}");
+                eprintln!("qd mark: telemetry invoked append failed (non-fatal): {e}");
             }
             0
         }

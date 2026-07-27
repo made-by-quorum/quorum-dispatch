@@ -1,0 +1,160 @@
+# DE-observed idempotency red-team — ROUND 1 RAW battery output
+# mechanism SHA: 3a5f8b6dd41ed83e9fc88a31f4f21b716721ae62 (telemetry.rs UNTOUCHED)
+# harness tip: 76a44da (this branch); origin==HEAD
+# command: cargo test -p quorum-dispatch --features deobs --test deobs_redteam -- --nocapture --test-threads=1
+# expected: 8 pass, 3 red (probe3/probe3b/probe3c = F-DEOBS-1 class); all else GREEN
+# ============================================================================
+warning: function `is_self_send` is never used
+   --> dispatch/crates/dispatch/src/bin/qd/verbs/send_unified.rs:125:4
+    |
+125 | fn is_self_send(env_id: Option<&str>, ids: &IdMap, target_session_id: &str) -> bool {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `run_send_moved` is never used
+ --> dispatch/crates/dispatch/src/bin/qd/verbs/stubs.rs:9:8
+  |
+9 | pub fn run_send_moved() -> i32 {
+  |        ^^^^^^^^^^^^^^
+
+warning: `quorum-dispatch` (bin "qd") generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/deobs_redteam.rs (/private/tmp/claude-501/-Users-qrmo-work-quorum-child-e/30d295e8-fce6-4adb-b031-cc892049332d/scratchpad/cargo-target-de-observed/debug/deps/deobs_redteam-956a40f455cfec67)
+
+running 11 tests
+test ffwd2a_lock_timeout_leaves_key_recordable ... ffwd2a: holding observed.lock; a racer will now contend to timeout (~10s)
+ffwd2a: timed-out racer result = Err("observed lock: timed out acquiring exclusive lock")
+---- RAW[ffwd2a] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpEgPXHE/marks.jsonl ----
+bytes=108 ends_with_newline=true
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-to"}
+
+---- RAW[ffwd2a] observed-claims/: ["qrmoh~claude~sid-to"]
+ffwd2a: record after lock released = Ok(true)
+ok
+test probe1_many_threads_same_key_exactly_one_line ... ---- RAW[probe1] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpXoyvkJ/marks.jsonl ----
+bytes=109 ends_with_newline=true
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-thr"}
+
+---- RAW[probe1] observed-claims/: ["qrmoh~claude~sid-thr"]
+probe1: wins=1 noops=15 errs=0 results=[Ok(false), Ok(false), Ok(false), Ok(false), Ok(true), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false)]
+ok
+test probe2_ffwd2b_sigkill_in_section_holder_recovers ... probe2/ffwd2b: holder is IN-SECTION (sentinel present); no line appended yet
+probe2/ffwd2b: holder killed, status = ExitStatus(unix_wait_status(9))
+---- RAW[probe2/ffwd2b] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpC6W0PO/marks.jsonl ----
+bytes=110 ends_with_newline=true
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-kill"}
+
+---- RAW[probe2/ffwd2b] observed-claims/: ["qrmoh~claude~sid-kill"]
+probe2/ffwd2b: recovery record after holder death = Ok(true)
+ok
+test probe3_torn_trailing_line_same_key ... probe3: injected torn tail (no newline): "{\"ts\":\"2026-07-15T00:00:00.000Z\",\"event\":\"observed\",\"host\":\"qrmoh\",\"harness\":\"claude\",\"sessionId\":\""
+---- RAW[probe3] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpKEfTjY/marks.jsonl ----
+bytes=209 ends_with_newline=true
+{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-torn"}
+
+---- RAW[probe3] observed-claims/: ["qrmoh~claude~sid-torn"]
+probe3: record result = Ok(true)
+probe3: readable_lines=0 marker_exists=true
+
+thread 'probe3_torn_trailing_line_same_key' (3060295) panicked at dispatch/crates/dispatch/tests/deobs_redteam.rs:171:9:
+assertion `left == right` failed: marker present but NO readable observed line for K — marker⟹line invariant BROKEN (torn-tail concatenation corrupted the append)
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test probe3b_torn_trailing_line_corrupts_unrelated_append ... ---- RAW[probe3b] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpVHCEuT/marks.jsonl ----
+bytes=207 ends_with_newline=true
+{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-K2"}
+
+---- RAW[probe3b] observed-claims/: ["qrmoh~claude~sid-K2"]
+probe3b: record K2 result = Ok(true)
+probe3b: K2 readable_lines=0 marker_exists=true
+
+thread 'probe3b_torn_trailing_line_corrupts_unrelated_append' (3060296) panicked at dispatch/crates/dispatch/tests/deobs_redteam.rs:212:5:
+assertion `left == right` failed: K2's legitimate append was silently corrupted by an unrelated torn tail (append_line has no leading-newline guard) — first sighting LOST
+  left: 0
+ right: 1
+FAILED
+test probe3c_class_closure_dirty_tail_fuzz ... probe3c: dirty-tail shapes tested=28 corrupted=28
+probe3c: CORRUPTED obs_chop@5: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@10: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@15: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@20: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@25: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@30: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@35: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@40: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@45: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@50: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@55: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@60: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@65: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@70: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@75: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@80: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@85: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@90: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@95: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@100: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@105: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@110: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_chop@115: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED obs_complete_no_nl: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED create_chop: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED mark_chop: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED valid_then_torn: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+probe3c: CORRUPTED junk_no_nl: r=Ok(true) readable=0 marker=true tail_ends_nl=false
+
+thread 'probe3c_class_closure_dirty_tail_fuzz' (3060297) panicked at dispatch/crates/dispatch/tests/deobs_redteam.rs:289:5:
+F-DEOBS-1 CLASS: 28/28 dirty-tail shapes corrupted a legitimate fresh first sighting (marker⟹line broken / silent loss). append_line needs a record-boundary guard. Members: ["obs_chop@5: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@10: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@15: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@20: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@25: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@30: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@35: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@40: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@45: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@50: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@55: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@60: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@65: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@70: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@75: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@80: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@85: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@90: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@95: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@100: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@105: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@110: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_chop@115: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "obs_complete_no_nl: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "create_chop: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "mark_chop: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "valid_then_torn: r=Ok(true) readable=0 marker=true tail_ends_nl=false", "junk_no_nl: r=Ok(true) readable=0 marker=true tail_ends_nl=false"]
+FAILED
+test probe4a_rotation_surviving_marker_blocks_reobservation ... probe4a: removed marks.jsonl; marker survives = true
+---- RAW[probe4a] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmp7s2OEg/marks.jsonl ----
+(no marks.jsonl: No such file or directory (os error 2))
+---- RAW[probe4a] observed-claims/: ["qrmoh~claude~sid-rot"]
+probe4a: re-observe after stream-loss-with-surviving-marker = Ok(false)
+probe4a: readable_lines_after_reobserve = 0
+ok
+test probe4b_rotation_clearing_markers_reobserves ... ---- RAW[probe4b] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpoz935N/marks.jsonl ----
+bytes=110 ends_with_newline=true
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-rot2"}
+
+---- RAW[probe4b] observed-claims/: ["qrmoh~claude~sid-rot2"]
+probe4b: re-observe after PROPER rotation = Ok(true)
+ok
+test probe5_composition_seam_duplicate_lines_first_wins ... ---- RAW[probe5] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpTPgNEs/marks.jsonl ----
+bytes=242 ends_with_newline=true
+{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-comp","cwd":"/a"}
+{"ts":"2026-07-15T00:00:01.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-comp","cwd":"/b"}
+
+---- RAW[probe5] observed-claims/: ["qrmoh~claude~sid-comp"]
+probe5: record over a 2-line history = Ok(false)
+ok
+test probe6_multiprocess_racers_one_physical_line ... ---- RAW[probe6] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpLt5vkM/marks.jsonl ----
+bytes=108 ends_with_newline=true
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-mp"}
+
+---- RAW[probe6] observed-claims/: ["qrmoh~claude~sid-mp"]
+probe6: 24 racer outputs = ["RESULT ok=false", "RESULT ok=true", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false"]
+probe6: wins=1 noops=23
+ok
+test probe7_planted_marker_early_noop_never_early_append ... probe7: planted marker with NO line: /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpVY0Kqx/observed-claims/qrmoh~claude~sid-plant
+---- RAW[probe7] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpVY0Kqx/marks.jsonl ----
+(no marks.jsonl: No such file or directory (os error 2))
+---- RAW[probe7] observed-claims/: ["qrmoh~claude~sid-plant"]
+probe7: record with planted marker = Ok(false)
+probe7: readable_lines = 0
+ok
+
+failures:
+
+failures:
+    probe3_torn_trailing_line_same_key
+    probe3b_torn_trailing_line_corrupts_unrelated_append
+    probe3c_class_closure_dirty_tail_fuzz
+
+test result: FAILED. 8 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.34s
+
+error: test failed, to rerun pass `-p quorum-dispatch --test deobs_redteam`
+EXIT=101

@@ -28,14 +28,14 @@ use dispatch::zmx_dir::resolve_zmx_dir;
 use super::common;
 use super::common::SendBackend;
 
-/// Append a content-free A6 usage line for a SUCCESSFUL `send` (any exit-0 path).
+/// Append a content-free A6 invoked line for a SUCCESSFUL `send` (any exit-0 path).
 /// Best-effort: a failure warns but NEVER changes the verb's exit code (spec
 /// §4.1 — telemetry must never break a working send).
-fn usage_send(session_id: &str, name: Option<&str>) {
+fn invoked_send(session_id: &str, name: Option<&str>) {
     if let Err(e) =
-        dispatch::telemetry::append_usage(&RealEnv, &RealClock, "send", Some(session_id), name)
+        dispatch::telemetry::append_invoked(&RealEnv, &RealClock, "send", Some(session_id), name)
     {
-        eprintln!("WARNING: telemetry usage append failed (non-fatal): {e}");
+        eprintln!("WARNING: telemetry invoked append failed (non-fatal): {e}");
     }
 }
 
@@ -225,7 +225,37 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
     if let Err(code) = common::reject_if_tombstoned(query, &session) {
         return code;
     }
-    let session = &session;
+    run_send_pty_resolved(&session, message, wait, raw, full, timeout, false)
+}
+
+/// Unified-send entry into the existing PTY implementation. The caller has
+/// already resolved and identity-fenced the target; accepting the `Session`
+/// directly prevents a second name/prefix resolution from selecting a different
+/// row between carrier selection and delivery. Explicit `send:pty` continues to
+/// enter through [`run_send_pty`] with its unchanged flags and defaults.
+///
+/// `strict=true` maps known-failed or unaccepted-stuck submission to non-zero
+/// (QS-3). Explicit `send:pty` uses `strict=false` for backward compatibility.
+pub(super) fn run_send_pty_unified(session: &dispatch::model::Session, message: &str) -> i32 {
+    run_send_pty_resolved(session, message, false, false, false, "120", true)
+}
+
+/// Shared resolved-target PTY body. Keeping the original explicit verb's body
+/// here makes unified send reuse its write acknowledgements, integrity checks,
+/// event semantics, and honest output without inventing a second PTY path.
+///
+/// `strict`: when true, known-failed submission (idle `!accepted`, busy
+/// `stuck`) exits non-zero instead of warning+exit-0. Unified send sets this;
+/// explicit `send:pty` keeps `false` for behavioral compatibility.
+fn run_send_pty_resolved(
+    session: &dispatch::model::Session,
+    message: &str,
+    wait: bool,
+    raw: bool,
+    full: bool,
+    timeout: &str,
+    strict: bool,
+) -> i32 {
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
     if let Some(code) = common::refuse_unknown_provider("send:pty", session) {
         return code;
@@ -257,6 +287,33 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
         }
         return 1;
     };
+
+    // M3 DEFENSIVE REFUSAL of an ATTENDED zmx target (BUILD-DIRECTIVES §1 ruling
+    // (2), SUPERSEDING the plan's "zmx keeps legacy" for the attended case). The zmx
+    // backend cannot host the polite machinery (journal/lock/countdown), so a blind
+    // primary CR into an attended pane could clobber a human's in-progress draft.
+    // Attendance is OBSERVED at the protocol seam — `zmx list`'s `clients=N` →
+    // `session.zmx_clients` (the same signal reconcile.rs uses for "attached ⇒ never
+    // touch") — never guessed. Sound ONLY for zmx: the embedded backend synthesizes
+    // `clients = 0` (it observes attendance internally in the mux and defers there),
+    // so gating on `SendBackend::Zmx` is load-bearing. The unattended zmx path
+    // (clients == 0) keeps today's behavior + honest events untouched below.
+    if dispatch::sendpty::refuse_attended_zmx(
+        matches!(common::send_backend_label(), SendBackend::Zmx),
+        session.zmx_clients,
+    ) {
+        // M5/T2 — fail CLOSED on an unknown count, with an HONEST message that never
+        // asserts an attach we did not observe (the unknown arm says the count is
+        // unreadable and attendance cannot be ruled out).
+        eprintln!(
+            "{}",
+            dispatch::sendpty::attended_zmx_refusal_message(
+                session.name.as_deref().unwrap_or(&session.session_id),
+                session.zmx_clients,
+            )
+        );
+        return 1;
+    }
 
     let action = decide_send_pty(session.status.as_str());
 
@@ -342,10 +399,10 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
         .clone()
         .unwrap_or_else(|| session.session_id.clone());
 
-    // A6 §4.1: capture identity for the content-free usage line emitted on a
-    // SUCCESSFUL send (any exit-0 path below). Best-effort — see `usage_send`.
-    let usage_sid = session.session_id.clone();
-    let usage_name = session.name.clone();
+    // A6 §4.1: capture identity for the content-free invoked line emitted on a
+    // SUCCESSFUL send (any exit-0 path below). Best-effort — see `invoked_send`.
+    let invoked_sid = session.session_id.clone();
+    let invoked_name = session.name.clone();
 
     // --- ACK-2 §9: engine event emission (additive, best-effort non-fatal) ----
     // The sessionId is ALWAYS resolved on the send:pty path, so the events file
@@ -397,6 +454,206 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
         },
     );
 
+    // ===================== M3: EMBEDDED handoff path =======================
+    // The embedded (qrmux) backend HANDS the send to the mux DELIVERY SURFACE
+    // (v5 PendingDelivery) instead of orchestrating raw writes. qd emitted ONLY the
+    // pre-handoff `send-initiated` (above); from the `DeliveryQueued` receipt onward
+    // the MUX owns the send's lifecycle and emits EXACTLY ONE terminal per send_id
+    // to the authoritative ledger (the single-writer split — qd writes NO terminal
+    // on this path). The ZMX backend falls through to today's raw-write orchestration
+    // (+ honest events); the attended-zmx refusal above already protected it.
+    if matches!(common::send_backend_label(), SendBackend::Embedded) {
+        let args = dispatch::embedded_mux::PendingDeliveryArgs {
+            send_id: send_id.clone(),
+            data: message.as_bytes().to_vec(),
+            content_sha256: events::sha256_hex(message.as_bytes()),
+            content_len: message.len() as u64,
+            transcript: transcript_str.clone(),
+            transcript_offset,
+            session: Some(session.session_id.clone()),
+            name: zmx_name.clone(),
+            // Normal polite send; `priority` (which shortens the countdown ceiling)
+            // and deliver-now are attach-side controls, not send:pty's to force.
+            priority: false,
+        };
+        match dispatch::embedded_mux::embedded_pending_delivery(&op_dir, args) {
+            Ok(acked) => debug_assert_eq!(acked, send_id, "mux echoes the qd-minted send_id"),
+            Err(e) => {
+                // DOOR failure BEFORE the mux accepted: nothing spooled, no dangling
+                // send. Loud synchronous exit, NO qd-minted terminal (matching today's
+                // door discipline — the standing send-initiated + this loud exit is the
+                // C1 account; any post-acceptance terminal is the mux's, never qd's).
+                eprintln!("Could not hand \"{label}\" its send to the mux delivery surface: {e}");
+                return 1;
+            }
+        }
+
+        if !wait {
+            // The mux resolves to exactly one terminal AFTER we exit — drop-immune,
+            // no reader-presence dependency (invariant 3). HONEST: accepted for
+            // delivery, resolves asynchronously; NEVER claims "landed" (QS-6).
+            //
+            // F2 CONTRACT (W8 truncation, explicit — not a silent drop): pre-M3, a
+            // chunked no-`--wait` send ran qd's SYNCHRONOUS W8 read-back and exited 1
+            // on truncation. Under the single-writer async handoff qd has NO terminal
+            // in hand at exit, so there is deliberately NO synchronous truncation
+            // verdict here: the no-`--wait` send is honestly `queued`, and the mux's
+            // LandingProbe surfaces a truncated landing as a `turn-anchored-mismatch`
+            // terminal on the ledger (P6 honest-events). That mismatch IS observed by
+            // `--wait` (mapped to an honest non-zero exit — see the mismatch arm below,
+            // proven by `m3_embedded_delivery_e2e::…_detects_truncation_as_mismatch`)
+            // and by the on-restart reconcile (M5(c)); it is NOT observable in the
+            // no-`--wait` sender's exit code (the sender is gone). Re-entry for a
+            // no-`--wait` truncation signal: M5(c) reconcile.
+            println!("Message queued to \"{label}\"");
+            invoked_send(&invoked_sid, invoked_name.as_deref());
+            return 0;
+        }
+
+        // --wait: watch the LEDGER to a REAL 7-set terminal (NEVER return on the
+        // non-terminal DeliveryQueued ack — a queued ack is NOT delivery). READ-ONLY:
+        // qd emits nothing.
+        //
+        // `--timeout` semantics (F4, explicit contract): `--timeout` bounds the
+        // REPLY-CAPTURE phase (the JSONL anchor loop below), NOT the delivery-watch.
+        // The delivery-watch uses a FLOOR spanning the mux's full countdown ceiling +
+        // fire + landing window (FireConfig defaults ~60s + ~8s ⇒ 75s): a send the mux
+        // is legitimately HOLDING through a human's countdown must be awaited to its
+        // terminal, not reported "pending" just because a short `--timeout` elapsed
+        // (that would be a false-pending on an in-flight polite hold). So the watch
+        // bound is `max(--timeout, floor)` — a larger `--timeout` is honored; a smaller
+        // one is raised to the floor. qd cannot cheaply observe attendance itself (the
+        // mux owns that seam), so the floor is unconditional rather than
+        // countdown-gated; the cost is only paid when no terminal appears (a genuinely
+        // pending send), and the message below names that honestly.
+        const EMBEDDED_WAIT_FLOOR_MS: i64 = 75_000;
+        let bound_ms = timeout_ms(timeout).max(EMBEDDED_WAIT_FLOOR_MS);
+        let watch_deps = RealTerminalWatchDeps {
+            state_dir: ev_state.clone(),
+            session_id: session.session_id.clone(),
+            name: session.name.clone(),
+            clock: &clock,
+            sleeper: &sleeper,
+        };
+        eprint!("Waiting for delivery");
+        {
+            use std::io::Write;
+            let _ = std::io::stderr().flush();
+        }
+        match dispatch::sendpty::watch_terminal(&watch_deps, &send_id, bound_ms, 500) {
+            // F5 (shared success-terminal identity): "which terminal means
+            // delivered" is now the leaf crate's ONE definition
+            // (`is_success_terminal`), consumed here AND by the mux banner
+            // (qrmux/attended/driver.rs `toast_kind_for`) — no locally-minted
+            // "message-seen" success literal on either side (M4 F5/M2 fold).
+            Some(term) if events::is_success_terminal(&term.event) => {
+                eprintln!(" delivered");
+                // QS-7: preserve the user-facing --wait reply print via the EXISTING
+                // JSONL anchor loop — WITHOUT emitting any terminal (the mux already
+                // emitted the one terminal; single-writer) and WITHOUT the WatchGuard
+                // or the status-transition emitter (`status_emit: None`): qd writes
+                // NOTHING to the ledger on this path.
+                let Some(jp) = jsonl_path.clone() else {
+                    // Delivery is confirmed (message-seen); we just can't read the
+                    // reply back without a transcript. Report the confirmed success.
+                    println!(
+                        "Message delivered to \"{label}\" (reply not captured: transcript unavailable)"
+                    );
+                    invoked_send(&invoked_sid, invoked_name.as_deref());
+                    return 0;
+                };
+                let pid_file = session
+                    .pid
+                    .filter(|&p| p != 0)
+                    .map(|pid| paths.sessions_dir.join(format!("{pid}.json")));
+                let deps = RealWaitDeps {
+                    jsonl_path: jp.clone(),
+                    start_offset,
+                    pid_file,
+                    clock: &clock,
+                    sleeper: &sleeper,
+                    status_emit: None,
+                };
+                let outcome = run_wait_loop(&deps, message, timeout_ms(timeout), 500);
+                let mode = if raw {
+                    ExtractMode::Raw
+                } else if full {
+                    ExtractMode::Full
+                } else {
+                    ExtractMode::Default
+                };
+                invoked_send(&invoked_sid, invoked_name.as_deref());
+                return match outcome {
+                    WaitOutcome::Complete { lines, anchor } => {
+                        eprintln!(" done");
+                        match dispatch::sendpty::capture_or_defect(&lines, anchor, mode) {
+                            Ok(body) => {
+                                println!("{body}");
+                                0
+                            }
+                            Err(observed) => {
+                                eprintln!("--wait capture EMPTY: {observed}.");
+                                eprintln!(
+                                    "The reply may still be flushing to the transcript — read it \
+                                     directly to recover it: {}",
+                                    jp.display()
+                                );
+                                1
+                            }
+                        }
+                    }
+                    // Delivery was ALREADY confirmed by the mux terminal; a
+                    // reply-collection miss is a capture failure, not a delivery lie.
+                    // Exit non-zero (parity with today's --wait), but the message names
+                    // that the send DID land — never a false "not delivered".
+                    WaitOutcome::Died => {
+                        eprintln!(" session died");
+                        eprintln!("Delivered to \"{label}\", but the session exited before its reply completed.");
+                        1
+                    }
+                    WaitOutcome::TimedOut { .. } => {
+                        eprintln!(" timeout");
+                        eprintln!("Delivered to \"{label}\", but timed out waiting for the reply.");
+                        1
+                    }
+                    WaitOutcome::SourceError(reason) => {
+                        eprintln!(" error");
+                        eprintln!(
+                            "Delivered to \"{label}\", but the transcript integrity was lost while \
+                             reading the reply: {reason}"
+                        );
+                        1
+                    }
+                };
+            }
+            Some(term) => {
+                // A mux failure/mismatch terminal (send-failed / seen-failed /
+                // turn-anchored-mismatch / anchor-timeout / pending-abandoned). Honest
+                // failure, named from the ledger; no reply collection.
+                eprintln!(" failed");
+                eprintln!(
+                    "Delivery to \"{label}\" did not land ({}) — check: qd attach {label}",
+                    term.event
+                );
+                return 1;
+            }
+            None => {
+                // Bound elapsed with NO terminal: the mux left the send Pending (e.g. a
+                // busy-queued turn landing past the mux's landing window) or it is still
+                // counting down under continuous typing. HONEST still-pending — never a
+                // false "landed", never a false failure (invariant 1). The send is
+                // spooled in the mux and resolves later (reconcile / a later landing).
+                eprintln!(" pending");
+                eprintln!(
+                    "Delivery to \"{label}\" is still pending (accepted by the mux, not yet \
+                     confirmed landed) — it will resolve in the mux; check: qd attach {label}"
+                );
+                return 1;
+            }
+        }
+    }
+
+    // ===================== ZMX legacy path (unchanged) =====================
     // m-1 (merge-ruling minor, fixed in-window): when the W8 verify already
     // emitted turn-anchored for this send, the --wait Complete arm must NOT emit
     // a SECOND one — one landed signal per send_id (readers take the first
@@ -476,8 +733,14 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                     // TS WARNING wording verbatim (send.ts:172-176).
                     eprintln!(
                         "WARNING: message may be stuck unsubmitted in \"{label}\"'s composer \
-                         — check with: qd connect {label}"
+                         — check with: qd attach {label}"
                     );
+                    // QS-3 (unified send): known-stuck submission is a non-zero
+                    // result for the primary verb (strict mode only; send:pty
+                    // preserves its existing warning+continue contract).
+                    if strict {
+                        return 1;
+                    }
                 }
                 println!("Message queued in \"{label}\" (session busy)");
 
@@ -531,7 +794,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                 eprintln!(
                                     "WARNING: could not verify the queued payload landed in \
                                      \"{label}\"'s transcript within {}s (the promise stays \
-                                     PENDING) — check: qd connect {label}",
+                                     PENDING) — check: qd attach {label}",
                                     dispatch::submit::BUSY_QUEUED_VERIFY_TIMEOUT_S
                                 );
                             }
@@ -546,12 +809,12 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                         // change self-scoped to the busy-queued path, constraint 4).
                         eprintln!(
                             "WARNING: could not resolve \"{label}\"'s transcript to verify the \
-                             queued payload (the promise stays PENDING) — check: qd connect {label}"
+                             queued payload (the promise stays PENDING) — check: qd attach {label}"
                         );
                     }
                 }
 
-                usage_send(&usage_sid, usage_name.as_deref());
+                invoked_send(&invoked_sid, invoked_name.as_deref());
                 return 0;
             }
             // --wait falls through to the anchor loop (the anchor confirms uptake).
@@ -571,6 +834,9 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
             let mut verify_eligible = true;
             // §2.3.2 recorder acks for whichever idle sub-path runs (set in both).
             let idle_acks: ChunkAcks;
+            // Set when outcome.accepted==false (pid-known path only); used for the
+            // deferred QS-3 strict exit after chunks-delivered emits.
+            let mut not_accepted = false;
             if let Some(pid) = session.pid.filter(|&p| p != 0) {
                 // pid known → full two-write delivery + acceptance-verify. The
                 // delivery drives a RECORDING IdleDeliverDeps (ACK-2 §9: same shape
@@ -594,6 +860,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                 if !outcome.accepted {
                     // Not accepted (never went busy) → the W8 read-back has no
                     // submitted turn to verify; the existing WARNING carries it.
+                    not_accepted = true;
                     verify_eligible = false;
                     if !wait {
                         // TS WARNING wording verbatim (send.ts:198-202).
@@ -601,6 +868,8 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                             "WARNING: Message sent to \"{label}\" but session did not go busy \
                              — it may be stuck unsubmitted in the composer."
                         );
+                        // QS-3 strict exit deferred: emitted AFTER chunks-delivered so the
+                        // event stream is complete before we exit (symmetry with busy lane).
                     }
                 }
             } else {
@@ -643,6 +912,14 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                 // 11) and leave the send dead-dangling; `qd delivery:recover` closes it
                 // from the transcript.
                 return write_failed_exit(idle_acks);
+            }
+
+            // QS-3 strict exit (idle lane, deferred from the not-accepted check above):
+            // chunks-delivered has now been emitted (or write_failed_exit returned), so the
+            // event stream is complete before we exit. Strict mode for unified send only;
+            // send:pty keeps its existing warning+exit-0 contract via strict=false.
+            if not_accepted && !wait && strict {
+                return 1;
             }
 
             // W8 verify-after-submit (ADD-15, M11 sanctioned; ADR-0012): CHUNKED
@@ -728,7 +1005,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                     eprintln!(
                                         "ERROR: payload truncated in delivery to \"{label}\": expected \
                                          {expected} bytes, recorded {recorded}.\n  The message submitted — \
-                                         do NOT blindly resend (double-submit risk).\n  Attach: qd connect {label}"
+                                         do NOT blindly resend (double-submit risk).\n  Attach: qd attach {label}"
                                     );
                                     return 1;
                                 }
@@ -740,7 +1017,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                 eprintln!(
                                     "WARNING: could not fully verify the short payload to \"{label}\" \
                                      (read-back truncated: expected {expected}, recorded {recorded}) — \
-                                     check: qd connect {label}"
+                                     check: qd attach {label}"
                                 );
                             }
                             dispatch::submit::PayloadVerifyOutcome::NoRecord => {
@@ -749,7 +1026,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                     eprintln!(
                                         "ERROR: could not verify payload arrival in \"{label}\"'s \
                                          transcript within {}s (no user record appeared).\n  \
-                                         Attach: qd connect {label}",
+                                         Attach: qd attach {label}",
                                         dispatch::submit::VERIFY_TIMEOUT_S
                                     );
                                     return 1;
@@ -761,20 +1038,20 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                 // W8) — pty's accepted reliability (§X.6).
                                 eprintln!(
                                     "WARNING: could not verify short-payload arrival in \"{label}\"'s \
-                                     transcript within {}s — check: qd connect {label}",
+                                     transcript within {}s — check: qd attach {label}",
                                     dispatch::submit::VERIFY_TIMEOUT_S
                                 );
                             }
                             dispatch::submit::PayloadVerifyOutcome::Unattributable => {
                                 eprintln!(
                                     "WARNING: could not attribute the delivered payload in \
-                                     \"{label}\"'s transcript — check: qd connect {label}"
+                                     \"{label}\"'s transcript — check: qd attach {label}"
                                 );
                             }
                             dispatch::submit::PayloadVerifyOutcome::SourceUnavailable(why) => {
                                 eprintln!(
                                     "WARNING: could not verify payload delivery to \"{label}\" \
-                                     ({why}) — check: qd connect {label}"
+                                     ({why}) — check: qd attach {label}"
                                 );
                             }
                         }
@@ -819,7 +1096,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                                     "WARNING: could not verify payload delivery to \"{label}\" \
                                      (fresh-child transcript did not resolve/anchor within the \
                                      deferred window — the promise stays PENDING) — check: \
-                                     qd connect {label}"
+                                     qd attach {label}"
                                 );
                             }
                         }
@@ -829,7 +1106,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
 
             if !wait {
                 println!("Message sent to {label}");
-                usage_send(&usage_sid, usage_name.as_deref());
+                invoked_send(&invoked_sid, invoked_name.as_deref());
                 return 0;
             }
         }
@@ -962,10 +1239,10 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
                 );
             }
             eprintln!(" done");
-            // The SEND landed (anchored) — the A6 usage line keys on the send,
+            // The SEND landed (anchored) — the A6 invoked line keys on the send,
             // not the capture, so it stays unconditional on this arm even when
             // the capture below fails loud (declared judgment call, B2 item 3).
-            usage_send(&usage_sid, usage_name.as_deref());
+            invoked_send(&invoked_sid, invoked_name.as_deref());
             // B2 item 3 — the binding capture invariant: --wait NEVER returns
             // an empty capture as success. capture_or_defect Ok = real content
             // (exit 0); Err = a LOUD non-zero exit naming what was observed.
@@ -1242,6 +1519,34 @@ impl StatusEmit<'_> {
                 },
             );
         }
+    }
+}
+
+/// Real deps for the M3 embedded `--wait` terminal watcher
+/// ([`dispatch::sendpty::watch_terminal`]): read the TARGET session's merged
+/// delivery ledger (read-only — the mux owns the terminal), sleep, and the real
+/// clock. Emits NOTHING (single-writer split: qd only READS the mux's terminal).
+struct RealTerminalWatchDeps<'a> {
+    state_dir: PathBuf,
+    session_id: String,
+    name: Option<String>,
+    clock: &'a dyn Clock,
+    sleeper: &'a dyn Sleeper,
+}
+
+impl dispatch::sendpty::TerminalWatchDeps for RealTerminalWatchDeps<'_> {
+    fn read_records(&self) -> Vec<dispatch::events::EventRecord> {
+        // The SAME key derivation qd's `EventWriter::for_key` and the mux's
+        // `resolve_state_dir`/`ledger_path` use → the one authoritative
+        // `<state_dir>/sessions/<sessionId>.events.jsonl` the mux wrote its terminal to.
+        dispatch::events::read_merged(&self.state_dir, Some(&self.session_id), self.name.as_deref())
+            .records
+    }
+    fn sleep(&self, ms: u64) {
+        self.sleeper.sleep_ms(ms);
+    }
+    fn now_ms(&self) -> i64 {
+        self.clock.now_ms()
     }
 }
 
@@ -1570,5 +1875,115 @@ mod tests {
         // generic-1 / new-p-Stalled-10 surfaces (machine-readable). A regression
         // that collapses it onto 1 or 10 REDs here.
         assert_eq!(EXIT_PTY_WRITE_FAILED, 11);
+    }
+
+    // QS-3 strict-mode structural guard: `run_send_pty_resolved` MUST return 1 in
+    // both the "stuck" (busy-lane, still in composer) and "not accepted" (idle-lane,
+    // never went busy) paths when `strict=true`. The explicit `send:pty` verb passes
+    // `strict=false` and preserves its warning+continue contract; unified `qd send`
+    // passes `strict=true` so it cannot exit 0 on a known-failed submission.
+    // Structural form because exercising these paths via unit test requires a real
+    // live PTY session; the source guard is the regression tripwire.
+    //
+    // Implementation note: the idle-lane strict exit is DEFERRED to after the
+    // chunks-delivered emit (event stream symmetry with the busy lane). The test
+    // verifies the deferred compound check `!outcome.accepted && !wait && strict`.
+    //
+    // MUTATION EVIDENCE: removing either strict guard reds this.
+    #[test]
+    fn unified_pty_strict_mode_exits_nonzero_on_stuck_and_unaccepted_submissions() {
+        let src = include_str!("send.rs");
+        let fn_start = src
+            .find("fn run_send_pty_resolved(")
+            .expect("run_send_pty_resolved must exist");
+        let after_fn = &src[fn_start..];
+        // Scope to the function body: emit_w8_message_seen immediately follows.
+        let fn_end = after_fn
+            .find("\nfn emit_w8_message_seen(")
+            .expect("emit_w8_message_seen must follow run_send_pty_resolved");
+        let body = &after_fn[..fn_end];
+
+        // --- stuck path (busy lane) ---
+        // Positive control: warning is present.
+        assert!(
+            body.contains("message may be stuck unsubmitted"),
+            "stuck warning must still exist in run_send_pty_resolved"
+        );
+        // The stuck guard fires immediately after the warning (within the `if !wait` branch).
+        let stuck_warn_pos = body.find("message may be stuck unsubmitted").unwrap();
+        let stuck_region = &body[stuck_warn_pos..(stuck_warn_pos + 600).min(body.len())];
+        assert!(
+            stuck_region.contains("if strict {"),
+            "run_send_pty_resolved must guard the stuck path with `if strict {{` (QS-3). \
+             Region after warning:\n{stuck_region}"
+        );
+        assert!(
+            stuck_region.contains("return 1;"),
+            "run_send_pty_resolved must return 1 in the strict stuck path (QS-3). \
+             Region after warning:\n{stuck_region}"
+        );
+
+        // --- not-accepted path (idle lane, deferred check) ---
+        // Positive control: warning is present.
+        assert!(
+            body.contains("did not go busy"),
+            "not-accepted warning must still exist in run_send_pty_resolved"
+        );
+        // The idle-lane strict exit is DEFERRED to after chunks-delivered for event
+        // symmetry. `not_accepted` captures outcome.accepted==false from the pid-known
+        // branch so it remains visible outside the if-let scope.
+        // Pin the deferred compound check (the whole expression).
+        assert!(
+            body.contains("not_accepted && !wait && strict"),
+            "run_send_pty_resolved must have the deferred idle-lane strict check \
+             `not_accepted && !wait && strict` (QS-3, idle-lane guard after \
+             chunks-delivered emit). Body does not contain the guard."
+        );
+        // Confirm return 1 follows it (within a tight window).
+        let deferred_pos = body
+            .find("not_accepted && !wait && strict")
+            .unwrap();
+        let deferred_region = &body[deferred_pos..(deferred_pos + 60).min(body.len())];
+        assert!(
+            deferred_region.contains("return 1;"),
+            "the deferred idle-lane strict check must return 1 (QS-3). \
+             Region:\n{deferred_region}"
+        );
+    }
+
+    // QS-3 wiring guard (F-1 Fable finding): pins that `run_send_pty_unified` wires
+    // the unified entry with `strict=true`. A one-token regression (`true`→`false`)
+    // would silently disconnect QS-3 from `qd send` while all other tests stay green.
+    // Structural form because the call site is the only wiring; no mock can exercise it.
+    // MUTATION EVIDENCE: `true`→`false` at send.rs:run_send_pty_unified call site reds this.
+    #[test]
+    fn unified_pty_entry_wires_strict_true() {
+        let src = include_str!("send.rs");
+        let fn_start = src
+            .find("pub(super) fn run_send_pty_unified(")
+            .expect("run_send_pty_unified must exist");
+        let after_fn = &src[fn_start..];
+        // Scope to the function body: run_send_pty_resolved immediately follows.
+        let fn_end = after_fn
+            .find("\nfn run_send_pty_resolved(")
+            .expect("run_send_pty_resolved must follow run_send_pty_unified");
+        let body = &after_fn[..fn_end];
+
+        // Must call run_send_pty_resolved with `true` as the final (strict) argument.
+        assert!(
+            body.contains("run_send_pty_resolved("),
+            "run_send_pty_unified must call run_send_pty_resolved"
+        );
+        // The call ends with `true)` — the strict=true argument.
+        assert!(
+            body.contains(", true)"),
+            "run_send_pty_unified must pass `true` (strict=true) to run_send_pty_resolved. \
+             This pins QS-3 at the unified entry. Body:\n{body}"
+        );
+        // Negative control: must NOT pass false (which would be the send:pty compat call).
+        assert!(
+            !body.contains(", false)"),
+            "run_send_pty_unified must NOT pass `false` (strict=false). Body:\n{body}"
+        );
     }
 }

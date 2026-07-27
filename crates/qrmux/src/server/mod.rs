@@ -371,6 +371,46 @@ pub async fn run_server_ctrl(
 
     let manager = Arc::new(Mutex::new(SessionManager::with_events(events_ctx)));
 
+    // attended-UX M1 (RT-R1, QS-4): on-boot pending-delivery reconciliation.
+    // A prior (crashed) incarnation of THIS session's mux may have left spooled
+    // sends; resolve each to EXACTLY ONE honest terminal before serving. The hosted
+    // session DIES with the mux (PTY-survival fact), so `session_alive = false` on a
+    // fresh boot — a spooled send is NEVER re-injected (an unknown inject outcome
+    // terminals honestly; a session-gone draft is retained + reported). Best-effort:
+    // a sweep failure is logged and never aborts the serve.
+    {
+        use crate::attended::{driver, fire::TranscriptLandingProbe, spool, sweep, SystemClock};
+        if let Some(state_dir) = driver::resolve_state_dir() {
+            let spool_dir = resolved_dir.join("pending").join(&session);
+            match spool::Spool::open(&spool_dir) {
+                Ok(sp) => {
+                    let session_name = session.clone();
+                    let ledger_for = move |r: &spool::PendingRecord| {
+                        driver::ledger_path(&state_dir, r.session.as_deref(), &session_name)
+                    };
+                    match sweep::reconcile_spool(
+                        &sp,
+                        &SystemClock,
+                        &TranscriptLandingProbe,
+                        false,
+                        &ledger_for,
+                    ) {
+                        Ok(resolved) if !resolved.is_empty() => info!(
+                            session = %session,
+                            count = resolved.len(),
+                            "attended: reconciled spooled pending sends on boot"
+                        ),
+                        Ok(_) => {}
+                        Err(e) => warn!(session = %session, error = %e,
+                            "attended: on-boot spool reconciliation failed"),
+                    }
+                }
+                Err(e) => warn!(session = %session, error = %e,
+                    "attended: could not open spool for on-boot reconciliation"),
+            }
+        }
+    }
+
     // WS-C M2/M3b (§4.1): the per-connection DaemonCtx and the single-session
     // lifecycle plumbing. ALWAYS single-session now — the legacy shared mode is
     // retired (spec §9).

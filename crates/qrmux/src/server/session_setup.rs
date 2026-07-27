@@ -26,6 +26,15 @@ pub(super) struct ConnectRequest {
     pub(super) rows: u16,
     pub(super) leftover: Vec<u8>,
     pub(super) mode: crate::protocol::ConnectMode,
+    /// Immutable result of the Hello capability intersection for this
+    /// connection.
+    pub(super) logical_history: bool,
+    /// Logical history may span frames and is terminated by
+    /// an empty `ServerMsg::HistoryLogical` completion frame.
+    pub(super) logical_history_stream: bool,
+    /// The server must wait for a post-Connected `ConfirmSize` before taking
+    /// the initial logical-history/screen snapshot.
+    pub(super) initial_size_confirm: bool,
 }
 
 /// Resize the PTY master and the virtual screen to the given dimensions.

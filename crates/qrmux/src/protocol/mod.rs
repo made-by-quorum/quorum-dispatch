@@ -10,6 +10,7 @@ pub mod messages;
 pub use codec::{encode, read_one_message, FrameReader};
 pub use handshake::{
     read_preamble, validate_hello_caps, write_preamble, PreambleCheck, ERR_EXPECTED_HELLO,
+    HISTORY_LOGICAL_STREAM_V1_CAP, HISTORY_LOGICAL_V1_CAP, INITIAL_SIZE_CONFIRM_V1_CAP,
     PROTOCOL_VERSION,
 };
 pub use messages::{ClientMsg, ConnectMode, ServerMsg, SessionInfo};

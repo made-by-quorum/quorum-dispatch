@@ -3,9 +3,10 @@
 //! action (bare `qd` → ls, index.ts:202-204) when no subcommand matched.
 
 mod acp_loss;
+mod adopt;
 mod bootstrap;
 mod common;
-mod connect;
+mod attach;
 mod gc;
 mod init;
 mod kill;
@@ -15,9 +16,10 @@ mod mark;
 mod ping;
 mod reconcile;
 mod recover;
-mod resume;
+pub(super) mod resume;
 mod send;
 mod send_relay;
+mod send_unified;
 mod stubs;
 mod update;
 mod wait;
@@ -30,11 +32,12 @@ use clap::ArgMatches;
 pub fn dispatch(matches: &ArgMatches) -> i32 {
     match matches.subcommand() {
         Some(("ls", m)) => ls::run(m),
-        // P0 start-surface rework (STATE 22): `attach` is a RETIRED erroring
-        // stub (connect covers attach-or-resume; agents use send:relay).
-        Some(("attach", _)) => stubs::run_attach_retired(),
-        Some(("connect", m)) => connect::run(m),
+        Some(("attach", m)) => attach::run(m),
+        // `connect` was renamed to `attach`; kept as a hidden backward-compat alias
+        // so existing shell wrappers that call `qd connect <session>` keep working.
+        Some(("connect", m)) => attach::run(m),
         Some(("resume", m)) => resume::run(m),
+        Some(("adopt", m)) => adopt::run(m),
         // P0 W1 (qb spec-cli §11): start/stop are the lifecycle verbs — same
         // backends as the old new/kill (renamed, not forked). new/kill are
         // RETIRED erroring stubs (helpful error, exit 1, never touch state).
@@ -43,7 +46,7 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         Some(("kill", _)) => stubs::run_kill_retired(),
         Some(("new", _)) => stubs::run_new_retired(),
         Some(("reconcile", m)) => reconcile::run(m),
-        Some(("send", _)) => stubs::run_send_moved(),
+        Some(("send", m)) => send_unified::run_send_unified(m),
         Some(("send:pty", m)) => send::run_send_pty(m),
         Some(("send:relay", m)) => send_relay::run(m),
         Some(("send:http", m)) => send::run_send_http(m),

@@ -32,6 +32,15 @@ pub enum ConnectMode {
 /// was bumped to 4: a skewed peer now refuses cleanly at the version gate rather
 /// than misframing `SubscribeRepublish` as the removed verb. The frozen
 /// `ServerMsg::Error` index 4 and the 5-byte preamble are untouched.
+///
+/// **Protocol-version note (v5, attended-UX M1):** the polite-delivery surface
+/// was APPENDED at the tail of both enums — `ClientMsg::PendingDelivery` and
+/// `ClientMsg::DeliverNow`; `ServerMsg::DeliveryQueued` and
+/// `ServerMsg::DeliveryOutcome`. Appending preserves every existing positional
+/// bincode index (the frozen `ServerMsg::Error` index 4 stays index 4);
+/// [`crate::protocol::PROTOCOL_VERSION`] was bumped to 5 so a skewed peer refuses
+/// cleanly at the version gate rather than misframing these frames. The 5-byte
+/// preamble is untouched. This is the qd↔mux delivery contract M2/M3/M4 consume.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum ClientMsg {
     /// Keyboard input from client
@@ -78,7 +87,8 @@ pub enum ClientMsg {
     /// negotiation order). Any other first frame → framed
     /// `ServerMsg::Error("protocol error: expected Hello as first frame")` and
     /// close. `caps` is the kebab-case capability set the client advertises;
-    /// v3 ships with an EMPTY required set, so a conforming client sends
+    /// The baseline surface has no required capability. Current session clients
+    /// advertise `history-logical-v1`; discovery/liveness probes may still send
     /// `caps: vec![]`. Unknown caps are ignored by the peer (forward compat).
     /// Defensive bounds (pre-auth frame): ≤64 caps, each ≤64 bytes, charset
     /// `[a-z0-9-]+`; violation → framed Error, close.
@@ -99,6 +109,59 @@ pub enum ClientMsg {
     /// its documented disk-poll (channel-DOWN) path. See the surviving consumers in
     /// `dispatch::observe` (the dashboard fold) and `dispatch::wait_channel`.
     SubscribeRepublish { name: String },
+    /// Additive attach-only width confirmation. A client that negotiated
+    /// `initial-size-confirm-v1` sends this immediately after `Connected`,
+    /// before it consumes the initial history/screen snapshot. The server does
+    /// not emit that snapshot until these dimensions have been applied.
+    /// APPENDED so every existing variant index remains unchanged.
+    ///
+    /// (Rebase note: this capability-gated variant landed on `main` WITHOUT a
+    /// version bump — it is gated by the `initial-size-confirm-v1` Hello cap, not
+    /// the version gate. It is kept AHEAD of the v5 delivery variants below so its
+    /// already-shipped positional index is preserved; the v5 variants append after.)
+    ConfirmSize { cols: u16, rows: u16 },
+    /// **v5 (attended-UX M1).** qd hands a send to the mux's polite-delivery
+    /// surface, replacing raw `SendInput` orchestration on the attended path.
+    /// The mux write-ahead-spools it (the durable acceptance write point — the
+    /// send exists durably before the sender's queued receipt is returned),
+    /// arms the journal-dependent countdown, and eventually fires it over the
+    /// PTY via the shared submit discipline, emitting exactly ONE terminal per
+    /// `send_id` to the authoritative delivery ledger.
+    ///
+    /// Fields carry everything the mux terminal + restart reconciliation need
+    /// WITHOUT the sender (which may have exited): `send_id` (qd-minted
+    /// `"{pid}-{epoch_ms}-{n}"`), the `data` bytes, `content_sha256`/`content_len`
+    /// for landing correlation, the resolved `transcript` path + pre-fire
+    /// `transcript_offset` for the landing/recovery window, the ledger `session`
+    /// (sessionId) + qrmux `name` (the addressed session; also the envelope
+    /// `name`), and `priority` (shortens the countdown ceiling). This is the
+    /// deliberate, delivery-surface-only exception to the advisory stream's
+    /// no-`send_id` rule (that stream stays send_id-free and untouched).
+    ///
+    /// APPENDED at the tail — see the enum-level v5 note.
+    PendingDelivery {
+        send_id: String,
+        data: Vec<u8>,
+        content_sha256: String,
+        content_len: u64,
+        transcript: Option<String>,
+        transcript_offset: Option<u64>,
+        session: Option<String>,
+        name: String,
+        priority: bool,
+    },
+    /// **v5 (attended-UX M1).** The deliver-now control: fire the named session's
+    /// held send immediately, WITHOUT resetting the countdown and WITHOUT
+    /// entering the journal (it is a control signal to the timer task, never a
+    /// human keystroke). `send_id` of `None` targets the session's
+    /// earliest-accepted held send; `Some` targets that specific send. M2 binds
+    /// the key; the control reaches the timer task.
+    ///
+    /// APPENDED at the tail — see the enum-level v5 note.
+    DeliverNow {
+        name: String,
+        send_id: Option<String>,
+    },
 }
 
 /// Message sent from the server to a client.
@@ -157,6 +220,34 @@ pub enum ServerMsg {
     /// **WP-B2b.** Headless republish terminal — breaker/EOF/lagged. A MUST-KEEP
     /// frame: it is the relay's stop signal. APPENDED at the tail.
     RepublishEnd { outcome: String },
+    /// Cell-exact logical history, gated by the additive
+    /// `history-logical-v1` Hello capability. Each chunk is one frozen
+    /// physical row; `end_of_line` is the only authority for appending CRLF.
+    /// APPENDED at the tail so every existing variant index remains unchanged.
+    ///
+    /// (Rebase note: capability-gated `main` variant, no version bump; kept ahead
+    /// of the v5 delivery variants below to preserve its shipped positional index.)
+    HistoryLogical(Vec<crate::screen::LogicalHistoryChunk>),
+    /// **v5 (attended-UX M1).** The queued receipt at handoff-ack for a
+    /// [`ClientMsg::PendingDelivery`]. NON-TERMINAL: it confirms the send is
+    /// durably spooled (write-ahead), not that it landed. A no-`--wait` sender
+    /// leaves after this; the mux still resolves the send to exactly one
+    /// terminal later (it WRITES the terminal to the ledger; this frame is only
+    /// the ack). qd's `send_path:"busy-queued"` record keys off this. APPENDED
+    /// at the tail (see the `ClientMsg` enum-level v5 note; `Error` index 4
+    /// frozen).
+    DeliveryQueued { send_id: String },
+    /// **v5 (attended-UX M1).** The outcome notification a `--wait` sender (or a
+    /// subscriber) consumes to learn the terminal. `terminal_kind` is the
+    /// delivery-event kind string the mux emitted to the ledger (sourced from
+    /// the shared `quorum-delivery-events` vocabulary — never a locally-minted
+    /// string). This is the WATCH channel, NOT the writer: the mux still WRITES
+    /// the terminal to the authoritative ledger; a `--wait` sender never writes
+    /// it. APPENDED at the tail.
+    DeliveryOutcome {
+        send_id: String,
+        terminal_kind: String,
+    },
 }
 
 /// Snapshot of a session's metadata, used in list responses.

@@ -32,6 +32,9 @@
 //! addressed by the recorded pgid — the W4 launcher-orphan finding) + no-survivor
 //! belts after BOTH the kill and the revive cleanup.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -53,7 +56,7 @@ use dispatch::wait::{run_codex_wait_loop, RealCodexWaitDeps, WaitStatusOutcome};
 
 /// The live gate: skip unless `QD_CODEX_LIVE=1`.
 fn live() -> bool {
-    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_CODEX_LIVE", "codex_resume_kill_live")
 }
 
 /// A jail Env: only the codex-relevant vars resolve. `env -i` shape via the seam.

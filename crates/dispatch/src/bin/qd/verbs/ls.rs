@@ -281,6 +281,11 @@ fn run_inner(
             .collect()
     };
 
+    // Honest bare/managed classification from one process+relay snapshot. A
+    // sidecar alone is insufficient: `adoption::classify_session` also requires
+    // the exact development-channel argv and matching live relay ancestry.
+    let management: Vec<dispatch::adoption::Management> = session_management(&sessions);
+
     if emit_json {
         // ls JSON surface (render::ls_json) — selected by `--json` OR the agent/pipe
         // auto-default (WP-B7 PIECE 1). The byte-faithful TS surface. Strays are an
@@ -323,8 +328,23 @@ fn run_inner(
             .iter()
             .map(|o| o.as_ref().map(|(t, _)| t.clone()))
             .collect();
-        let value =
+        let mut value =
             render::ls_json_full_acp(&sessions, &[], fold_ref, Some(&facets), &acp_status_texts);
+        if let Some(rows) = value.as_array_mut() {
+            for (row, mode) in rows.iter_mut().zip(&management) {
+                if matches!(
+                    mode,
+                    dispatch::adoption::Management::Bare | dispatch::adoption::Management::Managed
+                ) {
+                    if let Some(object) = row.as_object_mut() {
+                        object.insert(
+                            "management".to_string(),
+                            serde_json::Value::String(mode.as_str().to_string()),
+                        );
+                    }
+                }
+            }
+        }
         // `{}\n` reproduces `println!` byte-for-byte; emit_or_pipe_exit replaces
         // the panic-on-broken-pipe with a clean exit-141 (item 20).
         emit_or_pipe_exit(&format!("{}\n", render::to_pretty(&value)));
@@ -356,7 +376,11 @@ fn run_inner(
     } else {
         // (L) Item 3: the acp rows ride the PRIMARY-SOURCED Status override (computed
         // once above); non-acp rows → None → the byte-identical golden path.
-        emit_or_pipe_exit(&render_table_human_with(&sessions, &acp_status_overrides));
+        emit_or_pipe_exit(&render_table_human_with(
+            &sessions,
+            &acp_status_overrides,
+            &management,
+        ));
     }
 
     // ONE trailer emission, covering every TEXT mode (short / empty / table) —
@@ -391,12 +415,53 @@ pub fn render_table_for_live(sessions: &[Session]) -> String {
 fn render_table_human_with(
     sessions: &[Session],
     overrides: &[Option<(String, SessionStatus)>],
+    management: &[dispatch::adoption::Management],
 ) -> String {
     let now = {
         use dispatch::effects::Clock;
         dispatch::effects::RealClock.now_ms()
     };
-    render_table_human_at_with(sessions, now, overrides)
+    render_table_human_at_with_management(sessions, now, overrides, management)
+}
+
+fn session_management(sessions: &[Session]) -> Vec<dispatch::adoption::Management> {
+    use dispatch::effects::Env as _;
+    let env = dispatch::effects::RealEnv;
+    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
+        return sessions
+            .iter()
+            .map(|s| {
+                if s.provider == "claude-code" && dispatch::resolve::is_live_status(s.status) {
+                    dispatch::adoption::Management::Bare
+                } else {
+                    dispatch::adoption::Management::NotApplicable
+                }
+            })
+            .collect();
+    };
+    let paths = dispatch::paths::QdPaths::from_home(std::path::Path::new(&home));
+    let rows = dispatch::effects::process_rows(&dispatch::exec::RealExec).unwrap_or_default();
+    let relay_candidates = dispatch::relay::get_relay_ports(
+        &paths.relay_dir,
+        &dispatch::relay_http::HttpRelayProbe::new(),
+    );
+    let relays = dispatch::adoption::verify_live_relays(
+        &relay_candidates,
+        &dispatch::relay_http::CcRelay::new(),
+        &dispatch::effects::is_pid_alive,
+    );
+    sessions
+        .iter()
+        .map(|session| {
+            dispatch::adoption::classify_session(
+                session,
+                &relays,
+                &rows,
+                &dispatch::effects::is_pid_alive,
+            )
+            .management
+        })
+        .collect()
 }
 
 /// (L) Item 3 — the pure 3-way acp Status classification (THE distinct (L) revert seam),
@@ -467,12 +532,27 @@ fn render_table_human_at(sessions: &[Session], now: i64) -> String {
 /// that row's Status cell shows the primary-sourced acp text/color (riding the EXISTING
 /// Status column); None (incl. an empty slice) → the unchanged stored-status path, so a
 /// non-acp listing is BYTE-IDENTICAL to the pre-Item-3 output (the golden).
+#[cfg(test)]
 fn render_table_human_at_with(
     sessions: &[Session],
     now: i64,
     overrides: &[Option<(String, SessionStatus)>],
 ) -> String {
-    let headers = ["Name", "Id", "Status", "Last active", "Tokens"];
+    render_table_human_at_with_management(sessions, now, overrides, &[])
+}
+
+fn render_table_human_at_with_management(
+    sessions: &[Session],
+    now: i64,
+    overrides: &[Option<(String, SessionStatus)>],
+    management: &[dispatch::adoption::Management],
+) -> String {
+    let include_management = !management.is_empty();
+    let headers: Vec<&str> = if include_management {
+        vec!["Name", "Id", "Status", "Mode", "Last active", "Tokens"]
+    } else {
+        vec!["Name", "Id", "Status", "Last active", "Tokens"]
+    };
     let max_name = NAME_COL_MAX;
     // Shortest-unique prefixes among the LISTED sessions' stable ids (min 2
     // chars) — pure read-time computation, the same pattern codes used.
@@ -525,13 +605,23 @@ fn render_table_human_at_with(
             // the natural "0". Right-aligned (it's a number).
             let tokens_cell = Cell::plain_right(format_tokens(s.tokens));
 
-            vec![
-                name_cell,
-                id_cell,
-                status_cell,
-                Cell::plain_only(last),
-                tokens_cell,
-            ]
+            let mut cells = vec![name_cell, id_cell, status_cell];
+            if include_management {
+                let mode = management
+                    .get(i)
+                    .copied()
+                    .unwrap_or(dispatch::adoption::Management::NotApplicable);
+                cells.push(match mode {
+                    dispatch::adoption::Management::Managed => {
+                        Cell::new("managed", green("managed"))
+                    }
+                    dispatch::adoption::Management::Bare => Cell::new("bare", yellow("bare")),
+                    dispatch::adoption::Management::NotApplicable => Cell::new("-", dim("-")),
+                });
+            }
+            cells.push(Cell::plain_only(last));
+            cells.push(tokens_cell);
+            cells
         })
         .collect();
 
@@ -1039,6 +1129,29 @@ mod tests {
             // golden (human_table_golden).
             assert!(!plain.trim().is_empty());
         }
+    }
+
+    #[test]
+    fn adopt_management_column_names_bare_and_managed() {
+        let rows = vec![
+            session(Some("bare-one"), Some("a01"), SessionStatus::Idle, None, 0),
+            session(
+                Some("managed-one"),
+                Some("a02"),
+                SessionStatus::Busy,
+                None,
+                0,
+            ),
+        ];
+        let modes = vec![
+            dispatch::adoption::Management::Bare,
+            dispatch::adoption::Management::Managed,
+        ];
+        let out = render_table_human_at_with_management(&rows, NOW_MS, &[], &modes);
+        let plain: String = out.lines().map(strip_ansi).collect::<Vec<_>>().join("\n");
+        assert!(plain.lines().next().unwrap().contains("Mode"));
+        assert!(plain.contains("bare"));
+        assert!(plain.contains("managed"));
     }
 
     #[test]

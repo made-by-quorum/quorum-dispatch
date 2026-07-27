@@ -1,9 +1,11 @@
 use unicode_width::UnicodeWidthChar;
 use vte::{Params, Perform};
 
-use super::cell::Cell;
-use super::grid::{ActiveCharset, Charset, CursorShape, MouseEncoding, TerminalModes};
-use super::grid_mutator::GridMutator;
+use super::cell::{Cell, WrapKind};
+use super::grid::{
+    ActiveCharset, Charset, CursorShape, GeometryInvalidationReason, Grid, MouseEncoding,
+    TerminalModes,
+};
 use super::style::{Style, StyleId};
 use super::ScreenState;
 
@@ -13,17 +15,17 @@ use super::ScreenState;
 const MAX_COMBINING: usize = 16;
 
 /// VTE `Perform` implementation that translates escape sequences into grid mutations.
-pub(super) struct ScreenPerformer<'a, G: GridMutator> {
-    pub(super) grid: &'a mut G,
+pub(super) struct ScreenPerformer<'a> {
+    pub(super) grid: &'a mut Grid,
     pub(super) state: &'a mut ScreenState,
 }
 
-impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
+impl ScreenPerformer<'_> {
     /// Intern a style, triggering GC if the table is full and retrying.
     fn intern_with_gc(&mut self, style: Style) -> StyleId {
         let id = self.grid.style_table_mut().intern(style);
         if id.is_default() && !style.is_default() && self.grid.style_table().is_full() {
-            self.grid.compact_styles(self.state.saved_grid.as_ref());
+            super::compact_styles(self.grid, self.state.saved_grid.as_ref());
             self.grid.style_table_mut().intern(style)
         } else {
             id
@@ -80,6 +82,10 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
     /// Save full cursor state: position, style, charsets, autowrap mode, wrap_pending.
     /// Used by CSI s, ESC 7, and mode 1048h.
     fn save_cursor(&mut self) {
+        self.save_cursor_with_alt(None, false);
+    }
+
+    fn save_cursor_with_alt(&mut self, alt_epoch: Option<u64>, saved_by_alt_1049: bool) {
         self.state.saved_cursor_state = Some(super::SavedCursor {
             x: self.grid.cursor_x(),
             y: self.grid.cursor_y(),
@@ -90,12 +96,25 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
             autowrap_mode: self.grid.modes().autowrap_mode,
             origin_mode: self.grid.modes().origin_mode,
             wrap_pending: self.grid.wrap_pending(),
+            alt_epoch,
+            saved_by_alt_1049,
         });
     }
 
     /// Restore full cursor state saved by [`save_cursor`].
     /// Used by CSI u, ESC 8, and mode 1048l.
     fn restore_cursor(&mut self) {
+        self.restore_cursor_after_geometry(false);
+    }
+
+    /// The geometry reason is evaluated before selecting matched vs stale
+    /// cursor provenance. In the additive logical shadow it clears both
+    /// qualified and raw-only pending; the legacy grid retains c59 behavior.
+    fn restore_cursor_after_geometry(&mut self, geometry_invalid: bool) {
+        self.grid
+            .invalidate_pending_for_geometry(GeometryInvalidationReason::AltRestore {
+                source_invalid: geometry_invalid,
+            });
         if let Some(ref saved) = self.state.saved_cursor_state {
             let x = saved.x.min(self.grid.cols() - 1);
             let y = saved.y.min(self.grid.rows() - 1);
@@ -105,7 +124,11 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
             let active = saved.active_charset;
             let autowrap = saved.autowrap_mode;
             let origin = saved.origin_mode;
-            let wrap_pending = saved.wrap_pending;
+            let wrap_pending =
+                saved.wrap_pending && !(geometry_invalid && self.grid.is_logical_shadow());
+            // Same-domain and stale/cross-mode restores retain c59's raw bit
+            // but never re-arm logical provenance.
+            self.grid.invalidate_provenance_keep_raw();
             self.grid.set_wrap_pending(wrap_pending);
             self.grid.set_cursor_x_unclamped(x);
             self.grid.set_cursor_y_unclamped(y);
@@ -130,8 +153,10 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
         if self.state.in_alt_screen {
             return;
         }
+        let alt_epoch = self.state.next_alt_epoch;
+        self.state.next_alt_epoch = alt_epoch.and_then(|value| value.checked_add(1));
         if save_cursor {
-            self.save_cursor();
+            self.save_cursor_with_alt(alt_epoch, true);
         }
         use super::grid::SavedGrid;
         // Save main screen scroll region before overwriting it.
@@ -139,7 +164,15 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
         // Save visible rows; scrollback stays in the active grid
         let saved_visible = self.grid.drain_visible();
         let scrollback_limit = self.grid.scrollback_limit();
-        self.state.saved_grid = Some(SavedGrid::new(saved_visible, scrollback_limit));
+        self.state.saved_grid = Some(SavedGrid::new(
+            saved_visible,
+            scrollback_limit,
+            self.grid.cols(),
+            alt_epoch,
+            save_cursor,
+            self.grid.logical_pending(),
+            self.grid.logical_sequential(),
+        ));
         // Create blank visible rows for alt screen
         self.grid.fill_visible_blank();
         self.grid.set_scrollback_limit(0);
@@ -161,9 +194,29 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
             return;
         }
         self.state.in_alt_screen = false;
-        if let Some(saved) = self.state.saved_grid.take() {
+        // Every path returning to main-screen ownership must also return the
+        // logical topology classifier, including the defensive no-saved-grid
+        // path below.
+        self.grid.leave_alt_domain();
+        let mut provenance_restore = None;
+        let mut restore_geometry_invalid = false;
+        if let Some(mut saved) = self.state.saved_grid.take() {
+            let (width_changed, keep_count) = self.grid.prepare_alt_restore(&mut saved);
+            restore_geometry_invalid = width_changed
+                || self
+                    .state
+                    .saved_cursor_state
+                    .is_some_and(|cursor| cursor.y as usize >= keep_count);
             // Remove alt screen visible rows, restore saved visible rows
-            let (visible_cells, scrollback_limit) = saved.into_parts();
+            let (
+                visible_cells,
+                scrollback_limit,
+                _save_cols,
+                alt_epoch,
+                entered_with_1049,
+                pending,
+                sequential,
+            ) = saved.into_parts();
             self.grid.replace_visible(visible_cells);
             self.grid.set_scrollback_limit(scrollback_limit);
             // Adjust visible rows for current dimensions (may have resized during alt screen)
@@ -177,12 +230,23 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
                     .visible_row_mut(y)
                     .resize(cols_usize, Cell::default());
             }
+            provenance_restore = Some((alt_epoch, entered_with_1049, pending, sequential));
         }
         if let Some(modes) = self.state.saved_modes.take() {
             self.grid.set_modes(modes);
         }
         if do_restore_cursor {
-            self.restore_cursor();
+            self.restore_cursor_after_geometry(restore_geometry_invalid);
+        }
+        if let Some((alt_epoch, entered_with_1049, pending, sequential)) = provenance_restore {
+            let cursor_matches = self.state.saved_cursor_state.is_some_and(|saved| {
+                saved.saved_by_alt_1049
+                    && saved.alt_epoch.is_some()
+                    && saved.alt_epoch == alt_epoch
+                    && entered_with_1049
+            });
+            self.grid
+                .finish_alt_restore(pending, sequential, do_restore_cursor && cursor_matches);
         }
         // Restore the main screen scroll region saved on alt screen entry.
         // Fallback to full-screen reset if somehow missing (defensive).
@@ -197,7 +261,7 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
 
         // Compact styles after alt screen — apps like vim/htop create
         // many unique styles that become dead when returning to main screen.
-        self.grid.compact_styles(None);
+        super::compact_styles(self.grid, None);
     }
 
     // --- CSI command methods ---
@@ -368,6 +432,7 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
         let x = self.grid.cursor_x() as usize;
         let cols = self.grid.cols() as usize;
         if y < self.grid.rows() as usize {
+            self.grid.prepare_addressed_write(y);
             self.grid.fixup_wide_char_at(x, y);
             let delete_count = n.min(cols.saturating_sub(x));
             for _ in 0..delete_count {
@@ -395,6 +460,7 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
         let x = self.grid.cursor_x() as usize;
         let cols = self.grid.cols() as usize;
         if y < self.grid.rows() as usize {
+            self.grid.prepare_addressed_write(y);
             self.grid.fixup_wide_char_at(x, y);
             for _ in 0..n.min(cols.saturating_sub(x)) {
                 self.grid.visible_row_mut(y).pop();
@@ -503,13 +569,14 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
             tx
         };
         if self.grid.visible_row(cy).combining_len(tx as u16) < MAX_COMBINING {
-            self.grid.visible_row_mut(cy).push_combining(tx as u16, c);
+            self.grid.push_print_combining(cy, tx, c);
         }
     }
 
     /// Execute a deferred line wrap: advance to column 0 of the next row,
     /// scrolling if at the bottom of the scroll region.
     fn perform_deferred_wrap(&mut self) {
+        let pending = self.grid.take_qualified_wrap();
         self.grid.set_wrap_pending(false);
         self.grid.set_cursor_x_unclamped(0);
         if self.grid.cursor_y() == self.grid.scroll_bottom() {
@@ -517,6 +584,7 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
         } else if self.grid.cursor_y() < self.grid.rows() - 1 {
             self.grid.set_cursor_y_unclamped(self.grid.cursor_y() + 1);
         }
+        self.grid.publish_deferred_wrap(pending);
     }
 
     fn csi_set_dec_private_mode(&mut self, ps: &[Vec<u16>], enable: bool) {
@@ -573,7 +641,7 @@ impl<'a, G: GridMutator> ScreenPerformer<'a, G> {
     }
 }
 
-impl<'a, G: GridMutator> Perform for ScreenPerformer<'a, G> {
+impl Perform for ScreenPerformer<'_> {
     fn print(&mut self, c: char) {
         self.state.last_printed_char = c; // Save pre-map char for REP
         let c = self.map_charset(c);
@@ -598,8 +666,9 @@ impl<'a, G: GridMutator> Perform for ScreenPerformer<'a, G> {
                 let y = self.grid.cursor_y() as usize;
                 if x < self.grid.cols() as usize && y < self.grid.rows() as usize {
                     let blank = self.blank_cell();
-                    self.grid.visible_row_mut(y)[x] = blank;
+                    self.grid.set_wide_early_padding(x, y, blank);
                 }
+                self.grid.arm_qualified_wrap(WrapKind::WideEarly, 1);
                 self.perform_deferred_wrap();
             } else {
                 return;
@@ -611,13 +680,13 @@ impl<'a, G: GridMutator> Perform for ScreenPerformer<'a, G> {
         if x < self.grid.cols() as usize && y < self.grid.rows() as usize {
             let sid = self.intern_with_gc(self.state.current_style);
             self.grid
-                .set_cell(x, y, Cell::new(c, sid, char_width as u8));
+                .set_print_cell(x, y, Cell::new(c, sid, char_width as u8));
 
             let new_x = self.grid.cursor_x() + char_width;
             if new_x >= self.grid.cols() {
                 self.grid.set_cursor_x_unclamped(self.grid.cols() - 1);
                 if self.grid.modes().autowrap_mode {
-                    self.grid.set_wrap_pending(true);
+                    self.grid.arm_qualified_wrap(WrapKind::Normal, 0);
                 }
             } else {
                 self.grid.set_cursor_x_unclamped(new_x);
@@ -801,6 +870,7 @@ impl<'a, G: GridMutator> Perform for ScreenPerformer<'a, G> {
             }
             ([], b'M') => {
                 // RI — Reverse Index (scroll down at top margin)
+                self.grid.invalidate_provenance_keep_raw();
                 if self.grid.cursor_y() == self.grid.scroll_top() {
                     self.scroll_down();
                 } else if self.grid.cursor_y() > 0 {
@@ -826,6 +896,10 @@ impl<'a, G: GridMutator> Perform for ScreenPerformer<'a, G> {
                     self.grid.set_scrollback_limit(saved.scrollback_limit());
                 }
                 self.state.in_alt_screen = false;
+                // RIS destroys the alternate and saved-main domains rather
+                // than restoring either one. Future rows therefore belong to
+                // a fresh main-screen adjacency domain.
+                self.grid.leave_alt_domain();
                 self.state.saved_grid = None;
                 self.state.saved_modes = None;
                 self.state.saved_cursor_state = None;

@@ -79,7 +79,7 @@ pub trait Exec {
     ) -> io::Result<ExecResult>;
 
     /// Spawn a command with stdio INHERITED (no capture) and wait for it. Used
-    /// for the interactive handoff (`qd connect` → `zmx attach`, an exec-style
+    /// for the interactive handoff (`qd attach` → `zmx attach`, an exec-style
     /// takeover of the terminal). Returns the child's exit code (or 1 if it was
     /// signalled / produced no code).
     fn spawn_inherit(

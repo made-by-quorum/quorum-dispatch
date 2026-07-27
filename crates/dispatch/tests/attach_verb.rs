@@ -1,7 +1,5 @@
-//! W1 ADD-26 — `qd connect` (the human "get me into this session" verb).
-//! P0 start-surface rework (STATE 22): the `attach` verb is RETIRED (erroring
-//! stub, the new/kill pattern) — the old demoted-attach pins below were
-//! retargeted to the stub contract; connect is the one attach-mechanic caller.
+//! `qd attach` — the human "get me into this session" verb — plus the retired
+//! `qd connect` migration stub.
 //!
 //! Drives the REAL `qd` binary (`CARGO_BIN_EXE_qd`) against a JAILED, empty HOME
 //! (L9a / ADD-4 — never the real home; HOME + ZMX_DIR point into a per-test
@@ -94,7 +92,7 @@ fn claude_row_autonamed(pid: i64) -> String {
 
 // === Daemon redirect (codex) ===
 
-/// `qd connect <codex-row>` → the LOUD daemon redirect naming BOTH `qd send:relay`
+/// `qd attach <codex-row>` → the LOUD daemon redirect naming BOTH `qd send:relay`
 /// AND `qd resume`, exit 1, and does NOT attach (mutation evidence: there is no
 /// terminal-takeover, and stdout stays empty — the verb never reaches mux.attach).
 ///
@@ -102,11 +100,11 @@ fn claude_row_autonamed(pid: i64) -> String {
 /// would fall through to `refuse_unknown_provider` ("unknown provider \"codex\"")
 /// or attempt an attach — both red this (the redirect names send:relay+resume).
 #[test]
-fn connect_codex_is_daemon_redirect_not_attach() {
+fn attach_codex_is_daemon_redirect_not_terminal_attach() {
     let t = tempfile::tempdir().unwrap();
     let (code, out, err) =
-        run_qd_with_row(t.path(), 5050, &codex_row(5050, "cx"), &["connect", "cx"]);
-    assert_eq!(code, 1, "connect on a daemon-hosted row exits 1");
+        run_qd_with_row(t.path(), 5050, &codex_row(5050, "cx"), &["attach", "cx"]);
+    assert_eq!(code, 1, "attach on a daemon-hosted row exits 1");
     assert!(
         err.contains("daemon-hosted"),
         "names the daemon hosting reason, got: {err}"
@@ -130,90 +128,76 @@ fn connect_codex_is_daemon_redirect_not_attach() {
     );
 }
 
-// === attach verb RETIRED (STATE 22): erroring stub, fires before resolution ===
-// (Retired here with their history: `attach_codex_names_relay_and_resume_not_
-// unknown_provider` pinned the latent codex-redirect fix THROUGH the attach verb
-// — that fact stays pinned through connect above; `cold_claude_attach_emits_
-// shared_cold_error` pinned the demoted-attach cold pointer — the shared
-// `cold_session_error` helper died with the verb, connect's cold path
-// auto-revives instead.)
+// === connect verb ALIAS: backward-compat alias for attach, routes by provider ===
 
-/// `qd attach <anything>` is the retired erroring stub: exit 1, the pinned
-/// stderr line, NO resolution/state touched — even with a perfectly attachable
-/// row forged in the registry.
+/// `qd connect <session>` is a hidden backward-compat alias for `qd attach`.
+/// It resolves the session and routes by provider — a codex row produces the
+/// daemon redirect (exit 1), not the old retirement stub line.
 ///
-/// MUTATION EVIDENCE: re-routing dispatch back to the old run_attach reds this
-/// (a codex row would print the daemon redirect, not the retired line).
+/// MUTATION EVIDENCE: reverting to the retirement stub reds the daemon-hosted assert.
 #[test]
-fn attach_verb_is_retired_erroring_stub() {
+fn connect_verb_is_attach_alias() {
     let t = tempfile::tempdir().unwrap();
     let (code, out, err) =
-        run_qd_with_row(t.path(), 5051, &codex_row(5051, "cx"), &["attach", "cx"]);
-    assert_eq!(code, 1, "retired attach exits 1");
+        run_qd_with_row(t.path(), 5051, &codex_row(5051, "cx"), &["connect", "cx"]);
+    assert_eq!(code, 1, "codex via connect alias exits 1 (daemon redirect)");
     assert!(
-        err.contains(
-            "qd attach: `attach` is retired; humans use `qd connect`, agents use `qd send:relay`"
-        ),
-        "the exact retired-stub line, got: {err}"
+        err.contains("daemon-hosted"),
+        "codex row via connect alias gets the daemon redirect, got: {err}"
     );
-    assert!(out.is_empty(), "stub writes nothing to stdout, got: {out}");
-    // The stub fires at dispatch: no resolution output (no redirect, no cold
-    // wording, no 'No session matching').
+    assert!(out.is_empty(), "daemon redirect writes nothing to stdout, got: {out}");
     assert!(
-        !err.contains("daemon-hosted") && !err.contains("No session matching"),
-        "stub fires before any resolution, got: {err}"
+        !err.contains("renamed to qd attach"),
+        "retirement stub line must not appear (connect is now an alias), got: {err}"
     );
 }
 
-/// W1 phase 2 — connect's cold→auto-revive DIVERGENCE from attach. A cold claude
-/// `qd connect` no longer short-circuits to the pure cold-error: it ATTEMPTS the
+/// A cold claude `qd attach` attempts the
 /// detached revive (resume::revive_claude) FIRST. In this jail the revive cannot
 /// confirm boot (no real claude under the forged row), so it drives the real
 /// run_detached + the ADR-0005 ready-wait to a genuine timeout — hence this test is
 /// LIVE/SLOW (the boot waiter's default deadline is ~40-60s, with no env knob) and
-/// is `#[ignore]`d in the fast lane. The load-bearing observation: connect's cold
+/// is `#[ignore]`d in the fast lane. The load-bearing observation: attach's cold
 /// path REACHES the revive machinery (its stderr carries the revive-failure line —
-/// "could not launch" / "did not confirm ready" / "Failed to resume"), which attach
-/// NEVER does. Then connect appends the shared cold-error recovery pointer.
+/// "could not launch" / "did not confirm ready" / "Failed to resume").
 ///
-/// Run with: `cargo test -p quorum-dispatch --test connect_verb -- --ignored connect_cold`.
+/// Run with: `cargo test -p quorum-dispatch --test attach_verb -- --ignored cold_claude_attach`.
 ///
-/// MUTATION EVIDENCE: reverting connect to short-circuit Cold → a bare cold-error
+/// MUTATION EVIDENCE: reverting attach to short-circuit Cold → a bare cold-error
 /// (the pre-phase-2 behavior) reds the revive-attempt assert (no revive line ever
 /// appears).
 #[test]
 #[ignore = "live/slow: drives the real boot waiter to a ~40-60s timeout"]
-fn cold_claude_connect_attempts_revive_then_fails_loudly() {
+fn cold_claude_attach_attempts_revive_then_fails_loudly() {
     let t = tempfile::tempdir().unwrap();
     let (code, _out, err) =
-        run_qd_with_row(t.path(), 6061, &claude_row(6061, "wk"), &["connect", "wk"]);
+        run_qd_with_row(t.path(), 6061, &claude_row(6061, "wk"), &["attach", "wk"]);
     assert_eq!(
         code, 1,
-        "connect on a cold claude row whose revive fails exits 1"
+        "attach on a cold claude row whose revive fails exits 1"
     );
-    // Evidence the revive machinery RAN (attach never produces any of these).
+    // Evidence the revive machinery RAN.
     assert!(
         err.contains("did not confirm ready")
             || err.contains("could not launch")
             || err.contains("Failed to resume"),
-        "connect: cold path attempts revive (revive-failure line expected), got: {err}"
+        "attach: cold path attempts revive (revive-failure line expected), got: {err}"
     );
     // revive-FAILS returns the revive's own loud error; it must NOT append the
-    // cold-error pointer (that says "revive with `qd connect`" — re-run the command
-    // that just failed, circular on the human verb). The revive line above stands alone.
+    // circular recovery pointer. The revive line above stands alone.
     assert!(
-        !err.contains("revive and attach with: qd connect"),
-        "connect: revive-fails does NOT append the circular cold-error pointer, got: {err}"
+        !err.contains("revive and attach with: qd attach"),
+        "attach: revive-fails does NOT append the circular cold-error pointer, got: {err}"
     );
 }
 
-/// Bug #1 regression — connect must RESOLVE an AUTO-named (user_named=false) cold
-/// session, not die "No session matching". connect used to pass `JoinOpts::default()`
+/// Bug #1 regression — attach must RESOLVE an AUTO-named (user_named=false) cold
+/// session, not die "No session matching". The old implementation used to pass `JoinOpts::default()`
 /// (include_all=false), whose list cap keeps only user_named rows (join.rs
-/// apply_list_cap), so an auto-named session was invisible to connect even though
-/// resume (include_all=true) could see it — defeating connect's whole "attach OR
+/// apply_list_cap), so an auto-named session was invisible to attach even though
+/// resume (include_all=true) could see it — defeating attach's whole "attach OR
 /// resume, you don't think about which" contract. With include_all=true (tombstones
-/// stay excluded — connect's pre-existing posture), connect resolves the row and
+/// stay excluded — the verb's pre-existing posture), attach resolves the row and
 /// REACHES the cold→revive machinery.
 ///
 /// FAST + deterministic: the forged row's recorded cwd `/w` does not exist, so
@@ -221,17 +205,17 @@ fn cold_claude_connect_attempts_revive_then_fails_loudly() {
 /// slow boot waiter. That error is itself proof the revive machinery ran (it lives
 /// inside the revive path, reached only AFTER resolution).
 ///
-/// MUTATION EVIDENCE: reverting connect's opts to `JoinOpts::default()` reds this —
-/// the auto-named row is cap-filtered, so connect prints `No session matching` and
+/// MUTATION EVIDENCE: reverting attach's opts to `JoinOpts::default()` reds this —
+/// the auto-named row is cap-filtered, so attach prints `No session matching` and
 /// never reaches revive.
 #[test]
-fn connect_resolves_auto_named_cold_session() {
+fn attach_resolves_auto_named_cold_session() {
     let t = tempfile::tempdir().unwrap();
     let (code, _out, err) = run_qd_with_row(
         t.path(),
         7071,
         &claude_row_autonamed(7071),
-        &["connect", "claude-sid-7071"],
+        &["attach", "claude-sid-7071"],
     );
     assert_eq!(
         code, 1,
@@ -239,7 +223,7 @@ fn connect_resolves_auto_named_cold_session() {
     );
     assert!(
         !err.contains("No session matching"),
-        "connect must RESOLVE the auto-named row, not drop it as unnamed, got: {err}"
+        "attach must RESOLVE the auto-named row, not drop it as unnamed, got: {err}"
     );
     // Evidence the revive machinery RAN (the cwd reality-check is inside revive_claude,
     // reached only after resolution succeeds).
@@ -248,7 +232,7 @@ fn connect_resolves_auto_named_cold_session() {
             || err.contains("did not confirm ready")
             || err.contains("could not launch")
             || err.contains("Failed to resume"),
-        "connect: reaches the revive machinery for an auto-named session, got: {err}"
+        "attach: reaches the revive machinery for an auto-named session, got: {err}"
     );
 }
 
@@ -257,9 +241,9 @@ fn connect_resolves_auto_named_cold_session() {
 /// An unknown session name → resolve_or_die's clear `No session matching "<q>"`
 /// error, exit 1.
 #[test]
-fn connect_unknown_name_clear_error() {
+fn attach_unknown_name_clear_error() {
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_qd_empty(t.path(), &["connect", "nope"]);
+    let (code, _out, err) = run_qd_empty(t.path(), &["attach", "nope"]);
     assert_eq!(code, 1, "unknown name exits 1");
     assert!(
         err.contains(r#"No session matching "nope""#),
@@ -267,14 +251,14 @@ fn connect_unknown_name_clear_error() {
     );
 }
 
-// === fail-connect-noarg: clap required-arg error ===
+// === fail-attach-noarg: clap required-arg error ===
 
-/// `qd connect` with no `<session>` → clap required-arg error (commander phrasing,
+/// `qd attach` with no `<session>` → clap required-arg error (commander phrasing,
 /// exit 1 per cli.rs's centralized mapping).
 #[test]
-fn connect_noarg_required_arg_error() {
+fn attach_noarg_required_arg_error() {
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_qd_empty(t.path(), &["connect"]);
+    let (code, _out, err) = run_qd_empty(t.path(), &["attach"]);
     assert_eq!(code, 1, "missing required <session> exits 1");
     assert!(
         err.contains("missing required argument 'session'"),
@@ -286,10 +270,10 @@ fn connect_noarg_required_arg_error() {
 
 /// `qd resume --help` now documents resume as the AGENT verb: it revives a cold
 /// session to a DRIVABLE state with NO interactive attach tail (non-TTY safe), and
-/// points humans wanting an interactive landing at `qd connect`.
+/// points humans wanting an interactive landing at `qd attach`.
 ///
 /// MUTATION EVIDENCE: reverting help::RESUME to the old "Resume a dead session
-/// (wraps in zmx by default)" one-liner reds the agent-facing / drivable / connect
+/// (wraps in zmx by default)" one-liner reds the agent-facing / drivable / attach
 /// asserts.
 #[test]
 fn resume_help_documents_agent_facing_revive_to_drivable() {
@@ -310,8 +294,8 @@ fn resume_help_documents_agent_facing_revive_to_drivable() {
         "points at the working send:relay channel, got: {help}"
     );
     assert!(
-        help.contains("qd connect"),
-        "points humans at qd connect for the interactive landing, got: {help}"
+        help.contains("qd attach"),
+        "points humans at qd attach for the interactive landing, got: {help}"
     );
     // No longer claims to merely "Resume a dead session" with no agent framing.
     assert!(
@@ -320,42 +304,42 @@ fn resume_help_documents_agent_facing_revive_to_drivable() {
     );
 }
 
-// === attach retirement: absent from TOP help, --help marks it retired ===
+// === connect retirement: absent from TOP help, --help marks it renamed ===
 
-/// `attach` is absent from the top-level command table (`qd --help`) — which now
-/// carries the start/resume/connect MODEL LINE (STATE 21) — and `qd attach
-/// --help` still renders, marked retired and pointing at connect.
+/// `connect` is absent from the top-level command table (`qd --help`), which now
+/// carries the start/resume/attach model line; `qd connect --help` still renders
+/// a migration pointer.
 ///
-/// MUTATION EVIDENCE: re-listing attach in help::TOP reds the absence assert;
-/// dropping the ATTACH-const retired marker reds the pointer assert; dropping
+/// MUTATION EVIDENCE: re-listing connect in help::TOP reds the absence assert;
+/// dropping the CONNECT-const renamed marker reds the pointer assert; dropping
 /// the model line from help::TOP reds the model-line assert.
 #[test]
-fn attach_retired_from_top_help_and_help_marks_retired() {
+fn connect_retired_from_top_help_and_help_marks_renamed() {
     let t = tempfile::tempdir().unwrap();
 
     let (code, top, _e) = run_qd_empty(t.path(), &["--help"]);
     assert_eq!(code, 0, "top help exits 0");
     assert!(
-        top.contains("connect <session>"),
-        "connect listed in the top help, got: {top}"
+        top.contains("attach <session>"),
+        "attach listed in the top help, got: {top}"
     );
     // The STATE-21 model line (spec-w7-start-surface D1).
     assert!(
         top.contains("start = new participant (fresh or forked)")
             && top.contains("resume = same participant wakes")
-            && top.contains("connect = attach-to-live"),
-        "the start/resume/connect model line is in the overview, got: {top}"
+            && top.contains("attach = enter live or cold session"),
+        "the start/resume/attach model line is in the overview, got: {top}"
     );
-    // attach is gone: no `attach <session>` table row in the top help.
+    // connect is gone: no `connect <session>` table row in the top help.
     assert!(
-        !top.contains("attach <session>"),
-        "attach is off the top-level command table, got: {top}"
+        !top.contains("connect <session>"),
+        "connect is off the top-level command table, got: {top}"
     );
 
-    let (hc, ahelp, _e2) = run_qd_empty(t.path(), &["attach", "--help"]);
-    assert_eq!(hc, 0, "attach --help exits 0 (still dispatchable)");
+    let (hc, chelp, _e2) = run_qd_empty(t.path(), &["connect", "--help"]);
+    assert_eq!(hc, 0, "connect --help exits 0 (still dispatchable)");
     assert!(
-        ahelp.contains("(retired — use connect)"),
-        "attach --help marks the verb retired, got: {ahelp}"
+        chelp.contains("(renamed — use qd attach)"),
+        "connect --help marks the verb renamed, got: {chelp}"
     );
 }

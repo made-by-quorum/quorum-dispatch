@@ -20,13 +20,11 @@ use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 use super::common;
 
 // --- attach mechanic (commands/lifecycle.ts:355-395) ---
-// P0 start-surface rework (STATE 22): the `attach` VERB is a retired erroring
-// stub (verbs/stubs.rs; was ADD-26 demoted/hidden). The shared attach MECHANIC
-// below stays — `connect` is its one caller now.
+// The shared attach mechanic below backs the live `attach` verb.
 
 /// The cold-vs-done outcome of [`attach_resolved`] (W1 phase 2). A `MuxPane`
 /// (claude) session with no live pane is `Cold` — the SHARED mechanic returns it to
-/// the CALLER instead of deciding: `connect` maps it to auto-revive-then-attach.
+/// the CALLER instead of deciding: `attach` maps it to auto-revive-then-attach.
 /// Every other path (daemon redirect — incl. codex + acp/opencode, unknown-provider
 /// refusal, collision refusal, live attach) is a terminal `Done(code)`.
 pub enum AttachOutcome {
@@ -35,21 +33,21 @@ pub enum AttachOutcome {
 }
 
 /// The shared attach mechanic (ADD-26): provider dispatch + the zmx live-handoff,
-/// called by `connect::run` (its one caller since the attach-verb retirement,
-/// STATE 22). `verb` names the caller for the opencode/unknown-provider wording.
+/// called by `attach::run`. `verb` names the caller for the
+/// opencode/unknown-provider wording.
 ///
 /// Dispatch order: collision refusal → daemon redirect (codex + acp/opencode)
 /// → unknown-provider refusal → cold-vs-live. Cold (`MuxPane`, no live pane) is
-/// returned to the CALLER as [`AttachOutcome::Cold`] (W1 phase 2): `connect`
+/// returned to the CALLER as [`AttachOutcome::Cold`] (W1 phase 2): `attach`
 /// maps it to auto-revive-then-attach. All other outcomes are terminal
 /// [`AttachOutcome::Done`].
 pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
     // ADD-8 residual fix (W1 phase 2) — live-id-collision PREFLIGHT over the RAW
     // registry, SHARED with resume (Pete feedback #6). The deduped join collapses
-    // two same-id LIVE rows to one, so a bare `qd attach`/`qd connect` would
+    // two same-id LIVE rows to one, so a bare `qd attach` would
     // silently attach to the deduped survivor. We refuse a genuine ≥2-alive
-    // collision LOUDLY here (before provider dispatch) so BOTH connect and demoted
-    // attach inherit the guard. A 1-alive session is NOT refused (refuse_id_collision
+    // collision LOUDLY here (before provider dispatch) so attach inherits the
+    // guard. A 1-alive session is NOT refused (refuse_id_collision
     // returns None for the single-alive case → normal attach proceeds; we do NOT use
     // alive_pid_for_id, which would block the legitimate single-live attach).
     {
@@ -87,7 +85,7 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
     // `revive_claude` seam).
 
     // MuxPane (claude) cold → return Cold to the CALLER (W1 phase 2): no business
-    // branch on the `verb` string here. connect → auto-revive-then-attach.
+    // branch on the `verb` string here. attach → auto-revive-then-attach.
     let Some(zmx_name) = session.zmx_name.as_deref() else {
         return AttachOutcome::Cold;
     };
@@ -434,7 +432,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
 
     // --- P0 start-surface rework: resolve the `--fork <session>` target -------
     // The standard target pipeline (common::all_sessions + resolve_or_die — the
-    // same loud, house-shaped ambiguity/not-found errors resume/connect print).
+    // same loud, house-shaped ambiguity/not-found errors resume/attach print).
     // JoinOpts mirror resume's (include_all so an auto-named/cold target
     // resolves; include_tombstoned so a stopped session's transcript is
     // forkable). The resolved session's provider UUID seeds the forked launch
@@ -565,7 +563,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             eprintln!(
                 "qd start: agent/headless start requires -p <prompt> (a bare headless \
                  start is a no-op turn). To re-enter an existing session use \
-                 \"qd resume <name>\" or \"qd connect <name>\"."
+                 \"qd resume <name>\" or \"qd attach <name>\"."
             );
             return 1;
         }
@@ -582,7 +580,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                  For a one-off print run, invoke `claude -p \"<prompt>\"` directly. To start a \
                  tracked, attachable session use an interactive start (`qd start <name> \
                  --interactive`); to re-enter an existing session use `qd resume <name>` or \
-                 `qd connect <name>`."
+                 `qd attach <name>`."
             );
             return 1;
         }
@@ -877,15 +875,15 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         if let Err(e) = dispatch::telemetry::append_create_event(&env, &clock, &ev) {
             eprintln!("WARNING: telemetry create-event append failed (non-fatal): {e}");
         }
-        // The uniform create-usage line (spec §4.1 — all FOUR verbs, F9).
-        if let Err(e) = dispatch::telemetry::append_usage(
+        // The uniform create-invoked line (spec §4.1 — all FOUR verbs, F9).
+        if let Err(e) = dispatch::telemetry::append_invoked(
             &env,
             &clock,
             "create",
             session_id.as_deref(),
             Some(name.as_str()),
         ) {
-            eprintln!("WARNING: telemetry usage append failed (non-fatal): {e}");
+            eprintln!("WARNING: telemetry invoked append failed (non-fatal): {e}");
         }
     }
 
@@ -1080,7 +1078,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                     eprintln!(
                         "ERROR: payload truncated in delivery to \"{name}\": expected {expected} bytes, \
                          recorded {recorded}.\n  The turn started (went busy) — do NOT blindly resend \
-                         (double-submit risk).\n  Attach: qd connect {name}"
+                         (double-submit risk).\n  Attach: qd attach {name}"
                     );
                     return 1;
                 }
@@ -1089,14 +1087,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                     // → stays dangling). The send remains outstanding by design.
                     eprintln!(
                         "WARNING: could not attribute the delivered payload in \"{name}\"'s \
-                         transcript — check: qd connect {name}"
+                         transcript — check: qd attach {name}"
                     );
                 }
                 dispatch::submit::PayloadVerifyOutcome::NoRecord
                 | dispatch::submit::PayloadVerifyOutcome::SourceUnavailable(_) => {
                     eprintln!(
                         "WARNING: could not verify payload delivery to \"{name}\" \
-                         (transcript not yet resolvable) — check: qd connect {name}"
+                         (transcript not yet resolvable) — check: qd attach {name}"
                     );
                 }
             }
@@ -1415,8 +1413,22 @@ fn run_new_acp_daemon(
         .join("dispatch")
         .join("log")
         .join(format!("acp-{name}.log"));
+    // Mint an unbound stable id for this ACP session (mirrors the Codex create path).
+    // The ACP session UUID is not known until after readiness; mint_unbound creates a
+    // stable id entry with session_id=null; bind() attaches the UUID after the adapter
+    // is ready. Fail-closed: nothing spawns if the mint fails.
+    let ids_path = dispatch::idstore::ids_path(&paths.state_dir);
+    let acp_qd_id =
+        match dispatch::idstore::mint_unbound(&ids_path, Some(name), &RealClock) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("qd start: could not mint stable id for acp session: {e}");
+                return 1;
+            }
+        };
+    let acp_env = vec![("QD_SESSION_ID".to_string(), acp_qd_id.clone())];
     let spawner = RealDaemonSpawner;
-    let spawned = match spawner.spawn_detached(&argv, &[], cwd, &log_path) {
+    let spawned = match spawner.spawn_detached(&argv, &acp_env, cwd, &log_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("qd start: acp adapter spawn failed: {e}");
@@ -1436,6 +1448,17 @@ fn run_new_acp_daemon(
         }
     };
     let session_id = conn.status_session_id().ok().flatten().unwrap_or_default();
+
+    // Bind the pre-minted stable id to the ACP session UUID now that we have it.
+    // Best-effort: a bind failure is logged but does not abort the create (the session
+    // is live; the id just remains unbound, which resolve_to_uuid will miss).
+    if !session_id.is_empty() {
+        if let Err(e) =
+            dispatch::idstore::bind(&ids_path, &acp_qd_id, &session_id, &RealClock)
+        {
+            eprintln!("qd start: could not bind stable id to acp session {session_id}: {e}");
+        }
+    }
 
     // 5. optional create-time prompt: drive it over the SAME connection (the resident
     //    keeps streaming after we disconnect). Non-blocking — `wait` observes the turn.
@@ -1734,7 +1757,7 @@ fn map_deliver_outcome(outcome: dispatch::submit::DeliverOutcome, name: &str) ->
             eprintln!(
                 "WARNING: Prompt sent to \"{name}\" but session did not go busy.\n\
                  The prompt may be in the composer but not submitted.\n  \
-                 Attach: qd connect {name}"
+                 Attach: qd attach {name}"
             );
             10
         }
@@ -1744,7 +1767,7 @@ fn map_deliver_outcome(outcome: dispatch::submit::DeliverOutcome, name: &str) ->
             eprintln!(
                 "ERROR: Prompt sent to \"{name}\" but the session's PID file vanished \
                  after boot — the registry row disappeared (infra failure, not a stall).\n  \
-                 Check: qd ls\n  Attach: qd connect {name}"
+                 Check: qd ls\n  Attach: qd attach {name}"
             );
             1
         }
@@ -1970,7 +1993,7 @@ pub fn run_live(m: &ArgMatches) -> i32 {
         // TS header to stdout (the clear + title, commands/status.ts:433-434), then a clean
         // error to stderr (NOT the Bun stack trace) + exit 1.
         print!("\x1b[2J\x1b[H");
-        println!("qd live  type code to connect · q to quit\n");
+        println!("qd live  type code to attach · q to quit\n");
         eprintln!("qd live: requires an interactive terminal (TTY).");
         return 1;
     }
@@ -2012,7 +2035,7 @@ fn run_live_interactive(all: bool) -> i32 {
         if last_refresh.elapsed() >= Duration::from_secs(2) {
             current = common::all_sessions(opts).unwrap_or_default();
             print!("\x1b[2J\x1b[H");
-            println!("qd live  type code to connect · q to quit\n");
+            println!("qd live  type code to attach · q to quit\n");
             if current.is_empty() {
                 println!("No sessions found.");
             } else {
@@ -2054,12 +2077,12 @@ fn run_live_interactive(all: bool) -> i32 {
                             // W2: resume IS first-class now (no longer "not supported").
                             // The live picker runs in raw termios mid-loop; rather than
                             // re-enter the full revive choreography from here, point the
-                            // user at the dedicated verbs — `qd connect` for the human
+                            // user at the dedicated verbs — `qd attach` for the human
                             // revive+attach, `qd resume` for the agent cold-revive.
                             print!("\x1b[2J\x1b[H");
                             eprintln!(
                                 "Session \"{label}\" is cold (not running). Revive it with:\n  \
-                                 qd connect {label}   (human: revive and attach)\n  \
+                                 qd attach {label}    (human: revive and attach)\n  \
                                  qd resume {label}    (agent: revive to drivable)"
                             );
                             return 1;
@@ -2073,8 +2096,8 @@ fn run_live_interactive(all: bool) -> i32 {
     }
 }
 
-/// Attach to a resolved live session from the live picker (connectToSession for
-/// the claude-code path).
+/// Attach to a resolved live session from the live picker (the legacy picker
+/// helper's claude-code path).
 fn attach_session(s: &Session) -> i32 {
     let Some(zmx_name) = s.zmx_name.as_deref() else {
         eprintln!(
@@ -2496,7 +2519,7 @@ mod tests {
     fn boot_timeout_display_byte_identical_both_phases_exit_unchanged() {
         let expected = "ERROR: Session \"wk\" did not reach idle state within timeout.\n\
                         The zmx session exists but Claude Code may not have booted.\n  \
-                        Check: qd ls\n  Attach: qd connect wk\n  (boot detail here)";
+                        Check: qd ls\n  Attach: qd attach wk\n  (boot detail here)";
         for phase in [BootPhase::PidFile, BootPhase::Idle] {
             let err = NewError::BootTimeout {
                 name: "wk".to_string(),

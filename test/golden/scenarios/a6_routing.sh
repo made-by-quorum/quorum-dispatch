@@ -143,7 +143,7 @@ cleanup_session "$GA1"
 # create-stamp appends are warn-not-fail by design (spec §4.1). Inject an append
 # failure (marks.jsonl as a DIRECTORY → open fails) and assert the ported `qd new`
 # surface is UNCHANGED: exit 0, the normal stdout, and stderr carrying EXACTLY the
-# two designed warn lines (create event + create-usage — one per append), nothing
+# two designed warn lines (create event + create-invoked — one per append), nothing
 # else. This is a FAILURE-MODE-ONLY divergence vs TS at pin (TS emits nothing —
 # named in exec/divergence-table.md), never a silent drop.
 # ===========================================================================
@@ -161,7 +161,7 @@ grep -q "Started detached session \"$GA8\"" "$JAIL_ROOT/$GA8.out" \
 WARNS="$(grep -c "WARNING: telemetry .* append failed (non-fatal)" "$JAIL_ROOT/$GA8.err" 2>/dev/null)"
 OTHERS="$(grep -vc "WARNING: telemetry .* append failed (non-fatal)" "$JAIL_ROOT/$GA8.err" 2>/dev/null)"
 if [ "$WARNS" = "2" ] && [ "$OTHERS" = "0" ]; then
-  ok "G-A8 stderr = EXACTLY the two designed warn lines (create-event + usage)"
+  ok "G-A8 stderr = EXACTLY the two designed warn lines (create-event + invoked)"
 else
   note_fail "G-A8 stderr unexpected (warns=$WARNS others=$OTHERS): $(cat "$JAIL_ROOT/$GA8.err")"
 fi

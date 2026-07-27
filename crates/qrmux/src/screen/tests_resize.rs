@@ -1909,3 +1909,74 @@ fn resize_expand_in_alt_screen_skips_scrollback_restore() {
         "scrollback should be preserved after exiting alt screen"
     );
 }
+
+/// C-4 D7 discriminating cell: a cross-size REATTACH must replay the VISIBLE grid
+/// at the CLIENT's width, never at the capture width. On reattach the server
+/// resizes the grid (`Grid::resize` reflows visible rows to the new width) then
+/// repaints with `render(true, &mut RenderCache::new())` — exactly the daemon's
+/// send-initial-state path. If the visible-row reflow is disabled (the D7 garble:
+/// "capture-width history replay into a differently-sized client"), preserved
+/// rows keep their capture width and the repaint emits glyphs beyond the client
+/// width, garbling every row below.
+///
+/// GENERAL (not a mutant fingerprint): it asserts the width invariant, the absence
+/// of any beyond-width glyph in the actual repaint bytes, AND byte-exact preserved
+/// content — so ANY garble that leaves a preserved row un-reflowed reds it. It
+/// uses only `.len()`/`.iter()` (never an out-of-range index), so on the correct
+/// (reflowing) tree it is green and on a capture-width mutant it reds by a byte/
+/// content DIFFERENCE, never an out-of-bounds panic. NOTE: scrollback is
+/// deliberately frozen at capture width (see `scrollback_frozen_at_old_width_after_resize`),
+/// so this cell asserts only the VISIBLE reattach repaint — never scrollback reflow.
+#[test]
+fn d7_reattach_replays_visible_grid_at_client_width_not_capture_width() {
+    // Build at width A=20; row 0 FILLS the row (so any un-reflowed reattach emits
+    // beyond-width glyphs); the filled line stays a VISIBLE row — the reflow target.
+    let mut screen = Screen::new(20, 4, 100);
+    screen.process(b"\x1b[1;1H0123456789ABCDEFGHIJ"); // 20 glyphs, fills row 0
+    screen.process(b"\x1b[2;1Hsecond");
+    screen.process(b"\x1b[3;1Hthird");
+
+    // ---- WIDTH-ONLY reattach: cols 20 -> 10, rows unchanged ----
+    let b1 = 10usize;
+    screen.resize(b1 as u16, 4);
+
+    // (a) width invariant: no preserved visible row may keep its capture width.
+    for y in 0..screen.grid.visible_row_count() {
+        assert_eq!(
+            screen.grid.visible_row(y).len(),
+            b1,
+            "row {y} kept capture width {} instead of client width {b1} (capture-width replay)",
+            screen.grid.visible_row(y).len()
+        );
+    }
+
+    // (b) the reattach repaint (full=true + fresh cache == the server attach path)
+    //     must not emit any glyph from columns >= B into the narrower client.
+    let repaint = {
+        let mut cache = RenderCache::new();
+        screen.render(true, &mut cache)
+    };
+    let text = String::from_utf8_lossy(&repaint);
+    assert!(
+        !text.contains("ABCDEFGHIJ"),
+        "reattach repaint replayed capture-width (cols>=10) content into a 10-col client: {text:?}"
+    );
+
+    // (c) byte-exact preserved content within [0,B): the filled row equals the
+    //     width-B truncation, cell-for-cell.
+    let row0: String = screen.grid.visible_row(0).iter().map(|c| c.c).collect();
+    assert_eq!(row0, "0123456789", "row 0 preserved content must be exactly the width-10 truncation");
+
+    // ---- WIDTH-SHRINK reattach: cols 10 -> 6, rows unchanged (further width reflow) ----
+    let b2 = 6usize;
+    screen.resize(b2 as u16, 4);
+    for y in 0..screen.grid.visible_row_count() {
+        assert_eq!(
+            screen.grid.visible_row(y).len(),
+            b2,
+            "row {y} not reflowed to width {b2} on the shrink reattach (capture-width replay)"
+        );
+    }
+    let row0b: String = screen.grid.visible_row(0).iter().map(|c| c.c).collect();
+    assert_eq!(row0b, "012345", "row 0 preserved content must be exactly the width-6 truncation on shrink");
+}

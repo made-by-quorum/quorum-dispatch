@@ -1,8 +1,12 @@
-//! Verb-level `qd send:relay` test (spec §4.5): the no-relay error path.
+//! Verb-level `qd send:relay` test (spec §4.5): the bare-destination refusal path.
 //!
 //! Drives the REAL `qd` binary (via `CARGO_BIN_EXE_qd`) with a hermetic tempdir
-//! HOME and NO relay listening, asserting the exact stderr wording + exit 1
-//! (send.ts:407-408: `Session "<name>" has no relay.`).
+//! HOME and a bare (unmanaged) session, asserting the exact stderr wording + exit 1.
+//!
+//! The integration branch added a receivability gate (send_relay.rs:79): a session
+//! classified as `Management::Bare` (no relay channel loaded) is refused BEFORE any
+//! relay port lookup. A session with no relay ancestry is classified Bare, so the
+//! error is now the bare-destination message rather than "has no relay."
 //!
 //! Hermetic discipline (rule 9 / ADD-4): HOME, QD_HOME, ZMX_DIR, TMPDIR,
 //! XDG_RUNTIME_DIR all point into the tempdir; the test NEVER touches the real
@@ -58,7 +62,7 @@ fn write_session(home: &Path, pid: i64, name: &str, session_id: &str) {
 }
 
 #[test]
-fn send_relay_no_relay_errors_exit_1() {
+fn send_relay_bare_destination_errors_exit_1() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     // L9a: never the real home (the tempdir guarantees this, but assert it).
@@ -74,8 +78,9 @@ fn send_relay_no_relay_errors_exit_1() {
     }
 
     // A live session "lonely" with a pid that no relay's ancestry reaches → the
-    // fast lookup finds the name but no relay matches; the full-scan fallback
-    // resolves the session with relay_port = None → "has no relay." exit 1.
+    // session is classified Management::Bare (no relay ancestry ⇒ no channel
+    // loaded ⇒ not managed). The new receivability gate fires first and emits
+    // the bare-destination error before any relay port lookup.
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_qd"));
     hermetic_env(&mut cmd, &home); // creates the .claude dirs first
     write_session(&home, 31337, "lonely", "lonely-sid");
@@ -87,10 +92,10 @@ fn send_relay_no_relay_errors_exit_1() {
     assert_eq!(
         out.status.code(),
         Some(1),
-        "no-relay must exit 1; stderr was: {stderr}"
+        "bare-destination must exit 1; stderr was: {stderr}"
     );
     assert!(
-        stderr.contains(r#"Session "lonely" has no relay."#),
-        "expected the exact no-relay wording, got: {stderr}"
+        stderr.contains(r#"Destination "lonely" is non-receivable (bare)"#),
+        "expected the bare-destination wording, got: {stderr}"
     );
 }

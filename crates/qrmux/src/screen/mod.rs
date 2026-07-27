@@ -3,6 +3,7 @@
 
 pub(crate) mod cell;
 pub(crate) mod grid;
+#[allow(dead_code)]
 pub(crate) mod grid_mutator;
 pub(crate) mod performer;
 pub(crate) mod render;
@@ -12,6 +13,7 @@ pub mod traits;
 use std::collections::VecDeque;
 use vte::Parser;
 
+pub use cell::WrapKind;
 pub use cell::{Cell, Row};
 use grid::Grid;
 pub use grid::{sanitize_dimensions, CursorShape, TerminalSize};
@@ -23,6 +25,37 @@ pub use render::RenderCache;
 pub use style::write_u16;
 pub use style::{Color, Style, StyleId, UnderlineStyle};
 pub use traits::{TerminalEmulator, TerminalRenderer};
+
+/// Ordered logical-history domain requested by a Stage-1 emission consumer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LogicalEmissionSurface {
+    #[default]
+    AttachReplay,
+    GetHistory,
+}
+
+/// Exact untrimmed frozen cell carried by logical history transport planning.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LogicalCell {
+    pub ch: char,
+    pub display_width: u8,
+    pub combining: String,
+    pub style: Style,
+    pub wide_early_padding: bool,
+}
+
+/// One ordered physical-row chunk. `end_of_line` is true only when no
+/// validated outgoing edge authorizes continuation into the next chunk.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LogicalHistoryChunk {
+    pub cells: Vec<LogicalCell>,
+    pub end_of_line: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LogicalTransportEmission {
+    pub chunks: Vec<LogicalHistoryChunk>,
+}
 
 /// Full cursor state saved by DECSC (ESC 7) / CSI s / mode 1048.
 #[derive(Copy, Clone)]
@@ -37,6 +70,8 @@ pub(super) struct SavedCursor {
     pub(super) origin_mode: bool,
     /// VT220 "last column flag": deferred autowrap is pending.
     pub(super) wrap_pending: bool,
+    pub(super) alt_epoch: Option<u64>,
+    pub(super) saved_by_alt_1049: bool,
 }
 
 /// Maximum responses/passthrough entries buffered per process() call.
@@ -65,6 +100,7 @@ pub(super) struct ScreenState {
     pub(super) title: String,
     pub(super) title_stack: Vec<String>,
     pub(super) last_printed_char: char,
+    pub(super) next_alt_epoch: Option<u64>,
 }
 
 impl ScreenState {
@@ -110,6 +146,7 @@ impl Default for ScreenState {
             title: String::new(),
             title_stack: Vec::new(),
             last_printed_char: ' ',
+            next_alt_epoch: Some(0),
         }
     }
 }
@@ -119,6 +156,9 @@ pub struct Screen {
     pub(super) grid: Grid,
     pub(super) state: ScreenState,
     parser: Parser,
+    logical_grid: Grid,
+    logical_state: ScreenState,
+    logical_parser: Parser,
 }
 
 impl Screen {
@@ -128,6 +168,9 @@ impl Screen {
             grid: Grid::new(cols, rows, scrollback_limit),
             state: ScreenState::default(),
             parser: Parser::new(),
+            logical_grid: Grid::new_logical(cols, rows, scrollback_limit),
+            logical_state: ScreenState::default(),
+            logical_parser: Parser::new(),
         }
     }
 
@@ -155,6 +198,12 @@ impl Screen {
         self.grid.rows()
     }
 
+    /// Number of columns in the grid (inherent — the M2 banner fits its row to
+    /// this without needing the `TerminalEmulator` trait in scope at the relay).
+    pub fn cols(&self) -> u16 {
+        self.grid.cols()
+    }
+
     /// Whether the screen is currently in alternate screen mode.
     pub fn in_alt_screen(&self) -> bool {
         self.state.in_alt_screen
@@ -162,12 +211,21 @@ impl Screen {
 
     /// Feed raw bytes through the VTE parser, updating the grid and state.
     pub fn process(&mut self, bytes: &[u8]) {
-        let mut performer = ScreenPerformer {
-            grid: &mut self.grid,
-            state: &mut self.state,
-        };
         for &byte in bytes {
-            self.parser.advance(&mut performer, byte);
+            self.parser.advance(
+                &mut ScreenPerformer {
+                    grid: &mut self.grid,
+                    state: &mut self.state,
+                },
+                byte,
+            );
+            self.logical_parser.advance(
+                &mut ScreenPerformer {
+                    grid: &mut self.logical_grid,
+                    state: &mut self.logical_state,
+                },
+                byte,
+            );
         }
     }
 
@@ -238,6 +296,44 @@ impl Screen {
         lines
     }
 
+    /// Read-only logical-line view over frozen physical rows. This never
+    /// resizes, rewraps, or otherwise materializes storage.
+    pub fn logical_emission(&self, surface: LogicalEmissionSurface) -> LogicalTransportEmission {
+        self.logical_grid
+            .logical_emission(surface, self.logical_state.in_alt_screen)
+    }
+
+    /// Unit-test realization of the contract's private direct-row event.
+    #[cfg(test)]
+    fn logical_insert_row_for_test(&mut self, row: u16) {
+        let at = row.saturating_sub(1).min(self.logical_grid.rows() - 1) as usize;
+        let bottom = self.logical_grid.visible_row_count() - 1;
+        self.logical_grid.remove_visible_row(bottom);
+        let blank_style = Style {
+            bg: self.logical_state.current_style.bg,
+            ..Style::default()
+        };
+        let style_id = self.logical_grid.style_table_mut().intern(blank_style);
+        let blank = Cell::new(' ', style_id, 1);
+        let new_row = self.logical_grid.new_blank_row(blank);
+        self.logical_grid.insert_visible_row(at, new_row);
+    }
+
+    #[cfg(test)]
+    fn logical_remove_row_for_test(&mut self, row: u16) {
+        let at = row.saturating_sub(1).min(self.logical_grid.rows() - 1) as usize;
+        self.logical_grid.remove_visible_row(at);
+        let blank_style = Style {
+            bg: self.logical_state.current_style.bg,
+            ..Style::default()
+        };
+        let style_id = self.logical_grid.style_table_mut().intern(blank_style);
+        let blank = Cell::new(' ', style_id, 1);
+        let new_row = self.logical_grid.new_blank_row(blank);
+        let bottom = self.logical_grid.visible_row_count();
+        self.logical_grid.insert_visible_row(bottom, new_row);
+    }
+
     /// Render the current grid as ANSI output. Pass `full: true` for a full redraw.
     /// Threads `in_alt_screen` to the renderer so the client's terminal is
     /// switched to/from the alternate buffer in step with the inner app
@@ -289,6 +385,21 @@ impl Screen {
         (render_data, passthrough)
     }
 
+    /// attended-UX M2 — overlay the polite-delivery banner row onto an
+    /// already-rendered frame `base` for this client. `banner` is the row text (or
+    /// `None` to hide). Presentation only — reads the grid cursor/alt state, never
+    /// mutates the screen model. See [`render::compose_banner`] for the HARD
+    /// scrolling-clause behavior (scrollback-clean, alt-screen-yielding).
+    pub fn compose_banner(&self, base: &mut Vec<u8>, cache: &mut RenderCache, banner: Option<&str>) {
+        render::compose_banner(
+            &self.grid,
+            self.state.in_alt_screen,
+            base,
+            banner,
+            cache,
+        );
+    }
+
     /// Look up the resolved style for a visible cell. Test convenience.
     #[cfg(test)]
     pub(crate) fn cell_style(&self, row: usize, col: usize) -> style::Style {
@@ -319,17 +430,26 @@ impl Screen {
 
     /// Resize the grid to new dimensions, restoring scrollback lines on vertical expand.
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        let old_rows = self.grid.rows();
+        Self::resize_grid(&mut self.grid, self.state.in_alt_screen, cols, rows);
+        Self::resize_grid(
+            &mut self.logical_grid,
+            self.logical_state.in_alt_screen,
+            cols,
+            rows,
+        );
+    }
+
+    fn resize_grid(grid: &mut Grid, in_alt_screen: bool, cols: u16, rows: u16) {
+        let old_rows = grid.rows();
 
         // Restore scrollback lines when growing vertically (not in alt screen).
         // With unified buffer, scrollback rows are already in cells — just move the boundary.
-        if !self.state.in_alt_screen && rows > old_rows {
+        if !in_alt_screen && rows > old_rows {
             let grow = (rows - old_rows) as usize;
-            let restore_count = grow.min(self.grid.scrollback_len());
-            self.grid.restore_scrollback(restore_count);
-            self.grid.set_cursor_y_unclamped(
-                self.grid
-                    .cursor_y()
+            let restore_count = grow.min(grid.scrollback_len());
+            grid.restore_scrollback(restore_count);
+            grid.set_cursor_y_unclamped(
+                grid.cursor_y()
                     .saturating_add(u16::try_from(restore_count).unwrap_or(u16::MAX)),
             );
         }
@@ -339,18 +459,17 @@ impl Screen {
         // first; remaining excess pushes top rows into scrollback, mirroring
         // the grow path's restore. Only rows below the cursor that hold
         // content are ever discarded (rare), by grid.resize's fallback pop.
-        if !self.state.in_alt_screen && rows > 0 && rows < old_rows {
+        if !in_alt_screen && rows > 0 && rows < old_rows {
             let mut needed = (old_rows - rows) as usize;
-            needed -= self.grid.chop_blank_bottom_rows(needed);
-            let push = needed.min(self.grid.cursor_y() as usize);
+            needed -= grid.chop_blank_bottom_rows(needed);
+            let push = needed.min(grid.cursor_y() as usize);
             if push > 0 {
-                self.grid.push_top_rows_to_scrollback(push);
-                self.grid
-                    .set_cursor_y_unclamped(self.grid.cursor_y() - push as u16);
+                grid.push_top_rows_to_scrollback(push);
+                grid.set_cursor_y_unclamped(grid.cursor_y() - push as u16);
             }
         }
 
-        self.grid.resize(cols, rows);
+        grid.resize(cols, rows);
     }
 
     /// Snapshot the visible grid as owned rows of cells, for out-of-crate
@@ -481,6 +600,24 @@ pub(crate) fn compact_styles(grid: &mut Grid, saved_grid: Option<&grid::SavedGri
     }
 
     grid.style_table_mut().reclaim(&live);
+}
+
+/// Render the visible grid to plain text (one line per visible row, trailing
+/// whitespace trimmed, rows joined by `\n`). PRODUCTION render for the attended
+/// fire's plain-composer verify + the content-verified-CR read-back
+/// (`attended::fire`). The `#[cfg(test)]` `test_helpers::screen_lines` is the same
+/// logic; this is its production twin (the attended path needs plain text, not the
+/// ANSI `render_screen` bytes the client relay emits).
+pub fn screen_text(screen: &Screen) -> String {
+    screen
+        .grid
+        .visible_rows()
+        .map(|row| {
+            let s: String = row.iter().map(|c| c.c).collect();
+            s.trim_end().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -734,6 +871,57 @@ mod tests_content_history {
 }
 
 #[cfg(test)]
+mod logical_direct_row_tests {
+    use super::*;
+
+    fn logical_lines(screen: &Screen) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut current = String::new();
+        for chunk in screen
+            .logical_emission(LogicalEmissionSurface::AttachReplay)
+            .chunks
+        {
+            for cell in chunk.cells {
+                if !cell.wide_early_padding && cell.display_width > 0 {
+                    current.push(cell.ch);
+                    current.push_str(&cell.combining);
+                }
+            }
+            if chunk.end_of_line {
+                lines.push(current.trim_end_matches(' ').to_owned());
+                current.clear();
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn private_direct_row_events_stay_inside_cfg_test_harness() {
+        let mut insert_crossing = Screen::new(5, 4, 100);
+        insert_crossing.process(b"\x1b[2;1HABCDEF");
+        insert_crossing.logical_insert_row_for_test(3);
+        assert_eq!(logical_lines(&insert_crossing), ["", "ABCDE", "", "F"]);
+
+        let mut remove_endpoint = Screen::new(5, 4, 100);
+        remove_endpoint.process(b"\x1b[2;1HABCDEF");
+        remove_endpoint.logical_remove_row_for_test(2);
+        assert_eq!(logical_lines(&remove_endpoint), ["", "F"]);
+
+        let mut insert_below = Screen::new(5, 4, 100);
+        insert_below.process(b"ABCDEF");
+        insert_below.logical_insert_row_for_test(4);
+        insert_below.process(b"G");
+        assert_eq!(logical_lines(&insert_below), ["ABCDEFG"]);
+
+        let mut remove_below = Screen::new(5, 4, 100);
+        remove_below.process(b"ABCDEF");
+        remove_below.logical_remove_row_for_test(4);
+        remove_below.process(b"G");
+        assert_eq!(logical_lines(&remove_below), ["ABCDEFG"]);
+    }
+}
+
+#[cfg(test)]
 mod history_boundary_tests;
 #[cfg(test)]
 mod tests_large_updates;
@@ -749,3 +937,5 @@ mod tests_reconnect_scrollback;
 mod tests_resize;
 #[cfg(test)]
 mod tests_screen;
+#[cfg(test)]
+mod tests_banner;

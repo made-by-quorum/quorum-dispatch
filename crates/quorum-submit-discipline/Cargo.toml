@@ -1,0 +1,22 @@
+[package]
+# The pure SUBMIT-DISCIPLINE crate (submit-extract). A compile-time LEAF crate: it
+# owns the acceptance-keyed verify-then-CR core + the chunked two-write PTY delivery
+# discipline + the content-verified-CR composer predicate — fully trait-abstracted
+# with NO dependency on `dispatch` or `qrmux`. Both `dispatch` (which keeps the
+# concrete `Real*` Mux/Clock/fs bindings + the W8 transcript-verify / `--wait`
+# layer) and `qrmux` can drive the SAME discipline without a dependency cycle
+# (dispatch → qrmux is the existing edge; a reverse qrmux → dispatch import would
+# cycle). `dispatch::submit` / `dispatch::sendpty` re-export every moved public name
+# so all existing call sites are byte-for-byte unaffected. std-only: the pure
+# functions need no external deps — the serde/JSONL/`--wait`/W8-verify code stays in
+# dispatch (it is coupled to `crate::sendpty`'s JSONL parsing).
+name = "quorum-submit-discipline"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure submit discipline: acceptance-keyed verify-then-CR + chunked two-write PTY delivery + content-verified-CR composer predicate. Leaf crate (no dispatch/qrmux deps, std-only)."
+
+[lib]
+name = "quorum_submit_discipline"

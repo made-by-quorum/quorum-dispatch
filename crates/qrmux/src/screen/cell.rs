@@ -3,6 +3,29 @@ use std::ops::{Deref, DerefMut};
 
 use super::style::StyleId;
 
+/// Stable identity of a physical row. Identities are allocated monotonically
+/// by `Grid` and are never reused.
+pub(super) type RowId = u64;
+pub(super) type EdgeId = u64;
+
+/// The two physical autowrap forms that may create logical continuity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WrapKind {
+    Normal,
+    WideEarly,
+}
+
+/// Source-owned proof that the next physical row is part of the same logical
+/// line. Absence is always a hard boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct WrapEdge {
+    pub edge_id: EdgeId,
+    pub target: RowId,
+    pub kind: WrapKind,
+    pub padding_count: u16,
+    pub valid_width: u16,
+}
+
 /// Single character cell in the terminal grid, with style and display width.
 /// Combining marks are stored at the Row level (>99.99% of cells have none).
 #[derive(Clone, Copy, Debug)]
@@ -48,6 +71,9 @@ pub struct Row {
     cells: Vec<Cell>,
     /// Combining marks per column. Empty in the vast majority of rows.
     combining: Vec<(u16, Vec<char>)>,
+    pub(super) row_id: Option<RowId>,
+    pub(super) content_revision: Option<u64>,
+    pub(super) outgoing: Option<WrapEdge>,
 }
 
 impl Row {
@@ -56,6 +82,9 @@ impl Row {
         Self {
             cells: vec![Cell::default(); cols],
             combining: Vec::new(),
+            row_id: None,
+            content_revision: Some(0),
+            outgoing: None,
         }
     }
 
@@ -64,7 +93,24 @@ impl Row {
         Self {
             cells,
             combining: Vec::new(),
+            row_id: None,
+            content_revision: Some(0),
+            outgoing: None,
         }
+    }
+
+    pub(super) fn assign_id(&mut self, id: Option<RowId>) {
+        self.row_id = id;
+        if id.is_none() {
+            self.outgoing = None;
+        }
+    }
+
+    /// Advance the semantic content generation without wrapping. Exhaustion
+    /// is sticky and therefore cannot make an old pending token compare equal.
+    pub(super) fn advance_revision(&mut self) -> Option<u64> {
+        self.content_revision = self.content_revision.and_then(|value| value.checked_add(1));
+        self.content_revision
     }
 
     /// Returns combining marks for the given column (empty if none).

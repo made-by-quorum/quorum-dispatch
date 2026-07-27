@@ -165,19 +165,17 @@ fn resume_resolves_past_a_dead_pid_stale_namesake() {
 }
 
 /// W1 phase 2 (ADD-8 residual): the SAME id-collision must be refused by the SHARED
-/// `attach_resolved` guard. (Was pinned over BOTH `connect` and demoted `attach`;
-/// the attach VERB is a retired erroring stub since STATE 22, so `connect` — the
-/// mechanic's one caller — carries the pin alone.) A `qd connect <name>` over two
+/// `attach_resolved` guard. A `qd attach <name>` over two
 /// same-id alive rows would otherwise silently attach to the deduped survivor
 /// (the exact ADD-8 hole).
 ///
 /// MUTATION EVIDENCE: removing the `refuse_id_collision` preflight at the top of
-/// `attach_resolved` reds this — connect would fall through to the cold-vs-
+/// `attach_resolved` reds this — attach would fall through to the cold-vs-
 /// live dispatch and silently target the survivor (no "id collision" stderr).
 #[test]
-fn connect_refuses_a_duplicate_id_collision() {
+fn attach_refuses_a_duplicate_id_collision() {
     {
-        let verb = "connect";
+        let verb = "attach";
         let mut c1 = live_child();
         let mut c2 = live_child();
         let p1 = c1.id() as i64;
@@ -214,7 +212,7 @@ fn connect_refuses_a_duplicate_id_collision() {
 
 /// W1 phase 2 NUANCE: a SINGLE alive row must NOT be refused by the collision guard
 /// (it is not a collision). `refuse_id_collision` returns None for the one-alive
-/// case, so connect proceeds normally (attach retired, STATE 22) — here, with no
+/// case, so attach proceeds normally — here, with no
 /// live mux pane in the jail, that means the cold-session dispatch, NOT the
 /// id-collision refusal. The load-bearing assertion: the guard does NOT fire
 /// ("id collision" absent).
@@ -223,9 +221,9 @@ fn connect_refuses_a_duplicate_id_collision() {
 /// single-alive refusal in `attach_resolved` would red this (it would wrongly refuse
 /// a legitimate single-live attach with an "id collision" / "already alive" line).
 #[test]
-fn connect_does_not_refuse_a_single_alive_session() {
+fn attach_does_not_refuse_a_single_alive_session() {
     {
-        let verb = "connect";
+        let verb = "attach";
         let mut child = live_child();
         let pid = child.id() as i64;
         let rows = [(

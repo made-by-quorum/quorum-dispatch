@@ -16,18 +16,73 @@
 //! DIVERGENCE from the coordinator's suggested "reqwest-based" framing,
 //! flagged here and in the response back.
 //!
-//! **What this does NOT do**: TLS. It speaks plaintext HTTP only — the shape
-//! of garage/minio-style local S3-compatible stores. A direct HTTPS AWS S3
-//! endpoint needs a TLS stream behind the one `request` seam below; that is
-//! Atomic D's concern (real AWS credentials, live-box wiring), not this
-//! atomic's. [`crate::archive::s3::S3Client::new`] rejects a `https://`
-//! endpoint loudly rather than silently trying plaintext to a TLS port.
+//! **TLS (Atomic D)**: an `https://` endpoint (direct AWS S3) is spoken by
+//! wrapping the same blocking `TcpStream` in a synchronous rustls session
+//! behind the one `request_on` seam below — the HTTP/1.1 wire logic above it
+//! is byte-identical for both schemes. Trust roots are the bundled Mozilla
+//! set (`webpki-roots`), so per-host self-builds need no system cert store or
+//! OpenSSL. Certificate or handshake failures surface as loud [`HttpError`]s,
+//! never a silent plaintext fallback.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Process-wide rustls client config: built once (root-store parse is not
+/// free), shared by every TLS request. ring provider pinned explicitly so the
+/// build never depends on a process-default crypto provider being installed.
+fn tls_config() -> Arc<rustls::ClientConfig> {
+    static CFG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CFG.get_or_init(|| {
+        let roots = rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        Arc::new(
+            rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .expect("rustls: ring provider supports the default protocol versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+        )
+    })
+    .clone()
+}
+
+/// The one stream type the wire logic reads/writes — plaintext for
+/// garage/minio-style local stores, rustls-wrapped for https endpoints.
+enum Transport {
+    Plain(TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl Read for Transport {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Transport::Plain(s) => s.read(buf),
+            Transport::Tls(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Transport {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Transport::Plain(s) => s.write(buf),
+            Transport::Tls(s) => s.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Transport::Plain(s) => s.flush(),
+            Transport::Tls(s) => s.flush(),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct HttpResponse {
@@ -46,13 +101,29 @@ impl std::fmt::Display for HttpError {
 impl std::error::Error for HttpError {}
 
 /// Issue one HTTP/1.1 request over a fresh plaintext TCP connection.
-/// `authority` is `host:port`. No connection pooling — a persist/upload copy
-/// makes at most three requests per invocation (GET existing, optional
-/// set-aside PUT, PUT canonical); a short-lived CLI process gains nothing
-/// from pooling and loses the complexity of managing a keep-alive
-/// connection's lifetime.
+/// `authority` is `host:port`. Thin shim over [`request_on`] with TLS off —
+/// kept so plaintext callers (and this module's wire tests) are untouched by
+/// the TLS seam.
 pub fn request(
     authority: &str,
+    method: &str,
+    path: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+) -> Result<HttpResponse, HttpError> {
+    request_on(authority, None, method, path, headers, body)
+}
+
+/// Issue one HTTP/1.1 request over a fresh TCP connection to `authority`
+/// (`host:port`), TLS-wrapped iff `tls_server_name` is `Some` (the name is
+/// what the server's certificate must match — SNI + verification). No
+/// connection pooling — a persist/upload copy makes at most three requests
+/// per invocation (GET existing, optional set-aside PUT, PUT canonical); a
+/// short-lived CLI process gains nothing from pooling and loses the
+/// complexity of managing a keep-alive connection's lifetime.
+pub fn request_on(
+    authority: &str,
+    tls_server_name: Option<&str>,
     method: &str,
     path: &str,
     headers: &[(String, String)],
@@ -66,6 +137,16 @@ pub fn request(
     stream
         .set_write_timeout(Some(TIMEOUT))
         .map_err(|e| HttpError(format!("set_write_timeout: {e}")))?;
+    let stream = match tls_server_name {
+        None => Transport::Plain(stream),
+        Some(name) => {
+            let server_name = rustls::pki_types::ServerName::try_from(name.to_string())
+                .map_err(|e| HttpError(format!("invalid TLS server name {name:?}: {e}")))?;
+            let conn = rustls::ClientConnection::new(tls_config(), server_name)
+                .map_err(|e| HttpError(format!("TLS session setup for {name}: {e}")))?;
+            Transport::Tls(Box::new(rustls::StreamOwned::new(conn, stream)))
+        }
+    };
 
     let mut request_bytes = Vec::with_capacity(body.len() + 512);
     request_bytes.extend_from_slice(format!("{method} {path} HTTP/1.1\r\n").as_bytes());
@@ -116,7 +197,15 @@ pub fn request(
         }
     }
 
-    let body = if chunked {
+    // A response to a HEAD request never carries a message body, even though
+    // the server echoes the `Content-Length`/`Transfer-Encoding` the matching
+    // GET would return (RFC 9110 §9.3.2). Reading `content_length` bytes here
+    // would block until the socket's read timeout, so HEAD short-circuits to an
+    // empty body before either body-reading branch.
+    let is_head = method.eq_ignore_ascii_case("HEAD");
+    let body = if is_head {
+        Vec::new()
+    } else if chunked {
         read_chunked_body(&mut reader, authority)?
     } else if let Some(len) = content_length {
         let mut buf = vec![0u8; len];
@@ -222,6 +311,36 @@ mod tests {
             b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
         });
         let resp = request(&addr, "GET", "/bucket/missing", &[], &[]).unwrap();
+        assert_eq!(resp.status, 404);
+        assert!(resp.body.is_empty());
+    }
+
+    #[test]
+    fn head_response_has_no_body_even_with_a_nonzero_content_length() {
+        // A HEAD response echoes the Content-Length the matching GET would
+        // return, but sends NO body. A reader that trusts Content-Length would
+        // block on read_exact until the timeout; `request` must short-circuit
+        // HEAD to an empty body and return promptly.
+        let addr = one_shot_server(|req| {
+            assert!(req.starts_with("HEAD /bucket/blob HTTP/1.1\r\n"), "{req}");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n".to_vec()
+        });
+        let started = std::time::Instant::now();
+        let resp = request(&addr, "HEAD", "/bucket/blob", &[], &[]).unwrap();
+        assert_eq!(resp.status, 200);
+        assert!(resp.body.is_empty(), "HEAD carries no body");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "HEAD must not block waiting for a body the server never sends"
+        );
+    }
+
+    #[test]
+    fn head_404_is_a_clean_absent_not_an_error() {
+        let addr = one_shot_server(|_req| {
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
+        });
+        let resp = request(&addr, "HEAD", "/bucket/missing", &[], &[]).unwrap();
         assert_eq!(resp.status, 404);
         assert!(resp.body.is_empty());
     }

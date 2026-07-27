@@ -40,6 +40,15 @@ serde_json = { version = "1" }
 # the S3 client itself is hand-rolled over std::net rather than reqwest).
 hmac = "0.12"
 sha2 = "0.10"
+# TLS for the archive S3 client's https:// endpoints (Atomic D): synchronous
+# rustls wrapped around the same TcpStream behind archive/http.rs's single
+# request() seam — no tokio/hyper/reqwest surface (see http.rs's module doc).
+# Both crates already resolve in the workspace lock (transitive via
+# hyper-rustls/tokio-rustls), so this pins no new versions. webpki-roots
+# (bundled Mozilla roots) keeps per-host self-builds free of system cert/
+# OpenSSL dependencies; ring backend for the same portability reason.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "0.26"
 libc = "0.2"
 # clap v4 BUILDER API (no derive) — A3 CLI surface. We map clap's parse errors to
 # commander phrasing + exit 1 ourselves (try_parse), so `derive`/`error-context`
@@ -51,6 +60,21 @@ clap = { version = "4", default-features = false, features = ["std", "help", "us
 # lazily-init current-thread tokio runtime + block_on, so we bring tokio + anyhow
 # in alongside it.
 qrmux = { path = "../qrmux" }
+# The shared delivery-event VOCABULARY (vocab-extract): the `Payload` enum,
+# `Envelope`/`Anchor`, the terminal set, and the byte-exact wire serializer
+# (`build_record_line`) live in this LEAF crate so `qrmux` can emit the same vocab
+# without a `qrmux → dispatch` cycle. `dispatch::events` re-exports every moved
+# name so all existing call sites are byte-for-byte unaffected. DEFAULT features
+# (json-insertion-order → serde_json/preserve_order ON) keep dispatch's own
+# emission byte-exact — the leaf crate's serializer depends on it.
+quorum-delivery-events = { path = "../quorum-delivery-events" }
+# The pure submit-discipline LEAF crate (submit-extract): the acceptance-keyed
+# verify-then-CR + chunked two-write PTY delivery core + the content-verified-CR
+# composer predicate. Extracted here so `qrmux` (attended-UX M1 fire engine) can
+# drive the SAME discipline without a `qrmux → dispatch` cycle. `crate::submit` /
+# `crate::sendpty` re-export every moved name so all existing call sites are
+# byte-for-byte unaffected. std-only (no features) — plain path dependency.
+quorum-submit-discipline = { path = "../quorum-submit-discipline" }
 tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "io-util"] }
 anyhow = "1"
 # ACP crate-backed driver (provider/acp/client.rs). The official ACP client crate, pinned
@@ -106,6 +130,14 @@ mutation-evidence = []
 #   cargo test -p quorum-dispatch --features faultinj --test faultinj -- --nocapture
 faultinj = []
 
+# --- DE-observed idempotency RED-TEAM (loop component 2, gated) ---
+# `deobs` gates the deobs_observe_target victim bin AND the subprocess-driven
+# death/recovery probes in tests/deobs_redteam.rs (the in-process probes in that
+# file are ALWAYS-ON). The default build stays byte-unaffected. Run the full
+# battery with:
+#   cargo test -p quorum-dispatch --features deobs --test deobs_redteam -- --nocapture --test-threads=1
+deobs = []
+
 # The controllable VICTIM process the fault-injection harness spawns. Gated on
 # `faultinj` via required-features so it NEVER appears in the release `qd`
 # binary or the default build (R3a-Step-0: not shipped). The harness finds it via
@@ -122,6 +154,22 @@ required-features = ["faultinj"]
 [[bin]]
 name = "recovery_coordinator"
 path = "src/bin/recovery_coordinator.rs"
+
+# C-4 (a) — the fail-closed conformance grid minting invoker. A thin process
+# shell around `dispatch::conformance::{read_run_dir, mint_grid}`: reads a run
+# dir of deposited RunArtifacts and mints the certify-or-INVALID grid. C-5 wields
+# it over a measured run dir; nothing certifiable escapes it.
+[[bin]]
+name = "mint-conformance-grid"
+path = "src/bin/mint_conformance_grid.rs"
+
+# The controllable VICTIM process the DE-observed red-team spawns. Gated on
+# `deobs` via required-features so it NEVER ships in the release `qd` binary.
+# The harness finds it via CARGO_BIN_EXE_deobs_observe_target.
+[[bin]]
+name = "deobs_observe_target"
+path = "src/bin/deobs_observe_target.rs"
+required-features = ["deobs"]
 
 # NOTE: tests/faultinj.rs is auto-discovered by Cargo (no explicit [[test]]
 # needed). Its RED-gate `#[test]`s are `#[cfg(feature = "faultinj")]`, so without

@@ -94,9 +94,9 @@ use qrmux::client::discovery::scan_sessions;
 use qrmux::client::server_launcher::{ensure_session_server_running, ServerLaunchSpec};
 use qrmux::client::session_client::{
     attach_session, create_detached_session, get_history_session, kill_session_session,
-    send_input_session,
+    pending_delivery_session, send_input_session,
 };
-use qrmux::protocol::{ConnectMode, SessionInfo};
+use qrmux::protocol::{ClientMsg, ConnectMode, SessionInfo};
 use qrmux::server::socket::{session_socket_path_for, validate_session_identity};
 
 /// Test-lane override for the embedded daemon program (C1 M4fix mutation knob).
@@ -140,6 +140,72 @@ const WAIT_POLL_MAX: usize = 150; // ~30s ceiling; trait-fill only.
 /// History scrollback depth requested on read/create (lines). Matches the
 /// default the standalone CLI uses for a reattach.
 const HISTORY_LINES: usize = 10_000;
+
+/// Fields qd resolves BEFORE handing a send to the embedded mux delivery surface
+/// (v5 attended-UX, M3). These are exactly the [`ClientMsg::PendingDelivery`]
+/// payload: the qd-minted `send_id` (the same one carried on the `send-initiated`
+/// pre-handoff record), the message `data`, the landing-correlation hash/len, the
+/// resolved recovery-read window (`transcript` + pre-fire `transcript_offset`),
+/// the ledger `session` (sessionId) + qrmux `name`, and `priority` (false for a
+/// normal polite send:pty; deliver-now is the attach-side control).
+pub struct PendingDeliveryArgs {
+    pub send_id: String,
+    pub data: Vec<u8>,
+    pub content_sha256: String,
+    pub content_len: u64,
+    pub transcript: Option<String>,
+    pub transcript_offset: Option<u64>,
+    pub session: Option<String>,
+    pub name: String,
+    pub priority: bool,
+}
+
+/// Hand ONE send to the embedded mux delivery surface (v5, M3). Self-contained: it
+/// takes the socket dir the caller already resolved (no `EmbeddedEnv` needed),
+/// builds a throwaway current-thread runtime (`send:pty` is a one-shot CLI
+/// invocation), ensures the session's daemon, and drives `PendingDelivery` →
+/// `DeliveryQueued`. Returns the server-acked send_id.
+///
+/// SINGLE-WRITER (M3): qd's role ends at the receipt. From the `DeliveryQueued`
+/// ack onward the MUX owns the send's lifecycle and emits EXACTLY ONE terminal per
+/// send_id to the authoritative ledger — qd NEVER writes a terminal for a mux-held
+/// send. A no-`--wait` sender leaves at the receipt and the send still resolves to
+/// one terminal after it is gone.
+pub fn embedded_pending_delivery(socket_dir: &Path, args: PendingDeliveryArgs) -> io::Result<String> {
+    validate_session_identity(&args.name)
+        .map_err(|e| io::Error::other(format!("embedded mux: {e}")))?;
+    let spec = embedder_launch_spec()?;
+    let msg = ClientMsg::PendingDelivery {
+        send_id: args.send_id,
+        data: args.data,
+        content_sha256: args.content_sha256,
+        content_len: args.content_len,
+        transcript: args.transcript,
+        transcript_offset: args.transcript_offset,
+        session: args.session,
+        name: args.name,
+        priority: args.priority,
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| io::Error::other(format!("embedded mux: failed to build runtime: {e}")))?;
+    let out = rt.block_on(async {
+        tokio::time::timeout(
+            OP_TIMEOUT,
+            pending_delivery_session(Some(socket_dir), Some(&spec), msg),
+        )
+        .await
+    });
+    match out {
+        Ok(Ok(send_id)) => Ok(send_id),
+        Ok(Err(e)) => Err(io::Error::other(format!("embedded mux: pending_delivery: {e}"))),
+        Err(_elapsed) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("embedded mux: pending_delivery: timed out after {OP_TIMEOUT:?}"),
+        )),
+    }
+}
 
 /// The embedded mux: bridges the sync `Mux` trait to the async qrmux client over
 /// a lazily-init current-thread tokio runtime. Carries an [`EmbeddedEnv`] snapshot

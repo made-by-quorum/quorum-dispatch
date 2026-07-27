@@ -22,9 +22,9 @@
 //! ## What the wrapper does
 //!
 //! `claude` typed bare in an interactive terminal (outside zmx) creates a
-//! tracked session detached (`qd start <generated-name>`) and connects to it
-//! (`qd connect`). `qd start --attach` would be the one-shot form, but it is an
-//! engine-deferred surface today, so start-then-connect is the supported path.
+//! tracked session detached (`qd start <generated-name>`) and attaches to it
+//! (`qd attach`). `qd start --attach` would be the one-shot form, but it is an
+//! engine-deferred surface today, so start-then-attach is the supported path.
 //! If `qd start` fails for any reason — most commonly a first-run folder-trust
 //! dialog that blocks the boot-to-idle wait — the wrapper FALLS BACK to
 //! launching claude directly, so `claude` never leaves you worse off than
@@ -185,13 +185,13 @@ claude() {{
     command claude {wflags} "$@"; return
   fi
   # Remaining case: a bare interactive launch outside zmx → tracked session.
-  # Create detached, then connect (--attach on `qd start` is engine-deferred;
-  # start-then-connect is the supported path). If create fails — e.g. a first-run
+  # Create detached, then attach (--attach on `qd start` is engine-deferred;
+  # start-then-attach is the supported path). If create fails — e.g. a first-run
   # folder-trust dialog blocks the boot-to-idle wait — fall back to launching
   # claude directly so `claude` is never worse than running it raw.
   _qd_name="cc-$(date +%Y%m%d-%H%M%S)-$$"
   if qd start "$_qd_name" -- "$@"; then
-    qd connect "$_qd_name"
+    qd attach "$_qd_name"
   else
     command claude {wflags} "$@"
   fi
@@ -237,13 +237,13 @@ function claude
         command claude $_qd_wflags $argv
         return
     end
-    # Create detached, then connect (--attach on `qd start` is engine-deferred;
-    # start-then-connect is the supported path). If create fails — e.g. a first-run
+    # Create detached, then attach (--attach on `qd start` is engine-deferred;
+    # start-then-attach is the supported path). If create fails — e.g. a first-run
     # folder-trust dialog blocks the boot-to-idle wait — fall back to launching
     # claude directly so `claude` is never worse than running it raw.
     set -l _qd_name cc-(date +%Y%m%d-%H%M%S)-$fish_pid
     if qd start $_qd_name -- $argv
-        qd connect $_qd_name
+        qd attach $_qd_name
     else
         command claude $_qd_wflags $argv
     end
@@ -342,7 +342,7 @@ mod tests {
     //
     // The wrapper CONTRACT, asserted per shell:
     //   1. routes a bare launch through `qd start <generated-name>` then
-    //      `qd connect` (named-detached-then-connect — `qd start --attach` is an
+    //      `qd attach` (named-detached-then-attach — `qd start --attach` is an
     //      A5-deferred surface the backend honestly rejects),
     //   1b. falls back to a direct `command claude` when `qd start` fails (so a
     //      first-run trust dialog can never leave `claude` worse than raw),
@@ -356,7 +356,7 @@ mod tests {
         let s = init_script(Shell::Bash, "/run/user/501");
         assert!(
             s.contains(r#"if qd start "$_qd_name" -- "$@"; then"#)
-                && s.contains(r#"qd connect "$_qd_name""#),
+                && s.contains(r#"qd attach "$_qd_name""#),
             "route: {s}"
         );
         // Create-fail fallback to a direct claude launch (with wrapper flags).
@@ -384,7 +384,7 @@ mod tests {
         // zsh must use ${=VAR} (no implicit word splitting in zsh).
         assert!(s.contains("${=QD_CLAUDE_WRAPPER_FLAGS}"), "{s}");
         assert!(!s.contains(" $QD_CLAUDE_WRAPPER_FLAGS "), "{s}");
-        assert!(s.contains("qd connect"));
+        assert!(s.contains("qd attach"));
         assert!(s.contains("if qd start"));
         assert!(!s.contains("qd start --attach"));
     }
@@ -394,7 +394,7 @@ mod tests {
         let s = init_script(Shell::Fish, "/run/user/501");
         assert!(s.contains("function claude"));
         assert!(s.contains("if qd start $_qd_name -- $argv"));
-        assert!(s.contains("qd connect $_qd_name"));
+        assert!(s.contains("qd attach $_qd_name"));
         // Create-fail fallback to a direct claude launch.
         assert!(s.contains("command claude $_qd_wflags $argv"));
         assert!(!s.contains("qd start --attach"));

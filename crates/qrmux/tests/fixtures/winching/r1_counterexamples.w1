@@ -1,0 +1,25 @@
+# Round-1 reviewer counterexamples for WideEarly, source survival, and A13/A14.
+case reviewer_wide_early_abcd界
+size 5 2 100
+emit 10
+print abcd界
+expect 1 0 abcd界
+end
+
+case reviewer_one_row_alt_wrap_source_dies_fail_closed
+size 5 1 100
+emit 10
+alt-enter
+print ABCDEF
+expect 0 0 F
+end
+
+case reviewer_no_edge_cr_lf_rows
+size 5 2 100
+emit 10
+print ABC
+cr
+lf
+print DEF
+expect 0 0 ABC|DEF
+end

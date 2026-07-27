@@ -118,12 +118,21 @@ pub fn claude_flags(env: &impl Env, config_toml_path: &Path) -> Vec<String> {
     // are hardcoded in `headless.rs HeadlessLaunch::argv()` AFTER these flags, so
     // stripping here cannot break the tracked headless launch (separability proof).
     let resolved = resolve_claude_flags(env, config_toml_path);
-    let (kept, dropped) = strip_forbidden(resolved);
+    let (mut kept, dropped) = strip_forbidden(resolved);
     if !dropped.is_empty() {
         eprintln!(
             "qd: ignoring forbidden claude flag(s) {dropped:?} from QD_CLAUDE_FLAGS/config.toml \
              — dispatch does not inject --print/output-format into its own spawns"
         );
+    }
+    // External adoption installs a Stop hook in a generated settings file and
+    // launches through the ordinary resume machinery. Keep the path as one argv
+    // element (rather than placing it in whitespace-split QD_CLAUDE_FLAGS), so
+    // HOME/QD_HOME paths containing spaces remain exact. `--settings` is not a
+    // headless/print flag and is intentionally outside the forbidden set.
+    if let Some(settings) = env.var("QD_ADOPTION_SETTINGS").filter(|s| !s.is_empty()) {
+        kept.push("--settings".to_string());
+        kept.push(settings);
     }
     kept
 }
@@ -368,8 +377,17 @@ pub fn build_claude_cmd_from_argv(argv: &[String]) -> String {
 /// [`build_claude_cmd`] (split bin/flags/extra) and [`build_claude_cmd_from_argv`]
 /// (a pre-concatenated argv) so the assembly cannot drift between the two.
 fn build_claude_cmd_from_tokens(tokens: Vec<&str>) -> String {
+    let clear_adoption_settings = tokens.iter().any(|token| *token == "--settings");
     let quoted: Vec<String> = tokens.iter().map(|a| format!("'{a}'")).collect();
-    format!("command {}", quoted.join(" "))
+    let prefix = if clear_adoption_settings {
+        // QD_ADOPTION_SETTINGS is a qd-to-qd transport variable, not a Claude
+        // session birth property. Clear it in the launch shell before exec so
+        // Bash tools and nested qd launches cannot inherit this session's hook.
+        "unset -v QD_ADOPTION_SETTINGS; "
+    } else {
+        ""
+    };
+    format!("{prefix}command {}", quoted.join(" "))
 }
 
 // --- Session backend-env propagation (F1 fix; --via foundation) ----------------
@@ -428,7 +446,7 @@ pub fn capture_backend_env(env: &impl Env) -> Vec<(String, String)> {
 /// `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` (the fleet-default birth property);
 /// [`RenderMode::AltScreen`] injects NOTHING (the var is simply absent, so
 /// Claude Code keeps its native fullscreen rendering). This is the ONE shared
-/// env-assembly point for every launch site (start / resume / connect), so
+/// env-assembly point for every launch site (start / resume / attach), so
 /// per-site divergence is structurally impossible.
 ///
 /// `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` rides EVERY launch unconditionally
@@ -618,6 +636,32 @@ mod tests {
         // Env override wins, whitespace-split.
         let e = env(&[("QD_CLAUDE_FLAGS", "--foo  --bar baz")]);
         assert_eq!(claude_flags(&e, nonexistent), vec!["--foo", "--bar", "baz"]);
+    }
+
+    #[test]
+    fn adoption_settings_are_appended_as_one_allowed_argv_element() {
+        let settings = "/home with space/.quorum/adoption/settings.json";
+        let e = env(&[
+            (
+                "QD_CLAUDE_FLAGS",
+                "--dangerously-skip-permissions --dangerously-load-development-channels server:relay",
+            ),
+            ("QD_ADOPTION_SETTINGS", settings),
+        ]);
+        let flags = claude_flags(&e, Path::new("/does/not/exist"));
+        assert_eq!(
+            flags,
+            vec![
+                "--dangerously-skip-permissions",
+                "--dangerously-load-development-channels",
+                "server:relay",
+                "--settings",
+                settings,
+            ]
+        );
+        assert!(!is_forbidden_claude_flag("--settings"));
+        let command = build_claude_cmd("claude", &flags, &[]);
+        assert!(command.starts_with("unset -v QD_ADOPTION_SETTINGS; command "));
     }
 
     #[test]

@@ -579,7 +579,11 @@ fn run_core_scenario(kind: RelayKind) {
         instructions.chars().count()
     );
 
-    // ── B. tools/list: reply tool with correct inputSchema ──────────────────
+    // ── B. tools/list: reply tool (+ shutdown_for_adoption on Rust) ─────────
+    // DIVERGENCE NOTE: the Rust relay server added `shutdown_for_adoption` in
+    // the adopt integration branch (mcp.rs:372). The Bun reference server has
+    // no such tool (adoption is Rust-only). This is a ratified divergence —
+    // assert 2 tools for Rust and 1 tool for Bun.
     child.send(&json!({
         "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
     }));
@@ -587,12 +591,20 @@ fn run_core_scenario(kind: RelayKind) {
     let tools = tools_resp["result"]["tools"]
         .as_array()
         .expect("tools array");
-    assert_eq!(tools.len(), 1, "[{kind:?}] exactly one tool (reply)");
-    let reply_tool = &tools[0];
+    let expected_tool_count = match kind {
+        RelayKind::Rust => 2,
+        RelayKind::Bun => 1,
+    };
     assert_eq!(
-        reply_tool["name"], "reply",
-        "[{kind:?}] tool name is 'reply'"
+        tools.len(),
+        expected_tool_count,
+        "[{kind:?}] expected {expected_tool_count} tool(s), got {}",
+        tools.len()
     );
+    let reply_tool = tools
+        .iter()
+        .find(|t| t["name"] == "reply")
+        .expect("[{kind:?}] must have a 'reply' tool");
     let schema = &reply_tool["inputSchema"];
     assert_eq!(
         schema["type"], "object",
@@ -616,6 +628,17 @@ fn run_core_scenario(kind: RelayKind) {
         schema["properties"]["message_id"]["type"], "string",
         "[{kind:?}] message_id property is string"
     );
+    // Rust-only: shutdown_for_adoption tool (adoption feature, no Bun equivalent).
+    if matches!(kind, RelayKind::Rust) {
+        let shutdown_tool = tools
+            .iter()
+            .find(|t| t["name"] == "shutdown_for_adoption")
+            .expect("[Rust] must have a 'shutdown_for_adoption' tool");
+        assert_eq!(
+            shutdown_tool["inputSchema"]["type"], "object",
+            "[Rust] shutdown_for_adoption inputSchema.type == object"
+        );
+    }
 
     // ── C. /health JSON shape ─────────────────────────────────────────────
     let (status, body) = raw_get(port, "/health");

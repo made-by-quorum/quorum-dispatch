@@ -50,22 +50,6 @@ pub fn run_kill_retired() -> i32 {
     1
 }
 
-/// P0 start-surface rework (STATE 22 ruling): the retired `attach` stub's exact
-/// stderr line. `connect` already covers attach-or-resume for humans (live →
-/// attach; cold → auto-revive → attach; codex → loud daemon redirect), and
-/// agents drive sessions via `qd send:relay`; `attach` was already internally
-/// demoted/hidden — this completes the retirement (the new/kill pattern).
-pub fn attach_retired_line() -> &'static str {
-    "qd attach: `attach` is retired; humans use `qd connect`, agents use `qd send:relay`"
-}
-
-/// `qd attach …` retired stub: helpful stderr, exit 1. Same contract as
-/// `new`/`kill` (trailing pass-through swallows any args, never touches state).
-pub fn run_attach_retired() -> i32 {
-    eprintln!("{}", attach_retired_line());
-    1
-}
-
 /// The retired `qd start --agent` stub's exact stderr line. Role/agent CONTENT
 /// (the `<name>.md` definitions the old static-agent path resolved under
 /// `~/.quorum/dispatch/plugins/core/agents/`) now lives in the work-model PLUGIN; spawning a
@@ -92,7 +76,7 @@ mod tests {
 
     // P0 W1: the retired-stub stderr lines + exit codes are PINNED (spec-cli
     // §11: "`kill` is retired; use `stop`" — helpful error, exit 1; STATE 22
-    // added the attach retirement with the same contract).
+    // added the command-rename retirement with the same contract).
     #[test]
     fn retired_stub_lines_are_pinned() {
         assert_eq!(
@@ -102,10 +86,6 @@ mod tests {
         assert_eq!(
             kill_retired_line(),
             "qd kill: `kill` is retired; use `qd stop`"
-        );
-        assert_eq!(
-            attach_retired_line(),
-            "qd attach: `attach` is retired; humans use `qd connect`, agents use `qd send:relay`"
         );
         assert_eq!(
             start_agent_retired_line(),
@@ -118,7 +98,6 @@ mod tests {
     fn retired_stubs_exit_1() {
         assert_eq!(run_new_retired(), 1);
         assert_eq!(run_kill_retired(), 1);
-        assert_eq!(run_attach_retired(), 1);
         assert_eq!(run_start_agent_retired(), 1);
     }
 }

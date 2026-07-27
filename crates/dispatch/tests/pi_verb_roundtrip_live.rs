@@ -17,6 +17,9 @@
 //! a turn = assistant-gated lazy-write) is TIER-B; here the CRED-FREE regex+PA5
 //! shape assertion runs (deferred real-dir confirm noted in the report).
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -26,7 +29,7 @@ use dispatch::provider::pi::conformance::{run_tier_a, QdRunner, SCRUB_VARS};
 use dispatch::provider::pi::{PiRemote, PiRpc};
 
 fn live() -> bool {
-    std::env::var("QD_PI_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_PI_LIVE", "pi_verb_roundtrip_live")
 }
 
 /// The pinned pi binary: `QD_PI_BIN` if set, else the quorum-box default
@@ -128,7 +131,7 @@ fn pi_tier_a_conformance_live() {
 //       pi_tier_b_send_turn_live -- --nocapture --test-threads=1
 
 fn tierb_live() -> bool {
-    std::env::var("QD_PI_LIVE_TIERB").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_PI_LIVE_TIERB", "pi-tier-b")
 }
 
 /// Assemble a `~/.pi/agent` under `home` carrying the REAL pi OAuth by symlinking the
@@ -379,7 +382,7 @@ fn pi_tier_b_send_turn_live() {
 //       pi_floor_continuity_live -- --nocapture --test-threads=1
 
 fn floor_live() -> bool {
-    std::env::var("QD_PI_FLOOR_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_PI_FLOOR_LIVE", "pi_verb_roundtrip_live")
 }
 
 /// Count every `*.jsonl` under `dir` (recursive). A single file across ≥2 floor

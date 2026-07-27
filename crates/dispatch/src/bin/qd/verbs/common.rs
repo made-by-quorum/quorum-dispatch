@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use dispatch::effects::{is_pid_alive, Env, RealClock, RealEnv, RealProcessTable};
+use dispatch::effects::{is_pid_alive, Clock, Env, RealClock, RealEnv, RealProcessTable};
 use dispatch::exec::RealExec;
 use dispatch::join::{self, JoinOpts, MuxDirs};
 use dispatch::model::{Session, SessionStatus};
@@ -67,7 +67,7 @@ pub fn select_backend(env: &dyn Env) -> Result<Backend, i32> {
 /// punch item 7: resolve the per-session render mode from the verb's
 /// `--alt-screen` / `--inline` flags (clap marks them conflicting) + the
 /// `render-default` config key. Precedence: flag > config > inline. SHARED by
-/// start / resume / connect so every launch site resolves identically.
+/// start / resume / attach so every launch site resolves identically.
 pub fn resolve_render_mode(m: &clap::ArgMatches, env: &dyn Env) -> dispatch::launch::RenderMode {
     let flag = if m.get_flag("alt-screen") {
         Some(dispatch::launch::RenderMode::AltScreen)
@@ -274,12 +274,12 @@ pub fn refuse_unknown_provider(verb: &str, s: &Session) -> Option<i32> {
 }
 
 // P0 start-surface rework (STATE 22): `cold_session_error` (the W1 ADD-26
-// shared cold pointer) was REMOVED with the attach-verb retirement — connect's
+// shared cold pointer) was removed when the human verb gained auto-revive; attach's
 // cold path auto-revives (and revive_claude prints its own loud error on
 // failure), so no caller remained.
 
 /// SHARED codex (daemon-hosted) redirect (W1 ADD-26): a `Hosting::Daemon`
-/// session has NO terminal to attach. Emitted by `qd connect` (codex IS
+/// session has NO terminal to attach. Emitted by `qd attach` (codex IS
 /// supported, just not attachable — the verb-agnostic wording survived the
 /// attach-verb retirement, STATE 22). eprintln!s + returns exit 1.
 pub fn daemon_redirect(name: &str) -> i32 {
@@ -302,7 +302,7 @@ fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Sessio
     // PID-AWARE liveness for the live-refinement (dup-session fix): a row counts as
     // "live" only when its status is live AND its process is genuinely alive. A
     // stale leftover whose on-disk status still says idle/busy but whose pid is DEAD
-    // no longer collides with the real ALIVE row, so `qd resume/connect/attach <code
+    // no longer collides with the real ALIVE row, so `qd resume/attach <code
     // or name>` resolves to the one true session instead of dying with
     // "Ambiguous — matches 2 sessions". A pid of `None` or `0` means "no pid
     // recorded" (e.g. ZmxOnly rows) — fall back to the status-only view there so we
@@ -322,6 +322,23 @@ fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Sessio
         }
         Resolution::Many(v) => {
             eprintln!("Ambiguous — \"{query}\" matches {} sessions:", v.len());
+            let env = RealEnv;
+            let now_ms = RealClock.now_ms();
+            let rows = dispatch::effects::process_rows(&RealExec).unwrap_or_default();
+            let relays = home_path(&env)
+                .map(|home| QdPaths::from_home_env(&home, &env))
+                .map(|paths| {
+                    let candidates = dispatch::relay::get_relay_ports(
+                        &paths.relay_dir,
+                        &dispatch::relay_http::HttpRelayProbe::new(),
+                    );
+                    dispatch::adoption::verify_live_relays(
+                        &candidates,
+                        &dispatch::relay_http::CcRelay::new(),
+                        &is_pid_alive,
+                    )
+                })
+                .unwrap_or_default();
             for s in v {
                 // P0 wave-2 addendum: the handle is the STABLE id (codes are
                 // retired from display); id-less rows show "---" as before.
@@ -333,14 +350,21 @@ fn resolve_or_die<'a>(query: &str, sessions: &'a [Session]) -> Result<&'a Sessio
                     .filter(|&p| p != 0)
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "-".to_string());
-                eprintln!("  [{qd_id}] {name}\t{id}\tPID {pid}");
+                let access = dispatch::adoption::classify_session(s, &relays, &rows, &is_pid_alive);
+                let mgmt = access.management.as_str();
+                let liveness = if is_alive(s) { "alive" } else { "dead" };
+                let age = s
+                    .started_at_ms
+                    .map(|ms| dispatch::fmt::relative_time(ms, now_ms))
+                    .unwrap_or_else(|| "-".to_string());
+                eprintln!("  [{qd_id}] {name}\t{id}\tPID {pid}\t{mgmt}\t{liveness}\tstarted {age}");
             }
             Err(1)
         }
     }
 }
 
-/// THE sealed, uncapped resolution entry point for the ACTION verbs (connect /
+/// THE sealed, uncapped resolution entry point for the ACTION verbs (attach /
 /// resume / fork / stop / send:pty / send:http / send:relay / wait). Resolves a
 /// `<session>` handle (name | full UUID | qdId | prefix) against the FULL session
 /// universe — resolution is NEVER subject to the `ls`/`live` DISPLAY cap.
@@ -383,7 +407,7 @@ pub fn resolve_session_uncapped_in_list(
 
 /// D-2 post-resolve tombstone rejection. A resolved session whose status is
 /// `Killed` (a tombstone) is FOUND but not actionable for the reject-set verbs
-/// (connect / send:pty / send:http / send:relay / wait): print the clear
+/// (attach / send:pty / send:http / send:relay / wait): print the clear
 /// "found it, but it is stopped — resume it first" message and return `Err(1)`,
 /// never the misleading `No session matching`. The accept-set verbs (stop /
 /// resume / fork) do NOT call this — a tombstone is a legitimate target for them.
@@ -408,7 +432,7 @@ pub fn reject_if_tombstoned(query: &str, session: &Session) -> Result<(), i32> {
 /// (keep-newest — CORRECT for the legitimate stale-old-pid + new-live-pid case, e.g.
 /// codex resume leaving the old row), which HIDES a genuine collision (two distinct
 /// alive processes sharing an id) from `resolve_or_die`. This helper sees the
-/// unmerged truth so resume/connect can refuse loudly instead of silently picking.
+/// unmerged truth so resume/attach can refuse loudly instead of silently picking.
 ///
 /// An empty `target_id` returns empty (ZmxOnly rows carry "" and must not match;
 /// the resume verb's own "no session ID" guard handles the empty case).
@@ -434,13 +458,13 @@ pub fn alive_rows_with_id(sessions_dir: &Path, target_id: &str) -> Vec<LiveRow> 
         .collect()
 }
 
-/// Live-id-collision refusal SHARED by resume / connect (Pete feedback #6). When
+/// Live-id-collision refusal SHARED by resume / attach (Pete feedback #6). When
 /// ≥2 ALIVE rows share `target_id` the verb CANNOT disambiguate — refuse LOUDLY and
 /// list them. Returns `Some(1)` (already printed) to refuse, `None` to proceed.
 ///
-/// A connect-style verb must call this too: connecting to drive one of two same-id
+/// An attach-style verb must call this too: attaching to one of two same-id
 /// sessions would silently pick a survivor — exactly the bug. The single-alive
-/// ("already alive") case is verb-SPECIFIC (resume refuses → attach; connect may
+/// ("already alive") case is verb-SPECIFIC (resume refuses → attach; attach may
 /// attach directly) and is NOT decided here — see [`alive_pid_for_id`].
 pub fn refuse_id_collision(verb: &str, target_id: &str, sessions_dir: &Path) -> Option<i32> {
     let alive = alive_rows_with_id(sessions_dir, target_id);
@@ -928,8 +952,8 @@ mod tests {
              rename or stop it first"
         );
         assert_eq!(
-            held_name_error_line("connect", "wk", "ab3kx9mq"),
-            "qd connect: name \"wk\" is held by running session ab3kx9mq; \
+            held_name_error_line("attach", "wk", "ab3kx9mq"),
+            "qd attach: name \"wk\" is held by running session ab3kx9mq; \
              rename or stop it first"
         );
     }

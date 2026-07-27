@@ -2,10 +2,10 @@
 //!
 //! Drives the REAL `qd` binary against a JAILED HOME (L9a / ADD-4 — HOME + ZMX_DIR
 //! into a per-test tempdir, never the real home). Mirrors the dupid_collision.rs /
-//! connect_verb.rs harness shape: forge `<pid>.json` registry rows, run the bin,
+//! attach_verb.rs harness shape: forge `<pid>.json` registry rows, run the bin,
 //! assert exit + stderr. No new harness invented.
 //!
-//! THE INVARIANT under test: the eight ACTION verbs (connect / resume / fork /
+//! THE INVARIANT under test: the eight ACTION verbs (attach / resume / fork /
 //! stop / send:pty / send:http / send:relay / wait) resolve a `<session>` handle
 //! against the FULL session universe — resolution is NEVER subject to the `ls`
 //! display cap. Read verbs (info/ping/mark) and the `ls`/`live` DISPLAY cap are
@@ -121,7 +121,7 @@ fn seed_ids(dir: &Path, binds: &[(&str, &str)]) {
 }
 
 /// Seed `n` filler named rows that sort ABOVE `target` (larger updatedAt), so
-/// `target` lands at position `n+1` — beyond the 50-cap (connect/resume/fork) AND
+/// `target` lands at position `n+1` — beyond the 50-cap (attach/resume/fork) AND
 /// the 20-cap (stop/send/wait). Returns the full row vec including `target`.
 fn rows_burying(target: (i64, String), n: usize) -> Vec<(i64, String)> {
     let mut v = Vec::with_capacity(n + 1);
@@ -163,7 +163,7 @@ fn every_action_verb_resolves_target_beyond_the_cap_by_name() {
     // (verb args, a substring its POST-resolve follow-on prints — proves it got
     // past resolution; absence of "No session matching" is the core oracle.)
     let verbs: &[&[&str]] = &[
-        &["connect", TGT_NAME],
+        &["attach", TGT_NAME],
         &["resume", TGT_NAME],
         &["start", "forked-child", "--fork", TGT_NAME],
         &["stop", TGT_NAME],
@@ -194,7 +194,7 @@ fn every_action_verb_resolves_target_beyond_the_cap_by_name() {
 fn every_action_verb_resolves_target_beyond_the_cap_by_qdid() {
     let rows = buried_target_jail();
     let verbs: &[&[&str]] = &[
-        &["connect", TGT_QDID],
+        &["attach", TGT_QDID],
         &["resume", TGT_QDID],
         &["start", "forked-child", "--fork", TGT_QDID],
         &["stop", TGT_QDID],
@@ -215,7 +215,7 @@ fn every_action_verb_resolves_target_beyond_the_cap_by_qdid() {
     }
     // POSITIVE proof the qdId tier actually resolved THE row (guards against a
     // false-green !missed): a tombstoned target beyond the cap, addressed BY qdId,
-    // must surface in connect's D-2 message carrying that very qdId.
+    // must surface in attach's D-2 message carrying that very qdId.
     let tomb_qid = "tmbqd234";
     let tomb_sid = "70m6b0c0-4aaa-8aaa-aaaa-00000000000c";
     let tomb = (60_009_i64, row(60_009, tomb_sid, "qid-tomb", TGT_UPDATED));
@@ -225,7 +225,7 @@ fn every_action_verb_resolves_target_beyond_the_cap_by_qdid() {
     );
     let t = tempfile::tempdir().unwrap();
     seed_ids(t.path(), &[(tomb_sid, tomb_qid)]);
-    let (code, _out, err) = run_qd(t.path(), &fillers, &[tomb], &["connect", tomb_qid]);
+    let (code, _out, err) = run_qd(t.path(), &fillers, &[tomb], &["attach", tomb_qid]);
     assert!(
         err.contains(tomb_qid) && err.contains("is stopped"),
         "qdId tier resolved the tombstone (D-2 echoes the qdId `{tomb_qid}`); stderr: {err}"
@@ -287,10 +287,10 @@ fn live_in_cap_session_resolution_unchanged() {
 // === D-2: post-resolve tombstone rejection ===
 
 /// A tombstoned target beyond the cap RESOLVES (include_tombstoned:true), then a
-/// reject-set verb (connect) REJECTS it post-resolve with the clear "it is stopped
+/// reject-set verb (attach) REJECTS it post-resolve with the clear "it is stopped
 /// — resume it first" message — never the misleading `No session matching`.
 ///
-/// MUTATION EVIDENCE: dropping the reject_if_tombstoned call → connect would try to
+/// MUTATION EVIDENCE: dropping the reject_if_tombstoned call → attach would try to
 /// attach a tombstone; restoring include_tombstoned:false → `No session matching`.
 /// Either reds this (no "is stopped" / "resume it first").
 #[test]
@@ -298,7 +298,7 @@ fn tombstoned_target_rejected_with_clear_message() {
     let tomb = (60_003_i64, row(60_003, "70m6b001-4aaa-8aaa-aaaa-000000000004", "stopped-needle", TGT_UPDATED));
     let fillers = rows_burying((TGT_PID, row(TGT_PID, TGT_UUID, TGT_NAME, TGT_UPDATED + 5)), 60);
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_qd(t.path(), &fillers, &[tomb], &["connect", "stopped-needle"]);
+    let (code, _out, err) = run_qd(t.path(), &fillers, &[tomb], &["attach", "stopped-needle"]);
     assert!(!missed(&err), "a tombstone must RESOLVE (found, not phantom-missed); stderr: {err}");
     assert!(
         err.contains("is stopped") && err.contains("resume it first"),
@@ -344,7 +344,7 @@ fn ambiguous_two_live_same_name_errors_never_picks() {
     let mut rows = rows_burying((TGT_PID, row(TGT_PID, TGT_UUID, "unused-needle", TGT_UPDATED)), 60);
     rows.extend(dup);
     let t = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_qd(t.path(), &rows, &[], &["connect", "twin"]);
+    let (code, _out, err) = run_qd(t.path(), &rows, &[], &["attach", "twin"]);
     let _ = c1.kill();
     let _ = c1.wait();
     let _ = c2.kill();
@@ -365,7 +365,7 @@ fn live_over_stale_same_name_resolves_to_live() {
         (DEAD_PID, row(DEAD_PID, "57a1e009-4aaa-8aaa-aaaa-000000000009", "halflife", 1_000_000_000_005)),
     ];
     let t = tempfile::tempdir().unwrap();
-    let (_code, _out, err) = run_qd(t.path(), &rows, &[], &["connect", "halflife"]);
+    let (_code, _out, err) = run_qd(t.path(), &rows, &[], &["attach", "halflife"]);
     let _ = c.kill();
     let _ = c.wait();
     assert!(!err.contains("Ambiguous"), "the dead-pid stale row must NOT collide; stderr: {err}");
@@ -452,7 +452,7 @@ fn display_cap_intact_default_capped_all_uncapped() {
 #[test]
 fn structural_guard_action_verbs_route_through_sealed_entry() {
     let verbs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/qd/verbs");
-    for file in ["connect.rs", "resume.rs", "lifecycle.rs", "kill.rs", "send.rs", "send_relay.rs", "wait.rs"] {
+    for file in ["attach.rs", "resume.rs", "lifecycle.rs", "kill.rs", "send.rs", "send_relay.rs", "wait.rs"] {
         let src = std::fs::read_to_string(verbs_dir.join(file)).unwrap();
         assert!(
             src.contains("resolve_session_uncapped"),

@@ -33,39 +33,38 @@ Options:
 When the default view's cap (20) hides sessions, a trailer on stderr says how
 many: "… N more (qd ls --all)" (the count is total dropped, not narrowed by
 --prefix). Scripting tip: `qd ls --live --json` is the uncapped live-session
-surface (--json never carries the trailer).
+surface (--json never carries the trailer). Live Claude rows include an honest
+bare/managed classification (`management` in JSON; `Mode` in the human table).
 "####;
 
-// P0 start-surface rework (STATE 22 ruling): `attach` is RETIRED — erroring
-// stub pointing at `qd connect` (humans) / `qd send:relay` (agents); see
-// verbs/stubs.rs for the pinned stderr line.
-pub const ATTACH: &str = r####"Usage: qd attach [options]
-
-(retired — use connect)
-
-Options:
-  -h, --help  display help for command
-"####;
-
-// W1 ADD-26: `connect` is the human "get me into this session" verb. The help
+// `attach` is the human "get me into this session" verb. The help
 // text describes the provider/liveness matrix in human terms (no `zmx`/mux
 // internals leak to the user — the daemon/cold wording matches what the verb
 // actually prints).
-pub const CONNECT: &str = r####"Usage: qd connect [options] <session>
+pub const ATTACH: &str = r####"Usage: qd attach [options] <session>
 
 Get into a session — the one verb for "take me there".
 
 For a live Claude session this opens an interactive terminal. A cold Claude
-session prints how to revive it (`qd resume <session>`). A codex session is
+session is revived and then opened. A codex session is
 daemon-hosted (no terminal): it points you at `qd send:relay` / `qd resume`.
 
 Options:
   --no-attach   Revive a cold session to a persistent daemon and return 0
                 WITHOUT attaching a TTY (headless — e.g. a systemd ExecStart)
-  --alt-screen  Fullscreen (alt-screen) rendering if this connect revives the
+  --alt-screen  Fullscreen (alt-screen) rendering if this attach revives the
                 session (default: inline, so phone/SSH attach can scroll)
   --inline      Force inline rendering (overrides `render-default = alt-screen`)
   -h, --help    display help for command
+"####;
+
+// `connect` is a retired spelling, kept as a hidden backward-compat alias for attach.
+pub const CONNECT: &str = r####"Usage: qd connect [options]
+
+(renamed — use qd attach)
+
+Options:
+  -h, --help  display help for command
 "####;
 
 pub const RESUME: &str = r####"Usage: qd resume [options] <session>
@@ -77,7 +76,7 @@ state you can drive with `qd send:relay <session> <text>`. It is non-TTY safe �
 codex (daemon-hosted) sessions revive with NO interactive attach tail at all, and
 the claude path's detached mode (`--no-attach`) leaves the session running in the
 background without taking over your terminal. Humans who want to land inside a
-session interactively should use `qd connect <session>` instead.
+session interactively should use `qd attach <session>` instead.
 
 Options:
   --no-zmx           Don't wrap in a zmx session
@@ -87,6 +86,22 @@ Options:
                      (default: inline, so phone/SSH attach can scroll)
   --inline           Force inline rendering (overrides `render-default = alt-screen`)
   -h, --help         display help for command
+"####;
+
+pub const ADOPT: &str = r####"Usage: qd adopt [options] <session>
+
+Adopt a live bare Claude Code session under qrmux with the relay development
+channel enabled.
+
+When run from the target session, self-adoption prepares the existing manual
+shutdown flow. For an external target, qd uses a best-effort foreground-child
+idle heuristic, sends SIGTERM only after identity re-fencing, installs a
+session-scoped Stop hook, resumes the same transcript under qrmux, and marks the
+adoption final only after managed readiness is positively observed.
+
+Options:
+  -f, --force  Skip only the best-effort external idle heuristic
+  -h, --help   display help for command
 "####;
 
 // P0 W1 (qb spec-cli §11): `stop` is today's `kill`, renamed — same backend
@@ -123,7 +138,7 @@ pub const START: &str = r####"Usage: qd start [options] <name> [claudeArgs...]
 Create a new session (Claude Code in zmx, or OpenCode server)
 
 start = new participant (fresh or forked) · resume = same participant wakes ·
-connect = attach-to-live.
+attach = enter live or cold session.
 
 Options:
   --cwd <dir>            Working directory for the session
@@ -167,36 +182,21 @@ Options:
   -h, --help  display help for command
 "####;
 
-pub const SEND: &str = r####"Usage: qd send [options]
+pub const SEND: &str = r####"Usage: qd send <target> <message>
 
-(moved) Use send:pty, send:relay, or send:http
+Send a message to a session. qd resolves the target and selects its registered
+receive path automatically before making one delivery attempt.
 
 Options:
   -h, --help  display help for command
 
-Channels:
-  send:pty    Types into the session's zmx terminal. Best for back-and-forth
-              conversation where you need the response text. Requires the
-              session to be idle — busy sessions will buffer or mangle input.
-              No delivery confirmation. No retry on failure.
-
-  send:relay  Sends via the relay MCP HTTP endpoint. Best for task delegation
-              and fire-and-forget messaging. Has retry logic (3 attempts on
-              connection drop) and a 5-minute reply buffer so replies survive
-              disconnects. The target session must call the "reply" tool to
-              respond — it won't happen automatically.
-
-  send:http   Sends via OpenCode's HTTP API. Blocks until the full turn
-              completes and returns the assistant's response. Only works with
-              OpenCode sessions.
-
-Pick the channel that matches how you want to communicate.
-Run "qd send:pty --help", "qd send:relay --help", or "qd send:http --help" for details.
+The selected path is never changed after an attempt starts. A target that is
+stopped, cold, ambiguous, self, or has no live receive path is refused.
 "####;
 
 pub const SEND_PTY: &str = r####"Usage: qd send:pty [options] <session> <message>
 
-Send a message via zmx PTY (types into the session's terminal)
+(Compatibility/debug control) Force a message through the zmx PTY.
 
 Options:
   --timeout <seconds>  Max wait time (default: "120")
@@ -243,7 +243,7 @@ you need to see the full response text including tool calls and thinking.
 
 pub const SEND_RELAY: &str = r####"Usage: qd send:relay [options] <session> <message>
 
-Send a message via the relay HTTP endpoint
+(Compatibility/debug control) Force relay/daemon send routing.
 
 Options:
   --timeout <seconds>  Max wait for reply (default: "120")
@@ -290,7 +290,7 @@ details.
 
 pub const SEND_HTTP: &str = r####"Usage: qd send:http [options] <session> <message>
 
-Send a message to an OpenCode session via HTTP API
+(Compatibility/debug control) Force the OpenCode HTTP path.
 
 Options:
   --mode <mode>        Message envelope: report, execute, or raw (default:
@@ -357,7 +357,7 @@ Options:
 
 pub const LIVE: &str = r####"Usage: qd live [options]
 
-Live-updating session list — type a 3-char code to connect
+Live-updating session list — type a 3-char code to attach
 
 Options:
   -a, --all   Include dead sessions
@@ -456,14 +456,14 @@ Options:
 /// description replaced with the engine-only one-liner (spec §3 row 17; the
 /// harness normalizes this line per the orc bootstrap-help ruling). config +
 /// survey ARE listed (they dispatch pre-clap but appear in the command list).
-/// P0 start-surface rework (STATE 21 ruling): the start/resume/connect model
+/// P0 start-surface rework (STATE 21 ruling): the start/resume/attach model
 /// line is a further sanctioned divergence (spec-w7-start-surface D1).
 pub const TOP: &str = r####"Usage: qd [options] [command]
 
 Claude Sessions — manage Claude Code sessions
 
 start = new participant (fresh or forked) · resume = same participant wakes ·
-connect = attach-to-live.
+attach = enter live or cold session.
 
 Options:
   -V, --version                             output the version number
@@ -471,21 +471,22 @@ Options:
 
 Commands:
   ls|list [options]                         List Claude Code sessions (use --json for scripting)
-  connect <session>                         Get into a session (live Claude → terminal; cold/codex → how to revive)
+  attach <session>                          Get into a session (live/cold Claude → terminal; codex → driving guidance)
   resume [options] <session>                Resume a dead session (wraps in zmx by default)
+  adopt <session>                           Prepare this bare Claude session for a manual qrmux relaunch
   start [options] <name> [claudeArgs...]    Create a new session (Claude Code in zmx, or OpenCode server)
   stop [options] <session>                  Stop a session
   kill [options]                            (retired — use qd stop)
   new [options]                             (retired — use qd start)
   reconcile [options]                       Detect and repair drift across registry / zmx / process (idempotent)
-  send                                      (moved) Use send:pty, send:relay, or send:http
-  send:pty [options] <session> <message>    Send a message via zmx PTY (types into the session's terminal)
-  send:relay [options] <session> <message>  Send a message via the relay HTTP endpoint
-  send:http [options] <session> <message>   Send a message to an OpenCode session via HTTP API
+  send <session> <message>                  Send a message (delivery path selected automatically)
+  send:pty [options] <session> <message>    (compatibility/debug) Force a zmx PTY send
+  send:relay [options] <session> <message>  (compatibility/debug) Force relay/daemon send routing
+  send:http [options] <session> <message>   (compatibility/debug) Force the OpenCode HTTP path
   relay                                     (moved) Use send:relay instead
   whoami|name [options]                     Print the current session's name and ID
   wait [options] <session>                  Block until a session transitions from busy to idle
-  live [options]                            Live-updating session list — type a 3-char code to connect
+  live [options]                            Live-updating session list — type a 3-char code to attach
   info <session>                            Detailed view of a single session
   gc [options]                              Prune stale sessions and sidecars to recoverable trash
   init <shell>                              Print shell integration (claude wrapper) — add `eval "$(qd init bash)"` to your rc file

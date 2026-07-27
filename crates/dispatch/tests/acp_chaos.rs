@@ -57,6 +57,9 @@
 
 #![allow(clippy::needless_range_loop)]
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::unix::process::CommandExt;
@@ -116,7 +119,7 @@ const SCRUB_ENV: &[&str] = &[
 
 /// The live gate: `QD_ACP_CHAOS_LIVE=1` (spawns real `opencode acp`).
 fn live() -> bool {
-    std::env::var("QD_ACP_CHAOS_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_ACP_CHAOS_LIVE", "acp_chaos")
 }
 
 /// `opencode` on PATH (the bridge the fleet drives).

@@ -75,7 +75,7 @@ impl SubState {
     }
 
     /// The observe-path variant: identical to [`Self::new`] but with the per-frame
-    /// control-fact TAP armed (`qd connect` observe run-loop only).
+    /// control-fact TAP armed (`qd attach` observe run-loop only).
     fn new_observing() -> Self {
         Self {
             tap: Some(VecDeque::new()),
@@ -118,7 +118,7 @@ impl ChannelSubscriber {
     }
 
     /// WP-B-CS-2-LIVE — the OBSERVE-path subscriber: identical to [`Self::connect`]
-    /// but with the per-frame control-fact TAP armed, so the `qd connect` observe
+    /// but with the per-frame control-fact TAP armed, so the `qd attach` observe
     /// run-loop can drain the live `Republish*` stream into its cutover gate
     /// (`gate.observe(frame)` per frame). `qd wait` keeps using [`Self::connect`]
     /// (tap disabled) — byte-unchanged.
@@ -219,7 +219,7 @@ impl ChannelSubscriber {
 
     /// WP-B-CS-2 ADDITIVE observation accessor — a SNAPSHOT of the observe
     /// dashboard's latest control facts (folded from the same `Republish*` stream
-    /// the wait seams read). The read-only `qd connect` OBSERVE dashboard renders
+    /// the wait seams read). The read-only `qd attach` OBSERVE dashboard renders
     /// this. Purely additive: it neither changes nor depends on the wait seams'
     /// `connect_ok`/`status`/`result_seen` semantics. CONTROL FACTS ONLY (§2a) —
     /// the snapshot has no assistant-text field by construction.

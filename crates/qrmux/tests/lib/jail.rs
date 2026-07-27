@@ -295,17 +295,24 @@ impl Jail {
             self._kill_sessions_by_socket()?;
         }
 
-        // Verify nothing unexpected remains. The ONLY entry allowed to
-        // outlive the daemon is the ACK-1 `events/` dir — the event stream is
-        // a forensic record by design (ack1-spec §1; LESSONS L12) and is
-        // removed with jail_root below. Everything else (live sockets, lock
-        // files, stray writes) keeps the original full-strictness detection
-        // (merge-ruling C-1 refinement: events-specific exclusion, not a
-        // *.sock narrowing).
+        // Verify nothing unexpected remains. Two entries are allowed to outlive
+        // the daemon, both durable-by-design records removed with jail_root below:
+        // the ACK-1 `events/` dir (the advisory event stream — a forensic record,
+        // ack1-spec §1; LESSONS L12) and the attended-UX M1 `pending/` dir (the
+        // durable pending-delivery spool — RT-R1, the crash-survival store keyed to
+        // the PTY-survival fact). Everything else (live sockets, lock files, stray
+        // writes) keeps the original full-strictness detection (merge-ruling C-1
+        // refinement: specific exclusions, not a *.sock narrowing).
         if self.socket_dir.exists() {
             let leftovers = fs::read_dir(&self.socket_dir)?
                 .filter_map(|e| e.ok())
-                .filter(|e| !(e.file_name() == "events" && e.path().is_dir()))
+                .filter(|e| {
+                    let durable_dir = matches!(
+                        e.file_name().to_string_lossy().as_ref(),
+                        "events" | "pending"
+                    ) && e.path().is_dir();
+                    !durable_dir
+                })
                 .collect::<Vec<_>>();
             if !leftovers.is_empty() {
                 return Err(format!(

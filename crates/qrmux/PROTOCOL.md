@@ -1,9 +1,10 @@
 # qrmux wire protocol
 
-Version: **3** (preamble byte `0x03`). Status: B2 deliverable; C1 (D1) bumped
+Version: **4** (preamble byte `0x04`). Status: B2 deliverable; C1 (D1) bumped
 to v2 for the embedded-mux library surface; WS-C bumped to v3 for the
-per-session daemon split + the capability-exchange (`Hello`) frame. Consumed
-via `trait Mux`.
+capability-exchange (`Hello`) frame; P4DB drive-burn bumped to v4 because
+removing the middle `ClientMsg::LaunchHeadless` variant shifted a positional
+bincode index. Consumed via `trait Mux`.
 
 ## Why a version byte exists (read this first)
 
@@ -27,7 +28,8 @@ client                                daemon
   |<-- frame: ServerMsg::Hello ----------|   (v3 — MUST be the server's first frame)
   |-- frame: ClientMsg::Connect ------->|
   |<-- frame: ServerMsg::Connected -----|
-  |<-- frame: ServerMsg::History* ------|   (scrollback replay, chunked)
+  |-- frame: ClientMsg::ConfirmSize ---->|   (when initial-size-confirm-v1 negotiated)
+  |<-- frame: History* / HistoryLogical-|   (capability-gated replay)
   |<-- frame: ServerMsg::ScreenUpdate --|   (initial render)
   |<====== bidirectional frames =======>|   (Input/Resize/Detach ↔ ScreenUpdate/…)
 ```
@@ -37,7 +39,10 @@ preamble and before any request frame (full wire layout + negotiation order in
 "§3 The Hello capability-exchange frame"). One-shot commands (`ListSessions`,
 `KillSession`, `SendInput`, and the v2 `GetHistory` / `CreateDetached`) follow
 the preamble + Hello, then send one request frame, read one response frame, and
-close.
+close. `GetHistory` receives one or more `HistoryLogical` frames when both peers
+advertise `history-logical-v1`; with `history-logical-stream-v1`, an empty
+`HistoryLogical` frame explicitly completes the response. Otherwise it receives
+the unchanged `History` response.
 
 ## Preamble (FROZEN FOREVER)
 
@@ -46,7 +51,7 @@ The first 5 bytes on every connection, client → server:
 | bytes | content |
 |-------|---------|
 | 0–3   | magic `QRMX` (`0x51 0x52 0x4D 0x58`) |
-| 4     | protocol version (current: `0x03`) |
+| 4     | protocol version (current: `0x04`) |
 
 The preamble's **shape is frozen forever** — it must never grow, shrink, or
 move, precisely so any future version can read any past version's preamble.
@@ -78,7 +83,7 @@ After the preamble, all messages are length-prefixed bincode:
 - Fixint encoding is load-bearing: top-level `bincode::serialize` (varint)
   is NOT compatible. All paths go through `protocol::codec`.
 
-## §3 The Hello capability-exchange frame (v3)
+## §3 The Hello capability-exchange frame (introduced in v3)
 
 The preamble byte gates *which* version is speaking; the **`Hello` exchange**
 negotiates *what that version can do*. It is the first thing on the wire after
@@ -136,10 +141,9 @@ probe) → quiet close, no error (same rule as the preamble EOF).
 ### §3.3 Capability semantics (the skew-storm killer)
 
 - Capability names are kebab-case strings in the REGISTRY TABLE below (one row
-  per cap: name, introduced-version, gated surface). **v3 ships with an EMPTY
-  required set** — the frame's existence and negotiation machinery is the
-  deliverable; the baseline-v3 surface (all of §3 + the v2 verb set) needs no
-  cap.
+  per cap: name, introduced-version, gated surface). The baseline surface does
+  not require a capability; registered capabilities gate only their additive
+  variants.
 - Unknown caps are IGNORED by both sides (forward compatibility).
 - **Gate-on-cap rule (normative): a side MUST NOT send an enum variant or field
   whose cap the peer did not advertise.** Appended-variant decode of an unknown
@@ -149,11 +153,81 @@ probe) → quiet close, no error (same rule as the preamble EOF).
   per-operation (e.g. "session 'x' daemon lacks capability 'foo' — restart that
   session to upgrade"), never a connection-level refusal, never silence.
 
-**Capability registry (v3):**
+**Capability registry (current v4):**
 
 | capability | introduced | gated surface |
 |------------|-----------|---------------|
-| *(none)*   | —         | v3 ships with no registered capabilities — the baseline surface needs none |
+| `history-logical-v1` | v4, additive/no bump | `ServerMsg::HistoryLogical` for attach replay and `GetHistory` |
+| `history-logical-stream-v1` | v4, additive/no bump | multi-frame `HistoryLogical` plus an empty completion frame |
+| `initial-size-confirm-v1` | v4, additive/no bump | post-`Connected` `ClientMsg::ConfirmSize` before initial snapshot |
+
+`history-logical-stream-v1` depends on mutual `history-logical-v1`, because it
+changes the transport contract for `HistoryLogical`. `initial-size-confirm-v1`
+is independent: mutual support alone enables confirmation, regardless of the
+history representation selected for the attach.
+
+#### `history-logical-v1`
+
+A capable client includes `history-logical-v1` in `ClientMsg::Hello.caps`; a
+capable server lists the same string in `ServerMsg::Hello.caps`. The server may
+send `HistoryLogical` only when the client advertised the capability. A client
+that did not advertise it receives the existing `History` variant with its
+existing bytes and chunking unchanged. Unknown valid kebab-case capabilities
+remain accepted and ignored.
+
+The additive message is appended at the tail of `ServerMsg`; no existing
+variant index or field changes, so this addition does **not** bump v4:
+
+```rust
+HistoryLogical(Vec<LogicalHistoryChunk>)
+
+struct LogicalHistoryChunk {
+    cells: Vec<LogicalCell>,
+    end_of_line: bool,
+}
+
+struct LogicalCell {
+    ch: char,
+    display_width: u8,
+    combining: String,
+    style: Style,
+    wide_early_padding: bool,
+}
+```
+
+Chunks remain in physical-row order. The client concatenates cells across
+chunks and emits CRLF only when `end_of_line` is true; tail trimming and style
+rendering operate on the completed logical line, not independently on each
+chunk. This preserves a captured logical line across a different client width.
+The codec has a 16 MiB per-message cap. When both peers also advertise
+`history-logical-stream-v1`, the server splits the accepted chunk sequence into
+individually bounded non-empty `HistoryLogical` frames and sends an empty
+`HistoryLogical(Vec::new())` as the explicit completion marker. The receiver
+accumulates cells until that marker, then applies the original `end_of_line`
+flags. Splitting may divide an oversized physical-row chunk at a cell boundary;
+only its final fragment retains the original `end_of_line`. Thus a protocol
+frame boundary never adds a CRLF, joins two logical lines, or changes cells.
+
+#### `initial-size-confirm-v1`
+
+An attach client advertising this capability samples its terminal once for
+`Connect`, waits for `Connected`, samples again, and immediately sends the
+appended `ConfirmSize { cols, rows }` client variant. A server advertising the
+capability sends `Connected` but takes no logical-history or initial-screen
+snapshot until it has applied `ConfirmSize`. If the dimensions disagree, it
+uses the ordinary PTY/screen resize path and then emits the existing full
+initial repaint at the confirmed geometry. A client or server lacking the cap
+keeps the pre-existing handshake unchanged. The server waits at most five
+seconds for the post-`Connected` confirmation. On timeout, EOF, a malformed
+frame, or an unexpected message, it proceeds with the initial snapshot at the
+already-applied `Connect` geometry; `Connect` remains the confirmed fallback
+sample, so the server never renders at a width with no client sample.
+
+Compatibility is symmetric and additive: new client → older v4 server gets an
+empty server capability set and legacy `History`; old client → new server still
+advertises `history-logical-v1` (a server always advertises what it supports)
+but, seeing no client capability, sends legacy `History`; new/new uses
+`HistoryLogical`.
 
 ### §3.4 Refusal semantics
 
@@ -163,8 +237,7 @@ probe) → quiet close, no error (same rule as the preamble EOF).
 - **Engine surfacing is PER-SESSION (v3):** "stale qrmux daemon for session
   '<name>' at <dir> (vX vs vY); kill or restart THAT session" — never
   fleet-wide advice, NEVER auto-kill (kills are per-target user commands —
-  ADD-12 / A14-2; the dev-daemon skew precedent below carries over with
-  s/the daemon/that session's daemon/).
+  ADD-12 / A14-2).
 - **Hello-violation refusals:** §3.2 steps 2/3.
 - **Cap-missing:** per-operation named degradation (§3.3) — not a refusal.
 
@@ -193,9 +266,10 @@ probe) → quiet close, no error (same rule as the preamble EOF).
 | `KillSession { name }` | terminate a session |
 | `SendInput { name, data }` | **one-shot** input: bytes to the named session's PTY with NO attach, no eviction (B1 `send` verb) |
 | `RefreshScreen` | full redraw request (e.g. focus-in) |
-| `GetHistory { name }` *(v2)* | **one-shot** content read → single `History` reply (scrollback + current visible rows); NO attach, no eviction, no screen subscription (C1 D1; see "GetHistory composition") |
+| `GetHistory { name }` *(v2)* | **one-shot** content read → `HistoryLogical` when negotiated, otherwise unchanged `History` (scrollback + current visible rows); NO attach, no eviction, no screen subscription (C1 D1; see "GetHistory composition") |
 | `CreateDetached { name, shell_cmd, cwd, history }` *(v2)* | create a detached session running `["bash","-lc",<shell_cmd>]` in EXPLICIT `cwd`, no attach → `Connected`-class ack (C1 D1/R27) |
 | `Hello { caps }` *(v3)* | capability advertisement — **MUST be the first frame** after the preamble on every connection (see §3) |
+| `ConfirmSize { cols, rows }` | post-`Connected` current-size confirmation gated by `initial-size-confirm-v1` |
 
 `ServerMsg` (daemon → client):
 
@@ -203,6 +277,7 @@ probe) → quiet close, no error (same rule as the preamble EOF).
 |---------|---------|
 | `Connected { name, new_session }` | attach confirmed |
 | `History(Vec<Vec<u8>>)` | scrollback replay on attach, chunked under the frame limit |
+| `HistoryLogical(Vec<LogicalHistoryChunk>)` | cell-exact logical history gated by `history-logical-v1`; chunk order and `end_of_line` framing are preserved; an empty frame completes `history-logical-stream-v1` |
 | `ScreenUpdate(Vec<u8>)` | ANSI render of the current screen |
 | `SessionList(Vec<SessionInfo>)` | list response (`name`, child `pid`, `cols`, `rows`, `created` *(v2, daemon-populated Unix epoch seconds, `Option<u64>`)*) |
 | `SessionEnded` | child exited |
@@ -228,13 +303,11 @@ new capability string, with **NO bump** (the gate-on-cap rule, §3.3, keeps
 conforming peers from ever sending a variant the other can't decode).
 
 **Honest scope of the storm-mitigation:** additive evolution avoids bumps
-entirely — no refusal storm exists to trigger. A future BREAKING bump (v4)
-still refuses, but PER-SESSION with the session named (§3.4): the single
-fleet-wide refusal cliff of the old one-daemon shape becomes
-individually-restartable per-session refusals while other sessions' PTY worlds
-keep running. The capability frame **shards** the breaking-bump storm and
-**removes** it for the additive case; it does not abolish breaking-bump
-refusals.
+entirely — no refusal storm exists to trigger. Breaking changes still bump and
+refuse cleanly, as the v4 drive-burn change demonstrates. Refusals are
+per-session with the session named (§3.4), so other sessions' PTY worlds keep
+running. The capability frame removes bumps for additive surfaces; it does not
+abolish breaking-bump refusals.
 
 *(Pre-v3 rule, retained as history: v1/v2 bumped on ANY layout change and had
 no forward-compat negotiation — mismatch = refusal, "upgrade not degrade",
@@ -262,9 +335,21 @@ in "§3 The Hello capability-exchange frame"; the changelog bullet list is §3.5
 The 5-byte preamble shape and `ServerMsg::Error`'s variant index 4 were again
 NOT touched — the `Hello` variants are appended at the tail of their enums.
 
+### v3 → v4 (P4DB drive-burn)
+
+v4 removed `ClientMsg::LaunchHeadless` from the middle of the enum. That
+shifted `SubscribeRepublish`'s positional bincode index from 12 to 11, a
+breaking layout mutation, so the preamble version bumped from 3 to 4. The
+5-byte preamble shape and `ServerMsg::Error` index 4 remain unchanged.
+
+`history-logical-v1` and `ServerMsg::HistoryLogical` were subsequently added
+under v4 without another bump: the variant is tail-appended and cannot be sent
+unless the client advertises the capability.
+
 #### GetHistory composition (content inspection, NOT replay)
 
-The single `ServerMsg::History` returned by `GetHistory` is composed, in order:
+The `History` or negotiated `HistoryLogical` returned by `GetHistory` covers,
+in order:
 
 1. **Scrollback lines** — every scrollback row rendered to ANSI, exactly as the
    attach-replay `get_history` produces (same rows, same order).
@@ -292,25 +377,6 @@ outer terminal would corrupt the replay — see "Altscreen (Divergence #1)").
 includes the visible (alt) screen rows, because the answerer must still see a
 dialog rendered by a fullscreen app. This divergence is by design and load-
 bearing for the boot answerer.
-
-#### Dev-daemon skew window (named risk, C1 D1/R23; v3 per-session form)
-
-vN↔vM mismatch is a clean refusal **by design**. Production carries NO
-pre-existing qrmux daemons (the Rust `qd` never ran against real state; the
-B2/B3 daemons were jailed), so the only residual skew risk is a **dev/test
-daemon** left running from an older build while a newer client connects (or
-vice versa). The contract for that case:
-
-- The daemon answers the mismatched preamble with the framed
-  `ServerMsg::Error("protocol version mismatch: client vX, server vY — refusing
-  connection")` and closes — never a hang, never a misparse.
-- **v3 surfacing is PER-SESSION (§3.4):** the embedded-mux adapter surfaces a
-  NAMED error naming the affected session — **"stale qrmux daemon for session
-  '<name>' at `<dir>`; kill or restart THAT session"** — and **never
-  auto-kills** that session's daemon (kills are per-target user commands, not
-  skew-triggered — ADD-12 / A14-2). Jailed tests always launch a fresh daemon,
-  so they never hit this. *(Pre-v3 the advice was fleet-wide — "stale qrmux
-  daemon at `<dir>`; restart it" — because one daemon owned every session.)*
 
 ## Altscreen (Divergence #1 — ADR-0004)
 

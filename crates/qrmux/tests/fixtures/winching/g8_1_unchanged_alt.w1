@@ -1,0 +1,30 @@
+# G8 cell 1: preservation cannot blanket-sever; a later A7 mutation still wins.
+case g8_1_unchanged_survives
+size 5 3 100
+emit 10
+print ABCDEF
+alt-enter
+alt-exit
+expect 1 0 ABCDEF
+end
+
+case g8_1_severance_still_dominates
+size 5 3 100
+emit 10
+print ABCDEF
+alt-enter
+alt-exit
+cup 1 1
+print X
+expect 0 1 XBCDE|F
+end
+
+case g8_1_live_alt_edge_dies_at_exit
+size 5 3 100
+emit 10
+print X
+alt-enter
+print ABCDEF
+alt-exit
+expect 0 1 X
+end

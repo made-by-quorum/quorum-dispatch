@@ -154,6 +154,43 @@ impl<E: Exec> RealProcessTable<E> {
     }
 }
 
+/// One real `ps` snapshot for callers that need command and ancestry facts to
+/// agree (not two separately-timed trait calls). Routed through the same Exec
+/// seam and parser as [`RealProcessTable`]. Candidate Claude rows are enriched
+/// with the process's real argv, preserving element boundaries which `ps`
+/// display text loses. An unreadable argv remains `None` so receivability
+/// classification can fail closed.
+pub fn process_rows(exec: &dyn Exec) -> io::Result<HashMap<i32, ProcRow>> {
+    let r = exec.run("ps", &ps_args(), &[], None, None)?;
+    let mut rows = parse_ps_rows(&r.stdout);
+    for (pid, row) in &mut rows {
+        if command_program_is_claude(&row.cmd) {
+            row.argv = process_argv(*pid);
+        }
+    }
+    Ok(rows)
+}
+
+/// Enrich selected rows with exact OS argv elements. This is the bounded form
+/// used by external adoption: one `ps` snapshot identifies the target's direct
+/// children, then only those pids pay the Darwin `KERN_PROCARGS2` (or Linux
+/// `/proc/<pid>/cmdline`) read. Flattened `ps command=` text is never promoted
+/// into argv.
+pub fn enrich_process_argv(rows: &mut HashMap<i32, ProcRow>, pids: &[i32]) {
+    for pid in pids {
+        if let Some(row) = rows.get_mut(pid) {
+            row.argv = process_argv(*pid);
+        }
+    }
+}
+
+/// Read one live process's exact argv. Destructive identity fences use this
+/// directly at the signal seam so they do not depend on an earlier `ps`
+/// display-text classification.
+pub fn exact_process_argv(pid: i32) -> Option<Vec<String>> {
+    process_argv(pid)
+}
+
 impl<E: Exec> ProcessTable for RealProcessTable<E> {
     fn ppid_map(&self) -> io::Result<HashMap<i32, i32>> {
         // Port of the `ps -eo` read (src/session.ts:617-630); same single parse.
@@ -208,6 +245,130 @@ impl<E: Exec> ProcessTable for RealProcessTable<E> {
 pub struct ProcRow {
     pub ppid: i32,
     pub cmd: String,
+    /// Exact argv elements read from the OS, or `None` when unavailable. This
+    /// is deliberately separate from `cmd`: `ps command=` is flattened display
+    /// text and cannot distinguish an option from words inside one argument.
+    pub argv: Option<Vec<String>>,
+}
+
+fn command_program_is_claude(cmdline: &str) -> bool {
+    let Some(program) = cmdline
+        .split_whitespace()
+        .next()
+        .map(|s| s.trim_matches(['\'', '"']))
+    else {
+        return false;
+    };
+    std::path::Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        == Some("claude")
+}
+
+/// Read a live process's real argv with element boundaries intact.
+#[cfg(target_os = "linux")]
+fn process_argv(pid: i32) -> Option<Vec<String>> {
+    if pid <= 0 {
+        return None;
+    }
+    parse_linux_cmdline(&std::fs::read(format!("/proc/{pid}/cmdline")).ok()?)
+}
+
+#[cfg(target_os = "macos")]
+fn process_argv(pid: i32) -> Option<Vec<String>> {
+    if pid <= 0 {
+        return None;
+    }
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size = 0usize;
+    // SAFETY: `mib` and `size` point to initialized storage; the first call
+    // asks the kernel for the required buffer size and writes no payload.
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as libc::c_uint,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+        || size < std::mem::size_of::<libc::c_int>()
+    {
+        return None;
+    }
+
+    let mut buf = vec![0u8; size];
+    // SAFETY: `buf` owns `size` writable bytes and `mib` remains valid for the
+    // call. KERN_PROCARGS2 is read-only here (`newp = null`, `newlen = 0`).
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as libc::c_uint,
+            buf.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return None;
+    }
+    buf.truncate(size);
+    parse_kern_procargs2(&buf)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_argv(_pid: i32) -> Option<Vec<String>> {
+    None
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_linux_cmdline(bytes: &[u8]) -> Option<Vec<String>> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<&[u8]> = bytes.split(|b| *b == 0).collect();
+    if parts.last().is_some_and(|part| part.is_empty()) {
+        parts.pop();
+    }
+    let argv = parts
+        .into_iter()
+        .map(|part| std::str::from_utf8(part).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (!argv.is_empty()).then_some(argv)
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_kern_procargs2(bytes: &[u8]) -> Option<Vec<String>> {
+    let int_len = std::mem::size_of::<i32>();
+    let argc = i32::from_ne_bytes(bytes.get(..int_len)?.try_into().ok()?);
+    if argc <= 0 {
+        return None;
+    }
+
+    // KERN_PROCARGS2 layout: argc, executable path, NUL padding, then exactly
+    // argc NUL-terminated argv elements, followed by environment strings.
+    let payload = bytes.get(int_len..)?;
+    let executable_end = payload.iter().position(|b| *b == 0)?;
+    let mut offset = executable_end + 1;
+    while payload.get(offset) == Some(&0) {
+        offset += 1;
+    }
+
+    let argc = argc as usize;
+    if argc > payload.len().saturating_sub(offset) {
+        return None;
+    }
+    let mut argv = Vec::with_capacity(argc);
+    for _ in 0..argc {
+        let tail = payload.get(offset..)?;
+        let end = tail.iter().position(|b| *b == 0)?;
+        argv.push(std::str::from_utf8(&tail[..end]).ok()?.to_string());
+        offset = offset.checked_add(end + 1)?;
+    }
+    Some(argv)
 }
 
 /// The `ps` argv the process-table read uses. `command=` (with `=` to suppress
@@ -260,6 +421,7 @@ pub fn parse_ps_rows(text: &str) -> HashMap<i32, ProcRow> {
             ProcRow {
                 ppid,
                 cmd: cmd.trim().to_string(),
+                argv: None,
             },
         );
     }
@@ -736,6 +898,7 @@ fn fold_proc_state(state: Option<char>) -> ProcLiveness {
 /// The `/proc/<pid>/stat` state char: the first non-space char after the LAST
 /// `)`. `comm` (field 2) is wrapped in parens and may contain spaces/parens, so
 /// anchoring on the last `)` is the proc(5)-correct way to find field 3.
+#[cfg(target_os = "linux")]
 fn state_char_after_comm(stat: &str) -> Option<char> {
     let close = stat.rfind(')')?;
     stat[close + 1..].trim_start().chars().next()
@@ -812,6 +975,63 @@ impl RelayProbe for FixtureRelayProbe {
 mod tests {
     use super::*;
     use crate::exec::ScriptedExec;
+
+    #[test]
+    fn adopt_linux_cmdline_decoder_preserves_nul_delimited_argv() {
+        assert_eq!(
+            parse_linux_cmdline(b"claude\0--name\0bare-one\0"),
+            Some(vec!["claude".into(), "--name".into(), "bare-one".into()])
+        );
+        assert_eq!(
+            parse_linux_cmdline(b"claude\0prompt with spaces"),
+            Some(vec!["claude".into(), "prompt with spaces".into()])
+        );
+        assert_eq!(parse_linux_cmdline(b""), None);
+        assert_eq!(parse_linux_cmdline(b"claude\0\xff\0"), None);
+    }
+
+    fn kern_procargs2_buffer(argc: i32, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = argc.to_ne_bytes().to_vec();
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    #[test]
+    fn adopt_darwin_procargs2_decoder_honors_argc_and_excludes_environment() {
+        let bytes = kern_procargs2_buffer(
+            3,
+            b"/opt/Claude/claude\0\0\0claude\0--name\0bare-one\0HOME=/tmp\0IGNORED=1\0",
+        );
+        assert_eq!(
+            parse_kern_procargs2(&bytes),
+            Some(vec!["claude".into(), "--name".into(), "bare-one".into()])
+        );
+        assert_eq!(
+            parse_kern_procargs2(&kern_procargs2_buffer(0, b"x\0")),
+            None
+        );
+        assert_eq!(
+            parse_kern_procargs2(&kern_procargs2_buffer(-1, b"x\0")),
+            None
+        );
+    }
+
+    #[test]
+    fn adopt_darwin_procargs2_decoder_rejects_malformed_or_truncated_buffers() {
+        assert_eq!(parse_kern_procargs2(&[1, 2, 3]), None);
+        assert_eq!(
+            parse_kern_procargs2(&kern_procargs2_buffer(1, b"/usr/bin/claude")),
+            None
+        );
+        assert_eq!(
+            parse_kern_procargs2(&kern_procargs2_buffer(2, b"/usr/bin/claude\0\0claude\0")),
+            None
+        );
+        assert_eq!(
+            parse_kern_procargs2(&kern_procargs2_buffer(1, b"/usr/bin/claude\0\0\xff\0")),
+            None
+        );
+    }
 
     #[test]
     fn parse_ps_rows_splits_three_fields() {
@@ -972,6 +1192,7 @@ mod tests {
             ProcRow {
                 ppid: 0,
                 cmd: "/sbin/launchd".into(),
+                argv: None,
             },
         );
         rows.insert(
@@ -979,6 +1200,7 @@ mod tests {
             ProcRow {
                 ppid: 1,
                 cmd: "zmx run mysession -d bash -lc command 'claude'".into(),
+                argv: None,
             },
         );
         rows.insert(
@@ -986,6 +1208,7 @@ mod tests {
             ProcRow {
                 ppid: 555,
                 cmd: "bash -lc command claude".into(),
+                argv: None,
             },
         );
         rows.insert(
@@ -993,6 +1216,7 @@ mod tests {
             ProcRow {
                 ppid: 556,
                 cmd: "node claude".into(),
+                argv: None,
             },
         );
 
@@ -1070,6 +1294,7 @@ mod tests {
             ProcRow {
                 ppid: 5,
                 cmd: "zmx a -d bar".into(),
+                argv: None,
             },
         );
         rows.insert(
@@ -1077,6 +1302,7 @@ mod tests {
             ProcRow {
                 ppid: 10,
                 cmd: "claude".into(),
+                argv: None,
             },
         );
         let w = find_zmx_wrapper_for_pid(20, &rows).unwrap();
@@ -1093,6 +1319,7 @@ mod tests {
             ProcRow {
                 ppid: 1,
                 cmd: "zmx run self".into(),
+                argv: None,
             },
         );
         assert_eq!(find_zmx_wrapper_for_pid(10, &rows), None);
@@ -1105,6 +1332,7 @@ mod tests {
                 ProcRow {
                     ppid: i - 1,
                     cmd: "bash".into(),
+                    argv: None,
                 },
             );
         }
@@ -1113,6 +1341,7 @@ mod tests {
             ProcRow {
                 ppid: 0,
                 cmd: "init".into(),
+                argv: None,
             },
         );
         assert_eq!(find_zmx_wrapper_for_pid(19, &deep), None);

@@ -125,7 +125,7 @@ fn start_resume_is_an_unknown_option() {
 
 /// `--fork <ambiguous>`: two ALIVE rows share the target NAME — the standard
 /// resolver's loud ambiguity listing must fire (reuse, not reimplementation:
-/// the same resolve_or_die error resume/connect print), exit 1, no boot.
+/// the same resolve_or_die error resume/attach print), exit 1, no boot.
 ///
 /// MUTATION EVIDENCE: resolving the fork target with anything that picks an
 /// arbitrary winner (e.g. first-match) reds this — the jail would proceed to
@@ -518,7 +518,7 @@ fn start_fork_live_matrix_e2e() {
     // ABSENT->claude-code only at read-back (so `ls --json` shows "claude-code" for
     // BOTH rows — it cannot distinguish None there). We assert the raw `<pid>.json`
     // ROW, which is where the B5-i `provider` defect hid (green at the row layer,
-    // `qd connect` exit-1'd live). Fork-specific: keyed to the "forked" participant.
+    // `qd attach` exit-1'd live). Fork-specific: keyed to the "forked" participant.
     let sessions_dir = jail.dirs.home.join(".claude").join("sessions");
     let rows = dispatch::registry::read_entries(&sessions_dir, false);
     let fork_row = rows

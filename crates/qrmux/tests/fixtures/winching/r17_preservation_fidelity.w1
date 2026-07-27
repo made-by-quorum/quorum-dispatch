@@ -1,0 +1,142 @@
+# Round-17 false-break closures and preservation-half controls.
+
+case wide_early_direct_bce_write_preserves_sparse_combining
+size 5 2 100
+emit 10
+print ABCDE
+combine ́
+csi-c 1
+print 界
+expect 1 0 ABCD界
+end
+
+case direct_insert_row_below_edge_preserves
+size 5 4 100
+emit 10
+print ABCDEF
+insert-row 4
+print G
+expect 1 0 ABCDEFG
+end
+
+case direct_remove_row_below_edge_preserves
+size 5 4 100
+emit 10
+print ABCDEF
+remove-row 4
+print G
+expect 1 0 ABCDEFG
+end
+
+case vertical_grow_preserves_pending_construction
+size 5 2 100
+emit 10
+print ABCDE
+resize 5 3
+print F
+expect 1 0 ABCDEF
+end
+
+case nonendpoint_cell_operations_preserve_edge
+size 5 4 100
+emit 10
+print ABCDEF
+cup 4 1
+style blue-bg
+print Z
+erase-line
+ech 1
+dch 1
+ich 1
+style default
+expect 1 0 ABCDEF||<space><space><space><space><space>
+end
+
+case visible_edge_survives_nonendpoint_ed_and_history_clear
+size 5 4 100
+emit 10
+print ABCDEF
+cup 4 1
+erase-display 0
+ed3
+clear-scrollback
+expect 1 0 ABCDEF
+end
+
+case history_edge_survives_visible_ed_and_decaln
+size 5 3 100
+emit 10
+print ABCDEF
+cup 3 1
+lf
+lf
+erase-display 1
+erase-display 2
+decaln
+expect 1 0 ABCDEF|EEEEE|EEEEE|EEEEE
+end
+
+case persistent_edge_survives_cursor_and_save_restore_ops
+size 5 4 100
+emit 10
+print ABCDEF
+cr
+decsc
+decrc
+csi-save
+csi-restore
+1048-save
+1048-restore
+bs
+ht
+csi-a 1
+csi-b 1
+csi-c 1
+csi-d 1
+csi-e 1
+csi-f 1
+csi-g 1
+vpa 1
+origin on
+origin off
+cup 1 1
+region 1 4
+expect 1 0 ABCDEF
+end
+
+case persistent_edge_survives_nonmargin_lf_ind_ri_nel
+size 5 6 100
+emit 10
+print ABCDEF
+cup 4 1
+lf
+ri
+ind
+cup 4 1
+nel
+expect 1 0 ABCDEF
+end
+
+case persistent_edge_survives_unrelated_scroll_region
+size 5 5 100
+emit 10
+print ABCDEF
+region 3 5
+cup 4 1
+scroll-up 1
+scroll-down 1
+expect 1 0 ABCDEF
+end
+
+case main_edge_survives_47_and_1047_alt_domain_destruction
+size 5 3 100
+emit 10
+print ABCDEF
+alt-47-enter
+print XYZ
+alt-47-exit
+alt-1047-enter
+print QRS
+alt-1047-exit
+expect 1 0 ABCDEF
+end

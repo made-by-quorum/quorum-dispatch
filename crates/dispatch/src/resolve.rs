@@ -90,7 +90,7 @@ pub fn resolve_session<'a>(query: &str, sessions: &'a [Session]) -> Resolution<'
 }
 
 /// Liveness-aware [`resolve_session`]. `is_alive(&Session) -> bool` is the TRUE
-/// liveness oracle the caller supplies — acting verbs (resume/connect/attach) pass
+/// liveness oracle the caller supplies — acting verbs (resume/attach) pass
 /// a predicate that gates on PID-aliveness (`is_pid_alive`), so a stale dead-pid row
 /// whose on-disk status still says `idle`/`busy` does NOT count as live. This is the
 /// fix for the "Ambiguous — matches 2 sessions" false collision where one row is a
@@ -375,7 +375,7 @@ fn parse_int_prefix(s: &str) -> Option<i64> {
 // processes sharing an id. `resolve_or_die`'s loud `Many` path never fires for an
 // id-collision because the dedup already starved it. This pure decider runs over
 // the RAW registry's ALIVE rows (the caller filters by `is_pid_alive`) so resume /
-// connect can refuse loudly instead of silently picking a survivor.
+// attach can refuse loudly instead of silently picking a survivor.
 
 /// A LIVE registry row reduced to the fields the collision preflight needs. The
 /// caller has ALREADY confirmed `pid` is alive (`is_pid_alive`) before building
@@ -396,7 +396,7 @@ pub enum LiveIdCollision {
     /// Exactly one ALIVE row carries the target id: the session is actually live
     /// (the deduped join may report it Cold — the SEAM-3 misread). A resume would
     /// spawn a SECOND process on the same id → caller refuses ("already alive, use
-    /// attach"). A connect-style verb may instead attach to this pid.
+    /// attach"). An attach-style verb may instead attach to this pid.
     AlreadyAlive { pid: i64 },
     /// ≥2 ALIVE rows carry the target id: a genuine duplicate-id collision. The
     /// caller MUST refuse loudly and surface all of them — never silently pick.

@@ -197,6 +197,7 @@ pub fn match_by_ancestry(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastRelayMatch {
     pub port: u16,
+    pub pid: i32,
     pub session_id: String,
     pub name: String,
 }
@@ -266,6 +267,7 @@ pub fn fast_relay_lookup(
             if parent == matched.pid {
                 return Some(FastRelayMatch {
                     port: r.port,
+                    pid: matched.pid,
                     // TS: `match.sessionId` (may be undefined → empty string).
                     session_id: matched.session_id.clone().unwrap_or_default(),
                     // TS: `match.name || query`.

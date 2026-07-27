@@ -14,11 +14,14 @@
 //! (real bridge + ~2 model turns). Run:
 //!   QD_ACP_LIVE=1 ~/cap-cargo.sh test -p quorum-dispatch --test acp_verb_roundtrip_live -- --nocapture --test-threads=1
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn live() -> bool {
-    std::env::var("QD_ACP_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_ACP_LIVE", "acp_verb_roundtrip_live")
 }
 
 fn bridge_bin_dir() -> PathBuf {

@@ -84,13 +84,13 @@ impl TurnCompletion for NoTranscriptFallback {
     }
 }
 
-/// Append a content-free A6 usage line for a SUCCESSFUL `wait` (exit 0). Best-
+/// Append a content-free A6 invoked line for a SUCCESSFUL `wait` (exit 0). Best-
 /// effort: a failure warns but NEVER changes the verb's exit code (spec §4.1).
-fn usage_wait(session_id: &str, name: Option<&str>) {
+fn invoked_wait(session_id: &str, name: Option<&str>) {
     if let Err(e) =
-        dispatch::telemetry::append_usage(&RealEnv, &RealClock, "wait", Some(session_id), name)
+        dispatch::telemetry::append_invoked(&RealEnv, &RealClock, "wait", Some(session_id), name)
     {
-        eprintln!("qd wait: telemetry usage append failed (non-fatal): {e}");
+        eprintln!("qd wait: telemetry invoked append failed (non-fatal): {e}");
     }
 }
 
@@ -136,7 +136,7 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
     if session.provider == "codex" {
         if session.status == SessionStatus::Idle {
             println!("{label} is idle");
-            usage_wait(&session.session_id, session.name.as_deref());
+            invoked_wait(&session.session_id, session.name.as_deref());
             return 0;
         }
         return run_codex_wait(session, &label, timeout_ms);
@@ -208,7 +208,7 @@ fn run_claude_wait(session: &dispatch::model::Session, label: &str, timeout_ms: 
         .unwrap_or(ChannelStatusObservation::Down);
     if entry_gate_idle(entry_channel, || session.status == SessionStatus::Idle) {
         println!("{label} is idle");
-        usage_wait(&session.session_id, session.name.as_deref());
+        invoked_wait(&session.session_id, session.name.as_deref());
         return 0;
     }
 
@@ -298,14 +298,14 @@ fn run_claude_wait(session: &dispatch::model::Session, label: &str, timeout_ms: 
         &sleeper,
     );
 
-    // Capture identity for the usage line before the loop (cheap clones).
+    // Capture identity for the invoked line before the loop (cheap clones).
     let wait_sid = session.session_id.clone();
     let wait_name = session.name.clone();
 
     match run_wait_content_loop(&deps, timeout_ms, 500) {
         WaitStatusOutcome::Done => {
             eprintln!(" done");
-            usage_wait(&wait_sid, wait_name.as_deref());
+            invoked_wait(&wait_sid, wait_name.as_deref());
             0
         }
         WaitStatusOutcome::SessionExited => {
@@ -413,7 +413,7 @@ fn run_codex_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i
     match outcome {
         WaitStatusOutcome::Done => {
             eprintln!(" done");
-            usage_wait(&sid, name.as_deref());
+            invoked_wait(&sid, name.as_deref());
             0
         }
         // No SessionExited on the codex path (the rollout tail is the truth even if
@@ -819,7 +819,7 @@ fn run_acp_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64
                 if let Some(code) = verify_post_resume_if_marked(&paths, &session) {
                     return code; // fork detected → fail loud (nonzero); else proceed.
                 }
-                usage_wait(&session.session_id, session.name.as_deref());
+                invoked_wait(&session.session_id, session.name.as_deref());
                 return 0;
             }
             // Still in flight (streaming / quiet poll) → keep pulling until the terminal.
@@ -923,7 +923,7 @@ fn run_pi_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64)
                 // and emit message-seen for any pending pi send that landed.
                 pi_observe_landed_sends(&env, &paths, session);
                 eprintln!("{label} is idle.");
-                usage_wait(&session.session_id, session.name.as_deref());
+                invoked_wait(&session.session_id, session.name.as_deref());
                 return 0;
             }
         }
@@ -956,7 +956,7 @@ fn run_pi_wait(session: &dispatch::model::Session, label: &str, timeout_ms: i64)
                     // landed (incl. a steer's text in the just-closed turn).
                     pi_observe_landed_sends(&env, &paths, session);
                     eprintln!(" done");
-                    usage_wait(&session.session_id, session.name.as_deref());
+                    invoked_wait(&session.session_id, session.name.as_deref());
                     return 0;
                 }
                 PiWaitVerdict::Block => continue,

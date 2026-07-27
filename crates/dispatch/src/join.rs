@@ -285,7 +285,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
     // dev companion row or a human manually running `claude --resume
     // <session_id>`). Keying by sessionId alone let the plain twin's liveness
     // heartbeat permanently shadow the ACP row out of every join-derived
-    // surface (ls, send, wait, resume, connect, info) — hiding the session's
+    // surface (ls, send, wait, resume, attach, info) — hiding the session's
     // canonical identity (and its refusal surface). Same-class rows keep the
     // exact old keep-newest collapse; only the cross-class pair coexists.
     let mut pid_by_session_id: HashMap<(String, bool), &registry::RegistryEntry> = HashMap::new();
@@ -1644,7 +1644,7 @@ mod tests {
     // `claude --resume`). The twin's liveness heartbeat keeps bumping its
     // updatedAt while the dead ACP row's stamp is frozen — with a
     // sessionId-only dedup key the twin permanently shadowed the ACP row out
-    // of every join surface (ls/send/wait/resume/connect/info), hiding the
+    // of every join surface (ls/send/wait/resume/attach/info), hiding the
     // session's canonical identity. MUTATION EVIDENCE: reverting the dedup key
     // to sessionId-only (dropping the provider-class component) reds this test.
     #[test]

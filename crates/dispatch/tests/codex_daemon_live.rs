@@ -23,6 +23,9 @@
 //! recorded thread + endpoint + pid + the rollout-path keying under the jail
 //! CODEX_HOME), and documents the file-lands-on-first-turn behavior for W6/W8.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -35,7 +38,7 @@ use dispatch::provider::codex::{AppServerRpc, RpcError, WsAppServer};
 
 /// The live gate: skip unless `QD_CODEX_LIVE=1`.
 fn live() -> bool {
-    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_CODEX_LIVE", "codex_daemon_live")
 }
 
 /// A jail Env: only the codex-relevant vars resolve (HOME / CODEX_HOME / XDG /

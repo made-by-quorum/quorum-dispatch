@@ -575,7 +575,7 @@ impl<'a> EventBootWaiter<'a> {
     /// - `Unmatched` → FAIL IMMEDIATELY, zero keystrokes (ADR 0005 §2).
     ///
     /// Returns the PID file path on success, or `Err(detail)` (loud, naming
-    /// `qd connect <name>`) on any dialog failure or PID-phase timeout.
+    /// `qd attach <name>`) on any dialog failure or PID-phase timeout.
     fn run_pid_phase(&self, name: &str, deadline: i64) -> Result<PathBuf, String> {
         // PID phase cap = min(overall deadline, now + pid_phase_ms)
         // (lifecycle.ts:205).
@@ -719,7 +719,7 @@ impl<'a> EventBootWaiter<'a> {
                     // ADR 0005 §2: NEVER answer a dialog not in the named list.
                     // Fail loudly with ZERO keystrokes, carrying the tail.
                     return Err(format!(
-                        "unanswered dialog — qd connect {name} to answer it manually \
+                        "unanswered dialog — qd attach {name} to answer it manually \
                          (no keystroke was sent). Screen tail:\n{}",
                         strip_ansi(&tail).trim()
                     ));
@@ -747,7 +747,7 @@ impl<'a> EventBootWaiter<'a> {
                         // No 3rd send EVER (the bound).
                         return Err(format!(
                             "dialog '{key}' did not dismiss after retry — \
-                             qd connect {name} to answer it manually"
+                             qd attach {name} to answer it manually"
                         ));
                     }
                     // Loop back to re-scan (PID file + dialog state) immediately;
@@ -781,7 +781,7 @@ impl<'a> EventBootWaiter<'a> {
                 };
                 return Err(format!(
                     "PID file for \"{name}\" did not appear within {}ms — {pane_note}; \
-                     qd connect {name} to inspect",
+                     qd attach {name} to inspect",
                     self.timeouts.pid_phase_ms
                 ));
             }
@@ -1643,7 +1643,7 @@ Enter to confirm \u{b7} Esc to cancel";
         let sleeper = RecordingSleeper::default();
         let w = waiter(&mux, socket, sessions, &clock, &sleeper);
         let err = w.wait_ready("sess").unwrap_err();
-        assert!(err.detail.contains("qd connect"), "loud failure: {err:?}");
+        assert!(err.detail.contains("qd attach"), "loud failure: {err:?}");
         assert!(err.detail.contains("dev-channels"));
         // HARD BOUND: exactly 2 sends, never 3.
         assert_eq!(mux.send_count(), 2, "persistent dialog: \\r + 1 retry only");
@@ -1664,7 +1664,7 @@ Enter to confirm \u{b7} Esc to cancel";
         let w = waiter(&mux, socket, sessions, &clock, &sleeper);
         let err = w.wait_ready("sess").unwrap_err();
         assert!(err.detail.contains("unanswered dialog"));
-        assert!(err.detail.contains("qd connect"));
+        assert!(err.detail.contains("qd attach"));
         // The error includes the (stripped) tail for diagnosis.
         assert!(err.detail.contains("Some brand-new confirmation"));
         // CRITICAL: ZERO keystrokes to an unmatched dialog.
@@ -1718,7 +1718,7 @@ Enter to confirm \u{b7} Esc to cancel";
             err.detail.contains("folder-trust"),
             "names the dialog: {err:?}"
         );
-        assert!(err.detail.contains("qd connect"));
+        assert!(err.detail.contains("qd attach"));
         assert_eq!(mux.send_count(), 2, "persistent dialog: \\r + 1 retry only");
     }
 
@@ -1757,7 +1757,7 @@ Enter to confirm \u{b7} Esc to cancel";
         let w = waiter(&mux, socket, sessions, &clock, &sleeper);
         let err = w.wait_ready("sess").unwrap_err();
         assert_eq!(err.phase, BootPhase::PidFile);
-        assert!(err.detail.contains("did not appear") || err.detail.contains("qd connect"));
+        assert!(err.detail.contains("did not appear") || err.detail.contains("qd attach"));
         // punch item 6 (diagnostics): the timeout names the pane as still up —
         // distinguishable at the surface from the pane-death fail-fast below.
         assert!(
@@ -1922,7 +1922,7 @@ Enter to confirm \u{b7} Esc to cancel";
             "states the unconfirmed observation: {}",
             err.detail
         );
-        assert!(err.detail.contains("qd connect"), "{}", err.detail);
+        assert!(err.detail.contains("qd attach"), "{}", err.detail);
         assert_eq!(mux.send_count(), 0);
     }
 

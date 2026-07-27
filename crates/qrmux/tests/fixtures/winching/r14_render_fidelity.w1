@@ -1,0 +1,38 @@
+# Round 14: combining and opaque-chunk terminal witness fidelity.
+
+case r14_combining_on_default_space_renders
+size 5 1 100
+emit 5
+print <space>
+combine ́
+expect 0 0 <space>́
+end
+
+case r14_live_resize_wide_repair_preserves_combining
+size 5 2 100
+emit 4
+print abc界
+combine ́
+print F
+resize 4 2
+expect 0 1 abc<space>́|F
+end
+
+case r14_alt_restore_wide_repair_preserves_combining
+size 5 2 100
+emit 4
+print abc界
+combine ́
+print F
+alt-1049-enter
+resize 4 2
+alt-1049-exit
+expect 0 1 abc<space>́|F
+end
+
+case r14_opaque_chunk_interior_spaces
+size 5 2 100
+emit 10
+print ABC<space><space>D
+expect 1 0 ABC<space><space>D
+end

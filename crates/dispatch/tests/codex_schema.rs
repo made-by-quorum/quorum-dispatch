@@ -16,6 +16,9 @@
 //!      version-pin check + jailed regenerate from the installed binary +
 //!      diff. Drift or version-drift = red, BY NAME.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -208,8 +211,8 @@ fn diff_script_green_on_identical_tree() {
 
 #[test]
 fn live_schema_diff_against_installed_binary() {
-    if std::env::var("QD_CODEX_LIVE").as_deref() != Ok("1") {
-        return; // live lane is opt-in (rule 9: only the jailed lane runs it)
+    if !live_gate::conformance_gate("QD_CODEX_LIVE", "codex-schema-diff") {
+        return; // live lane is opt-in (rule 9: only the jailed lane runs it) — the gate logs an honest skip
     }
     let out = Command::new("bash")
         .arg(diff_script())

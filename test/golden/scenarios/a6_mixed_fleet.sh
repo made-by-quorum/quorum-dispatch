@@ -9,7 +9,7 @@
 #
 # Rows:
 #   r1  Rust `qd new` (stub claude writes its entry WITH backend+spawnedBy —
-#       the A1-field tolerance surface) → marks.jsonl gains create+usage lines.
+#       the A1-field tolerance surface) → marks.jsonl gains create+invoked lines.
 #   r2  TS `ls` sees the session; exit 0; output mentions the name.
 #   r3  TS `info <name>` resolves it; exit 0 (field TOLERANCE: no crash/parse-drop).
 #   r4  TS `gc` runs clean on the live session (exit 0, session survives).

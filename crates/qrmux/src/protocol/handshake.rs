@@ -44,7 +44,30 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// caller's documented fallback, e.g. `qd wait`'s disk-poll / the per-session
 /// "stale qrmux daemon — restart THAT session" surfacing) instead of SILENTLY
 /// misframing `SubscribeRepublish` as the removed verb.
-pub const PROTOCOL_VERSION: u8 = 4;
+///
+/// **v5 (attended-UX M1):** APPENDED the polite-delivery surface at the tail of
+/// both message enums — `ClientMsg::PendingDelivery`/`DeliverNow` and
+/// `ServerMsg::DeliveryQueued`/`DeliveryOutcome`. Appending preserves every
+/// existing positional bincode index (including the FROZEN `ServerMsg::Error`
+/// index 4), so this is layout-additive rather than layout-mutating; the bump to
+/// 5 still ensures a skewed peer refuses cleanly at the version gate rather than
+/// misframing a v5-only frame. The 5-byte preamble stays FROZEN.
+pub const PROTOCOL_VERSION: u8 = 5;
+
+/// Additive capability for cell-exact, logical-line-framed history transport.
+/// Peers that do not advertise it continue to use `ServerMsg::History`.
+pub const HISTORY_LOGICAL_V1_CAP: &str = "history-logical-v1";
+
+/// Additive completion contract for logical-history responses that span more
+/// than one protocol frame. Peers advertising this capability accumulate
+/// non-empty `HistoryLogical` frames until an empty `HistoryLogical` frame,
+/// which is the explicit completion marker.
+pub const HISTORY_LOGICAL_STREAM_V1_CAP: &str = "history-logical-stream-v1";
+
+/// Additive attach-handshake contract: after `Connected`, the client samples
+/// its terminal again and sends `ConfirmSize` before the server snapshots and
+/// emits logical history plus the initial full repaint.
+pub const INITIAL_SIZE_CONFIRM_V1_CAP: &str = "initial-size-confirm-v1";
 
 /// Magic bytes identifying an qrmux client connection. Frozen forever.
 pub const PREAMBLE_MAGIC: [u8; 4] = *b"QRMX";
@@ -195,34 +218,33 @@ mod tests {
         }
     }
 
-    /// v4 negotiation arm (P4DB drive-burn bump; updated from the prior v3 pin):
-    /// this server is now v4 (LaunchHeadless removed → SubscribeRepublish's index
-    /// shifted), so a stale v3 (pre-burn) client's preamble must be reported as a
-    /// mismatch carrying the v3 client byte — the deploy skew window the spec calls
-    /// out (stale pre-burn qrmux daemon ↔ new post-burn client). The adapter
-    /// surfaces this PER-SESSION as "stale qrmux daemon for session '<name>';
-    /// kill or restart THAT session".
+    /// v5 negotiation arm (attended-UX M1 bump; updated from the prior v4 pin):
+    /// this server is now v5 (the polite-delivery surface appended), so a stale
+    /// v4 client's preamble must be reported as a mismatch carrying the v4 client
+    /// byte — the deploy skew window the spec calls out. The adapter surfaces
+    /// this PER-SESSION as "stale qrmux daemon for session '<name>'; kill or
+    /// restart THAT session".
     #[tokio::test]
-    async fn preamble_v3_client_refused_by_v4_server() {
+    async fn preamble_v4_client_refused_by_v5_server() {
         assert_eq!(
-            PROTOCOL_VERSION, 4,
-            "this test pins the v4 bump; update it on the next bump"
+            PROTOCOL_VERSION, 5,
+            "this test pins the v5 bump; update it on the next bump"
         );
         let (mut w, mut r) = tokio::io::duplex(64);
         let mut buf = [0u8; PREAMBLE_LEN];
         buf[..4].copy_from_slice(&PREAMBLE_MAGIC);
-        buf[4] = 3; // a stale v3 (pre-burn) client/daemon
+        buf[4] = 4; // a stale v4 (pre-attended) client/daemon
         w.write_all(&buf).await.unwrap();
         match read_preamble(&mut r).await.unwrap() {
-            PreambleCheck::VersionMismatch { client } => assert_eq!(client, 3),
+            PreambleCheck::VersionMismatch { client } => assert_eq!(client, 4),
             other => panic!("expected VersionMismatch, got {:?}", other),
         }
     }
 
-    /// v4 negotiation arm: a current (v4) client preamble is accepted by a v4
+    /// v5 negotiation arm: a current (v5) client preamble is accepted by a v5
     /// server — the positive twin of the skew refusal above.
     #[tokio::test]
-    async fn preamble_v4_client_accepted_by_v4_server() {
+    async fn preamble_v5_client_accepted_by_v5_server() {
         let (mut w, mut r) = tokio::io::duplex(64);
         write_preamble(&mut w).await.unwrap();
         assert_eq!(read_preamble(&mut r).await.unwrap(), PreambleCheck::Ok);

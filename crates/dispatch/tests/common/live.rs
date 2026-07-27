@@ -18,9 +18,12 @@ use std::sync::Arc;
 use dispatch::provider::codex::{AppServerRpc, ClientInfo, WsAppServer};
 use dispatch::registry::RegistryEntry;
 
-/// The live gate: skip unless `QD_CODEX_LIVE=1`.
+/// The codex live gate — a thin delegate through the single-home keyed gate
+/// [`super::live_gate::conformance_gate`] (C-4 (a)). The env READ lives only in
+/// `common/live_gate.rs`; this must not read `QD_CODEX_LIVE` directly or the
+/// drift lint reds it.
 pub fn live() -> bool {
-    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
+    super::live_gate::conformance_gate("QD_CODEX_LIVE", "codex-live (common)")
 }
 
 /// The `qd` binary under test (Cargo sets this for the dev binary).

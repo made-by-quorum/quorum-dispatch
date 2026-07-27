@@ -1,0 +1,58 @@
+# Round 8: cross-mode alt epoch, wide-orphan repair, and REP.
+
+case mixed_47_entry_1049_exit_rejects_old_decsc_token
+size 5 2 100
+emit 10
+print ABCDE
+decsc
+print F
+alt-47-enter
+alt-1049-exit
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case alt_restore_horizontal_shrink_repairs_wide_orphan
+size 5 2 100
+emit 10
+print abc界F
+alt-1049-enter
+resize 4 2
+alt-1049-exit
+expect 0 1 abc|F
+end
+
+case rep_one_fires_deferred_wrap
+size 5 2 100
+emit 10
+print ABCDE
+rep 1
+expect 1 0 ABCDEE
+end
+
+case rep_after_cup_source_rewrite_severs_a7
+size 5 2 100
+emit 10
+print ABCDE
+rep 1
+cup 1 1
+rep 1
+expect 0 1 EBCDE|E
+end
+
+case rep_zero_and_default_each_repeat_once
+size 5 2 100
+emit 10
+print ABC
+rep 0
+rep default
+expect 0 0 ABCCC
+end
+
+case rep_explicit_count_repeats_exactly
+size 5 2 100
+emit 10
+print ABC
+rep 2
+expect 0 0 ABCCC
+end

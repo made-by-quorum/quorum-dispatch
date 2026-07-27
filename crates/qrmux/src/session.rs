@@ -56,6 +56,10 @@ pub struct SessionHandles {
     pub screen_notify: Arc<tokio::sync::Notify>,
     pub reader_alive: Arc<AtomicBool>,
     pub name: String,
+    /// attended-UX M1: the polite-delivery state, so the `client_to_pty` relay's
+    /// Input arm can journal + lock human keystrokes. `None` ⇒ today's behavior
+    /// (write straight to the PTY).
+    pub attended: Option<Arc<crate::attended::driver::AttendedState>>,
 }
 
 /// A single terminal session backed by a PTY and a virtual screen.
@@ -83,6 +87,13 @@ pub struct Session {
     /// events are disabled (kill switch) or the writer failed to open (the
     /// session then runs unlogged — emission must never fail session ops).
     events: Option<Arc<crate::events::EventWriter>>,
+    #[cfg(test)]
+    logical_history_override: Option<crate::screen::LogicalTransportEmission>,
+    /// attended-UX M1: the polite-delivery state (journal / lock / spool) + the
+    /// per-session timer task. `None` when there is no runtime dir (events
+    /// disabled) — the session then behaves exactly as today (no journal/lock/
+    /// countdown). The timer task inside is **aborted in `Session::drop`**.
+    attended: Option<Arc<crate::attended::driver::AttendedState>>,
 }
 
 impl Session {
@@ -104,6 +115,16 @@ impl Session {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .map(|d| d.as_secs());
+        // M4/M5(T5): capture the harness identity from the spawned command BEFORE
+        // `command` is moved into the PTY spawn. `None` (attach-to-shell / Connect)
+        // ⇒ Harness::Default. `Some` uses `from_command`, which parses the launched
+        // binary out of the `["bash","-lc", command '<bin>' …]` login-shell shape
+        // CreateDetached uses for every provider (argv0 is always `bash`, so
+        // `from_argv0` alone could never reach Codex/Pi — the M4 reachability gap).
+        let harness = command
+            .as_ref()
+            .map(|c| crate::attended::driver::Harness::from_command(&c.argv))
+            .unwrap_or(crate::attended::driver::Harness::Default);
         let pty = Pty::spawn(cols, rows, command, cwd)?;
 
         // ACK-1 event writer: pid captured ONCE here, right after spawn —
@@ -163,6 +184,32 @@ impl Session {
                 })?
         };
 
+        // attended-UX M1: create the polite-delivery state + spawn the per-session
+        // timer task. The spool lives under the runtime dir (`<socket_dir>/pending/
+        // <name>/`); the socket_dir is `events_ctx.dir`'s parent (dir =
+        // `<socket_dir>/events`). No events_ctx (events disabled / tests) ⇒ no
+        // attended state ⇒ today's exact behavior. The timer task only spawns when
+        // a tokio runtime is present (the server path), so sync tests are unaffected.
+        let attended = events_ctx
+            .and_then(|ctx| ctx.dir.parent().map(|sd| sd.to_path_buf()))
+            .and_then(|socket_dir| {
+                let spool_dir = socket_dir.join("pending").join(&name);
+                match crate::attended::driver::AttendedState::new(
+                    name.clone(),
+                    spool_dir,
+                    pty.writer_arc(),
+                    screen.clone(),
+                    harness,
+                ) {
+                    Ok(a) => Some(a),
+                    Err(e) => {
+                        tracing::warn!(session = %name, error = %e,
+                            "attended state unavailable — session runs without polite delivery");
+                        None
+                    }
+                }
+            });
+
         Ok(Self {
             name,
             pty,
@@ -175,6 +222,9 @@ impl Session {
             reader_handle: Some(reader_handle),
             created,
             events,
+            #[cfg(test)]
+            logical_history_override: None,
+            attended,
         })
     }
 
@@ -183,6 +233,13 @@ impl Session {
     /// the lifecycle close sites.
     pub fn events_writer(&self) -> Option<Arc<crate::events::EventWriter>> {
         self.events.clone()
+    }
+
+    /// The attended-UX polite-delivery state (M1), if present. Cloned out under
+    /// the manager lock then operated on after release (like `pty_writer_arc`):
+    /// the client_handler `PendingDelivery`/`DeliverNow` arms drive it.
+    pub fn attended_arc(&self) -> Option<Arc<crate::attended::driver::AttendedState>> {
+        self.attended.clone()
     }
 
     /// Spawn time as Unix epoch seconds (`None` if the clock could not be read).
@@ -232,6 +289,35 @@ impl Session {
         Ok(screen.get_content_history())
     }
 
+    /// Snapshot cell-exact logical history for a capability-negotiated wire
+    /// consumer. This is read-only and uses the same screen lock as the legacy
+    /// history snapshot.
+    pub fn logical_history(
+        &self,
+        surface: crate::screen::LogicalEmissionSurface,
+    ) -> anyhow::Result<crate::screen::LogicalTransportEmission> {
+        #[cfg(test)]
+        if let Some(emission) = &self.logical_history_override {
+            return Ok(emission.clone());
+        }
+        let screen = self
+            .screen
+            .lock()
+            .map_err(|e| anyhow::anyhow!("screen mutex poisoned: {}", e))?;
+        Ok(screen.logical_emission(surface))
+    }
+
+    /// Test-only transport fixture used to exercise protocol/client boundaries
+    /// whose byte scale would be prohibitively slow to synthesize through the
+    /// terminal parser. Production builds have no override field or branch.
+    #[cfg(test)]
+    pub(crate) fn set_logical_history_override(
+        &mut self,
+        emission: crate::screen::LogicalTransportEmission,
+    ) {
+        self.logical_history_override = Some(emission);
+    }
+
     /// Mark a client as connected, evicting any previous client.
     ///
     /// Returns a `ClientGuard` (clears `has_client` on drop), shared handles
@@ -274,6 +360,7 @@ impl Session {
             screen_notify: self.screen_notify.clone(),
             reader_alive: self.reader_alive.clone(),
             name: self.name.clone(),
+            attended: self.attended.clone(),
         };
 
         (guard, handles, evict_rx)
@@ -670,6 +757,13 @@ fn persistent_reader_loop(
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // attended-UX M1: abort the per-session timer task FIRST (crash-safe, no
+        // leaked task). Explicit — a `SessionHandles` clone held by a relay task
+        // keeps the `Arc<AttendedState>` alive, so we cannot rely on the Arc's own
+        // Drop; `shutdown` takes the JoinHandle so it is idempotent.
+        if let Some(att) = &self.attended {
+            att.shutdown();
+        }
         // ACK-1 close-bookend BELT (spec §2 C4): if no instrumented path
         // (kill/reap/shutdown) emitted session-closed, record reason
         // "dropped". No-op when the shared once-flag is already set — the

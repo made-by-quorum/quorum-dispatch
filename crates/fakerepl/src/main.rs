@@ -172,6 +172,16 @@ struct Config {
     truncate_user_record_bytes: Option<usize>,
     sessions_dir: PathBuf,
     report_path: Option<PathBuf>,
+    /// M3 e2e delivery proof (opt-in, DEFAULT-OFF; `QD_FAKEREPL_COMPOSER_MODE=1`).
+    /// Renders a faithful-er claude composer so the attended mux fire's discipline
+    /// is exercised end-to-end: (1) prints the `❯` prompt glyph on idle (so the
+    /// mux's `SafeDefaultFacts::composer_is_plain` verify passes — a plain composer
+    /// is present); (2) treats the clear-chord `Ctrl-U` (0x15) as line-discard (so
+    /// the injected turn is the clean payload, not `\x15`-polluted — the LandingProbe
+    /// then matches Landed, not Mismatch); (3) echoes composer bytes to the PTY (so
+    /// the marker renders in history). Existing gates do NOT set it → their behavior
+    /// is byte-identical.
+    composer_mode: bool,
 }
 
 impl Config {
@@ -260,6 +270,11 @@ impl Config {
 
         let report_path = std::env::var_os("QD_FAKEREPL_REPORT").map(PathBuf::from);
 
+        // M3 e2e composer emulation (opt-in, default-off).
+        let composer_mode = std::env::var("QD_FAKEREPL_COMPOSER_MODE")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
         Self {
             name,
             paste_threshold,
@@ -275,6 +290,7 @@ impl Config {
             truncate_user_record_bytes,
             sessions_dir,
             report_path,
+            composer_mode,
         }
     }
 }
@@ -355,7 +371,24 @@ impl Repl {
         };
         repl.write_registry_row()?;
         repl.install_sigterm_handler();
+        // M3 composer-mode: show the `❯` prompt on the initial idle screen so the
+        // mux fire's plain-composer verify (SafeDefaultFacts, `❯`) passes.
+        if repl.cfg.composer_mode {
+            repl.render_prompt();
+        }
         Ok(repl)
+    }
+
+    /// M3 composer-mode: emit the `❯ ` prompt glyph to the PTY (idle re-prompt), so
+    /// the rendered screen carries a composer anchor. No-op unless `composer_mode`.
+    fn render_prompt(&self) {
+        if !self.cfg.composer_mode {
+            return;
+        }
+        let mut out = std::io::stdout().lock();
+        // Leading \r so the prompt starts a fresh line under a raw PTY.
+        let _ = out.write_all("\r\u{276f} ".as_bytes());
+        let _ = out.flush();
     }
 
     /// Publish the registry-row path for the SIGTERM handler and install it.
@@ -492,6 +525,9 @@ impl Repl {
                 // W8: a stub assistant end_turn record on turn-done (gives the
                 // transcript an assistant record after the user record).
                 self.append_convo_assistant(n);
+                // M3 composer-mode: re-show the idle `❯` prompt so a subsequent
+                // send's fire verify still finds a plain composer.
+                self.render_prompt();
             }
         }
     }
@@ -528,6 +564,17 @@ impl Repl {
             self.input_bytes_total += 1;
             self.maybe_arm_stall();
 
+            // M3 composer-mode: the mux fire's clear-chord `Ctrl-U` (0x15) is
+            // line-discard — empty the composer + re-prompt so the injected turn is
+            // the CLEAN payload (never 0x15-prefixed, which would fail the mux's
+            // LandingProbe as a mismatch). Mirrors a real readline composer; only
+            // active under the opt-in flag, so existing gates are unaffected.
+            if self.cfg.composer_mode && b == 0x15 {
+                self.composer.clear();
+                self.composer_crs = 0;
+                self.render_prompt();
+                continue;
+            }
             if b == b'\r' {
                 self.handle_cr(is_paste);
             } else if self.admit_content_byte() {
@@ -536,6 +583,13 @@ impl Repl {
                 // collecting pasted text.) Under an active stall the byte may be
                 // DROPPED (saturation) — admit_content_byte decides.
                 self.composer.push(b);
+                // M3 composer-mode: echo the admitted byte so the marker renders in
+                // history (a real composer echoes typed/pasted input). Opt-in only.
+                if self.cfg.composer_mode {
+                    let mut out = std::io::stdout().lock();
+                    let _ = out.write_all(&[b]);
+                    let _ = out.flush();
+                }
             }
         }
         // A stall window that expired during this burst is reported once it ends

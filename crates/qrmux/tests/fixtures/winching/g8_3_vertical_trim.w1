@@ -1,0 +1,31 @@
+# G8 cell 3: padding and intact pairs above a cut survive; trimmed endpoints die.
+case g8_3_vertical_padding_survives
+size 5 2 100
+emit 10
+print ABCDEF
+alt-enter
+resize 5 3
+alt-exit
+expect 1 0 ABCDEF
+end
+
+case g8_3_trimmed_target_severs_no_dangling
+size 5 2 100
+emit 10
+print ABCDEF
+alt-enter
+resize 5 1
+alt-exit
+expect 0 1 ABCDE
+expect-outgoing 0
+end
+
+case g8_3_pair_wholly_above_trim_survives
+size 5 4 100
+emit 20
+print ABCDEFGHIJK
+alt-enter
+resize 5 2
+alt-exit
+expect 1 1 ABCDEFGHIJ
+end

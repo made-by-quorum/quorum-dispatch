@@ -40,15 +40,16 @@ pub fn build_cli() -> Command {
         .subcommands(subcommands())
 }
 
-/// All 25 verb registrations + aliases (spec §3 + qb spec-cli §11). The default
+/// All 26 verb registrations + aliases (spec §3 + qb spec-cli §11). The default
 /// action (bare `qd` → ls) is handled in `verbs::dispatch` when no subcommand
 /// matched.
 fn subcommands() -> Vec<Command> {
     vec![
         cmd_ls(),
-        cmd_connect(),
         cmd_attach(),
+        cmd_connect(),
         cmd_resume(),
+        cmd_adopt(),
         cmd_start(),
         cmd_stop(),
         cmd_kill(),
@@ -123,29 +124,31 @@ fn cmd_ls() -> Command {
         )
 }
 
-// --- 2. attach — RETIRED erroring stub (P0 start-surface rework, STATE 22
-// ruling; was W1 ADD-26 demoted/hidden). `connect` covers attach-or-resume
-// (live → attach; cold → auto-revive → attach; codex → loud redirect); agents
-// use `qd send:relay`. Stays REGISTERED + hidden so `qd attach ...` reaches the
-// stub's helpful error instead of a clap usage error; trailing pass-through
-// swallows any args (the new/kill pattern).
+// --- 2. attach <session> — the human "get me into this session" verb.
+// Dispatches on provider hosting then liveness (verbs/attach.rs).
 fn cmd_attach() -> Command {
     Command::new("attach")
-        .hide(true)
-        .about("(retired — use qd connect)")
+        .about("Get into a session (live/cold Claude → terminal; codex → driving guidance)")
         .override_help(help::ATTACH)
-        .arg(trailing_passthrough())
-}
-
-// --- 2b. connect <session> (NET-NEW, ADD-26) — the human "get me into this
-// session" verb. Dispatches on provider hosting then liveness (verbs/connect.rs).
-fn cmd_connect() -> Command {
-    Command::new("connect")
-        .about("Get into a session (live Claude → terminal; cold/codex → how to revive)")
-        .override_help(help::CONNECT)
         .arg(positional("session"))
         // Revive a cold session into a PERSISTENT, relay-serving daemon and return
         // 0 WITHOUT attaching a TTY — the headless entry a systemd ExecStart calls.
+        .arg(long_flag(
+            "no-attach",
+            "Revive to a persistent daemon without attaching a TTY (headless)",
+        ))
+        .args(render_mode_flags())
+}
+
+// --- 2b. connect — hidden backward-compat alias for attach. Remains registered
+// and hidden; invocations route transparently to attach::run so existing shell
+// wrappers that call `qd connect <session>` keep working.
+fn cmd_connect() -> Command {
+    Command::new("connect")
+        .hide(true)
+        .about("(renamed — use qd attach)")
+        .override_help(help::CONNECT)
+        .arg(positional("session"))
         .arg(long_flag(
             "no-attach",
             "Revive to a persistent daemon without attaching a TTY (headless)",
@@ -172,6 +175,19 @@ fn cmd_resume() -> Command {
             "Override the session's recorded working directory",
         ))
         .args(render_mode_flags())
+}
+
+// --- 3b. adopt <session> — self-adopt a live bare Claude session. ---
+fn cmd_adopt() -> Command {
+    Command::new("adopt")
+        .about("Adopt a live bare Claude session into managed qrmux")
+        .override_help(help::ADOPT)
+        .arg(positional("session"))
+        .arg(flag(
+            "force",
+            'f',
+            "Skip only the best-effort external idle heuristic",
+        ))
 }
 
 // --- 4. stop <session> (P0 W1, qb spec-cli §11) — today's `kill`, renamed.
@@ -303,7 +319,7 @@ fn cmd_start() -> Command {
 }
 
 /// punch item 7: the shared `--alt-screen` / `--inline` render-mode flag pair,
-/// attached to EVERY launch verb (start / resume / connect). Inline is the
+/// attached to EVERY launch verb (start / resume / attach). Inline is the
 /// fleet default (sessions render in the scrollback so phone/SSH attach can
 /// scroll); `--alt-screen` restores fullscreen rendering for THIS session.
 /// `--inline` is the mirror (forces inline when `render-default = alt-screen`
@@ -345,20 +361,21 @@ fn cmd_reconcile() -> Command {
         ))
 }
 
-// --- 7. send (moved stub), commands/send.ts:19-21 ---
+// --- 7. send <session> <message> — unified primary send surface ---
 fn cmd_send() -> Command {
-    // allowUnknownOption (commands/send.ts:21): accept-anything, the action is a pointer.
-    // The Channels after-help block is part of the verbatim help string (help::SEND).
     Command::new("send")
-        .about("(moved) Use send:pty, send:relay, or send:http")
+        .about("Send a message to a session (delivery path selected automatically)")
         .override_help(help::SEND)
-        .arg(trailing_passthrough())
+        .arg(positional("session"))
+        // A caller's message is opaque payload, including values such as
+        // `--literal`; unified send has no transport options to reinterpret it.
+        .arg(positional("message").allow_hyphen_values(true))
 }
 
 // --- 8. send:pty <session> <message>, commands/send.ts:52-58 ---
 fn cmd_send_pty() -> Command {
     Command::new("send:pty")
-        .about("Send a message via zmx PTY (types into the session's terminal)")
+        .about("(compatibility/debug) Force a zmx PTY send")
         .override_help(help::SEND_PTY)
         .arg(positional("session"))
         .arg(positional("message"))
@@ -379,7 +396,7 @@ fn cmd_send_pty() -> Command {
 // --- 9. send:relay <session> <message>, commands/send.ts:237-241 ---
 fn cmd_send_relay() -> Command {
     Command::new("send:relay")
-        .about("Send a message via the relay HTTP endpoint")
+        .about("(compatibility/debug) Force relay/daemon send routing")
         .override_help(help::SEND_RELAY)
         .arg(positional("session"))
         .arg(positional("message"))
@@ -398,7 +415,7 @@ fn cmd_send_relay() -> Command {
 // --- 10. send:http <session> <message>, commands/send.ts:366-370 ---
 fn cmd_send_http() -> Command {
     Command::new("send:http")
-        .about("Send a message to an OpenCode session via HTTP API")
+        .about("(compatibility/debug) Force the OpenCode HTTP path")
         .override_help(help::SEND_HTTP)
         .arg(positional("session"))
         .arg(positional("message"))
@@ -450,7 +467,7 @@ fn cmd_wait() -> Command {
 // --- 14. live, commands/status.ts:394-397 ---
 fn cmd_live() -> Command {
     Command::new("live")
-        .about("Live-updating session list — type a 3-char code to connect")
+        .about("Live-updating session list — type a 3-char code to attach")
         .override_help(help::LIVE)
         .arg(flag("all", 'a', "Include dead sessions"))
 }
@@ -850,6 +867,53 @@ mod tests {
     }
 
     #[test]
+    fn unified_send_requires_target_and_preserves_opaque_message() {
+        for message in [
+            "",
+            "--option-like",
+            "multiline\nsecond line",
+            "multibyte: 🧭 café",
+            "$(shell) `ticks` ; & | ' \" $HOME",
+        ] {
+            let m = parse(&["send", "sess", message]).unwrap();
+            let (_, sm) = m.subcommand().unwrap();
+            assert_eq!(
+                sm.get_one::<String>("session").map(String::as_str),
+                Some("sess")
+            );
+            assert_eq!(
+                sm.get_one::<String>("message").map(String::as_str),
+                Some(message)
+            );
+        }
+
+        for argv in [vec!["send"], vec!["send", "sess"]] {
+            assert_eq!(
+                parse(&argv).unwrap_err().kind(),
+                ErrorKind::MissingRequiredArgument,
+                "{argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unified_help_is_transport_neutral_and_escape_hatches_are_labeled() {
+        assert!(help::SEND.contains("Usage: qd send <target> <message>"));
+        assert!(help::SEND.contains("selects its registered\nreceive path automatically"));
+        for carrier in ["send:pty", "send:relay", "send:http"] {
+            assert!(
+                !help::SEND.contains(carrier),
+                "primary help must not teach carrier menu item {carrier}"
+            );
+        }
+        assert!(help::SEND_PTY.contains("Compatibility/debug control"));
+        assert!(help::SEND_RELAY.contains("Compatibility/debug control"));
+        assert!(help::SEND_HTTP.contains("Compatibility/debug control"));
+        assert!(help::TOP.contains("send <session> <message>"));
+        assert!(help::TOP.contains("(compatibility/debug) Force a zmx PTY send"));
+    }
+
+    #[test]
     fn send_pty_timeout_defaults_to_120() {
         let m = parse(&["send:pty", "sess", "hi"]).unwrap();
         let (_, sm) = m.subcommand().unwrap();
@@ -985,13 +1049,13 @@ mod tests {
     }
 
     /// punch item 7: --alt-screen / --inline parse on EVERY launch verb
-    /// (start / resume / connect), default false, and conflict at parse.
+    /// (start / resume / attach), default false, and conflict at parse.
     #[test]
     fn render_mode_flags_on_all_launch_verbs() {
         for argv in [
             vec!["start", "wk", "--alt-screen"],
             vec!["resume", "wk", "--alt-screen"],
-            vec!["connect", "wk", "--alt-screen"],
+            vec!["attach", "wk", "--alt-screen"],
         ] {
             let m = parse(&argv).unwrap();
             let (_, sm) = m.subcommand().unwrap();
@@ -1001,7 +1065,7 @@ mod tests {
         for argv in [
             vec!["start", "wk", "--inline"],
             vec!["resume", "wk", "--inline"],
-            vec!["connect", "wk", "--inline"],
+            vec!["attach", "wk", "--inline"],
         ] {
             let m = parse(&argv).unwrap();
             let (_, sm) = m.subcommand().unwrap();
@@ -1115,28 +1179,26 @@ mod tests {
 
     #[test]
     fn missing_required_session_maps_to_commander_phrasing() {
-        // (was `attach` — retired stub now swallows args; connect carries the
-        // same required <session> positional.)
-        let e = parse(&["connect"]).unwrap_err();
+        let e = parse(&["attach"]).unwrap_err();
         assert_eq!(e.kind(), ErrorKind::MissingRequiredArgument);
         let msg = commander_message(&e);
         assert_eq!(msg, "error: missing required argument 'session'");
     }
 
-    // --- P0 start-surface rework (STATE 22): retired attach swallows args ---
+    // --- connect is a hidden alias for attach: same parse contract ---
 
     #[test]
-    fn retired_attach_swallows_any_args_at_parse() {
-        for argv in [
-            vec!["attach"],
-            vec!["attach", "wk"],
-            vec!["attach", "--nosuchopt", "wk"],
-        ] {
-            let m = parse(&argv).unwrap_or_else(|e| {
-                panic!("retired `attach` must accept-and-ignore {argv:?}, got: {e}")
-            });
-            assert_eq!(m.subcommand_name(), Some("attach"));
-        }
+    fn connect_alias_parse_contract_matches_attach() {
+        // connect accepts a session positional (alias contract).
+        let m = parse(&["connect", "wk"]).expect("connect <session> must parse");
+        let sm = m.subcommand_matches("connect").unwrap();
+        assert_eq!(sm.get_one::<String>("session").map(String::as_str), Some("wk"));
+        // connect without a session is a parse error (required positional).
+        let e = parse(&["connect"]).unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::MissingRequiredArgument);
+        // connect rejects unknown options (no trailing passthrough).
+        let e2 = parse(&["connect", "--nosuchopt", "wk"]).unwrap_err();
+        assert_eq!(e2.kind(), ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -1192,6 +1254,7 @@ mod tests {
             "connect",
             "attach",
             "resume",
+            "adopt",
             "start",
             "stop",
             "kill",
@@ -1215,15 +1278,31 @@ mod tests {
         ] {
             assert!(names.contains(&v), "missing verb {v}");
         }
-        // 25 registrations here (W1 ADD-26 added `connect`; `attach` stays
-        // registered+hidden; `init` added with the eval-init shell integration;
+        // 26 registrations here (`adopt` adds the self-adopt shutdown flow;
+        // `attach` is live; renamed `connect` stays registered+hidden as an
+        // erroring stub; `init` added with the eval-init shell integration;
         // P0 W1 added `start`/`stop` with `new`/`kill` retained as retired
         // stubs; transcript-archive-spec.md Atomic B's `backup` was retired by
         // persist-relocation — transcript persistence now lives in frame as
         // `qf persist`, in-crate, no cross-binary hop); the delivery/receipt
         // contract (D1) added `delivery:recover`, the dead-dangling recovery
         // verb; config + survey are dispatched pre-clap (hand-parsed).
-        assert_eq!(names.len(), 25);
+        assert_eq!(names.len(), 26);
+    }
+
+    #[test]
+    fn adopt_force_is_a_plain_flag_after_the_session() {
+        let matches = parse(&["adopt", "bare-one", "--force"]).unwrap();
+        let (_, adopt) = matches.subcommand().unwrap();
+        assert_eq!(
+            adopt.get_one::<String>("session").map(String::as_str),
+            Some("bare-one")
+        );
+        assert!(adopt.get_flag("force"));
+
+        let matches = parse(&["adopt", "bare-one"]).unwrap();
+        let (_, adopt) = matches.subcommand().unwrap();
+        assert!(!adopt.get_flag("force"));
     }
 
     #[test]

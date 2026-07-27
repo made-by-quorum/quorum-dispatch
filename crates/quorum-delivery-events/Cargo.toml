@@ -1,0 +1,48 @@
+[package]
+# The shared delivery-event VOCABULARY crate (vocab-extract). A compile-time LEAF
+# crate: it owns the producer surface — the `Payload` enum, `Envelope`/`Anchor`,
+# the terminal set, and the byte-exact wire serializer (`build_record_line`) —
+# with NO dependency on `dispatch` or `qrmux`. Both `dispatch` (the writer/reader/
+# resolver) and `qrmux` (attended-UX M1/M3 emitters) depend on THIS so the same
+# vocab can be emitted from either side without a dependency cycle
+# (dispatch → qrmux is the existing edge; a reverse qrmux → dispatch import would
+# cycle). `dispatch::events` re-exports every moved public name so all existing
+# call sites are byte-for-byte unaffected.
+name = "quorum-delivery-events"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared delivery-event vocabulary: Payload/Envelope/Anchor + byte-exact wire serialization. Leaf crate (no dispatch/qrmux deps)."
+
+[lib]
+name = "quorum_delivery_events"
+
+[dependencies]
+# The wire format is a HAND-BUILT serde_json::Map with keys inserted in a pinned
+# order (build_record_line), then `.to_string()`. That byte-exactness DEPENDS on
+# serde_json's `preserve_order` feature (Map = IndexMap, insertion-ordered);
+# WITHOUT it Map is a BTreeMap (sorted) → DIFFERENT bytes. Mirror dispatch's
+# pattern EXACTLY: gate preserve_order behind a default-ON feature rather than
+# requesting it unconditionally. A normal dependency edge unifies serde_json's
+# features across every crate sharing it in one build, so requesting preserve_order
+# unconditionally here would silently flip Map iteration order for ANY other crate
+# in the build. Gating it (default-on) keeps THIS crate's emission byte-exact while
+# letting a consumer opt out via `default-features = false`.
+serde_json = { version = "1" }
+# 64-char lowercase hex SHA-256 for `sha256_hex` (the producer's content-hash
+# surface); same dep dispatch already uses.
+sha2 = "0.10"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = ["json-insertion-order"]
+# Gates `serde_json/preserve_order` (see the dependency comment) rather than
+# requesting it unconditionally, so a plain path-dependency consumer can opt out
+# via `default-features = false` without flipping serde_json's Map order for the
+# rest of the build. dispatch depends on this crate with DEFAULT features so its
+# own emission stays byte-for-byte unchanged.
+json-insertion-order = ["serde_json/preserve_order"]

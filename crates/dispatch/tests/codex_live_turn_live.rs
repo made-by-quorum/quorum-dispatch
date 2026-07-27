@@ -45,6 +45,9 @@
 //! shared app-server to cross-contaminate). SKIPPED deliberately — no lane, noted
 //! here per the §5.2 work-set.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -68,7 +71,7 @@ use dispatch::provider::{Provider, ProviderFx, SessionKey};
 
 /// The live gate. Skip unless `QD_CODEX_LIVE=1` (NOT the stale `SB_CODEX_LIVE`).
 fn live() -> bool {
-    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_CODEX_LIVE", "codex_live_turn_live")
 }
 
 /// The SECOND gate for the load-bearing production OAuth turn. Skip unless

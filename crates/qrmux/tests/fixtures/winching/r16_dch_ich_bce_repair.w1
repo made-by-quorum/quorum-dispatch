@@ -1,0 +1,21 @@
+# Round 16: DCH/ICH post-shift wide-orphan repair uses the active BCE blank.
+
+case r16_dch_post_shift_orphan_uses_blue_bce_blank
+size 5 2 100
+emit 5
+print A界XYF
+style blue-bg
+cup 1 1
+dch 2
+expect 0 1 <space>XY<space><space>|F
+end
+
+case r16_ich_boundary_orphan_uses_blue_bce_blank
+size 5 2 100
+emit 5
+print A界XYF
+style blue-bg
+cup 1 1
+ich 2
+expect 0 1 <space><space>A<space><space>|F
+end

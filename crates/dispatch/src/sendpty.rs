@@ -6,11 +6,15 @@
 //! decision out) so the branching is unit-testable without touching real zmx/fs.
 //! The `commands/` path prefix on cited comments is preserved per a prior red-team.
 //!
-//! ANSI stripping REUSES [`crate::boot::strip_ansi`] (boot.rs:159-247) — the W6
-//! differential test below proves it agrees with the TS `stripAnsi` regex
-//! semantics (utils.ts:373-383) before we adopt it as the composer stripper.
+//! The content-verified-CR composer predicate (`composer_holds_message`,
+//! `normalize_ws`, `PROMPT_GLYPH`) has MOVED to the `quorum-submit-discipline` LEAF
+//! crate (it carries its own std-only ANSI stripper there, byte-identical to
+//! `crate::boot::strip_ansi`, and the W6 differential test moved with it). It is
+//! re-exported below so `crate::sendpty::*` / `dispatch::sendpty::*` call sites are
+//! byte-for-byte unchanged.
 
-use crate::boot::strip_ansi;
+pub use quorum_submit_discipline::{composer_holds_message, normalize_ws, PROMPT_GLYPH};
+
 use serde::Deserialize;
 
 // --- send:pty busy/idle send decision (queue-to-busy directive) ------------
@@ -47,6 +51,51 @@ pub fn decide_send_pty(status: &str) -> SendPtyAction {
         SendPtyAction::SendQueue
     } else {
         SendPtyAction::SendVerify
+    }
+}
+
+/// PURE (M3 defensive refusal, BUILD-DIRECTIVES §1 ruling (2); M5/T2 fail-CLOSED):
+/// should `send:pty` REFUSE this target? True IFF the ZMX backend is selected AND
+/// attendance is NOT provably zero — either OBSERVED clients > 0, or an UNREADABLE
+/// count (`None`). A blind primary CR into a possibly-attended zmx pane could
+/// clobber a human's in-progress draft, and zmx cannot host the polite machinery.
+/// The `is_zmx` gate is LOAD-BEARING: the embedded backend is never refused here (it
+/// observes attendance internally in the mux and delivers politely; its synthesized
+/// `clients = 0` would misfire this predicate anyway). Attendance is OBSERVED at the
+/// protocol seam (`zmx list` `clients=N` → `zmx_clients`), never guessed.
+///
+/// **M5/T2 — fail CLOSED on an unknown count.** M3 shipped this fail-OPEN (`None`
+/// ⇒ deliver) as interim protection. That let a send whose attendance could not be
+/// read blind-submit into a possibly-attended session. The only SAFE unattended
+/// signal is an OBSERVED `Some(0)`; every other shape (observed attach OR unreadable)
+/// now refuses. The observed-attended (refuse) and observed-unattended (deliver)
+/// paths are UNCHANGED; only the unknown arm flips from deliver to refuse.
+pub fn refuse_attended_zmx(is_zmx: bool, zmx_clients: Option<u32>) -> bool {
+    // Deliver ONLY into an OBSERVED-unattended zmx (Some(0)); refuse an observed
+    // attach (Some(n>0)) AND an unreadable count (None). Never refuse non-zmx.
+    is_zmx && zmx_clients != Some(0)
+}
+
+/// The honest refusal message for a zmx target the [`refuse_attended_zmx`] gate
+/// blocked (M5/T2). The message is FAITHFUL to why we refused — it never asserts an
+/// attach we did not observe:
+/// - `Some(n)` (n>0): an OBSERVED attach of `n` client(s).
+/// - `None`: the client count was UNREADABLE, so attendance cannot be RULED OUT —
+///   we refuse rather than risk a blind submit (fail-closed). Never claims a count.
+pub fn attended_zmx_refusal_message(session_label: &str, zmx_clients: Option<u32>) -> String {
+    match zmx_clients {
+        Some(n) => format!(
+            "Refusing send:pty to attended zmx session \"{session_label}\": a human is attached \
+             ({n} client(s)) and a blind submit could clobber their in-progress draft. Detach the \
+             client, or run this session under the embedded mux (unset QD_MUX) which delivers politely."
+        ),
+        None => format!(
+            "Refusing send:pty to zmx session \"{session_label}\": its attached-client count is \
+             UNREADABLE, so a human's attendance cannot be ruled out — refusing rather than risk a \
+             blind submit that could clobber an in-progress draft. Run this session under the \
+             embedded mux (unset QD_MUX) which delivers politely, or retry once `zmx list` reports \
+             the client count."
+        ),
     }
 }
 
@@ -165,75 +214,6 @@ pub fn decide_wait(anchor_found: bool, status: Option<&str>) -> WaitDecision {
     } else {
         WaitDecision::Collecting
     }
-}
-
-// --- send:pty queued-send stuck detection (content-verified CR) ------------
-//
-// VERBATIM (qa/hardening@3dd9f1e:src/utils.ts:367-378):
-// A busy-session queued send delivers as two writes (text, then "\r" alone) to
-// mimic a human keystroke. If even that leaves the message unsubmitted in the
-// composer (paste-burst still absorbing the \r), we remediate — but ONLY when we
-// can SEE our text sitting unsubmitted. This is the predicate for that decision:
-// does the session's screen still hold OUR message in the composer?
-//
-// Why this is safe under the revised contract (see commands/send.ts): we never
-// BLIND-CR a busy session — every remediation CR is conditional on this returning
-// true, i.e. on our exact text being visibly present and unsubmitted, so the CR
-// can only submit OUR message. If it already queued, the composer is empty, this
-// returns false, and no CR is emitted.
-
-/// The live composer prompt glyph (`❯`) — the region after the LAST one is the
-/// composer (scrollback quotes appear before it).
-const PROMPT_GLYPH: char = '\u{276f}'; // ❯
-
-/// Collapse ALL whitespace runs to single spaces and trim — so a composer that
-/// WRAPS a long message across lines still matches the one-line needle. Port of
-/// `normalizeWs` (qa/hardening@3dd9f1e:src/utils.ts:387-389,
-/// `s.replace(/\s+/g, " ").trim()`).
-pub fn normalize_ws(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut in_ws = false;
-    for ch in s.chars() {
-        if ch.is_whitespace() {
-            in_ws = true;
-        } else {
-            if in_ws && !out.is_empty() {
-                out.push(' ');
-            }
-            in_ws = false;
-            out.push(ch);
-        }
-    }
-    out
-}
-
-/// Does the session's screen still hold OUR message unsubmitted in the composer?
-/// Port of `composerHoldsMessage` (qa/hardening@3dd9f1e:src/utils.ts:391-423).
-///
-/// ---------------------------------------------------------------------------
-/// VERBATIM (utils.ts:391-405 doc-comment):
-/// Anchored to the region AFTER the LAST prompt glyph (❯) in the dump: that glyph
-/// marks the live composer prompt, so a processed user turn quoted in scrollback
-/// (which appears BEFORE the last ❯) can never false-positive as "still unsent".
-/// If no glyph is present we fall back to scanning the whole dump (conservative:
-/// a false "stuck" only costs one extra content-verified CR, never a blind one).
-///
-/// Both haystack and needle are ANSI-stripped and whitespace-normalized, so a
-/// message the composer wrapped across several lines still matches.
-/// ---------------------------------------------------------------------------
-pub fn composer_holds_message(screen_text: &str, message: &str) -> bool {
-    let needle = normalize_ws(&strip_ansi(message));
-    if needle.is_empty() {
-        return false;
-    }
-    let clean = strip_ansi(screen_text);
-    // Region after the LAST ❯ glyph; no glyph → whole dump (TS
-    // `lastIndexOf("❯")` / `slice(lastPrompt)` else whole `clean`).
-    let region = match clean.rfind(PROMPT_GLYPH) {
-        Some(idx) => &clean[idx..],
-        None => &clean,
-    };
-    normalize_ws(region).contains(&needle)
 }
 
 // ===========================================================================
@@ -437,6 +417,54 @@ fn settle_snapshot(
         }
     }
     Ok(prev)
+}
+
+// ===========================================================================
+// M3 embedded `--wait` terminal watcher (single-writer split): a READ-ONLY poll
+// of the TARGET session's delivery ledger for the mux-written terminal. On the
+// embedded path the MUX owns the terminal; qd only READS it here. Deliberately
+// NOT `events::await_received` — that helper is a WRITER (it emits `anchor-timeout`
+// on budget exhaustion and runs inline recovery-read), which would make qd mint a
+// terminal for a mux-held send and break the single-writer split.
+// ===========================================================================
+
+/// Deps for [`watch_terminal`]: read the target session's merged event records
+/// (read-only), sleep, and a clock. Seamed so the (terminal-appears × timeout)
+/// matrix is unit-testable without real sleeps or a real ledger file. The bin
+/// wires `events::read_merged(state_dir, session_id, name).records`.
+pub trait TerminalWatchDeps {
+    fn read_records(&self) -> Vec<crate::events::EventRecord>;
+    fn sleep(&self, ms: u64);
+    fn now_ms(&self) -> i64;
+}
+
+/// Poll the target session ledger for the FIRST terminal (the 7-set) record for
+/// `send_id`, up to `bound_ms`. PURE READ — emits NOTHING and runs no
+/// recovery-read: on the embedded path the MUX owns the terminal (single-writer
+/// split, M3), so qd only READS it. `Some(record)` on the first `is_terminal`
+/// match (first-terminal-wins, via the leaf crate's `is_terminal` through
+/// [`crate::events::first_terminal_for`]); `None` when the bound elapses with no
+/// terminal — an HONEST still-pending (never a false "landed", never a false
+/// failure). Reads once BEFORE the first timeout check so an already-present
+/// terminal (a fast idle send, or a no-`--wait` predecessor's terminal) resolves
+/// immediately.
+pub fn watch_terminal(
+    deps: &dyn TerminalWatchDeps,
+    send_id: &str,
+    bound_ms: i64,
+    poll_ms: u64,
+) -> Option<crate::events::EventRecord> {
+    let start = deps.now_ms();
+    loop {
+        let records = deps.read_records();
+        if let Some(term) = crate::events::first_terminal_for(&records, send_id) {
+            return Some(term);
+        }
+        if deps.now_ms() - start >= bound_ms {
+            return None;
+        }
+        deps.sleep(poll_ms);
+    }
 }
 
 /// The Default-mode empty-extraction sentinel (send.ts:329 wording). ONE const
@@ -758,246 +786,6 @@ mod tests {
         }
     }
 
-    // --- normalize_ws -----------------------------------------------------
-
-    #[test]
-    fn normalize_ws_collapses_and_trims() {
-        assert_eq!(normalize_ws("  a \n\t b   c \n"), "a b c");
-        assert_eq!(normalize_ws(""), "");
-        assert_eq!(normalize_ws("   "), "");
-        assert_eq!(normalize_ws("solid"), "solid");
-    }
-
-    // --- composer_holds_message (ported + additions) ----------------------
-
-    const ESC: char = '\u{1b}';
-
-    /// A screen dump: scrollback, then the live composer prompt line (TS test
-    /// helper `screen`).
-    fn screen(composer: &str, scrollback: &str) -> String {
-        format!("{scrollback}\n\u{276f} {composer}\n")
-    }
-
-    #[test]
-    fn composer_exact_match() {
-        assert!(composer_holds_message(
-            &screen("SMOKE4: hello there", ""),
-            "SMOKE4: hello there"
-        ));
-    }
-
-    #[test]
-    fn composer_wrapped_across_lines_matches() {
-        // The composer wraps a long message; whitespace-normalization collapses
-        // the injected newlines so the one-line needle still matches.
-        let wrapped = "this is a very long\nmessage that the composer\nwrapped across lines";
-        assert!(composer_holds_message(
-            &screen(wrapped, ""),
-            "this is a very long message that the composer wrapped across lines"
-        ));
-    }
-
-    #[test]
-    fn composer_ansi_decorated_matches_after_strip() {
-        let decorated = format!("{ESC}[2m{ESC}[36mqueued text{ESC}[0m");
-        assert!(composer_holds_message(
-            &screen(&decorated, ""),
-            "queued text"
-        ));
-    }
-
-    #[test]
-    fn composer_absent_empty_composer_is_false() {
-        assert!(!composer_holds_message(
-            &screen("", ""),
-            "SMOKE4: hello there"
-        ));
-    }
-
-    #[test]
-    fn composer_processed_turn_in_scrollback_does_not_false_positive() {
-        // The same text appears as an ALREADY-PROCESSED turn (before the last ❯),
-        // and the composer is now empty. Anchoring to the region after the LAST ❯
-        // excludes scrollback, so this is correctly NOT stuck.
-        let scrollback = "\u{276f} SMOKE4: hello there\n  (assistant replied...)";
-        assert!(!composer_holds_message(
-            &screen("", scrollback),
-            "SMOKE4: hello there"
-        ));
-    }
-
-    #[test]
-    fn composer_empty_needle_is_false() {
-        assert!(!composer_holds_message(&screen("", ""), ""));
-        // A needle that is only whitespace also normalizes to empty → false.
-        assert!(!composer_holds_message(&screen("anything", ""), "   "));
-    }
-
-    #[test]
-    fn composer_no_glyph_falls_back_to_whole_dump() {
-        // No ❯ anywhere → scan the whole dump (conservative). Our text present →
-        // true.
-        assert!(composer_holds_message(
-            "plain dump with queued text in it",
-            "queued text"
-        ));
-        assert!(!composer_holds_message(
-            "plain dump without it",
-            "queued text"
-        ));
-    }
-
-    #[test]
-    fn composer_unicode_message_matches() {
-        // a4-spec D: Unicode. A multibyte message survives strip+normalize and
-        // matches in the composer region.
-        let msg = "café ☕ 日本語 — naïve";
-        assert!(composer_holds_message(&screen(msg, ""), msg));
-        // And it does NOT match when only present in scrollback (empty composer).
-        let scrollback = format!("\u{276f} {msg}\n (replied)");
-        assert!(!composer_holds_message(&screen("", &scrollback), msg));
-    }
-
-    // --- W6 differential: boot::strip_ansi vs TS stripAnsi semantics ------
-    //
-    // a4-spec §2.3 W6 (MANDATORY): before adopting boot::strip_ansi as the
-    // composer stripper, run it against the TS stripAnsi regex semantics
-    // (utils.ts:373-383) on the input classes the regex targets — OSC title
-    // sequences (ESC ] 0;… BEL and ESC ] …ST), CSI color/cursor runs, and lone
-    // ESC. `ts_strip_ansi_reference` is a faithful port of the THREE TS regexes,
-    // used as the oracle.
-    //
-    // RESULT (flagged to the lead — do NOT "resolve" this silently): boot and TS
-    // AGREE on every CSI and OSC class (the only escapes claude's TUI emits in a
-    // composer dump — verified by the boot-corpus tests + the cases below). They
-    // DIVERGE on the bare lone-ESC class: TS's `\x1b[@-_]?` consumes the next byte
-    // ONLY when it is in 0x40..=0x5f, whereas boot's catch-all 2-byte rule
-    // (boot.rs:215-219) consumes ESC + ANY following byte. So
-    // `strip_ansi("plain\x1b=more")` is boot→"plainmore" vs TS→"plain=more"
-    // (`=` is 0x3d), and `"\x1b xtext"`-style sequences differ likewise.
-    //
-    // We do NOT extend boot::strip_ansi to the narrower TS rule: boot's existing
-    // `strip_ansi_charset_keypad_and_lone_esc` test (boot.rs:693-697) ASSERTS the
-    // wider behavior (it strips `\x1b=` whole — keypad-mode is real claude TUI
-    // output), so narrowing would regress a sanctioned boot invariant. The two
-    // strippers serve different corpora with a deliberate, now-DOCUMENTED edge
-    // difference that is inert for the composer (a composer dump carries no bare
-    // `ESC <0x20-0x3f/0x60-0x7e>` runs — those bytes only appear inside the CSI/OSC
-    // payloads both strip identically). The `w6_*` tests below pin BOTH the
-    // agreement (CSI/OSC) and the documented divergence (lone-ESC) so a future
-    // change to either stripper is caught. ESCALATION: this is a flagged semantic
-    // edge for the lead, not a silent adoption.
-
-    /// Reference port of the TS `stripAnsi` regexes (utils.ts:373-383), applied in
-    /// the same order:
-    ///   1. CSI:  \x1b\[[0-9;?]*[ -/]*[@-~]
-    ///   2. OSC:  \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)
-    ///   3. lone: \x1b[@-_]?
-    ///
-    /// Hand-rolled (no regex dep) but faithful to the regex semantics.
-    fn ts_strip_ansi_reference(s: &str) -> String {
-        let b = s.as_bytes();
-        let mut out: Vec<u8> = Vec::with_capacity(b.len());
-        let mut i = 0;
-        while i < b.len() {
-            if b[i] == 0x1b {
-                // Try CSI: ESC [ [0-9;?]* [ -/]* [@-~]
-                if b.get(i + 1) == Some(&b'[') {
-                    let mut j = i + 2;
-                    while j < b.len() && matches!(b[j], b'0'..=b'9' | b';' | b'?') {
-                        j += 1;
-                    }
-                    while j < b.len() && (0x20..=0x2f).contains(&b[j]) {
-                        j += 1;
-                    }
-                    if j < b.len() && (0x40..=0x7e).contains(&b[j]) {
-                        i = j + 1; // consumed CSI incl. final byte
-                        continue;
-                    }
-                    // No final byte → falls through to the lone-ESC rule.
-                }
-                // Try OSC: ESC ] [^BEL,ESC]* (BEL | ESC \)
-                if b.get(i + 1) == Some(&b']') {
-                    let mut j = i + 2;
-                    while j < b.len() && b[j] != 0x07 && b[j] != 0x1b {
-                        j += 1;
-                    }
-                    if j < b.len() && b[j] == 0x07 {
-                        i = j + 1; // BEL-terminated
-                        continue;
-                    }
-                    if j + 1 < b.len() && b[j] == 0x1b && b[j + 1] == b'\\' {
-                        i = j + 2; // ST-terminated
-                        continue;
-                    }
-                    // Unterminated OSC → the regex doesn't match; fall to lone-ESC.
-                }
-                // lone ESC: \x1b[@-_]?  (ESC + optionally ONE byte in 0x40..=0x5f)
-                if b.get(i + 1).is_some_and(|&n| (0x40..=0x5f).contains(&n)) {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-            out.push(b[i]);
-            i += 1;
-        }
-        String::from_utf8_lossy(&out).into_owned()
-    }
-
-    #[test]
-    fn w6_strip_ansi_agrees_on_csi_and_osc_classes() {
-        // The CSI + OSC classes the TS regex targets (utils.ts:373-383) — the ONLY
-        // escapes a claude composer dump carries. boot::strip_ansi and the TS
-        // reference must produce identical output on each; a regression in either
-        // stripper trips this.
-        let cases: &[&str] = &[
-            // OSC title set, BEL-terminated.
-            "\u{1b}]0;window title\u{07}keep",
-            // OSC hyperlink, ST-terminated (ESC \).
-            "before\u{1b}]8;;https://x\u{1b}\\link\u{1b}]8;;\u{1b}\\after",
-            // CSI colour run + cursor moves around text.
-            "\u{1b}[31mred\u{1b}[0m \u{1b}[2J\u{1b}[1;1Hhome",
-            // CSI with ? private param + intermediate bytes.
-            "\u{1b}[?25ltext\u{1b}[0 q",
-            // Lone ESC followed by a [@-_] byte (BOTH consume ESC + the one byte).
-            "a\u{1b}Mb",
-            // Lone trailing ESC at end-of-input (BOTH drop it).
-            "trail\u{1b}",
-            // Plain text, no escapes (identity).
-            "just plain text 123",
-            // Mixed CSI + OSC + plain.
-            "\u{1b}[1mbold\u{1b}[0m\u{1b}]0;t\u{07}done",
-            // Unicode payload between escapes (composer Unicode survives both).
-            "\u{1b}[2mcafé ☕ 日本語\u{1b}[0m",
-        ];
-        for c in cases {
-            assert_eq!(
-                strip_ansi(c),
-                ts_strip_ansi_reference(c),
-                "boot::strip_ansi diverges from TS stripAnsi on CSI/OSC input {c:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn w6_documented_lone_esc_divergence() {
-        // The DOCUMENTED, FLAGGED divergence (see the section comment above): on a
-        // BARE lone ESC followed by a byte OUTSIDE 0x40..=0x5f, boot consumes the
-        // byte (its wide catch-all rule, sanctioned by boot.rs's keypad test)
-        // whereas TS's `\x1b[@-_]?` keeps it. This is inert for the composer
-        // (composer dumps carry no such bare runs — those bytes only appear inside
-        // CSI/OSC payloads, which both strip identically). Pinned so any change to
-        // EITHER stripper surfaces here for the lead's review rather than silently.
-        // ESC = (keypad, 0x3d): boot strips the `=`, TS keeps it.
-        assert_eq!(strip_ansi("plain\u{1b}=more"), "plainmore");
-        assert_eq!(ts_strip_ansi_reference("plain\u{1b}=more"), "plain=more");
-        // ESC x (0x78): boot strips the `x`, TS keeps it.
-        assert_eq!(strip_ansi("\u{1b}xtext"), "text");
-        assert_eq!(ts_strip_ansi_reference("\u{1b}xtext"), "xtext");
-    }
-
     // --- parse_jsonl_slice + find_anchor (N10 index-alignment) ------------
 
     #[test]
@@ -1276,5 +1064,147 @@ mod tests {
         // anchor None → all lines considered (TS `allLines`).
         let lines = vec![assistant_line("z", "end_turn")];
         assert_eq!(extract_response(&lines, None, ExtractMode::Default), "z");
+    }
+
+    // --- refuse_attended_zmx (M3 defensive refusal) — full matrix ----------
+
+    #[test]
+    fn refuse_attended_zmx_fails_closed_on_unknown_count() {
+        // M5/T2 — FAIL CLOSED. Deliver ONLY into an OBSERVED-unattended zmx
+        // (Some(0)); refuse an observed attach AND an unreadable count. The
+        // observed arms are UNCHANGED from M3; only the unknown arm flips.
+        assert!(refuse_attended_zmx(true, Some(1)), "attended zmx → refuse (unchanged)");
+        assert!(refuse_attended_zmx(true, Some(5)), "attended zmx → refuse (unchanged)");
+        assert!(!refuse_attended_zmx(true, Some(0)), "OBSERVED-unattended zmx → deliver (unchanged)");
+        // THE T2 ARM: an unreadable count now REFUSES (M3 shipped this fail-open).
+        assert!(refuse_attended_zmx(true, None), "zmx UNKNOWN count → refuse (fail-CLOSED, T2)");
+        // Embedded never refused, regardless of the (synthesized) client count.
+        assert!(!refuse_attended_zmx(false, Some(3)), "embedded → never refuse");
+        assert!(!refuse_attended_zmx(false, Some(0)), "embedded → never refuse");
+        assert!(!refuse_attended_zmx(false, None), "embedded → never refuse");
+    }
+
+    #[test]
+    fn attended_zmx_refusal_message_is_honest_about_why() {
+        // Observed attach: names the count.
+        let m = attended_zmx_refusal_message("alpha", Some(3));
+        assert!(m.contains("a human is attached (3 client(s))"), "observed-attach msg: {m}");
+        assert!(m.contains("alpha"));
+        // Unknown count: NEVER asserts an attach/count — says it is unreadable and
+        // that attendance cannot be ruled out (T2 honesty crux for the message).
+        let u = attended_zmx_refusal_message("beta", None);
+        assert!(u.contains("UNREADABLE"), "unknown msg names unreadability: {u}");
+        assert!(u.contains("cannot be ruled out"), "unknown msg is honest about the gap: {u}");
+        assert!(!u.contains("client(s))"), "unknown msg must NOT fabricate a client count: {u}");
+        assert!(!u.contains("is attached"), "unknown msg must NOT assert an observed attach: {u}");
+    }
+
+    // --- watch_terminal (M3 embedded --wait ledger watcher) ----------------
+
+    /// A scripted [`TerminalWatchDeps`]: a records timeline keyed by poll count, an
+    /// advancing virtual clock (500ms/poll), NO real sleeps.
+    struct FakeWatch {
+        polls: std::cell::Cell<u32>,
+        t: std::cell::Cell<i64>,
+        records_at: Box<dyn Fn(u32) -> Vec<crate::events::EventRecord>>,
+    }
+    impl FakeWatch {
+        fn new(records_at: impl Fn(u32) -> Vec<crate::events::EventRecord> + 'static) -> Self {
+            Self {
+                polls: std::cell::Cell::new(0),
+                t: std::cell::Cell::new(0),
+                records_at: Box::new(records_at),
+            }
+        }
+    }
+    impl TerminalWatchDeps for FakeWatch {
+        fn read_records(&self) -> Vec<crate::events::EventRecord> {
+            (self.records_at)(self.polls.get())
+        }
+        fn sleep(&self, ms: u64) {
+            self.t.set(self.t.get() + ms as i64);
+            self.polls.set(self.polls.get() + 1);
+        }
+        fn now_ms(&self) -> i64 {
+            self.t.get()
+        }
+    }
+
+    /// Build EventRecords from JSONL lines (the same reader path production uses).
+    fn recs(lines: &[&str]) -> Vec<crate::events::EventRecord> {
+        crate::events::parse_events(&lines.join("\n")).records
+    }
+    fn ev_line(event: &str, send_id: &str) -> String {
+        format!(
+            "{{\"v\":1,\"ts\":\"2026-01-01T00:00:00.000Z\",\"pid\":1,\"seq\":0,\
+             \"event\":\"{event}\",\"send_id\":\"{send_id}\",\"content_sha256\":\"x\"}}"
+        )
+    }
+
+    #[test]
+    fn watch_terminal_returns_first_terminal_for_send_id() {
+        // poll 0: only a non-terminal send-initiated; poll 1: message-seen appears.
+        let l0 = ev_line("send-initiated", "s1");
+        let l1a = ev_line("send-initiated", "s1");
+        let l1b = ev_line("message-seen", "s1");
+        let deps = FakeWatch::new(move |poll| {
+            if poll == 0 {
+                recs(&[&l0])
+            } else {
+                recs(&[&l1a, &l1b])
+            }
+        });
+        let got = watch_terminal(&deps, "s1", 60_000, 500);
+        assert_eq!(got.map(|r| r.event), Some("message-seen".to_string()));
+    }
+
+    #[test]
+    fn watch_terminal_immediate_when_terminal_already_present() {
+        // A terminal already on disk (a fast idle send / a no-wait predecessor's
+        // terminal) resolves on the FIRST read — no sleep needed.
+        let l = ev_line("message-seen", "s1");
+        let deps = FakeWatch::new(move |_| recs(&[&l]));
+        let got = watch_terminal(&deps, "s1", 60_000, 500);
+        assert_eq!(got.map(|r| r.event), Some("message-seen".to_string()));
+        assert_eq!(deps.polls.get(), 0, "resolved before any sleep");
+    }
+
+    #[test]
+    fn watch_terminal_none_on_timeout_is_honest_pending() {
+        // No terminal ever appears → the bound elapses → None (honest still-pending),
+        // NEVER a fabricated terminal.
+        let deps = FakeWatch::new(|_| recs(&[]));
+        assert!(watch_terminal(&deps, "s1", 1_000, 500).is_none());
+    }
+
+    #[test]
+    fn watch_terminal_ignores_non_terminal_records() {
+        // send-initiated + chunks-delivered for our send_id are NON-terminal (a
+        // queued ack is NOT delivery) → the watcher keeps waiting → None within the
+        // bound. This is the ledger-level "never return on a non-terminal" guard.
+        let si = ev_line("send-initiated", "s1");
+        let cd = ev_line("chunks-delivered", "s1");
+        let deps = FakeWatch::new(move |_| recs(&[&si, &cd]));
+        assert!(watch_terminal(&deps, "s1", 1_000, 500).is_none());
+    }
+
+    #[test]
+    fn watch_terminal_ignores_other_send_ids() {
+        // A terminal for a DIFFERENT send_id must not resolve OUR wait.
+        let other = ev_line("message-seen", "OTHER");
+        let deps = FakeWatch::new(move |_| recs(&[&other]));
+        assert!(watch_terminal(&deps, "s1", 1_000, 500).is_none());
+    }
+
+    #[test]
+    fn watch_terminal_resolves_failure_terminal_too() {
+        // A failure terminal (send-failed) IS a 7-set terminal → resolve on it (the
+        // verb maps it to an honest failure exit, no reply collection).
+        let f = ev_line("send-failed", "s1");
+        let deps = FakeWatch::new(move |_| recs(&[&f]));
+        assert_eq!(
+            watch_terminal(&deps, "s1", 60_000, 500).map(|r| r.event),
+            Some("send-failed".to_string())
+        );
     }
 }

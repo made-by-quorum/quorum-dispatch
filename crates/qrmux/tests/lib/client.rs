@@ -163,6 +163,11 @@ impl ProtocolClient {
                         ServerMsg::RepublishTurnEnd { .. } => "RepublishTurnEnd",
                         ServerMsg::RepublishStatus { .. } => "RepublishStatus",
                         ServerMsg::RepublishEnd { .. } => "RepublishEnd",
+                        ServerMsg::HistoryLogical(_) => "HistoryLogical",
+                        // v5 (attended-UX M1): appended delivery variants —
+                        // debug-label passthrough (this helper does not exercise them).
+                        ServerMsg::DeliveryQueued { .. } => "DeliveryQueued",
+                        ServerMsg::DeliveryOutcome { .. } => "DeliveryOutcome",
                     }
                 );
                 return Ok(frame_bytes);

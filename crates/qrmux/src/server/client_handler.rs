@@ -15,6 +15,13 @@ use super::session_setup::ConnectRequest;
 /// from clients that connect but never send anything.
 const INITIAL_MSG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+#[derive(Clone, Copy, Debug, Default)]
+struct NegotiatedCaps {
+    logical_history: bool,
+    logical_history_stream: bool,
+    initial_size_confirm: bool,
+}
+
 /// Framed-error string the SINGLE-SESSION daemon returns once it has begun
 /// exit-on-session-end teardown (§4.1 step 4): a deterministic refusal, never a
 /// hang. The launcher reads this as the "retiring" fourth state (§4.2). Exact
@@ -206,7 +213,11 @@ fn session_addressed_name(msg: &ClientMsg) -> Option<&str> {
         | ClientMsg::GetHistory { name }
         | ClientMsg::KillSession { name }
         | ClientMsg::CreateDetached { name, .. }
-        | ClientMsg::SubscribeRepublish { name } => Some(name),
+        | ClientMsg::SubscribeRepublish { name }
+        // v5 (attended-UX M1): both delivery frames are session-addressed —
+        // they prove a real claim on the daemon's session (§4.1 capacity-1 gate).
+        | ClientMsg::PendingDelivery { name, .. }
+        | ClientMsg::DeliverNow { name, .. } => Some(name),
         _ => None,
     }
 }
@@ -275,22 +286,39 @@ pub async fn handle_client(
             break msg;
         }
     };
-    match first {
+    let negotiated = match first {
         ClientMsg::Hello { caps } => {
             if let Err(e) = crate::protocol::validate_hello_caps(&caps) {
                 let resp = protocol::encode(&ServerMsg::Error(e))?;
                 stream.write_all(&resp).await?;
                 return Ok(());
             }
-            // Server's FIRST reply frame. `caps` empty (v3 ships no required
-            // caps); `session` = the daemon's --session identity in
-            // single-session mode (per-session identity belt, §3.2/§4.1), or the
-            // M1 transitional empty string in legacy mode.
+            let logical_history = caps
+                .iter()
+                .any(|cap| cap == crate::protocol::HISTORY_LOGICAL_V1_CAP);
+            let logical_history_stream = logical_history
+                && caps
+                    .iter()
+                    .any(|cap| cap == crate::protocol::HISTORY_LOGICAL_STREAM_V1_CAP);
+            let initial_size_confirm = caps
+                .iter()
+                .any(|cap| cap == crate::protocol::INITIAL_SIZE_CONFIRM_V1_CAP);
+            // Server's FIRST reply frame. Advertise the additive logical-history
+            // surface; emission is still gated by the client's advertisement.
             let resp = protocol::encode(&ServerMsg::Hello {
-                caps: vec![],
+                caps: vec![
+                    crate::protocol::HISTORY_LOGICAL_V1_CAP.to_string(),
+                    crate::protocol::HISTORY_LOGICAL_STREAM_V1_CAP.to_string(),
+                    crate::protocol::INITIAL_SIZE_CONFIRM_V1_CAP.to_string(),
+                ],
                 session: ctx.hello_session(),
             })?;
             stream.write_all(&resp).await?;
+            NegotiatedCaps {
+                logical_history,
+                logical_history_stream,
+                initial_size_confirm,
+            }
         }
         _ => {
             let resp = protocol::encode(&ServerMsg::Error(
@@ -299,7 +327,7 @@ pub async fn handle_client(
             stream.write_all(&resp).await?;
             return Ok(());
         }
-    }
+    };
 
     loop {
         // Decode any frame already buffered (a client may pipeline its first
@@ -387,6 +415,9 @@ pub async fn handle_client(
                             rows,
                             leftover: frames.into_leftover(),
                             mode,
+                            logical_history: negotiated.logical_history,
+                            logical_history_stream: negotiated.logical_history_stream,
+                            initial_size_confirm: negotiated.initial_size_confirm,
                         },
                         in_flight_guard.take(),
                     )
@@ -558,23 +589,34 @@ pub async fn handle_client(
                         stream.write_all(&resp).await?;
                         return Ok(());
                     }
-                    // One-shot scrollback read: NO attach, no eviction, no screen
-                    // subscription. Snapshot history under the manager lock and
-                    // reply with a single History frame (protocol v2).
+                    // One-shot content read: NO attach, no eviction, no screen
+                    // subscription. Capable peers receive cell-exact logical
+                    // chunks; legacy peers keep the unchanged History reply.
                     let result = {
                         let mgr = manager.lock().await;
-                        mgr.get(&name).map(|s| s.history_lines())
+                        mgr.get(&name).map(|s| {
+                            if negotiated.logical_history {
+                                s.logical_history(crate::screen::LogicalEmissionSurface::GetHistory)
+                                    .map(|emission| ServerMsg::HistoryLogical(emission.chunks))
+                            } else {
+                                s.history_lines().map(ServerMsg::History)
+                            }
+                        })
                     };
                     let resp = match result {
-                        Some(Ok(lines)) => ServerMsg::History(lines),
+                        Some(Ok(response)) => response,
                         Some(Err(e)) => ServerMsg::Error(format!(
                             "failed to read history for '{}': {}",
                             name, e
                         )),
                         None => ServerMsg::Error(format!("session '{}' not found", name)),
                     };
-                    let encoded = protocol::encode(&resp)?;
-                    stream.write_all(&encoded).await?;
+                    super::session_bridge::write_history_response(
+                        &mut stream,
+                        resp,
+                        negotiated.logical_history_stream,
+                    )
+                    .await?;
                     return Ok(());
                 }
                 ClientMsg::CreateDetached {
@@ -629,6 +671,93 @@ pub async fn handle_client(
                         name
                     )))?;
                     stream.write_all(&resp).await?;
+                    return Ok(());
+                }
+                // attended-UX M1 (v5): qd hands a send to the mux polite-delivery
+                // surface. Write-ahead-spool it (durable ACCEPTANCE — before the
+                // receipt), arm the timer, and return the non-terminal queued
+                // receipt. A no-`--wait` sender leaves here; the mux resolves the
+                // send to exactly one terminal later (and writes it to the ledger).
+                ClientMsg::PendingDelivery {
+                    send_id,
+                    data,
+                    content_sha256,
+                    content_len,
+                    transcript,
+                    transcript_offset,
+                    session,
+                    name,
+                    priority,
+                } => {
+                    if let Err(e) = crate::session::validate_session_name(&name) {
+                        let resp = protocol::encode(&ServerMsg::Error(format!("{}", e)))?;
+                        stream.write_all(&resp).await?;
+                        return Ok(());
+                    }
+                    let attended = {
+                        let mgr = manager.lock().await;
+                        mgr.get(&name).and_then(|s| s.attended_arc())
+                    };
+                    let resp = match attended {
+                        Some(att) => {
+                            use crate::attended::Clock as _;
+                            let now = crate::attended::SystemClock.now_ms();
+                            match att.accept(
+                                send_id.clone(),
+                                data,
+                                content_sha256,
+                                content_len,
+                                transcript,
+                                transcript_offset,
+                                session,
+                                name.clone(),
+                                "send:pty",
+                                priority,
+                                now,
+                            ) {
+                                Ok(()) => ServerMsg::DeliveryQueued { send_id },
+                                Err(e) => ServerMsg::Error(format!(
+                                    "failed to spool pending delivery for '{}': {}",
+                                    name, e
+                                )),
+                            }
+                        }
+                        None => ServerMsg::Error(format!(
+                            "session '{}' not found or attended delivery unavailable",
+                            name
+                        )),
+                    };
+                    let encoded = protocol::encode(&resp)?;
+                    stream.write_all(&encoded).await?;
+                    return Ok(());
+                }
+                // attended-UX M1 (v5): the deliver-now control — fire the target
+                // (or earliest) held send NOW, without a countdown reset or a
+                // journal entry. Fire-and-forget; the outcome arrives via
+                // `DeliveryOutcome`. Ack with `InputSent{bytes:0}` (control
+                // accepted; the fire is asynchronous, no synchronous PTY write).
+                ClientMsg::DeliverNow { name, send_id } => {
+                    if let Err(e) = crate::session::validate_session_name(&name) {
+                        let resp = protocol::encode(&ServerMsg::Error(format!("{}", e)))?;
+                        stream.write_all(&resp).await?;
+                        return Ok(());
+                    }
+                    let attended = {
+                        let mgr = manager.lock().await;
+                        mgr.get(&name).and_then(|s| s.attended_arc())
+                    };
+                    let resp = match attended {
+                        Some(att) => {
+                            att.deliver_now(send_id);
+                            ServerMsg::InputSent { name, bytes: 0 }
+                        }
+                        None => ServerMsg::Error(format!(
+                            "session '{}' not found or attended delivery unavailable",
+                            name
+                        )),
+                    };
+                    let encoded = protocol::encode(&resp)?;
+                    stream.write_all(&encoded).await?;
                     return Ok(());
                 }
                 _ => {
@@ -927,6 +1056,105 @@ mod tests {
         }
     }
 
+    /// Stage 2a capability gate through the real Hello + GetHistory path: the
+    /// capable connection receives logical chunks and reconstructs the wrapped
+    /// source line, while an unadvertised connection receives legacy History.
+    #[tokio::test]
+    async fn history_logical_capability_gates_real_history_emission() {
+        let manager = Arc::new(Mutex::new(SessionManager::new()));
+        let cwd = std::env::current_dir().unwrap();
+        {
+            let mut mgr = manager.lock().await;
+            mgr.create_detached(
+                "logical-gate".into(),
+                5,
+                2,
+                100,
+                crate::pty::CommandSpec::login_shell_c("sleep 60"),
+                cwd,
+            )
+            .unwrap();
+            let screen = mgr.get("logical-gate").unwrap().screen.clone();
+            drop(mgr);
+            let mut screen = screen.lock().unwrap();
+            screen.process(b"\x1bcABCDEFGHIJ");
+        }
+
+        async fn request(
+            manager: Arc<Mutex<SessionManager>>,
+            caps: Vec<String>,
+        ) -> (ServerMsg, ServerMsg) {
+            let (mut client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+            protocol::write_preamble(&mut client_stream).await.unwrap();
+            let hello = protocol::encode(&ClientMsg::Hello { caps }).unwrap();
+            let get = protocol::encode(&ClientMsg::GetHistory {
+                name: "logical-gate".into(),
+            })
+            .unwrap();
+            client_stream.write_all(&hello).await.unwrap();
+            client_stream.write_all(&get).await.unwrap();
+
+            let handle = tokio::spawn(handle_client(
+                server_stream,
+                manager,
+                test_fault(),
+                DaemonCtx::legacy(),
+            ));
+            let mut reader = FrameReader::new();
+            let mut replies = Vec::new();
+            while replies.len() < 2 {
+                assert!(reader.fill_from(&mut client_stream).await.unwrap());
+                while let Some(msg) = reader.decode_next::<ServerMsg>().unwrap() {
+                    replies.push(msg);
+                }
+            }
+            handle.await.unwrap().unwrap();
+            (replies.remove(0), replies.remove(0))
+        }
+
+        let (hello, capable) = request(
+            manager.clone(),
+            vec![protocol::HISTORY_LOGICAL_V1_CAP.to_string()],
+        )
+        .await;
+        match hello {
+            ServerMsg::Hello { caps, .. } => {
+                assert_eq!(
+                    caps,
+                    [
+                        protocol::HISTORY_LOGICAL_V1_CAP,
+                        protocol::HISTORY_LOGICAL_STREAM_V1_CAP,
+                        protocol::INITIAL_SIZE_CONFIRM_V1_CAP,
+                    ]
+                )
+            }
+            other => panic!("expected server Hello, got {:?}", other),
+        }
+        match capable {
+            ServerMsg::HistoryLogical(chunks) => {
+                assert_eq!(chunks.len(), 2);
+                assert!(!chunks[0].end_of_line);
+                assert!(chunks[1].end_of_line);
+                let lines = crate::client::render_logical_history(&chunks);
+                assert_eq!(lines, vec![(b"ABCDEFGHIJ".to_vec(), true)]);
+            }
+            other => panic!("capable peer expected HistoryLogical, got {:?}", other),
+        }
+
+        let (_, legacy) = request(manager.clone(), vec![]).await;
+        match legacy {
+            ServerMsg::History(lines) => {
+                assert_eq!(lines, vec![b"ABCDE".to_vec(), b"FGHIJ".to_vec()]);
+            }
+            other => panic!("legacy peer expected unchanged History, got {:?}", other),
+        }
+
+        let session = manager.lock().await.remove("logical-gate");
+        if let Some(session) = session {
+            crate::server::drop_blocking_with_timeout(session, "test cleanup").await;
+        }
+    }
+
     /// v2 GetHistory against a missing session → framed Error naming the session.
     #[tokio::test]
     async fn get_history_missing_session_errors() {
@@ -1091,8 +1319,8 @@ mod tests {
     }
 
     /// §3.2: the FIRST frame after the preamble MUST be Hello. A valid Hello →
-    /// the server's FIRST reply frame is ServerHello (empty caps, transitional
-    /// empty session in M1).
+    /// the server's FIRST reply frame is ServerHello (with the server's
+    /// additive capabilities and transitional empty session in M1).
     #[tokio::test]
     async fn hello_first_roundtrip() {
         let (mut client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
@@ -1109,7 +1337,14 @@ mod tests {
         ));
         match read_raw(&mut client_stream).await {
             ServerMsg::Hello { caps, session } => {
-                assert!(caps.is_empty(), "v3 ships empty caps, got {:?}", caps);
+                assert_eq!(
+                    caps,
+                    [
+                        protocol::HISTORY_LOGICAL_V1_CAP,
+                        protocol::HISTORY_LOGICAL_STREAM_V1_CAP,
+                        protocol::INITIAL_SIZE_CONFIRM_V1_CAP,
+                    ]
+                );
                 assert_eq!(session, "", "M1 session identity is transitional/empty");
             }
             other => panic!("expected ServerHello, got {:?}", other),
@@ -1286,7 +1521,14 @@ mod tests {
         ));
         match read_raw(&mut client_stream).await {
             ServerMsg::Hello { caps, session } => {
-                assert!(caps.is_empty(), "v3 ships empty caps, got {:?}", caps);
+                assert_eq!(
+                    caps,
+                    [
+                        protocol::HISTORY_LOGICAL_V1_CAP,
+                        protocol::HISTORY_LOGICAL_STREAM_V1_CAP,
+                        protocol::INITIAL_SIZE_CONFIRM_V1_CAP,
+                    ]
+                );
                 assert_eq!(
                     session, "alpha",
                     "ServerHello must carry the --session identity"

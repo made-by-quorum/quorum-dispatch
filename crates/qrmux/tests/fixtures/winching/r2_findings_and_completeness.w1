@@ -1,0 +1,280 @@
+# Round-2 closure and systematic named-surface completeness cases.
+
+case decawm_off_preserves_existing_edge
+size 5 3 100
+emit 10
+print ABCDEF
+decawm off
+print G
+expect 1 0 ABCDEFG
+end
+
+case il_inside_region_cuts_edge
+size 5 4 100
+emit 10
+cup 2 1
+print ABCDEF
+region 2 3
+cup 2 1
+insert-lines 1
+expect 0 1 ||ABCDE
+end
+
+case il_outside_region_is_noop
+size 5 4 100
+emit 10
+cup 3 1
+print ABCDEF
+region 2 3
+insert-lines 1
+expect 1 0 ||ABCDEF
+end
+
+case dl_inside_region_cuts_edge
+size 5 4 100
+emit 10
+cup 2 1
+print ABCDEF
+region 2 3
+cup 2 1
+delete-lines 1
+expect 0 1 |F
+end
+
+case dl_outside_region_is_noop
+size 5 4 100
+emit 10
+cup 3 1
+print ABCDEF
+region 2 3
+delete-lines 1
+expect 1 0 ||ABCDEF
+end
+
+case decsc_decrc_saved_pending_cannot_rearm
+size 5 3 100
+emit 10
+print ABCDE
+decsc
+print F
+decrc
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case csi_s_u_saved_pending_cannot_rearm
+size 5 3 100
+emit 10
+print ABCDE
+csi-save
+print F
+csi-restore
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case mode_1048_saved_pending_cannot_rearm
+size 5 3 100
+emit 10
+print ABCDE
+1048-save
+print F
+1048-restore
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case backspace_target_overwrite_severs
+size 5 3 100
+emit 10
+print ABCDEF
+bs
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case horizontal_tab_target_overwrite_severs
+size 10 3 100
+emit 20
+print ABCDEFGHIJK
+ht
+print Z
+expect 0 1 ABCDEFGHIJ|K<space><space><space><space><space><space><space>Z
+end
+
+case csi_scroll_down_cut_severs
+size 5 4 100
+emit 10
+cup 3 1
+print ABCDEF
+region 2 4
+scroll-down 1
+expect 0 1 |||ABCDE
+end
+
+case csi_scroll_down_co_move_survives
+size 5 4 100
+emit 10
+cup 2 1
+print ABCDEF
+region 2 4
+scroll-down 1
+expect 1 0 ||ABCDEF
+end
+
+case lf_at_margin_region_cut_severs
+size 5 3 100
+emit 10
+cup 2 1
+print ABCDEF
+region 2 3
+cup 3 1
+lf
+expect 0 1 |F
+end
+
+case direct_insert_row_crossing_severs
+size 5 4 100
+emit 10
+cup 2 1
+print ABCDEF
+insert-row 3
+expect 0 1 |ABCDE||F
+end
+
+case direct_remove_row_endpoint_severs
+size 5 4 100
+emit 10
+cup 2 1
+print ABCDEF
+remove-row 2
+expect 0 1 |F
+end
+
+case live_horizontal_resize_severs
+size 5 3 100
+emit 10
+print ABCDEF
+resize 3 3
+expect 0 1 ABC|F
+end
+
+case vertical_resize_boundary_migration_survives
+size 5 2 100
+emit 10
+print ABCDEF
+lf
+resize 5 3
+expect 1 0 ABCDEF
+end
+
+case source_print_rewrite_severs
+size 5 3 100
+emit 10
+print ABCDEF
+cup 1 1
+print Z
+expect 0 1 ZBCDE|F
+end
+
+case target_cup_write_severs
+size 5 3 100
+emit 10
+print ABCDEF
+cup 2 1
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case construction_forward_stream_preserves_a16
+size 5 3 100
+emit 10
+print ABCDEF
+print G
+print H
+expect 1 0 ABCDEFGH
+end
+
+# Round-3 ordinary CSI cursor-motion setter coverage. Each setter is an
+# explicit reposition (including a clamp/no-op) and cancels A2 authorization.
+case csi_a_target_stream_reposition_severs
+size 5 2 100
+emit 10
+print ABCDEF
+csi-a 1
+print Z
+expect 0 1 AZCDE|F
+end
+
+case csi_b_clamped_target_reposition_severs
+size 5 2 100
+emit 10
+print ABCDEF
+csi-b 1
+print Z
+expect 0 1 ABCDE|FZ
+end
+
+case csi_c_target_reposition_severs
+size 5 2 100
+emit 10
+print ABCDEF
+csi-c 1
+print Z
+expect 0 1 ABCDE|F<space>Z
+end
+
+case csi_d_target_reposition_severs
+size 5 2 100
+emit 10
+print ABCDEF
+csi-d 1
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case csi_e_clamped_target_reposition_severs
+size 5 2 100
+emit 10
+print ABCDEF
+csi-e 1
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case csi_f_source_reposition_severs
+size 5 2 100
+emit 10
+print ABCDEF
+csi-f 1
+print Z
+expect 0 1 ZBCDE|F
+end
+
+case csi_g_target_reposition_severs
+size 5 2 100
+emit 10
+print ABCDEF
+csi-g 1
+print Z
+expect 0 1 ABCDE|Z
+end
+
+case vpa_target_reposition_severs
+size 5 2 100
+emit 10
+print ABCDEF
+vpa 2
+print Z
+expect 0 1 ABCDE|FZ
+end
+
+case origin_mode_home_target_reposition_severs
+size 5 3 100
+emit 10
+region 2 3
+print ABCDEF
+origin on
+print Z
+expect 0 1 ABCDE|Z
+end

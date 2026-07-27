@@ -26,6 +26,9 @@
 //! SIGTERM→grace→SIGKILL cleanup (instance-addressed by the recorded pgid, the W4
 //! launcher-orphan finding) + a no-survivor belt.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -44,7 +47,7 @@ use dispatch::wait::{run_codex_wait_loop, RealCodexWaitDeps, WaitStatusOutcome};
 
 /// The live gate: skip unless `QD_CODEX_LIVE=1`.
 fn live() -> bool {
-    std::env::var("QD_CODEX_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_CODEX_LIVE", "codex_send_wait_live")
 }
 
 /// A jail Env: only the codex-relevant vars resolve. `env -i` shape via the seam.

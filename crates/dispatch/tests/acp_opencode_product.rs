@@ -20,6 +20,9 @@
 //!    ONLY (`~/.secrets/openrouter-pi.key`), read into the child env at drive-time; its VALUE never
 //!    appears in the test source, assertions, or output.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use dispatch::acp_residence::build_adapter_argv;
 use dispatch::provider::acp::acp_provider_for;
 use std::path::{Path, PathBuf};
@@ -83,7 +86,7 @@ fn opencode_bridge_resolution_routes_to_opencode() {
 // ===========================================================================
 
 fn live() -> bool {
-    std::env::var("QD_ACP_OPENCODE_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_ACP_OPENCODE_LIVE", "acp_opencode_product")
 }
 
 /// Locate the `opencode` binary (the bun install dir, then PATH). Returns None to skip.

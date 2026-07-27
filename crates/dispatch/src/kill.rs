@@ -1297,6 +1297,7 @@ mod descendant_tests {
                     ProcRow {
                         ppid,
                         cmd: format!("proc-{pid}"),
+                        argv: None,
                     },
                 )
             })

@@ -14,6 +14,9 @@
 //!
 //! Evidence (RUN-not-read) → `$QD_OPENCODE_EVIDENCE`.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -26,7 +29,7 @@ use dispatch::wait::{TurnCompletion, TurnCompletionProbe};
 use tempfile::TempDir;
 
 fn live() -> bool {
-    std::env::var("QD_OPENCODE_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_OPENCODE_LIVE", "acp_opencode_live")
 }
 
 fn opencode_on_path() -> bool {

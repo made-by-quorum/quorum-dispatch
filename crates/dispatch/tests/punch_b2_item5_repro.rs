@@ -56,6 +56,7 @@ struct RelayChild {
 }
 
 impl RelayChild {
+    #[allow(dead_code)] // retained for reference; tests now use spawn_managed
     fn spawn(home: &Path, session_uuid: &str) -> Self {
         let exe = env!("CARGO_BIN_EXE_qd");
         let mut child = Command::new(exe)
@@ -68,7 +69,49 @@ impl RelayChild {
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn qd relay:serve");
+        Self::from_child(child, home)
+    }
 
+    /// Spawn a MANAGED topology: a bash process that exec-replaces itself as
+    /// "claude" (with `--dangerously-load-development-channels=server:relay` in
+    /// argv so `classify_live_claude` returns `Management::Managed`) and hosts
+    /// `qd relay:serve` as a direct child (so ancestry reaches the "claude" pid).
+    ///
+    /// Stdin/stdout are piped identically to `spawn` — the relay reads MCP
+    /// frames from fd 3 (duplicated from the bash stdin pipe before exec) and
+    /// writes JSON to the inherited stdout pipe.
+    ///
+    /// Returns `(Self, claude_pid)`: the RelayChild handle and the OS pid of the
+    /// exec'd "claude" bash. Register the session with `claude_pid` so that
+    /// `relay_for_session`'s ancestry walk succeeds.
+    fn spawn_managed(home: &Path, session_uuid: &str) -> (Self, u32) {
+        let exe = env!("CARGO_BIN_EXE_qd");
+        // Bash one-liner:
+        //   1. Dup stdin → fd 3 (relay MCP input stays alive after exec)
+        //   2. Spawn relay:serve in background reading from fd 3
+        //   3. exec -a claude: replace the bash process with a "claude"-named
+        //      bash that loops forever, carrying the adoption channel flag in
+        //      argv so classify_live_claude sees Management::Managed.
+        let script = "exec 3<&0; \"$QD_RELAY_BIN\" relay:serve <&3 & \
+                      exec -a claude bash -c 'while :; do sleep 1; done' x \
+                      --dangerously-load-development-channels=server:relay";
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg(script)
+            .env("QD_RELAY_BIN", exe)
+            .env("HOME", home)
+            .env("RELAY_PORT_BASE", PORT_BASE.to_string())
+            .env("CLAUDE_CODE_SESSION_ID", session_uuid)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn managed qd relay:serve");
+        let claude_pid = child.id();
+        (Self::from_child(child, home), claude_pid)
+    }
+
+    fn from_child(mut child: std::process::Child, home: &Path) -> Self {
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
         let (tx, rx) = mpsc::channel::<String>();
@@ -137,25 +180,29 @@ impl RelayChild {
         }
     }
 
-    /// Wait for this relay's sidecar `<home>/.claude/relay/<pid>.json` (it
-    /// carries the bound port; existence = boot complete).
+    /// Wait for any relay sidecar in `<home>/.claude/relay/*.json` (existence
+    /// = boot complete). Scans rather than keying by pid so both the direct
+    /// `spawn` and the bash-wrapper `spawn_managed` paths work.
     fn wait_for_sidecar(&self) -> u16 {
-        let path = self
-            .home
-            .join(".claude")
-            .join("relay")
-            .join(format!("{}.json", self.child.id()));
+        let relay_dir = self.home.join(".claude").join("relay");
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(bytes) = std::fs::read(&path) {
-                if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
-                    if let Some(port) = v.get("port").and_then(Value::as_u64) {
-                        return port as u16;
+            if let Ok(entries) = std::fs::read_dir(&relay_dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.extension().and_then(|e| e.to_str()) == Some("json") {
+                        if let Ok(bytes) = std::fs::read(&p) {
+                            if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+                                if let Some(port) = v.get("port").and_then(Value::as_u64) {
+                                    return port as u16;
+                                }
+                            }
+                        }
                     }
                 }
             }
             if Instant::now() >= deadline {
-                panic!("sidecar {path:?} never appeared");
+                panic!("relay sidecar never appeared in {relay_dir:?}");
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -170,28 +217,16 @@ impl Drop for RelayChild {
     }
 }
 
-/// Stage the hermetic HOME: .claude dirs, a registry row binding the name
-/// "tgt" to TARGET_UUID with pid = THIS TEST PROCESS (alive; the relay child
-/// is our direct child, so the verb's fast-path pid-ancestry walk —
-/// relay pid → test pid — matches in one hop), zmx/tmp dirs, and the idstore
-/// mint binding TRUE_STABLE_ID ↔ TRUE_UUID under QD_HOME/state.
-fn stage_home(home: &Path) {
+/// Create the hermetic HOME directory structure and idstore.
+/// Call BEFORE spawning any relay process, then call `register_session`
+/// with the spawned process pid to complete the setup.
+fn prepare_home_dirs(home: &Path) {
     let claude = home.join(".claude");
     std::fs::create_dir_all(claude.join("sessions")).unwrap();
     std::fs::create_dir_all(claude.join("projects")).unwrap();
     std::fs::create_dir_all(claude.join("relay")).unwrap();
     std::fs::create_dir_all(home.join("zmx")).unwrap();
     std::fs::create_dir_all(home.join("tmp")).unwrap();
-
-    let test_pid = std::process::id();
-    let row = format!(
-        r#"{{"pid":{test_pid},"sessionId":"{TARGET_UUID}","name":"tgt","status":"idle","cwd":"/work/x","updatedAt":1781000000000,"startedAt":1780990000000}}"#
-    );
-    std::fs::write(
-        claude.join("sessions").join(format!("{test_pid}.json")),
-        row,
-    )
-    .unwrap();
 
     // idstore: the TRUE engine identity, resolvable stable-id → claude uuid.
     let state = home.join(".quorum").join("dispatch").join("state");
@@ -202,6 +237,23 @@ fn stage_home(home: &Path) {
             "{}\n",
             json!({ "event": "mint", "id": TRUE_STABLE_ID, "session_id": TRUE_UUID })
         ),
+    )
+    .unwrap();
+}
+
+/// Write a registry row binding "tgt" → TARGET_UUID under `session_pid`.
+/// `session_pid` must be an alive process — for managed topologies it is the
+/// exec'd "claude" bash pid returned by `RelayChild::spawn_managed`.
+fn register_session(home: &Path, session_pid: u32) {
+    let claude = home.join(".claude");
+    let row = format!(
+        r#"{{"pid":{session_pid},"sessionId":"{TARGET_UUID}","name":"tgt","status":"idle","cwd":"/work/x","updatedAt":1781000000000,"startedAt":1780990000000}}"#
+    );
+    std::fs::write(
+        claude
+            .join("sessions")
+            .join(format!("{session_pid}.json")),
+        row,
     )
     .unwrap();
 }
@@ -249,9 +301,11 @@ fn run_send_relay(home: &Path, message: &str, plant_env: impl FnOnce(&mut Comman
 fn engine_identity_wins_over_inherited_env_uuid() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
-    stage_home(home);
-
-    let mut relay = RelayChild::spawn(home, TARGET_UUID);
+    // Managed topology: dirs first, then spawn the bash/"claude" wrapper that
+    // hosts the relay as a child, then register the session under the claude pid.
+    prepare_home_dirs(home);
+    let (mut relay, claude_pid) = RelayChild::spawn_managed(home, TARGET_UUID);
+    register_session(home, claude_pid);
     relay.handshake();
     let _port = relay.wait_for_sidecar();
 
@@ -291,9 +345,9 @@ fn engine_identity_wins_over_inherited_env_uuid() {
 fn unresolvable_engine_identity_falls_back_to_claude_env() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
-    stage_home(home);
-
-    let mut relay = RelayChild::spawn(home, TARGET_UUID);
+    prepare_home_dirs(home);
+    let (mut relay, claude_pid) = RelayChild::spawn_managed(home, TARGET_UUID);
+    register_session(home, claude_pid);
     relay.handshake();
     let _port = relay.wait_for_sidecar();
 
@@ -327,9 +381,9 @@ fn unresolvable_engine_identity_falls_back_to_claude_env() {
 fn control_bare_shell_attributes_cli() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
-    stage_home(home);
-
-    let mut relay = RelayChild::spawn(home, TARGET_UUID);
+    prepare_home_dirs(home);
+    let (mut relay, claude_pid) = RelayChild::spawn_managed(home, TARGET_UUID);
+    register_session(home, claude_pid);
     relay.handshake();
     let _port = relay.wait_for_sidecar();
 

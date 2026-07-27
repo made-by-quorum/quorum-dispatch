@@ -26,13 +26,16 @@
 //!         -u CLAUDE_CODE_SESSION_ID \
 //!     cargo test -p quorum-dispatch --features faultinj --test pi_chaos -- --nocapture
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::path::PathBuf;
 
 use dispatch::provider::pi::chaos::{run_chaos_round, ChaosReport};
 use dispatch::provider::pi::conformance::QdRunner;
 
 fn live() -> bool {
-    std::env::var("QD_PI_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_PI_LIVE", "pi_chaos")
 }
 
 /// The pinned pi binary: `QD_PI_BIN` if set, else the quorum-box default

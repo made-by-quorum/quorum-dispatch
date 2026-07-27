@@ -22,9 +22,8 @@ impl std::fmt::Display for S3Error {
             S3Error::Unreachable(e) => write!(f, "S3 store unreachable: {e}"),
             S3Error::UnsupportedScheme(s) => write!(
                 f,
-                "unsupported archive endpoint scheme {s:?}: this build only speaks plaintext \
-                 HTTP (see archive/http.rs's module doc) — an https:// endpoint needs Atomic D's \
-                 TLS wiring"
+                "unsupported archive endpoint scheme {s:?}: only http:// (garage/minio-style \
+                 local stores) and https:// (rustls, see archive/http.rs's module doc) are spoken"
             ),
             S3Error::Http { status, body } => write!(f, "S3 request failed: HTTP {status} {body}"),
         }
@@ -48,6 +47,21 @@ impl From<HttpError> for S3Error {
 pub trait ObjectStore {
     fn get_object(&self, key: &str, now: &str) -> Result<Option<Vec<u8>>, S3Error>;
     fn put_object(&self, key: &str, body: &[u8], now: &str) -> Result<(), S3Error>;
+    /// Cheap existence probe (HTTP HEAD): `Ok(true)` if the object is present,
+    /// `Ok(false)` on a clean 404. Used by the refs-first blob upload
+    /// (frame `archive_hook`) to skip re-PUTting a LARGE already-present,
+    /// content-addressed blob — the round trip pays for itself only above a
+    /// size threshold (below it, an unconditional idempotent PUT is cheaper
+    /// than a HEAD+PUT).
+    ///
+    /// Default: conservatively report absent so the caller PUTs. Because blobs
+    /// are content-addressed, a false "absent" only ever costs a redundant,
+    /// byte-identical PUT — never a correctness or ordering violation — so an
+    /// in-memory fake that does not model HEAD stays safe by inheriting this.
+    /// The real network client ([`S3Client`]) overrides it.
+    fn head_object(&self, _key: &str, _now: &str) -> Result<bool, S3Error> {
+        Ok(false)
+    }
 }
 
 impl ObjectStore for S3Client {
@@ -57,13 +71,25 @@ impl ObjectStore for S3Client {
     fn put_object(&self, key: &str, body: &[u8], now: &str) -> Result<(), S3Error> {
         S3Client::put_object(self, key, body, now)
     }
+    fn head_object(&self, key: &str, now: &str) -> Result<bool, S3Error> {
+        S3Client::head_object(self, key, now)
+    }
 }
 
 #[derive(Debug)]
 pub struct S3Client {
-    /// `host:port` — what `TcpStream::connect` and the signed `Host` header
-    /// both use.
+    /// What the signed `Host` header carries: `host:port` for http (garage
+    /// convention, port always explicit) and for https-with-explicit-port;
+    /// bare `host` for https on the default port 443 (AWS SigV4 convention —
+    /// the sent and signed Host must simply match, and AWS's own SDKs omit
+    /// the default port).
     authority: String,
+    /// What `TcpStream::connect` dials — always `host:port`.
+    connect_addr: String,
+    /// `Some(hostname)` iff the endpoint is https — the name the server's
+    /// certificate must match (SNI + verification), threaded to
+    /// [`http::request_on`].
+    tls_server_name: Option<String>,
     bucket: String,
     region: String,
     credentials: S3Credentials,
@@ -85,16 +111,35 @@ impl S3Client {
     ) -> Result<Self, S3Error> {
         let (scheme, authority) = split_endpoint(endpoint)
             .ok_or_else(|| S3Error::Unreachable(format!("malformed endpoint {endpoint:?}")))?;
-        if scheme != "http" {
-            return Err(S3Error::UnsupportedScheme(scheme.to_string()));
-        }
-        let authority = if authority.contains(':') {
-            authority.to_string()
-        } else {
-            format!("{authority}:80")
+        let (authority, connect_addr, tls_server_name) = match scheme {
+            // Garage/minio convention preserved byte-for-byte: Host header
+            // always carries an explicit port.
+            "http" => {
+                let authority = if authority.contains(':') {
+                    authority.to_string()
+                } else {
+                    format!("{authority}:80")
+                };
+                (authority.clone(), authority, None)
+            }
+            "https" => match authority.split_once(':') {
+                Some((host, _port)) => (
+                    authority.to_string(),
+                    authority.to_string(),
+                    Some(host.to_string()),
+                ),
+                None => (
+                    authority.to_string(),
+                    format!("{authority}:443"),
+                    Some(authority.to_string()),
+                ),
+            },
+            other => return Err(S3Error::UnsupportedScheme(other.to_string())),
         };
         Ok(S3Client {
             authority,
+            connect_addr,
+            tls_server_name,
             bucket: bucket.to_string(),
             region: region.to_string(),
             credentials,
@@ -108,7 +153,7 @@ impl S3Client {
     pub fn get_object(&self, key: &str, now: &str) -> Result<Option<Vec<u8>>, S3Error> {
         let path = sigv4::uri_encode_path(&format!("/{}/{key}", self.bucket));
         let headers = self.sign("GET", &path, &[], now);
-        let resp = http::request(&self.authority, "GET", &path, &headers, &[])?;
+        let resp = http::request_on(&self.connect_addr, self.tls_server_name.as_deref(), "GET", &path, &headers, &[])?;
         match resp.status {
             404 => Ok(None),
             200..=299 => Ok(Some(resp.body)),
@@ -124,7 +169,7 @@ impl S3Client {
     pub fn put_object(&self, key: &str, body: &[u8], now: &str) -> Result<(), S3Error> {
         let path = sigv4::uri_encode_path(&format!("/{}/{key}", self.bucket));
         let headers = self.sign("PUT", &path, body, now);
-        let resp = http::request(&self.authority, "PUT", &path, &headers, body)?;
+        let resp = http::request_on(&self.connect_addr, self.tls_server_name.as_deref(), "PUT", &path, &headers, body)?;
         match resp.status {
             200..=299 => Ok(()),
             status => Err(S3Error::Http {
@@ -134,7 +179,43 @@ impl S3Client {
         }
     }
 
-    fn sign(&self, method: &str, encoded_path: &str, body: &[u8], now: &str) -> Vec<(String, String)> {
+    /// HEAD `<bucket>/<key>` — existence only, no body transferred. `Ok(true)`
+    /// on a 2xx, `Ok(false)` on a clean 404, `Err` on anything else or a
+    /// transport failure (loud, per the no-silent-gaps standard — same
+    /// disposition as `get_object`). The signed payload is empty exactly as a
+    /// GET's is; `http::request` discards any `Content-Length`-announced body
+    /// on a HEAD response (RFC 9110 §9.3.2 — a HEAD response never carries
+    /// one), so this never blocks reading a body the server did not send.
+    pub fn head_object(&self, key: &str, now: &str) -> Result<bool, S3Error> {
+        let path = sigv4::uri_encode_path(&format!("/{}/{key}", self.bucket));
+        let headers = self.sign("HEAD", &path, &[], now);
+        let resp = http::request_on(&self.connect_addr, self.tls_server_name.as_deref(), "HEAD", &path, &headers, &[])?;
+        match resp.status {
+            404 => Ok(false),
+            200..=299 => Ok(true),
+            status => Err(S3Error::Http {
+                status,
+                body: String::from_utf8_lossy(&resp.body).into_owned(),
+            }),
+        }
+    }
+
+    /// SigV4 requires the request's `x-amz-date` to be within ~15 minutes of
+    /// server time (AWS rejects with `RequestTimeTooSkewed` beyond that; garage
+    /// never checks, which kept this dormant). Callers historically threaded a
+    /// `now` captured ONCE at the top of a long walk — every persist signed
+    /// after minute 15 of a walk then failed against AWS, and end-of-walk
+    /// projection PUTs failed on every long walk. The real client therefore
+    /// stamps EACH request at sign time and ignores the caller's `now`; the
+    /// parameter stays on the [`ObjectStore`] surface for fakes and call-site
+    /// compatibility.
+    fn sign(&self, method: &str, encoded_path: &str, body: &[u8], _caller_now: &str) -> Vec<(String, String)> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let now = crate::render::epoch_ms_to_amz_date(now_ms);
+        let now = now.as_str();
         let signed = sigv4::sign(&SignParams {
             method,
             host: &self.authority,
@@ -187,10 +268,57 @@ mod tests {
     }
 
     #[test]
-    fn https_endpoint_is_rejected_loudly_not_silently_tried_as_http() {
-        let err =
-            S3Client::new("https://s3.amazonaws.com", "b", "us-east-1", creds()).unwrap_err();
-        assert!(matches!(err, S3Error::UnsupportedScheme(s) if s == "https"));
+    fn https_endpoint_default_port_signs_bare_host_and_dials_443() {
+        let client = S3Client::new("https://s3.us-east-2.amazonaws.com", "b", "us-east-2", creds())
+            .unwrap();
+        // AWS SigV4 convention: the Host header (== signed authority) omits
+        // the default port; the socket still dials :443; the certificate must
+        // match the bare hostname.
+        assert_eq!(client.authority, "s3.us-east-2.amazonaws.com");
+        assert_eq!(client.connect_addr, "s3.us-east-2.amazonaws.com:443");
+        assert_eq!(
+            client.tls_server_name.as_deref(),
+            Some("s3.us-east-2.amazonaws.com")
+        );
+    }
+
+    #[test]
+    fn https_endpoint_with_explicit_port_keeps_it_in_host_and_dial() {
+        let client = S3Client::new("https://minio.local:9443", "b", "us-east-1", creds()).unwrap();
+        assert_eq!(client.authority, "minio.local:9443");
+        assert_eq!(client.connect_addr, "minio.local:9443");
+        assert_eq!(client.tls_server_name.as_deref(), Some("minio.local"));
+    }
+
+    #[test]
+    fn http_endpoint_stays_plaintext_no_tls_name() {
+        let client = S3Client::new("http://127.0.0.1:3900", "b", "us-east-1", creds()).unwrap();
+        assert_eq!(client.tls_server_name, None);
+        assert_eq!(client.connect_addr, "127.0.0.1:3900");
+    }
+
+    #[test]
+    fn sign_stamps_fresh_time_ignoring_callers_stale_now() {
+        // The RequestTimeTooSkewed fix: a caller threading a walk-start `now`
+        // (here: epoch) must NOT control the signed x-amz-date — the client
+        // stamps at sign time, keeping every request inside AWS's 15-min skew
+        // window no matter how long the calling walk runs.
+        let client =
+            S3Client::new("https://s3.us-east-2.amazonaws.com", "b", "us-east-2", creds())
+                .unwrap();
+        let headers = client.sign("PUT", "/b/k", b"x", "19700101T000000Z");
+        let amz_date = &headers.iter().find(|(k, _)| k == "x-amz-date").unwrap().1;
+        assert_ne!(amz_date, "19700101T000000Z", "stale caller time must be ignored");
+        assert!(
+            amz_date.len() == 16 && amz_date.ends_with('Z') && amz_date.contains('T'),
+            "fresh YYYYMMDD'T'HHMMSS'Z' stamp, got {amz_date:?}"
+        );
+    }
+
+    #[test]
+    fn non_http_schemes_are_rejected_loudly() {
+        let err = S3Client::new("ftp://example.com", "b", "us-east-1", creds()).unwrap_err();
+        assert!(matches!(err, S3Error::UnsupportedScheme(s) if s == "ftp"));
     }
 
     #[test]

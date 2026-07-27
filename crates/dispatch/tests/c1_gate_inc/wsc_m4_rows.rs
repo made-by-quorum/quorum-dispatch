@@ -128,7 +128,9 @@ fn g_isol() {
     let child_b = mux.list(&dir).unwrap_or_default().into_iter().find(|s| s.name == "bravo").map(|s| s.pid as u32);
     detail.push_str(&format!("POS children: alpha child pid={child_a:?}, bravo child pid={child_b:?}\n"));
 
-    // Both live + operable pre-kill: send to bravo and confirm history carries it.
+    // Both live + operable pre-kill: send to bravo and confirm the daemon acks
+    // the send (history won't carry a blind-inject into a non-composer `cat` — see
+    // the post-kill block / g_isol Fix A below).
     let (cs0, _o, _e) = run_qd(&jail, &["send:pty", "bravo", "PRE_KILL_B"]);
     ok &= cs0 == 0;
 
@@ -171,25 +173,41 @@ fn g_isol() {
     }
 
     // B PROVEN ALIVE BY OPERATION (not just pid): bravo's daemon still serves
-    // send:pty acks AND history renders the post-kill marker.
+    // send:pty AND a history read.
+    //
+    // g_isol Fix A (clerk ruling 01KXEF952F, under Pete's grant): under M-series
+    // polite delivery, a send:pty into a NON-COMPOSER carrier (bravo is a bare
+    // `cat` — no `❯` prompt glyph) correctly VERIFY-BLOCKS: the fire declines to
+    // blind-type (`composer_is_plain` = None → honest verify-block, never a blind
+    // type), so the marker does NOT render in history. That is the QS-5 safety gate
+    // working as designed — NOT a liveness failure. (The old expectation that the
+    // marker renders encoded v4's superseded blind-write contract; Fix B — bypass
+    // the gate for unattended non-composer sends — was REJECTED.) So we prove B
+    // alive-by-operation WITHOUT a blind inject: daemon pid alive + send:pty acks
+    // (exit 0 — the daemon served the request) + the daemon serves a history READ +
+    // mux.list finds bravo (the correct jailed daemon is reachable), and we assert
+    // the marker is ABSENT (the honest verify-block outcome).
     let b_pid_survives = pid_b.map(pid_alive).unwrap_or(false);
     let (cs, _os, es) = run_qd(&jail, &["send:pty", "bravo", "POST_KILL_MARKER_B"]);
     let send_ok = cs == 0;
-    let mut hist_ok = false;
-    let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_secs(4) {
-        let h = strip_ansi(&mux.history(&dir, "bravo").unwrap_or_default());
-        if h.contains("POST_KILL_MARKER_B") {
-            hist_ok = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(80));
-    }
+    // The daemon serves a history read (Ok transport, not an error) ...
+    let hist_read_ok = mux.history(&dir, "bravo").is_ok();
+    // ... and list still finds bravo (correct jailed daemon reachable, not a
+    // wrong-daemon read).
+    let list_finds_bravo = mux
+        .list(&dir)
+        .unwrap_or_default()
+        .into_iter()
+        .any(|s| s.name == "bravo");
+    // Verify-block contract: the non-composer carrier receives NO blind inject, so
+    // the marker must be ABSENT from history.
+    let marker_absent =
+        !strip_ansi(&mux.history(&dir, "bravo").unwrap_or_default()).contains("POST_KILL_MARKER_B");
     detail.push_str(&format!(
-        "POS B-alive-by-operation: bravo daemon pid alive={b_pid_survives}, send:pty exit={cs} (stderr {}), history renders post-kill marker={hist_ok}\n",
+        "POS B-alive-by-operation: bravo daemon pid alive={b_pid_survives}, send:pty exit={cs} (stderr {}), history-read-served={hist_read_ok}, list-finds-bravo={list_finds_bravo}, verify-block marker-absent={marker_absent}\n",
         es.trim()
     ));
-    ok &= b_pid_survives && send_ok && hist_ok;
+    ok &= b_pid_survives && send_ok && hist_read_ok && list_finds_bravo && marker_absent;
 
     // A RECOVERABLE COLD: a fresh `qd start alpha` relaunches a daemon for it.
     let _ = run_qd(&jail, &["stop", "--force", "alpha"]);
@@ -225,7 +243,7 @@ fn g_isol() {
     // the shared world. See the spec §7 G-ISOL negative-control construction.
 
     let verdict = if ok {
-        "G-ISOL (POSITIVE) VERDICT: PASS — A,B on DISTINCT per-session daemons (one pid each); SIGKILL A's daemon → A child DEAD + world torn down, B PROVEN ALIVE BY OPERATION (send:pty acks + history renders post-kill marker), A recoverable cold (qd start relaunch). The shared-fate NEGATIVE control (must RED) is the qrmux-level g_isol_negative_shared_fate_red arm (QRMUX_TEST_SHARED seam)."
+        "G-ISOL (POSITIVE) VERDICT: PASS — A,B on DISTINCT per-session daemons (one pid each); SIGKILL A's daemon → A child DEAD + world torn down, B PROVEN ALIVE BY OPERATION (send:pty acks + daemon serves a history read + list finds bravo; the polite fire correctly VERIFY-BLOCKS a blind inject into the non-composer cat — QS-5 upheld, g_isol Fix A), A recoverable cold (qd start relaunch). The shared-fate NEGATIVE control (must RED) is the qrmux-level g_isol_negative_shared_fate_red arm (QRMUX_TEST_SHARED seam)."
     } else {
         "G-ISOL (POSITIVE) VERDICT: FAIL"
     };

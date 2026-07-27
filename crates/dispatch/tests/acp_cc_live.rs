@@ -25,6 +25,9 @@
 //!    `~/work/acp-cc-coord/`). A no-op unless `QD_ACP_LIVE=1` so the default suite
 //!    never spawns a real CC session or spends API budget.
 
+#[path = "common/live_gate.rs"]
+mod live_gate;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -54,7 +57,7 @@ fn node_program() -> Option<String> {
 
 /// The live gate: skip unless `QD_ACP_LIVE=1`.
 fn live() -> bool {
-    std::env::var("QD_ACP_LIVE").as_deref() == Ok("1")
+    live_gate::conformance_gate("QD_ACP_LIVE", "acp_cc_live")
 }
 
 /// The real `claude-code-acp` bridge entry script (`$QD_ACP_BRIDGE` overrides the

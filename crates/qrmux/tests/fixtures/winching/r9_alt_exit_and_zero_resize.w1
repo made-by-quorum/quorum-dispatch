@@ -1,0 +1,110 @@
+# Round 9: all 3x3 alt entry/exit mode combinations and raw zero-height resize.
+# Only a 1049 entry followed by a 1049 exit restores the saved main cursor and
+# qualified pending token. Every 47/1047 exit keeps the active alt cursor.
+
+case alt_47h_47l_keeps_active_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-47-enter
+print X
+alt-47-exit
+print Z
+expect 0 0 AZCDE
+end
+
+case alt_47h_1047l_keeps_active_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-47-enter
+print X
+alt-1047-exit
+print Z
+expect 0 0 AZCDE
+end
+
+case alt_47h_1049l_has_no_matching_shared_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-47-enter
+print X
+alt-1049-exit
+print Z
+expect 0 0 AZCDE
+end
+
+case alt_1047h_47l_keeps_active_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-1047-enter
+print X
+alt-47-exit
+print Z
+expect 0 0 AZCDE
+end
+
+case alt_1047h_1047l_keeps_active_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-1047-enter
+print X
+alt-1047-exit
+print Z
+expect 0 0 AZCDE
+end
+
+case alt_1047h_1049l_has_no_matching_shared_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-1047-enter
+print X
+alt-1049-exit
+print Z
+expect 0 0 AZCDE
+end
+
+case alt_1049h_47l_keeps_active_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-1049-enter
+print X
+alt-47-exit
+print Z
+expect 0 0 AZCDE
+end
+
+case alt_1049h_1047l_keeps_active_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-1049-enter
+print X
+alt-1047-exit
+print Z
+expect 0 0 AZCDE
+end
+
+case alt_1049h_1049l_restores_saved_main_cursor
+size 5 2 100
+emit 10
+print ABCDE
+alt-1049-enter
+print X
+alt-1049-exit
+print Z
+expect 1 0 ABCDEZ
+end
+
+case zero_height_resize_skips_main_migration_then_bottom_pops
+size 5 2 100
+emit 10
+print ABCDEF
+resize 5 0
+expect 0 1 ABCDE
+end

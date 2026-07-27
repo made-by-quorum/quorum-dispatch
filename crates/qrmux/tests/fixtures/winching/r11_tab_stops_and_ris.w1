@@ -1,0 +1,46 @@
+# Round-11 mutable tab-stop and RIS-style fidelity counterexamples.
+
+case hts_custom_stop_suppresses_a1
+size 10 2 100
+emit 20
+print ABC
+csi-g 5
+hts
+csi-g 4
+ht
+print ZQR
+expect 0 0 ABC<space>ZQR
+end
+
+case tbc_clear_all_creates_a1
+size 10 2 100
+emit 20
+print ABC
+tbc 3
+ht
+print ZQ
+expect 1 0 ABC<space><space><space><space><space><space>ZQ
+end
+
+case tbc_current_clears_only_custom_stop
+size 10 2 100
+emit 20
+print ABC
+csi-g 5
+hts
+tbc 0
+csi-g 4
+ht
+print ZQ
+expect 0 0 ABC<space><space><space><space><space>ZQ
+end
+
+case ris_resets_style_before_new_a1
+size 5 2 100
+emit 10
+style red
+print ABCDEF
+ris
+print GHIJKL
+expect 1 1 GHIJKL
+end

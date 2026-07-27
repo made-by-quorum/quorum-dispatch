@@ -1,0 +1,86 @@
+# Round-1 closure: named A7/A9/A11 surfaces are first-class oracle events.
+case reviewer_dch_source_severs_a7
+size 5 3 100
+emit 10
+print ABCDEF
+cup 1 2
+dch 1
+expect 0 1 ACDE|F
+end
+
+case erase_line_source_severs_a7
+size 5 3 100
+emit 10
+print ABCDEF
+cup 1 1
+erase-line
+expect 0 1 |F
+end
+
+case ech_source_severs_a7
+size 5 3 100
+emit 10
+print ABCDEF
+cup 1 2
+ech 2
+expect 0 1 A<space><space>DE|F
+end
+
+case ich_source_severs_a7
+size 5 3 100
+emit 10
+print ABCDEF
+cup 1 2
+ich 1
+expect 0 1 A<space>BCD|F
+end
+
+case combining_source_severs_a7
+size 5 3 100
+emit 10
+print ABCDEF
+cup 1 2
+combine ́
+expect 0 1 ÁBCDE|F
+end
+
+case ind_at_margin_region_cut_severs_a9
+size 5 3 100
+emit 10
+cup 2 1
+print ABCDEF
+region 2 3
+cup 3 1
+ind
+expect 0 1 |F
+end
+
+case ri_at_margin_region_cut_severs_a9
+size 5 3 100
+emit 10
+print ABCDEF
+region 1 2
+cup 1 1
+ri
+expect 0 1 |ABCDE
+end
+
+case reviewer_nel_at_margin_region_cut_severs_a9
+size 5 3 100
+emit 10
+cup 2 1
+print ABCDEF
+region 2 3
+cup 3 1
+nel
+expect 0 1 |F
+end
+
+case bulk_clear_scrollback_severs_a11
+size 5 2 100
+emit 10
+print ABCDEF
+lf
+clear-scrollback
+expect 0 1 F
+end

@@ -95,7 +95,7 @@ fn explicit_claude_code_is_byte_identical_to_absent_field() {
 /// (b) UNKNOWN-VALUE SURVIVAL + ACTING-VERB REFUSAL (codex-p1-spec section 4 /
 /// section 2.3): a row with `"provider": "weird-prov"` SURVIVES the scan and
 /// renders the value VERBATIM in `ls --json` (L8 permissive — render never kills
-/// the row); but an ACTING verb (`connect` — was `attach`, retired STATE 22)
+/// the row); but an ACTING verb (`attach`)
 /// REFUSES it with the exact message + exit 1.
 ///
 /// MUTATION EVIDENCE: bypassing/removing the `refuse_unknown_provider` call site
@@ -114,13 +114,13 @@ fn weird_provider_survives_render_but_acting_verb_refuses() {
         "the unknown provider value renders verbatim, got: {json}"
     );
 
-    // Acting-verb refusal: `qd connect` refuses with the EXACT message + exit 1.
+    // Acting-verb refusal: `qd attach` refuses with the EXACT message + exit 1.
     let t2 = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_qd_with_row(t2.path(), 90201, row, &["connect", "wp"]);
-    assert_eq!(code, 1, "connect refuses an unknown provider with exit 1");
+    let (code, _out, err) = run_qd_with_row(t2.path(), 90201, row, &["attach", "wp"]);
+    assert_eq!(code, 1, "attach refuses an unknown provider with exit 1");
     assert_eq!(
         err.trim_end(),
-        "qd connect: unknown provider \"weird-prov\" — this engine supports: claude-code.",
+        "qd attach: unknown provider \"weird-prov\" — this engine supports: claude-code.",
         "exact refusal wording (one source of truth: refuse_unknown_provider)"
     );
 }

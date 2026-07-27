@@ -938,10 +938,15 @@ fn b_whoami_env_id_of_tombstoned_row_answers_without_the_dead_name() {
         "dead pid NOT surfaced: {v}"
     );
 
-    // Human surface: name||sessionId → the UUID.
+    // Human surface: tombstoned row means no live registry row → PartialCold.
+    // The spec (01KXABDW9Y) says PartialCold output must be "distinguishable from
+    // both a fully resolved live identity and a non-managed caller"; printing the
+    // UUID alone would be indistinguishable from a Full-resolution with no name.
+    // Pete accepted L3 (PartialCold compound stdout) as designed behavior.
+    // Contract: human mode emits "partial-cold: qdId=<qd_id>, sessionId=<uuid>".
     let (code, out, _e) = run_whoami(&["whoami"]);
     assert_eq!(code, 0);
-    assert_eq!(out.trim(), "tomb-uuid-0001");
+    assert_eq!(out.trim(), "partial-cold: qdId=ab3kx9mq, sessionId=tomb-uuid-0001");
 }
 
 // ===========================================================================

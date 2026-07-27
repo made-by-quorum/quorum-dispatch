@@ -19,6 +19,19 @@ anyhow = "1"
 thiserror = "2"
 serde_json = "1"
 sha2 = "0.10"
+# The shared delivery-event VOCABULARY (vocab-extract). qrmux does NOT consume it
+# YET — the M1 mux terminal emitter + M3 send-path events (attended-UX) will EMIT
+# this vocab. Added now so it is importable without a `qrmux → dispatch` cycle
+# (dispatch depends on qrmux; the vocab lives in a shared LEAF crate that depends
+# on neither). DEFAULT features (json-insertion-order → serde_json/preserve_order)
+# so M1/M3 emission is byte-identical to dispatch's.
+quorum-delivery-events = { path = "../quorum-delivery-events" }
+# The shared SUBMIT DISCIPLINE (submit-extract). qrmux implements the discipline's
+# `Deps` traits against its LOCAL surface (pty_writer / screen model / child status)
+# and drives `deliver_idle_two_write` at the fire seam — one compile-time definition
+# of the discipline, no second parallel impl, no `qrmux → dispatch` cycle (the leaf
+# depends on neither). DEFAULT features.
+quorum-submit-discipline = { path = "../quorum-submit-discipline" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 terminal_size = "0.4"

@@ -6,11 +6,17 @@ pub mod server_launcher;
 pub mod session_client;
 
 use crate::protocol::{self, ClientMsg, FrameReader, ServerMsg};
+use crate::screen::{LogicalCell, LogicalHistoryChunk, Style};
 use std::io::{self, BufWriter, Read, Write};
 use tokio::io::AsyncWriteExt;
 
 /// Detach key: Ctrl+\ (0x1c).
 const DETACH_KEY: u8 = 0x1c;
+/// attended-UX M2 deliver-now chord: Ctrl+] (0x1d, GS — telnet-escape lineage,
+/// pairs with detach's Ctrl+\ and is rarely used by TUIs). Fires a held send
+/// immediately (M1's `ClientMsg::DeliverNow`), no countdown reset / journal entry.
+/// The exact key is a **digest taste-residual** (gate item 6), changeable freely.
+const DELIVER_NOW_KEY: u8 = 0x1d;
 /// Focus-in event: ESC [ I
 const FOCUS_IN: u8 = b'I';
 /// Focus-out event: ESC [ O
@@ -38,6 +44,55 @@ pub(crate) enum DispatchResult {
     Done,
 }
 
+/// Reassemble cell chunks into logical lines and render each complete line as
+/// one ANSI byte sequence. The bool records whether the transport supplied an
+/// `end_of_line` terminator; only terminated lines receive CRLF on attach.
+pub(crate) fn render_logical_history(chunks: &[LogicalHistoryChunk]) -> Vec<(Vec<u8>, bool)> {
+    let mut lines = Vec::new();
+    let mut cells = Vec::new();
+    for chunk in chunks {
+        cells.extend(chunk.cells.iter().cloned());
+        if chunk.end_of_line {
+            lines.push((render_logical_line(&cells), true));
+            cells.clear();
+        }
+    }
+    if !cells.is_empty() {
+        lines.push((render_logical_line(&cells), false));
+    }
+    lines
+}
+
+fn render_logical_line(cells: &[LogicalCell]) -> Vec<u8> {
+    // Tail detection intentionally runs over the reassembled logical line,
+    // not each physical-row chunk. WideEarly padding is edge-qualified
+    // omission metadata and never reaches the terminal.
+    let last = cells.iter().rposition(|cell| {
+        !cell.wide_early_padding
+            && ((cell.ch != ' ' && cell.ch != '\0')
+                || !cell.combining.is_empty()
+                || cell.style != Style::default())
+    });
+    let mut out = Vec::new();
+    let mut current_style = Style::default();
+    for cell in cells.iter().take(last.map_or(0, |index| index + 1)) {
+        if cell.wide_early_padding || cell.display_width == 0 {
+            continue;
+        }
+        if cell.style != current_style {
+            cell.style.write_sgr_with_reset_to(&mut out);
+            current_style = cell.style;
+        }
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(cell.ch.encode_utf8(&mut buf).as_bytes());
+        out.extend_from_slice(cell.combining.as_bytes());
+    }
+    if current_style != Style::default() {
+        out.extend_from_slice(b"\x1b[0m");
+    }
+    out
+}
+
 /// Write a single ServerMsg to stdout. Returns `Done` for terminal messages.
 pub(crate) fn dispatch_server_msg(
     msg: &ServerMsg,
@@ -55,6 +110,14 @@ pub(crate) fn dispatch_server_msg(
             for line in lines {
                 stdout.write_all(line)?;
                 stdout.write_all(b"\r\n")?;
+            }
+        }
+        ServerMsg::HistoryLogical(chunks) => {
+            for (line, end_of_line) in render_logical_history(chunks) {
+                stdout.write_all(&line)?;
+                if end_of_line {
+                    stdout.write_all(b"\r\n")?;
+                }
             }
         }
         ServerMsg::SessionEnded => {
@@ -99,6 +162,8 @@ enum FilterAction {
     Forward(Vec<u8>),
     /// Client requested detach (Ctrl+\).
     Detach,
+    /// attended-UX M2: client requested deliver-now (Ctrl+]).
+    DeliverNow,
     /// Terminal reported focus gained — trigger screen refresh.
     FocusIn,
 }
@@ -132,12 +197,22 @@ impl InputFilter {
             combined
         };
 
-        // Check for detach key first
+        // Check for detach key first — it ends the session, so it takes precedence.
         if let Some(pos) = raw.iter().position(|&b| b == DETACH_KEY) {
             let mut actions = Vec::new();
-            if pos > 0 {
-                actions.push(FilterAction::Forward(raw[..pos].to_vec()));
+            // Extract any deliver-now chords in the pre-detach bytes in stream order,
+            // so a deliver-now that PRECEDES a detach in one read is honored — not
+            // forwarded to the PTY as a literal GS (0x1d) byte (red-team r1 N3).
+            let mut pre = Vec::with_capacity(pos);
+            for &b in &raw[..pos] {
+                if b == DELIVER_NOW_KEY {
+                    Self::flush_filtered(&mut actions, &mut pre);
+                    actions.push(FilterAction::DeliverNow);
+                } else {
+                    pre.push(b);
+                }
             }
+            Self::flush_filtered(&mut actions, &mut pre);
             actions.push(FilterAction::Detach);
             return actions;
         }
@@ -146,6 +221,16 @@ impl InputFilter {
         let mut filtered = Vec::with_capacity(raw.len());
         let mut i = 0;
         while i < raw.len() {
+            // attended-UX M2: deliver-now chord (Ctrl+]). Emitted as its own action
+            // in stream order; surrounding bytes still forward normally. (Detach is
+            // checked first above and ends the session, so a detach in the same read
+            // wins — a rare edge, and the chord byte then rides along harmlessly.)
+            if raw[i] == DELIVER_NOW_KEY {
+                Self::flush_filtered(&mut actions, &mut filtered);
+                actions.push(FilterAction::DeliverNow);
+                i += 1;
+                continue;
+            }
             if raw[i] != 0x1b {
                 filtered.push(raw[i]);
                 i += 1;
@@ -211,8 +296,10 @@ impl InputFilter {
 }
 
 /// Stdin → socket relay: reads stdin, handles detach key and focus events,
-/// and forwards input to the server.
-pub(crate) async fn run_stdin_to_socket(sw: SocketWriter) -> anyhow::Result<()> {
+/// and forwards input to the server. `session_name` names the attached session
+/// for the M2 deliver-now frame (the attach path uses it as advisory metadata; the
+/// server resolves the target from the attachment itself).
+pub(crate) async fn run_stdin_to_socket(sw: SocketWriter, session_name: String) -> anyhow::Result<()> {
     let mut filter = InputFilter::new();
 
     'stdin: loop {
@@ -250,6 +337,18 @@ pub(crate) async fn run_stdin_to_socket(sw: SocketWriter) -> anyhow::Result<()> 
                             }
                             drop(w);
                             return Ok(());
+                        }
+                        FilterAction::DeliverNow => {
+                            // attended-UX M2: fire the attached session's held send
+                            // now (M1's control). `send_id: None` = the earliest
+                            // held send ("send my message now").
+                            if let Ok(msg) = protocol::encode(&ClientMsg::DeliverNow {
+                                name: session_name.clone(),
+                                send_id: None,
+                            }) {
+                                let mut w = sw.lock().await;
+                                w.write_all(&msg).await?;
+                            }
                         }
                         FilterAction::FocusIn => {
                             if let Ok(msg) = protocol::encode(&ClientMsg::RefreshScreen) {
@@ -301,14 +400,50 @@ pub(crate) fn spawn_sigwinch_handler(
 pub(crate) async fn run_socket_to_stdout(
     mut sock_reader: tokio::net::unix::OwnedReadHalf,
     leftover: Vec<u8>,
+    logical_history_stream: bool,
 ) -> anyhow::Result<()> {
     let mut frames = FrameReader::with_leftover(leftover);
     let mut stdout = BufWriter::new(io::stdout());
+    let mut logical_chunks = Vec::new();
+    let mut awaiting_stream_completion = logical_history_stream;
+
+    fn dispatch_frame(
+        msg: ServerMsg,
+        stdout: &mut impl Write,
+        awaiting_stream_completion: &mut bool,
+        logical_chunks: &mut Vec<LogicalHistoryChunk>,
+    ) -> anyhow::Result<DispatchResult> {
+        if *awaiting_stream_completion {
+            match msg {
+                ServerMsg::HistoryLogical(mut chunks) => {
+                    if chunks.is_empty() {
+                        *awaiting_stream_completion = false;
+                        let complete = ServerMsg::HistoryLogical(std::mem::take(logical_chunks));
+                        return Ok(dispatch_server_msg(&complete, stdout)?);
+                    }
+                    logical_chunks.append(&mut chunks);
+                    return Ok(DispatchResult::Continue);
+                }
+                other => {
+                    anyhow::bail!(
+                        "logical history stream ended without its completion frame before {:?}",
+                        std::mem::discriminant(&other)
+                    );
+                }
+            }
+        }
+        Ok(dispatch_server_msg(&msg, stdout)?)
+    }
 
     // Process any complete frames already in the leftover buffer
     while let Some(msg) = frames.decode_next::<ServerMsg>()? {
         if matches!(
-            dispatch_server_msg(&msg, &mut stdout)?,
+            dispatch_frame(
+                msg,
+                &mut stdout,
+                &mut awaiting_stream_completion,
+                &mut logical_chunks,
+            )?,
             DispatchResult::Done
         ) {
             return Ok(());
@@ -323,13 +458,21 @@ pub(crate) async fn run_socket_to_stdout(
         }
         while let Some(msg) = frames.decode_next::<ServerMsg>()? {
             if matches!(
-                dispatch_server_msg(&msg, &mut stdout)?,
+                dispatch_frame(
+                    msg,
+                    &mut stdout,
+                    &mut awaiting_stream_completion,
+                    &mut logical_chunks,
+                )?,
                 DispatchResult::Done
             ) {
                 return Ok(());
             }
         }
         stdout.flush()?;
+    }
+    if awaiting_stream_completion {
+        anyhow::bail!("server closed before completing logical history stream");
     }
     Ok(())
 }
@@ -467,6 +610,76 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_history_logical_reassembles_before_rendering() {
+        fn cell(ch: char) -> LogicalCell {
+            LogicalCell {
+                ch,
+                display_width: 1,
+                combining: String::new(),
+                style: Style::default(),
+                wide_early_padding: false,
+            }
+        }
+
+        let msg = ServerMsg::HistoryLogical(vec![
+            LogicalHistoryChunk {
+                cells: "ABCDE".chars().map(cell).collect(),
+                end_of_line: false,
+            },
+            LogicalHistoryChunk {
+                cells: "FGHIJ".chars().map(cell).collect(),
+                end_of_line: true,
+            },
+        ]);
+        let mut buf = Vec::new();
+        let result = dispatch_server_msg(&msg, &mut buf).unwrap();
+        assert!(matches!(result, DispatchResult::Continue));
+        assert_eq!(buf, b"ABCDEFGHIJ\r\n");
+    }
+
+    async fn run_streamed_history_relay(messages: Vec<ServerMsg>) -> anyhow::Result<()> {
+        let (client, mut server) = tokio::net::UnixStream::pair().unwrap();
+        let (reader, _client_writer) = client.into_split();
+        for message in messages {
+            server
+                .write_all(&protocol::encode(&message).unwrap())
+                .await
+                .unwrap();
+        }
+        drop(server);
+        run_socket_to_stdout(reader, Vec::new(), true).await
+    }
+
+    #[tokio::test]
+    async fn streamed_history_eof_before_first_frame_is_named_error() {
+        let error = run_streamed_history_relay(Vec::new()).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "server closed before completing logical history stream"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_history_non_history_before_marker_is_named_error() {
+        let error = run_streamed_history_relay(vec![ServerMsg::ScreenUpdate(b"early".to_vec())])
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("logical history stream ended without its completion frame before"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_empty_history_completion_marker_succeeds() {
+        run_streamed_history_relay(vec![ServerMsg::HistoryLogical(Vec::new())])
+            .await
+            .unwrap();
+    }
+
+    #[test]
     fn input_filter_passthrough() {
         let mut filter = InputFilter::new();
         let result = filter.process(b"hello");
@@ -488,6 +701,61 @@ mod tests {
         let mut filter = InputFilter::new();
         let result = filter.process(b"\x1c");
         assert_eq!(result, vec![FilterAction::Detach]);
+    }
+
+    #[test]
+    fn input_filter_deliver_now_alone() {
+        let mut filter = InputFilter::new();
+        assert_eq!(filter.process(b"\x1d"), vec![FilterAction::DeliverNow]);
+    }
+
+    #[test]
+    fn input_filter_deliver_now_mid_stream_splits_surrounding_bytes() {
+        // attended-UX M2: the chord fires in stream order; surrounding input still forwards.
+        let mut filter = InputFilter::new();
+        assert_eq!(
+            filter.process(b"ab\x1dcd"),
+            vec![
+                FilterAction::Forward(b"ab".to_vec()),
+                FilterAction::DeliverNow,
+                FilterAction::Forward(b"cd".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn input_filter_detach_takes_precedence_over_deliver_now_in_one_read() {
+        // Detach ends the session, so it wins if both chords arrive in one buffer.
+        // A deliver-now AFTER the detach byte is moot (the session is detaching).
+        let mut filter = InputFilter::new();
+        let actions = filter.process(b"x\x1c\x1d");
+        assert_eq!(
+            actions,
+            vec![FilterAction::Forward(b"x".to_vec()), FilterAction::Detach]
+        );
+    }
+
+    #[test]
+    fn input_filter_deliver_now_before_detach_is_honored_not_leaked() {
+        // red-team r1 N3: a deliver-now chord PRECEDING a detach in one read is
+        // emitted as a DeliverNow action (in stream order), never forwarded to the
+        // PTY as a literal GS byte.
+        let mut filter = InputFilter::new();
+        assert_eq!(
+            filter.process(b"\x1d\x1c"),
+            vec![FilterAction::DeliverNow, FilterAction::Detach]
+        );
+        // With surrounding text preserved around the chord, before the detach.
+        let mut filter2 = InputFilter::new();
+        assert_eq!(
+            filter2.process(b"ab\x1dcd\x1c"),
+            vec![
+                FilterAction::Forward(b"ab".to_vec()),
+                FilterAction::DeliverNow,
+                FilterAction::Forward(b"cd".to_vec()),
+                FilterAction::Detach,
+            ]
+        );
     }
 
     #[test]

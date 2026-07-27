@@ -25,12 +25,14 @@
 //! re-probe TOCTOU between pidfd open and send.
 
 use crate::liveness::ProcKey;
+use serde::{Deserialize, Serialize};
 
 /// The reuse-robust, fence-carrying identity of one managed session (R1 §8).
 /// `session_id` is the STABLE id (from `idstore`, survives respawn under the
 /// same name); `(pid, start_ms)` is the live-process identity (changes each
 /// incarnation); `incarnation` is the monotonic name-level fence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionIdentity {
     /// Stable session id (from `idstore` / `ids.jsonl`) — survives respawn.
     pub session_id: String,

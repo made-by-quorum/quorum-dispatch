@@ -1,0 +1,18 @@
+# Round-6 oracle fidelity: forward combining refresh and real BCE WideEarly padding.
+
+case combining_at_pending_margin_refreshes_token
+size 5 2 100
+emit 10
+print ABCDE
+combine ́
+print F
+expect 1 0 ABCDÉF
+end
+
+case styled_wide_early_uses_bce_padding
+size 5 2 100
+emit 10
+style red
+print abcd界
+expect 1 0 abcd界
+end

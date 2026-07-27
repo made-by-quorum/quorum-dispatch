@@ -5,6 +5,7 @@
 //! module now lives in the library crate.
 
 use crate::protocol::{self, ServerMsg};
+use crate::screen::{Color, LogicalCell, LogicalHistoryChunk, Style};
 
 #[test]
 fn history_message_round_trip() {
@@ -28,6 +29,44 @@ fn history_message_round_trip() {
         }
         other => panic!("expected History, got {:?}", other),
     }
+}
+
+#[test]
+fn history_logical_message_round_trip_preserves_cells_and_framing() {
+    let styled = Style {
+        bold: true,
+        fg: Some(Color::Rgb(12, 34, 56)),
+        ..Style::default()
+    };
+    let chunks = vec![
+        LogicalHistoryChunk {
+            cells: vec![LogicalCell {
+                ch: '界',
+                display_width: 2,
+                combining: "\u{301}".into(),
+                style: styled,
+                wide_early_padding: false,
+            }],
+            end_of_line: false,
+        },
+        LogicalHistoryChunk {
+            cells: vec![LogicalCell {
+                ch: ' ',
+                display_width: 1,
+                combining: String::new(),
+                style: Style::default(),
+                wide_early_padding: true,
+            }],
+            end_of_line: true,
+        },
+    ];
+    let msg = ServerMsg::HistoryLogical(chunks.clone());
+    let encoded = protocol::encode(&msg).unwrap();
+    let (data, consumed) = protocol::codec::decode_frame(&encoded).unwrap().unwrap();
+    assert_eq!(consumed, encoded.len());
+
+    let decoded: ServerMsg = protocol::codec::decode(data).unwrap();
+    assert_eq!(decoded, ServerMsg::HistoryLogical(chunks));
 }
 
 #[test]

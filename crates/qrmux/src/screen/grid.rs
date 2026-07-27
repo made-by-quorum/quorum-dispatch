@@ -1,6 +1,7 @@
-use std::collections::VecDeque;
+use std::cell::Cell as CounterCell;
+use std::collections::{BTreeSet, VecDeque};
 
-use super::cell::{Cell, Row};
+use super::cell::{Cell, EdgeId, Row, RowId, WrapEdge, WrapKind};
 use super::style::StyleTable;
 
 /// DEC character set designator.
@@ -196,6 +197,35 @@ pub struct Grid {
     pending_start: usize,
     /// Interned style table shared by all cells in this grid
     style_table: StyleTable,
+    /// Additive logical-line provenance. None/exhaustion is sticky and can
+    /// only cause a conservative hard boundary.
+    next_row_id: CounterCell<Option<RowId>>,
+    next_edge_id: CounterCell<Option<EdgeId>>,
+    pending_wrap: Option<PendingWrap>,
+    sequential_edge: Option<SequentialEdge>,
+    in_alt_domain: bool,
+    logical_shadow: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PendingWrap {
+    source: RowId,
+    source_revision: u64,
+    source_width: u16,
+    kind: WrapKind,
+    padding_count: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SequentialEdge {
+    source: RowId,
+    target: RowId,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum GeometryInvalidationReason {
+    LiveResize { width_changed: bool },
+    AltRestore { source_invalid: bool },
 }
 
 /// Saved visible rows and scrollback limit for alt screen save/restore.
@@ -203,14 +233,32 @@ pub struct Grid {
 pub struct SavedGrid {
     visible_cells: VecDeque<Row>,
     scrollback_limit: usize,
+    save_cols: u16,
+    alt_epoch: Option<u64>,
+    entered_with_1049: bool,
+    pending_wrap: Option<PendingWrap>,
+    sequential_edge: Option<SequentialEdge>,
 }
 
 impl SavedGrid {
     /// Create a new SavedGrid.
-    pub(super) fn new(visible_cells: VecDeque<Row>, scrollback_limit: usize) -> Self {
+    pub(super) fn new(
+        visible_cells: VecDeque<Row>,
+        scrollback_limit: usize,
+        save_cols: u16,
+        alt_epoch: Option<u64>,
+        entered_with_1049: bool,
+        pending_wrap: Option<PendingWrap>,
+        sequential_edge: Option<SequentialEdge>,
+    ) -> Self {
         Self {
             visible_cells,
             scrollback_limit,
+            save_cols,
+            alt_epoch,
+            entered_with_1049,
+            pending_wrap,
+            sequential_edge,
         }
     }
 
@@ -225,8 +273,26 @@ impl SavedGrid {
     }
 
     /// Consume the SavedGrid, returning (visible_cells, scrollback_limit).
-    pub(super) fn into_parts(self) -> (VecDeque<Row>, usize) {
-        (self.visible_cells, self.scrollback_limit)
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        VecDeque<Row>,
+        usize,
+        u16,
+        Option<u64>,
+        bool,
+        Option<PendingWrap>,
+        Option<SequentialEdge>,
+    ) {
+        (
+            self.visible_cells,
+            self.scrollback_limit,
+            self.save_cols,
+            self.alt_epoch,
+            self.entered_with_1049,
+            self.pending_wrap,
+            self.sequential_edge,
+        )
     }
 }
 
@@ -239,13 +305,29 @@ pub(super) fn default_tab_stops(cols: u16) -> Vec<bool> {
 impl Grid {
     /// Create a grid with the given dimensions, sanitized to at least 1x1.
     pub fn new(cols: u16, rows: u16, scrollback_limit: usize) -> Self {
+        Self::new_with_role(cols, rows, scrollback_limit, false)
+    }
+
+    pub(super) fn new_logical(cols: u16, rows: u16, scrollback_limit: usize) -> Self {
+        Self::new_with_role(cols, rows, scrollback_limit, true)
+    }
+
+    fn new_with_role(cols: u16, rows: u16, scrollback_limit: usize, logical_shadow: bool) -> Self {
         let TerminalSize { cols, rows } = sanitize_dimensions(cols, rows);
+        let mut next_row_id: Option<u64> = Some(0);
+        let cells = (0..rows as usize)
+            .map(|_| {
+                let id = next_row_id;
+                next_row_id = next_row_id.and_then(|value| value.checked_add(1));
+                let mut row = Row::new(cols as usize);
+                row.assign_id(id);
+                row
+            })
+            .collect();
         Self {
             cols,
             rows,
-            cells: (0..rows as usize)
-                .map(|_| Row::new(cols as usize))
-                .collect(),
+            cells,
             cursor_x: 0,
             cursor_y: 0,
             wrap_pending: false,
@@ -258,7 +340,35 @@ impl Grid {
             scrollback_limit,
             pending_start: 0,
             style_table: StyleTable::new(),
+            next_row_id: CounterCell::new(next_row_id),
+            next_edge_id: CounterCell::new(Some(0)),
+            pending_wrap: None,
+            sequential_edge: None,
+            in_alt_domain: false,
+            logical_shadow,
         }
+    }
+
+    pub(super) fn is_logical_shadow(&self) -> bool {
+        self.logical_shadow
+    }
+
+    fn take_id(counter: &CounterCell<Option<u64>>) -> Option<u64> {
+        let current = counter.get();
+        counter.set(current.and_then(|value| value.checked_add(1)));
+        current
+    }
+
+    fn fresh_row_with_cells(&self, cells: Vec<Cell>) -> Row {
+        let mut row = Row::from_cells(cells);
+        row.assign_id(Self::take_id(&self.next_row_id));
+        row
+    }
+
+    fn fresh_blank_row(&self, cols: usize) -> Row {
+        let mut row = Row::new(cols);
+        row.assign_id(Self::take_id(&self.next_row_id));
+        row
     }
 
     // =================================================================
@@ -380,6 +490,197 @@ impl Grid {
     #[allow(dead_code)] // fork-carried performer accessor; kept for grid API symmetry
     pub(super) fn set_wrap_pending(&mut self, val: bool) {
         self.wrap_pending = val;
+        if !val {
+            self.pending_wrap = None;
+            self.sequential_edge = None;
+        }
+    }
+
+    /// Qualify the legacy pending bit at the only legitimate autowrap source.
+    pub(super) fn arm_qualified_wrap(&mut self, kind: WrapKind, padding_count: u16) {
+        self.wrap_pending = true;
+        let row = self.visible_row(self.cursor_y as usize);
+        self.pending_wrap = match (row.row_id, row.content_revision) {
+            (Some(source), Some(source_revision)) => Some(PendingWrap {
+                source,
+                source_revision,
+                source_width: row.len().try_into().unwrap_or(u16::MAX),
+                kind,
+                padding_count,
+            }),
+            _ => None,
+        };
+    }
+
+    /// Consume a pending proof before legacy cursor motion. Raw-only pending
+    /// still performs the exact old motion, but returns no publication token.
+    pub(super) fn take_qualified_wrap(&mut self) -> Option<PendingWrap> {
+        let pending = self.pending_wrap.take()?;
+        let row = self.visible_row(self.cursor_y as usize);
+        let kind_valid = matches!(pending.kind, WrapKind::Normal) && pending.padding_count == 0
+            || matches!(pending.kind, WrapKind::WideEarly) && pending.padding_count > 0;
+        (kind_valid
+            && row.row_id == Some(pending.source)
+            && row.content_revision == Some(pending.source_revision)
+            && row.len() == pending.source_width as usize
+            && self.cols == pending.source_width)
+            .then_some(pending)
+    }
+
+    /// A1: the single persistent edge publication operation. It is called
+    /// only by `perform_deferred_wrap`, after physical motion has completed.
+    pub(super) fn publish_deferred_wrap(&mut self, pending: Option<PendingWrap>) {
+        let Some(pending) = pending else {
+            self.sequential_edge = None;
+            return;
+        };
+        let target = self.visible_row(self.cursor_y as usize).row_id;
+        let Some(target) = target else {
+            self.sequential_edge = None;
+            return;
+        };
+        if target == pending.source {
+            self.sequential_edge = None;
+            return;
+        }
+        let Some(source_index) = self
+            .cells
+            .iter()
+            .position(|row| row.row_id == Some(pending.source))
+        else {
+            self.sequential_edge = None;
+            return;
+        };
+        let target_index = self.cells.iter().position(|row| row.row_id == Some(target));
+        if target_index != Some(source_index + 1)
+            || self.cells[source_index].len() != pending.source_width as usize
+            || self.cells[source_index + 1].len() != pending.source_width as usize
+        {
+            self.sequential_edge = None;
+            return;
+        }
+        let Some(edge_id) = Self::take_id(&self.next_edge_id) else {
+            self.sequential_edge = None;
+            return;
+        };
+        self.cells[source_index].outgoing = Some(WrapEdge {
+            edge_id,
+            target,
+            kind: pending.kind,
+            padding_count: pending.padding_count,
+            valid_width: pending.source_width,
+        });
+        self.sequential_edge = Some(SequentialEdge {
+            source: pending.source,
+            target,
+        });
+    }
+
+    /// Cut qualified continuation while deliberately retaining c59's raw
+    /// deferred-wrap bit and its physical behavior.
+    pub(super) fn invalidate_provenance_keep_raw(&mut self) {
+        self.pending_wrap = None;
+        self.sequential_edge = None;
+    }
+
+    /// Single geometry invalidation choke-point. The logical shadow clears
+    /// raw-only motion on every live resize and on an invalid alt restore;
+    /// qualified state survives only unchanged geometry with its source still
+    /// intact. The legacy grid retains its independently pinned raw behavior.
+    pub(super) fn invalidate_pending_for_geometry(&mut self, reason: GeometryInvalidationReason) {
+        let invalid = match reason {
+            GeometryInvalidationReason::LiveResize { width_changed } => width_changed,
+            GeometryInvalidationReason::AltRestore { source_invalid } => source_invalid,
+        };
+        if invalid {
+            self.pending_wrap = None;
+            self.sequential_edge = None;
+            if self.logical_shadow {
+                self.wrap_pending = false;
+            }
+        }
+    }
+
+    pub(super) fn logical_pending(&self) -> Option<PendingWrap> {
+        self.pending_wrap
+    }
+
+    pub(super) fn logical_sequential(&self) -> Option<SequentialEdge> {
+        self.sequential_edge
+    }
+
+    pub(super) fn prepare_alt_restore(&mut self, saved: &mut SavedGrid) -> (bool, usize) {
+        let keep = (self.rows as usize).min(saved.visible_cells.len());
+        let doomed: BTreeSet<_> = saved
+            .visible_cells
+            .iter()
+            .skip(keep)
+            .filter_map(|row| row.row_id)
+            .collect();
+        let width_changed = self.cols != saved.save_cols;
+        let affected: BTreeSet<_> = if width_changed {
+            saved
+                .visible_cells
+                .iter()
+                .filter_map(|row| row.row_id)
+                .collect()
+        } else {
+            doomed.clone()
+        };
+        self.sever_ids(&affected);
+        for row in &mut saved.visible_cells {
+            if row.row_id.is_some_and(|id| affected.contains(&id))
+                || row
+                    .outgoing
+                    .is_some_and(|edge| affected.contains(&edge.target))
+            {
+                row.outgoing = None;
+            }
+            if width_changed {
+                row.advance_revision();
+            }
+        }
+        if saved
+            .pending_wrap
+            .is_some_and(|pending| affected.contains(&pending.source))
+            || width_changed
+        {
+            saved.pending_wrap = None;
+        }
+        if saved
+            .sequential_edge
+            .is_some_and(|seq| affected.contains(&seq.source) || affected.contains(&seq.target))
+            || width_changed
+        {
+            saved.sequential_edge = None;
+        }
+        (width_changed, keep)
+    }
+
+    pub(super) fn finish_alt_restore(
+        &mut self,
+        pending: Option<PendingWrap>,
+        sequential: Option<SequentialEdge>,
+        authorize: bool,
+    ) {
+        self.in_alt_domain = false;
+        self.pending_wrap = if authorize { pending } else { None };
+        self.sequential_edge = if authorize { sequential } else { None };
+        self.validate_all_edges();
+        let pending_valid = self.pending_wrap.is_some_and(|token| {
+            self.cells
+                .get(self.scrollback_len + self.cursor_y as usize)
+                .is_some_and(|row| {
+                    row.row_id == Some(token.source)
+                        && row.content_revision == Some(token.source_revision)
+                        && row.len() == token.source_width as usize
+                        && self.cols == token.source_width
+                })
+        });
+        if !pending_valid {
+            self.pending_wrap = None;
+        }
+        self.validate_all_edges();
     }
 
     /// Set cursor visibility.
@@ -475,6 +776,80 @@ impl Grid {
         self.cells.iter().take(self.scrollback_len)
     }
 
+    fn validated_outgoing_between(&self, source: &Row, target: &Row) -> Option<WrapEdge> {
+        let edge = source.outgoing?;
+        let source_id = source.row_id?;
+        if target.row_id != Some(edge.target) || source_id == edge.target {
+            return None;
+        }
+        Self::edge_shape_valid(source, target, edge).then_some(edge)
+    }
+
+    pub(super) fn logical_emission(
+        &self,
+        surface: super::LogicalEmissionSurface,
+        in_alt: bool,
+    ) -> super::LogicalTransportEmission {
+        let rows: Vec<(&Row, bool)> = match (surface, in_alt) {
+            (super::LogicalEmissionSurface::AttachReplay, true) => {
+                self.visible_rows().map(|row| (row, false)).collect()
+            }
+            (super::LogicalEmissionSurface::GetHistory, true) => self
+                .scrollback_rows()
+                .map(|row| (row, true))
+                .chain(self.visible_rows().map(|row| (row, false)))
+                .collect(),
+            (_, false) => self
+                .scrollback_rows()
+                .map(|row| (row, true))
+                .chain(self.visible_rows().map(|row| (row, false)))
+                .collect(),
+        };
+        let mut chunks = Vec::with_capacity(rows.len());
+        let mut has_history = Vec::with_capacity(rows.len());
+        for (index, (row, is_history)) in rows.iter().enumerate() {
+            let next = rows.get(index + 1);
+            let forbidden_alt_boundary = in_alt
+                && surface == super::LogicalEmissionSurface::GetHistory
+                && *is_history
+                && next.is_some_and(|(_, next_history)| !*next_history);
+            let edge = (!forbidden_alt_boundary)
+                .then(|| next.and_then(|(target, _)| self.validated_outgoing_between(row, target)))
+                .flatten();
+            let padding = edge
+                .filter(|edge| edge.kind == WrapKind::WideEarly)
+                .map_or(0, |edge| edge.padding_count as usize);
+            chunks.push(super::LogicalHistoryChunk {
+                cells: super::render::logical_cells_for_row(row, &self.style_table, padding),
+                end_of_line: edge.is_none(),
+            });
+            has_history.push(*is_history);
+        }
+
+        // Canonical omission applies to complete trailing visible logical
+        // lines only. History rows are never omitted.
+        loop {
+            let Some(last) = chunks.len().checked_sub(1) else {
+                break;
+            };
+            let start = (0..last)
+                .rev()
+                .find(|&index| chunks[index].end_of_line)
+                .map_or(0, |index| index + 1);
+            let omittable = chunks[last].end_of_line
+                && !has_history[start..].iter().any(|value| *value)
+                && chunks[start..]
+                    .iter()
+                    .all(|chunk| super::render::logical_cells_are_omittable_blank(&chunk.cells));
+            if !omittable {
+                break;
+            }
+            chunks.truncate(start);
+            has_history.truncate(start);
+        }
+        super::LogicalTransportEmission { chunks }
+    }
+
     /// Drain visible rows for alt screen save. Returns saved rows.
     pub(super) fn drain_visible(&mut self) -> VecDeque<Row> {
         self.cells.drain(self.scrollback_len..).collect()
@@ -486,25 +861,43 @@ impl Grid {
         for row in rows {
             self.cells.push_back(row);
         }
+        // The suspended main domain is structurally unified again before any
+        // restore-time trim/width validation runs.
+        self.in_alt_domain = false;
     }
 
     /// Add blank visible rows for alt screen.
     pub(super) fn fill_visible_blank(&mut self) {
         for _ in 0..self.rows as usize {
-            self.cells.push_back(Row::new(self.cols as usize));
+            self.cells
+                .push_back(self.fresh_blank_row(self.cols as usize));
         }
+        self.in_alt_domain = true;
+        self.pending_wrap = None;
+        self.sequential_edge = None;
         self.check_invariants();
+    }
+
+    /// Return the active topology to the main-screen adjacency domain.
+    /// This is idempotent so every alt-exit/discard path can call it.
+    pub(super) fn leave_alt_domain(&mut self) {
+        self.in_alt_domain = false;
     }
 
     /// Adjust visible row count to match `self.rows` (trim or pad).
     pub(super) fn adjust_visible_to_fit(&mut self) {
         let rows_usize = self.rows as usize;
         while self.visible_row_count() > rows_usize {
+            if let Some(id) = self.cells.back().and_then(|row| row.row_id) {
+                self.sever_ids(&BTreeSet::from([id]));
+            }
             self.cells.pop_back();
         }
         while self.visible_row_count() < rows_usize {
-            self.cells.push_back(Row::new(self.cols as usize));
+            self.cells
+                .push_back(self.fresh_blank_row(self.cols as usize));
         }
+        self.validate_all_edges();
         self.check_invariants();
     }
 
@@ -529,9 +922,15 @@ impl Grid {
                 break;
             }
             let last = &self.cells[self.cells.len() - 1];
-            let blank = last.iter().all(|c| c.c == ' ' || c.c == '\0');
+            let blank = last.iter().enumerate().all(|(column, c)| {
+                (c.c == ' ' || c.c == '\0')
+                    && (!self.logical_shadow || last.combining(column as u16).is_empty())
+            });
             if !blank {
                 break;
+            }
+            if let Some(id) = self.cells.back().and_then(|row| row.row_id) {
+                self.sever_ids(&BTreeSet::from([id]));
             }
             self.cells.pop_back();
             chopped += 1;
@@ -557,6 +956,9 @@ impl Grid {
             }
             self.scrollback_len += 1;
             if self.scrollback_len > self.scrollback_limit {
+                if let Some(id) = self.cells.front().and_then(|row| row.row_id) {
+                    self.sever_ids(&BTreeSet::from([id]));
+                }
                 self.cells.pop_front();
                 self.scrollback_len -= 1;
                 if self.pending_start > 0 {
@@ -619,6 +1021,206 @@ impl Grid {
         self.cells.len().saturating_sub(self.scrollback_len)
     }
 
+    fn edge_shape_valid(source: &Row, target: &Row, edge: WrapEdge) -> bool {
+        let kind_valid = match edge.kind {
+            WrapKind::Normal => edge.padding_count == 0,
+            WrapKind::WideEarly => {
+                edge.padding_count > 0
+                    && edge.padding_count as usize <= source.len()
+                    && source
+                        .iter()
+                        .rev()
+                        .take(edge.padding_count as usize)
+                        .all(|cell| cell.c == ' ' && cell.width == 1)
+            }
+        };
+        kind_valid
+            && source.len() == edge.valid_width as usize
+            && target.len() == edge.valid_width as usize
+            && target.row_id == Some(edge.target)
+    }
+
+    /// Fail-closed lifecycle backstop. This never creates provenance. The
+    /// validation is linear: a live edge can only name the immediately next
+    /// row in its active domain (apart from the opaque saved-main boundary).
+    pub(super) fn validate_all_edges(&mut self) {
+        let sequential = self.sequential_edge;
+        let mut sequential_valid = false;
+        for index in 0..self.cells.len() {
+            let Some(edge) = self.cells[index].outgoing else {
+                continue;
+            };
+            let source_id = self.cells[index].row_id;
+            // While alt is active, the last history row may legitimately point
+            // into the suspended SavedGrid, which is intentionally absent from
+            // the active deque. Retain that one opaque boundary mark; restore
+            // classification validates it before it can be read.
+            let suspended_boundary = self.in_alt_domain
+                && index + 1 == self.scrollback_len
+                && !self.cells.iter().any(|row| row.row_id == Some(edge.target))
+                && source_id.is_some();
+            let valid = if suspended_boundary {
+                self.cells[index].len() == edge.valid_width as usize
+                    && matches!(edge.kind, WrapKind::Normal | WrapKind::WideEarly)
+            } else {
+                let crosses_alt_boundary = self.in_alt_domain && index + 1 == self.scrollback_len;
+                source_id.is_some_and(|source| source != edge.target)
+                    && !crosses_alt_boundary
+                    && self.cells.get(index + 1).is_some_and(|target| {
+                        target.row_id == Some(edge.target)
+                            && Self::edge_shape_valid(&self.cells[index], target, edge)
+                    })
+            };
+            if !valid {
+                self.cells[index].outgoing = None;
+            } else if sequential.is_some_and(|seq| {
+                source_id == Some(seq.source) && edge.target == seq.target && !suspended_boundary
+            }) {
+                sequential_valid = true;
+            }
+        }
+
+        let pending_valid = self.pending_wrap.is_some_and(|pending| {
+            self.cells
+                .get(self.scrollback_len + self.cursor_y as usize)
+                .is_some_and(|row| {
+                    row.row_id == Some(pending.source)
+                        && row.content_revision == Some(pending.source_revision)
+                        && row.len() == pending.source_width as usize
+                })
+        });
+        if !pending_valid {
+            self.pending_wrap = None;
+        }
+        if sequential.is_some() && !sequential_valid {
+            self.sequential_edge = None;
+        }
+    }
+
+    fn sever_ids(&mut self, doomed: &BTreeSet<RowId>) {
+        for row in &mut self.cells {
+            if row
+                .outgoing
+                .is_some_and(|edge| doomed.contains(&edge.target))
+                || row.row_id.is_some_and(|id| doomed.contains(&id))
+            {
+                row.outgoing = None;
+            }
+        }
+        if self
+            .pending_wrap
+            .is_some_and(|pending| doomed.contains(&pending.source))
+        {
+            self.pending_wrap = None;
+        }
+        if self
+            .sequential_edge
+            .is_some_and(|seq| doomed.contains(&seq.source) || doomed.contains(&seq.target))
+        {
+            self.sequential_edge = None;
+        }
+    }
+
+    fn before_content_write(&mut self, y: usize, forward_stream: bool, refresh_pending: bool) {
+        if y >= self.rows as usize {
+            return;
+        }
+        let index = self.scrollback_len + y;
+        let target_id = self.cells[index].row_id;
+        self.cells[index].outgoing = None;
+
+        if index > 0 {
+            let incoming = self.cells[index - 1].outgoing;
+            let authorized = forward_stream
+                && self.sequential_edge.is_some_and(|seq| {
+                    self.cells[index - 1].row_id == Some(seq.source)
+                        && target_id == Some(seq.target)
+                        && incoming.is_some_and(|edge| edge.target == seq.target)
+                });
+            if incoming.is_some_and(|edge| Some(edge.target) == target_id) && !authorized {
+                self.cells[index - 1].outgoing = None;
+            }
+        }
+
+        let old_revision = self.cells[index].content_revision;
+        let pending = self.pending_wrap;
+        let refresh = refresh_pending
+            && pending.is_some_and(|token| {
+                target_id == Some(token.source) && old_revision == Some(token.source_revision)
+            });
+        let new_revision = self.cells[index].advance_revision();
+        if refresh {
+            if let (Some(mut token), Some(revision)) = (pending, new_revision) {
+                token.source_revision = revision;
+                self.pending_wrap = Some(token);
+            } else {
+                self.pending_wrap = None;
+            }
+        } else if pending.is_some_and(|token| target_id == Some(token.source)) {
+            self.pending_wrap = None;
+        }
+        if new_revision.is_none() {
+            self.pending_wrap = None;
+            self.sequential_edge = None;
+        }
+    }
+
+    pub(super) fn prepare_addressed_write(&mut self, y: usize) {
+        self.before_content_write(y, false, false);
+        self.sequential_edge = None;
+    }
+
+    pub(super) fn set_print_cell(&mut self, x: usize, y: usize, cell: Cell) {
+        if y >= self.rows as usize || x >= self.cols as usize {
+            return;
+        }
+        self.before_content_write(y, true, false);
+        self.set_cell_raw(x, y, cell);
+    }
+
+    pub(super) fn set_wide_early_padding(&mut self, x: usize, y: usize, cell: Cell) {
+        if y >= self.rows as usize || x >= self.cols as usize {
+            return;
+        }
+        self.before_content_write(y, true, false);
+        // Preserve sparse combining data exactly as the c59 direct assignment.
+        self.visible_row_mut(y)[x] = cell;
+    }
+
+    pub(super) fn push_print_combining(&mut self, y: usize, x: usize, mark: char) {
+        self.before_content_write(y, true, true);
+        self.visible_row_mut(y).push_combining(x as u16, mark);
+    }
+
+    /// Remove one physical row with row-local provenance cleanup. A valid
+    /// incoming edge can only be owned by the immediate predecessor; the
+    /// removed row's own outgoing mark disappears with it.
+    fn remove_row_at(&mut self, index: usize) -> Option<Row> {
+        let doomed = self.cells.get(index)?.row_id;
+        if let Some(doomed) = doomed {
+            if index > 0
+                && self.cells[index - 1]
+                    .outgoing
+                    .is_some_and(|edge| edge.target == doomed)
+            {
+                self.cells[index - 1].outgoing = None;
+            }
+            if self
+                .pending_wrap
+                .is_some_and(|pending| pending.source == doomed)
+            {
+                self.pending_wrap = None;
+            }
+            if self
+                .sequential_edge
+                .is_some_and(|seq| seq.source == doomed || seq.target == doomed)
+            {
+                self.sequential_edge = None;
+            }
+        }
+        self.cells.remove(index)
+    }
+
     /// Remove a visible row by index, returning it.
     pub fn remove_visible_row(&mut self, y: usize) -> Row {
         let idx = self.scrollback_len + y;
@@ -628,14 +1230,31 @@ impl Grid {
             idx,
             self.cells.len()
         );
-        self.cells
-            .remove(idx)
+        self.remove_row_at(idx)
             .unwrap_or_else(|| Row::new(self.cols as usize))
     }
 
     /// Insert a row at a visible row index.
     pub fn insert_visible_row(&mut self, y: usize, row: Row) {
-        self.cells.insert(self.scrollback_len + y, row);
+        let index = self.scrollback_len + y;
+        // Insertion can only invalidate the old edge spanning this seam.
+        // Clear that source before the new row separates the endpoints.
+        if index > 0 && index < self.cells.len() {
+            let source_id = self.cells[index - 1].row_id;
+            let target_id = self.cells[index].row_id;
+            let separated = self.cells[index - 1]
+                .outgoing
+                .is_some_and(|edge| target_id == Some(edge.target));
+            if separated {
+                self.cells[index - 1].outgoing = None;
+                if self.sequential_edge.is_some_and(|seq| {
+                    source_id == Some(seq.source) && target_id == Some(seq.target)
+                }) {
+                    self.sequential_edge = None;
+                }
+            }
+        }
+        self.cells.insert(index, row);
     }
 
     /// Find the next tab stop column at or after `col`, clamped to right margin.
@@ -661,7 +1280,7 @@ impl Grid {
             // Top visible row becomes scrollback — just move the boundary
             self.scrollback_len += 1;
             if self.scrollback_len > self.scrollback_limit {
-                self.cells.pop_front();
+                self.remove_row_at(0);
                 self.scrollback_len -= 1;
                 if self.pending_start > 0 {
                     self.pending_start -= 1;
@@ -671,26 +1290,22 @@ impl Grid {
             // the end of cells (partial scroll region must not shift rows below).
             if bottom >= visible_len - 1 {
                 self.cells
-                    .push_back(Row::from_cells(vec![fill; self.cols as usize]));
+                    .push_back(self.fresh_row_with_cells(vec![fill; self.cols as usize]));
             } else {
-                self.cells.insert(
-                    self.scrollback_len + bottom,
-                    Row::from_cells(vec![fill; self.cols as usize]),
-                );
+                let blank = self.fresh_row_with_cells(vec![fill; self.cols as usize]);
+                self.insert_visible_row(bottom, blank);
             }
         } else if top <= bottom && bottom < visible_len {
             if top == 0 && bottom == visible_len - 1 {
                 // Full screen, no scrollback: O(1)
-                self.cells.remove(self.scrollback_len);
-                self.cells
-                    .push_back(Row::from_cells(vec![fill; self.cols as usize]));
+                self.remove_visible_row(0);
+                let blank = self.fresh_row_with_cells(vec![fill; self.cols as usize]);
+                self.insert_visible_row(self.visible_row_count(), blank);
             } else {
                 // Partial scroll region
-                self.cells.remove(self.scrollback_len + top);
-                self.cells.insert(
-                    self.scrollback_len + bottom,
-                    Row::from_cells(vec![fill; self.cols as usize]),
-                );
+                self.remove_visible_row(top);
+                let blank = self.fresh_row_with_cells(vec![fill; self.cols as usize]);
+                self.insert_visible_row(bottom, blank);
             }
         }
         self.check_invariants();
@@ -703,17 +1318,22 @@ impl Grid {
         let visible_len = self.cells.len() - self.scrollback_len;
 
         if top <= bottom && bottom < visible_len {
-            self.cells.remove(self.scrollback_len + bottom);
-            self.cells.insert(
-                self.scrollback_len + top,
-                Row::from_cells(vec![fill; self.cols as usize]),
-            );
+            self.remove_visible_row(bottom);
+            let blank = self.fresh_row_with_cells(vec![fill; self.cols as usize]);
+            self.insert_visible_row(top, blank);
         }
         self.check_invariants();
     }
 
     /// Clear all scrollback rows and reset pending counters.
     pub fn clear_scrollback(&mut self) {
+        let doomed: BTreeSet<_> = self
+            .cells
+            .iter()
+            .take(self.scrollback_len)
+            .filter_map(|row| row.row_id)
+            .collect();
+        self.sever_ids(&doomed);
         self.cells.drain(..self.scrollback_len);
         self.scrollback_len = 0;
         self.pending_start = 0;
@@ -728,7 +1348,7 @@ impl Grid {
 
     /// Create a new blank row filled with `fill`, matching grid width.
     pub fn new_blank_row(&self, fill: Cell) -> Row {
-        Row::from_cells(vec![fill; self.cols as usize])
+        self.fresh_row_with_cells(vec![fill; self.cols as usize])
     }
 
     /// Number of scrollback rows that haven't been sent to the client yet.
@@ -739,6 +1359,7 @@ impl Grid {
     /// Resize the grid, clamping cursor position and resetting scroll region and tab stops.
     /// Only resizes visible rows; scrollback rows keep their original column width.
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        let old_cols = self.cols;
         let TerminalSize { cols, rows } = sanitize_dimensions(cols, rows);
         self.cols = cols;
         self.rows = rows;
@@ -747,26 +1368,47 @@ impl Grid {
         if visible_len > rows_usize {
             let excess = visible_len - rows_usize;
             for _ in 0..excess {
+                if let Some(id) = self.cells.back().and_then(|row| row.row_id) {
+                    self.sever_ids(&BTreeSet::from([id]));
+                }
                 self.cells.pop_back();
             }
         } else if visible_len < rows_usize {
             let deficit = rows_usize - visible_len;
             for _ in 0..deficit {
-                self.cells.push_back(Row::new(cols as usize));
+                self.cells.push_back(self.fresh_blank_row(cols as usize));
             }
         }
         let cols_usize = cols as usize;
         for row in self.cells.iter_mut().skip(self.scrollback_len) {
+            if row.len() != cols_usize {
+                row.outgoing = None;
+                row.advance_revision();
+            }
             row.fix_wide_char_orphan_at_boundary(cols_usize);
             row.resize(cols_usize, Cell::default());
         }
+        // Width change of a target also severs its predecessor.
+        self.validate_all_edges();
         if self.cursor_x >= cols {
             self.cursor_x = cols - 1;
         }
         if self.cursor_y >= rows {
             self.cursor_y = rows - 1;
         }
-        self.wrap_pending = false;
+        self.invalidate_pending_for_geometry(GeometryInvalidationReason::LiveResize {
+            width_changed: old_cols != cols,
+        });
+        if !self.logical_shadow || old_cols != cols {
+            self.wrap_pending = false;
+            self.pending_wrap = None;
+            self.sequential_edge = None;
+        } else {
+            self.validate_all_edges();
+            if self.pending_wrap.is_none() {
+                self.wrap_pending = false;
+            }
+        }
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.tab_stops = default_tab_stops(cols);
@@ -783,6 +1425,11 @@ impl Grid {
         if y >= self.rows as usize || x >= self.cols as usize {
             return;
         }
+        self.before_content_write(y, false, false);
+        self.set_cell_raw(x, y, cell);
+    }
+
+    fn set_cell_raw(&mut self, x: usize, y: usize, cell: Cell) {
         self.fixup_wide_char_at(x, y);
         let row = self.visible_row_mut(y);
         row[x] = cell;
@@ -809,6 +1456,7 @@ impl Grid {
         if from >= to {
             return;
         }
+        self.before_content_write(y, false, false);
         self.fixup_wide_char_at(from, y);
         if to < cols {
             self.fixup_wide_char_at(to, y);
@@ -826,6 +1474,7 @@ impl Grid {
         let from_y = from_y.min(max_y);
         let to_y = to_y.min(max_y);
         for y in from_y..to_y {
+            self.before_content_write(y, false, false);
             let row = self.visible_row_mut(y);
             for cell in row.iter_mut() {
                 *cell = blank;

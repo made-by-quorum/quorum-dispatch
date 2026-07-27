@@ -1,0 +1,264 @@
+# Round-7 c59-fidelity counterexamples and guarded-write controls.
+
+case accepted_decstbm_home_severs_target_stream
+size 5 1 100
+emit 10
+print ABCDEF
+region 1 1
+print G
+expect 0 1 ABCDE|G
+end
+
+case invalid_decstbm_is_noop_and_preserves_stream
+size 5 1 100
+emit 10
+print ABCDEF
+region 2 1
+print G
+expect 1 0 ABCDEFG
+end
+
+case combining_mark_17_is_noop_and_preserves_edge
+size 5 2 100
+emit 10
+print ABCD
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+combine ́
+print EF
+cup 1 5
+combine ́
+expect 1 0 ABCD́́́́́́́́́́́́́́́́EF
+end
+
+case severed_wide_early_padding_is_real_styled_content
+size 5 2 100
+emit 10
+style blue-bg
+print abcd界
+style default
+cup 1 1
+print X
+expect 0 1 Xbcd<space>|界
+end
+
+case get_history_during_alt_has_hard_main_alt_boundary
+size 5 1 100
+emit 10
+surface get-history
+print ABC
+lf
+alt-enter
+print DEF
+expect 0 0 ABC|DEF
+end
+
+case invalid_ed_mode_is_noop
+size 5 1 100
+emit 10
+print ABCDEF
+erase-display 9
+print G
+expect 1 0 ABCDEFG
+end
+
+case invalid_el_mode_is_noop
+size 5 1 100
+emit 10
+print ABCDEF
+erase-line-mode 9
+print G
+expect 1 0 ABCDEFG
+end
+
+case out_of_range_decstbm_top_is_noop
+size 5 2 100
+emit 10
+print ABCDEF
+region 9 2
+print G
+expect 1 0 ABCDEFG
+end
+
+case ed0_valid_write_severs
+size 5 2 100
+emit 10
+print ABCDEF
+cup 1 2
+erase-display 0
+expect 0 1 A
+end
+
+case ed1_valid_write_severs
+size 5 2 100
+emit 10
+print ABCDEFG
+cup 2 1
+erase-display 1
+expect 0 1 |<space>G
+end
+
+case ed2_valid_target_write_severs
+size 5 1 100
+emit 10
+print ABCDEF
+cup 1 1
+erase-display 2
+expect 0 1 ABCDE
+end
+
+case el0_valid_target_write_severs
+size 5 1 100
+emit 10
+print ABCDEF
+cup 1 1
+erase-line-mode 0
+expect 0 1 ABCDE
+end
+
+case el1_valid_target_write_severs
+size 5 1 100
+emit 10
+print ABCDEF
+cup 1 1
+erase-line-mode 1
+expect 0 1 ABCDE
+end
+
+case el2_valid_target_write_severs
+size 5 1 100
+emit 10
+print ABCDEF
+cup 1 1
+erase-line-mode 2
+expect 0 1 ABCDE
+end
+
+case ech_large_count_clamps_and_writes
+size 5 1 100
+emit 10
+print ABCDEF
+cup 1 1
+ech 99
+expect 0 1 ABCDE
+end
+
+case dch_large_count_clamps_and_writes
+size 5 1 100
+emit 10
+print ABCDEF
+cup 1 1
+dch 99
+expect 0 1 ABCDE
+end
+
+case ich_large_count_clamps_and_writes
+size 5 1 100
+emit 10
+print ABCDEF
+cup 1 1
+ich 99
+expect 0 1 ABCDE
+end
+
+case decstbm_zero_bottom_defaults_to_rows_and_homes
+size 5 1 100
+emit 10
+print ABCDEF
+region 1 0
+print G
+expect 0 1 ABCDE|G
+end
+
+case csi_scroll_up_zero_defaults_to_one
+size 5 4 100
+emit 10
+cup 2 1
+print ABCDEF
+region 2 4
+scroll-up 0
+expect 0 1 |F
+end
+
+case deferred_wrap_below_region_at_bottom_creates_no_self_edge
+size 5 3 100
+emit 10
+region 1 2
+cup 3 5
+print AB
+expect 0 0 ||B<space><space><space>A
+end
+
+case same_size_resize_preserves_pending_construction
+size 5 2 100
+emit 10
+print ABCDE
+resize 5 2
+print F
+expect 1 0 ABCDEF
+end
+
+case csi_scroll_up_preserves_unaffected_pending
+size 5 3 100
+emit 10
+region 2 3
+print ABCDE
+scroll-up 1
+print F
+expect 1 0 ABCDEF
+end
+
+case csi_scroll_down_preserves_unaffected_pending
+size 5 3 100
+emit 10
+region 2 3
+print ABCDE
+scroll-down 1
+print F
+expect 1 0 ABCDEF
+end
+
+case saved_cursor_restore_restores_autowrap_mode
+size 5 2 100
+emit 10
+decawm off
+decsc
+decawm on
+decrc
+print ABCDEF
+expect 0 0 ABCDF
+end
+
+case alt_1049_exit_restores_autowrap_mode
+size 5 2 100
+emit 10
+decawm off
+alt-enter
+decawm on
+alt-exit
+print ABCDEF
+expect 0 0 ABCDF
+end
+
+case decawm_toggle_preserves_existing_pending
+size 5 2 100
+emit 10
+print ABCDE
+decawm off
+decawm on
+print F
+expect 1 0 ABCDEF
+end

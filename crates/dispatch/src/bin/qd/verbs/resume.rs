@@ -83,7 +83,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // `revive_claude` seam (which derives its own zmx name), so they are inert here.
     // `--alt-screen`/`--inline` (render) ARE consulted: the seam launches a native
     // claude pane whose render mode is a launch-time birth property, resolved via the
-    // shared `common::resolve_render_mode` below (identical to `qd connect`/`qd start`).
+    // shared `common::resolve_render_mode` below (identical to `qd attach`/`qd start`).
     let cwd_override = m.get_one::<String>("cwd").map(|s| s.as_str());
 
     let env = RealEnv;
@@ -150,7 +150,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // cold gate so a collision is surfaced even when the join reports the survivor
     // busy/idle, and so a Cold-MISREAD of an actually-live session is refused (it
     // would otherwise spawn a SECOND process on the same id — the orchestrator
-    // revival-ladder hazard). SHARED with connect via `common::refuse_id_collision`.
+    // revival-ladder hazard). SHARED with attach via `common::refuse_id_collision`.
     if let Some(code) =
         common::refuse_id_collision("resume", &session.session_id, &paths.sessions_dir)
     {
@@ -158,7 +158,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     }
     if let Some(pid) = common::alive_pid_for_id(&paths.sessions_dir, &session.session_id) {
         eprintln!(
-            "qd resume: session \"{}\" is already alive (PID {pid}). Use \"qd connect\" instead.",
+            "qd resume: session \"{}\" is already alive (PID {pid}). Use \"qd attach\" instead.",
             session.name.as_deref().unwrap_or(&session.session_id)
         );
         return 1;
@@ -173,7 +173,7 @@ pub fn run(m: &ArgMatches) -> i32 {
         // resume — "still alive" would be a false statement of fact. The gate's
         // LOGIC is unchanged (anything non-Cold refuses, exit 1); only this arm's
         // message states the true condition. Genuinely-alive statuses keep the
-        // byte-pinned pointer (now `qd connect` — attach retired, STATE 22).
+        // byte-pinned pointer to the human attach verb.
         // (Join structure note: a killed session WHOSE
         // TRANSCRIPT EXISTS surfaces as a ColdJsonl row — Cold, resumable, never
         // here; the Killed branch emits only sids no transcript row claimed. The
@@ -189,7 +189,7 @@ pub fn run(m: &ArgMatches) -> i32 {
             return 1;
         }
         eprintln!(
-            "Session is still alive (status: {}). Use \"qd connect\" instead.",
+            "Session is still alive (status: {}). Use \"qd attach\" instead.",
             session.status.as_str()
         );
         return 1;
@@ -219,31 +219,31 @@ pub fn run(m: &ArgMatches) -> i32 {
 
     // --- P4DB Phase A: RE-POINT qd resume onto the shared long-lived revive seam. ---
     // Re-home off the one-off `-p` stream-json drive (`launch_headless_embedded` with
-    // prompt `""` + cwd `None`) ONTO `revive_claude`, the SAME seam `qd connect`'s
-    // cold arm (connect.rs:65) and WP-B-CS-2's `revive_to_drive` (lifecycle.rs:371)
+    // prompt `""` + cwd `None`) ONTO `revive_claude`, the SAME seam `qd attach`'s
+    // cold arm (attach.rs) and WP-B-CS-2's `revive_to_drive` (lifecycle.rs:371)
     // already ride. It relaunches a native-TUI `claude --resume <id>` (provider seam,
     // NO `-p`/stream-json), detached + ready-gated (EventBootWaiter::wait_ready) so a
     // boot that never confirms FAILS LOUD (nonzero + actionable) — the silent-success
     // bug is closed by construction, and the fail-loud already lives inside the seam.
     //
     // REVIVE DETACHED (A3 §4 clause 5): `qd resume` does NOT attach a TTY — `qd
-    // connect` is the attach path. The seam returns a `ReviveHandle`; resume reports
+    // attach` is the attach path. The seam returns a `ReviveHandle`; resume reports
     // the addressable session and leaves attach to the human (do NOT mux.attach here).
     //
     // cwd (A3 clause 4): pass the parsed `--cwd` override; the seam resolves the
     // recorded `session.cwd` + the override via `resolve_resume_cwd` and threads the
     // result all the way to `mux.run_detached` — fixing the old `-p` path's cwd `None`
     // (which silently inherited the daemon cwd). render: the shared `resolve_render_mode`
-    // (flag > config > inline), identical to `qd connect`/`qd start`.
+    // (flag > config > inline), identical to `qd attach`/`qd start`.
     //
     // The always-headless policy (`driver::resume_is_headless`, driver.rs:169) is no
     // longer a router to the drive; its removal is gated to a later phase, so it is
     // simply no longer consulted here.
     let render = common::resolve_render_mode(m, &env);
-    match revive_claude(&session, cwd_override, render) {
+    match revive_claude(&session, cwd_override, render, false) {
         Ok(handle) => {
             println!(
-                "Resumed session \"{}\" from {} (detached); attach with \"qd connect {}\".",
+                "Resumed session \"{}\" from {} (detached); attach with \"qd attach {}\".",
                 handle.zmx_name,
                 dispatch::fmt::truncate_id_default(&session.session_id),
                 handle.zmx_name
@@ -255,7 +255,7 @@ pub fn run(m: &ArgMatches) -> i32 {
 }
 
 /// P0 wave-2 (spec-w2-env D1+D4) — the SHARED resume/revive env prep, the exact
-/// same sequence on both paths (`run`'s claude path and connect's
+/// same sequence on both paths (`run`'s claude path and attach's
 /// [`revive_claude`]): resolve the ids store ONCE; run the D4 same-name guard
 /// BEFORE any side effect (the spike hazard — the stale-kill must never destroy
 /// a DIFFERENT live session's pane; the target's own stale pane keeps the
@@ -267,9 +267,9 @@ pub fn run(m: &ArgMatches) -> i32 {
 /// set, overriding anything inherited through the caller's subtree) plus the
 /// captured backend pairs — so the env file + dot-source prefix are
 /// unconditional on every resume/revive branch (`--no-zmx` bare, `--no-attach`
-/// detached, default attach, and connect's revive all share the one
+/// detached, default attach, and attach's revive all share the one
 /// `claude_cmd` this returns). `verb` keys the per-path error wording
-/// ("resume" / "connect"); every `Err(code)` has already printed its error.
+/// ("resume" / "attach"); every `Err(code)` has already printed its error.
 #[allow(clippy::too_many_arguments)]
 fn prepare_claude_resume_env(
     verb: &str,
@@ -315,7 +315,7 @@ fn prepare_claude_resume_env(
 }
 
 /// The SHARED detached-revive seam (W1 phase 2): `run_detached` + the ADR-0005
-/// EVENT ready-wait, factored out of resume's `--no-attach` branch so `connect`
+/// EVENT ready-wait, factored out of resume's `--no-attach` branch so `attach`
 /// can reuse the EXACT same revive-to-drivable mechanics before its TTY attach.
 /// Returns `Ok(())` when the session is detached + confirmed ready, or `Err(code)`
 /// (already printed) on a launch / boot-confirm failure. The caller owns any
@@ -375,7 +375,7 @@ fn run_detached_revive(
 }
 
 /// A revived claude session's attach coordinates (W1 phase 2): the socket dir +
-/// zmx name a caller (`connect`) attaches to AFTER `revive_claude` brings the
+/// zmx name a caller (`attach`) attaches to AFTER `revive_claude` brings the
 /// session up detached + drivable.
 pub struct ReviveHandle {
     pub socket_dir: PathBuf,
@@ -385,7 +385,7 @@ pub struct ReviveHandle {
 /// WP-B5-ii-b (PROOF 1) — the resume argv fragment a cold-row revive passes to
 /// claude, built from the row's RECORDED `session_id` (`model::Session::session_id`
 /// — the durable identity the daemon minted onto the child-pid-keyed row). The
-/// connect→Cold→revive durability proof pins THIS wiring: the recorded id flows
+/// attach→Cold→revive durability proof pins THIS wiring: the recorded id flows
 /// into `--resume <id>` so revive resumes the SAME claude session, never a fresh
 /// one. Factored pure (no spawn) so the wiring is unit-testable on the default
 /// floor — the cheap mirror of the `#[ignore]` end-to-end seed
@@ -407,7 +407,7 @@ fn revive_resume_args(
     provider.resume_args(&resume_key, false)
 }
 
-/// W1 phase 2 — the SHARED cold→drivable claude revive, callable by `connect` for
+/// W1 phase 2 — the SHARED cold→drivable claude revive, callable by `attach` for
 /// the human "just works" auto-revive-then-attach path. This factors resume's
 /// claude relaunch PREP (cwd reality-check, claude_cmd build via the provider
 /// seam, env-file capture, zmx-name derive/validate, backend + canonical-dir
@@ -419,18 +419,19 @@ fn revive_resume_args(
 ///
 /// SCOPE: this is the ZMX/embedded detached revive — it deliberately does NOT carry
 /// resume's `--no-zmx` bare-exec branch nor resume's fused-default `zmx attach`
-/// path (those stay byte-stable in `run`). `connect` always wants detached-then-
+/// path (those stay byte-stable in `run`). `attach` always wants detached-then-
 /// attach, which is exactly this seam + a follow-up `mux.attach`.
 pub fn revive_claude(
     session: &dispatch::model::Session,
     cwd_override: Option<&str>,
     render: RenderMode,
+    fresh: bool,
 ) -> Result<ReviveHandle, i32> {
     let env = RealEnv;
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("qd connect: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd attach: HOME is not set — cannot resolve the session state dir.");
             return Err(1);
         }
     };
@@ -461,12 +462,27 @@ pub fn revive_claude(
     let flags = claude_flags(&env, &config_toml);
     let Some(provider_impl) = dispatch::provider::provider_for(&session.provider) else {
         eprintln!(
-            "qd connect: unknown provider \"{}\" — this engine supports: claude-code.",
+            "qd attach: unknown provider \"{}\" — this engine supports: claude-code.",
             session.provider
         );
         return Err(1);
     };
-    let extra = revive_resume_args(provider_impl, session);
+    // adoption:relaunch for zero-turn sessions: no JSONL exists, so --resume
+    // fails with "No conversation found". Use --session-id to start fresh under
+    // the same UUID. Also pass --name so claude writes the name into its new
+    // registry row; without it, the row's name is None and the adopt identity
+    // check (which requires the relaunched session to carry the requested name)
+    // fails with "resume identity mismatch".
+    let extra = if fresh {
+        let mut args = vec!["--session-id".to_string(), session.session_id.clone()];
+        if let Some(name) = session.name.as_deref().filter(|n| !n.is_empty()) {
+            args.push("--name".to_string());
+            args.push(name.to_string());
+        }
+        args
+    } else {
+        revive_resume_args(provider_impl, session)
+    };
     let base_claude_cmd = build_claude_cmd(&bin, &flags, &extra);
 
     // F1: capture backend env + write the self-deleting env file (lifecycle.ts:466-485).
@@ -478,9 +494,9 @@ pub fn revive_claude(
     }
 
     // P0 wave-2 (spec-w2-env D1+D4) — IDENTICAL to resume's claude path, via the
-    // shared prepare_claude_resume_env ("connect" keys the error wording).
+    // shared prepare_claude_resume_env ("attach" keys the error wording).
     let claude_cmd = prepare_claude_resume_env(
-        "connect",
+        "attach",
         &env,
         &home,
         &paths,
@@ -500,7 +516,7 @@ pub fn revive_claude(
             match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
-                    eprintln!("qd connect: {msg}");
+                    eprintln!("qd attach: {msg}");
                     return Err(1);
                 }
             }
@@ -522,7 +538,7 @@ pub fn revive_claude(
     let mut dirs = vec![canonical.clone()];
     dirs.extend(legacy);
     // r6 F1: the SAFE stale-pane clear (see `run`'s twin call; same contract).
-    common::clear_stale_panes("connect", mux, &dirs, &zmx_name)?;
+    common::clear_stale_panes("attach", mux, &dirs, &zmx_name)?;
 
     // Detached revive + ready-wait via the SHARED seam.
     run_detached_revive(mux, &canonical, &zmx_name, &claude_cmd, &cwd_path, &paths)?;
@@ -874,7 +890,7 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     if let Some(holder_pid) = common::alive_pid_for_id(&paths.sessions_dir, &session.session_id) {
         eprintln!(
             "qd resume: session \"{name}\" is already alive (PID {holder_pid}). \
-             Use \"qd connect\" instead."
+             Use \"qd attach\" instead."
         );
         return 1;
     }
@@ -951,8 +967,28 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
         .join("dispatch")
         .join("log")
         .join(format!("acp-{name}.log"));
+    // Get or mint the stable id for this ACP session. On resume the session UUID is
+    // already known → mint_or_get returns the existing id (no-op if already present).
+    // Mirrors the non-acp claude resume path (resume.rs common::ids_store_path arm).
+    // Fail-soft: a mint error is logged but does not abort the resume.
+    let acp_env = {
+        let ids_path = dispatch::idstore::ids_path(&paths.state_dir);
+        match dispatch::idstore::mint_or_get(
+            &ids_path,
+            &session.session_id,
+            Some(&name),
+            &RealClock,
+        ) {
+            Ok(id) => vec![("QD_SESSION_ID".to_string(), id)],
+            Err(e) => {
+                eprintln!("qd resume: could not get/mint stable id for acp session: {e}");
+                // Explicitly clear the value so the adapter cannot inherit the caller's id.
+                vec![("QD_SESSION_ID".to_string(), String::new())]
+            }
+        }
+    };
     let spawner = RealDaemonSpawner;
-    let spawned = match spawner.spawn_detached(&argv, &[], &cwd, &log_path) {
+    let spawned = match spawner.spawn_detached(&argv, &acp_env, &cwd, &log_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("qd resume: \"{name}\": acp adapter spawn failed: {e}");
@@ -1313,7 +1349,7 @@ mod tests {
     /// unconditional on every resume/revive branch. (The pair-set builder is
     /// the hoisted `dispatch::launch::launch_env_pairs`; resume always passes `Some`.)
     /// R2 (override-never-inherit, the D1-site-4 pattern on the REVIVE path):
-    /// an --alt-screen resume/connect-revive writes an env file carrying the
+    /// an --alt-screen resume/attach-revive writes an env file carrying the
     /// EXPLICIT `unset -v CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` (omitting the
     /// export alone would leave the child inheriting the var from an inline
     /// parent env), the unset PRECEDES the identity export, and the claude cmd
@@ -1664,10 +1700,10 @@ mod tests {
         // PID-file-phase detail (boot.rs run_pid_phase wording).
         assert_eq!(
             resume_boot_unconfirmed_line(
-                "PID file for \"wk\" did not appear within 40000ms — qd connect wk to inspect"
+                "PID file for \"wk\" did not appear within 40000ms — qd attach wk to inspect"
             ),
             "qd resume: session launched but did not confirm ready: \
-             PID file for \"wk\" did not appear within 40000ms — qd connect wk to inspect"
+             PID file for \"wk\" did not appear within 40000ms — qd attach wk to inspect"
         );
     }
 }

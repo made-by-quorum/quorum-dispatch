@@ -458,16 +458,15 @@ fn g_crud() {
     ));
     ok &= hist_ok;
 
-    // ATTACH (verb 6) + DETACH + REATTACH through `qd connect` over a PTY
-    // (the attach verb is a retired stub since STATE 22; same attach mechanic).
+    // ATTACH (verb 6) + DETACH + REATTACH through `qd attach` over a PTY.
     let mut att = QdAttach::spawn(&jail, name, 80, 24);
     let attached = att.wait_for("CRUD_SENTINEL_42", 4000) || att.is_alive();
-    detail.push_str(&format!("ATTACH: qd connect alive/replayed={attached}\n"));
+    detail.push_str(&format!("ATTACH: qd attach alive/replayed={attached}\n"));
     att.detach();
     // The daemon + session survive the detach (reattach must work).
     let mut att2 = QdAttach::spawn(&jail, name, 80, 24);
     let reattached = att2.is_alive();
-    detail.push_str(&format!("REATTACH: second qd connect alive={reattached}\n"));
+    detail.push_str(&format!("REATTACH: second qd attach alive={reattached}\n"));
     att2.detach();
     ok &= attached && reattached;
 
@@ -538,14 +537,13 @@ fn is_tmp_root_qrmux_path(dir: &Path) -> bool {
 }
 
 // ===========================================================================
-// G-ALT — ADOPTED-shape. vim/less altscreen through `qd connect` (embedded):
+// G-ALT — ADOPTED-shape. vim/less altscreen through `qd attach` (embedded):
 // ADR-0004 invariants: render-during, restore-equivalence, altscreen-replay
 // (REVERSED 2026-06-10 from no-altscreen-leak: the renderer now replays the
 // absorbed alt-screen state per client — ?1049h on attach into a fullscreen
 // app, ?1049l when it exits — so phone terminals track the inner app's
 // buffer; doc/inbox/2026-06-10-qrmux-phone-scroll-regression.md).
-// (Merge note: #51 side wrote `qd attach`; the verb is `qd connect` since
-// STATE 22 — phase side's rename kept.)
+// The live human-entry verb is `qd attach`.
 // ===========================================================================
 
 #[test]
@@ -627,7 +625,7 @@ fn g_alt() {
     jail.teardown();
 
     let verdict = if ok {
-        "G-ADOPTED G-ALT VERDICT: PASS — render-during + altscreen-replay (1049h/l ride-through + clean main-screen reattach) + restore-equivalence through qd connect (ADR-0004, reversed 2026-06-10)"
+        "G-ADOPTED G-ALT VERDICT: PASS — render-during + altscreen-replay (1049h/l ride-through + clean main-screen reattach) + restore-equivalence through qd attach (ADR-0004, reversed 2026-06-10)"
     } else {
         "G-ALT VERDICT: FAIL"
     };

@@ -14,11 +14,13 @@
 //!   see [`registry`] module docs. Lineage = `spawned_by` ONLY (ADD-3a/3b).
 
 pub mod acp_residence;
+pub mod adoption;
 pub mod archive;
 pub mod backends;
 pub mod boot;
 pub mod bootstrap;
 pub mod codes;
+pub mod conformance;
 pub mod control_sock;
 pub mod create;
 pub mod create_daemon;
