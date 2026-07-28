@@ -4,5 +4,6 @@
   "status": "cold",
   "live": false,
   "pid": null,
-  "provider": "claude-code"
+  "provider": "claude-code",
+  "jsonlPath": "<HOME>/.claude/projects/proj/44444444-dddd-4ddd-8ddd-444444444444.jsonl"
 }

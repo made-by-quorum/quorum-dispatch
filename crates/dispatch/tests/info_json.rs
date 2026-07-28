@@ -142,6 +142,13 @@ fn normalize_pid(out: &str, pid: i64) -> String {
     out.replace(&format!("\"pid\": {pid}"), "\"pid\": \"<PID>\"")
 }
 
+/// Replace the jail's volatile tempdir home prefix with `<HOME>` so a `jsonlPath`
+/// (which carries the temp home) is run-stable — the same NORMALIZATION-class
+/// idiom parity.rs / codex_ls.rs already use for their path-bearing goldens.
+fn normalize_home(out: &str, home: &Path) -> String {
+    out.replace(&home.to_string_lossy().into_owned(), "<HOME>")
+}
+
 const SID_LIVE: &str = "11111111-aaaa-4aaa-8aaa-111111111111";
 const SID_STALE: &str = "22222222-bbbb-4bbb-8bbb-222222222222";
 const SID_BARE: &str = "33333333-cccc-4ccc-8ccc-333333333333";
@@ -234,7 +241,7 @@ fn info_json_cold_row_golden() {
     j.write_cold_transcript(SID_COLD, "coldy");
     let (code, out, err) = j.run(&["info", "coldy", "--json"]);
     assert_eq!(code, 0, "stderr: {err}");
-    assert_golden("info-json-cold.json", &out);
+    assert_golden("info-json-cold.json", &normalize_home(&out, &j.home));
     assert!(
         out.contains("\"status\": \"cold\"") && out.contains("\"live\": false"),
         "cold row must be live:false: {out}"
