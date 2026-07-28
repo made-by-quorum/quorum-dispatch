@@ -49,6 +49,7 @@ fn subcommands() -> Vec<Command> {
         cmd_attach(),
         cmd_connect(),
         cmd_resume(),
+        cmd_wrap(),
         cmd_adopt(),
         cmd_start(),
         cmd_stop(),
@@ -177,10 +178,27 @@ fn cmd_resume() -> Command {
         .args(render_mode_flags())
 }
 
-// --- 3b. adopt <session> — self-adopt a live bare Claude session. ---
+// --- 3b. wrap <session> — wrap a live bare Claude session under managed qrmux. ---
+fn cmd_wrap() -> Command {
+    Command::new("wrap")
+        .about("Wrap a live bare Claude session into managed qrmux")
+        .override_help(help::WRAP)
+        .arg(positional("session"))
+        .arg(flag(
+            "force",
+            'f',
+            "Skip only the best-effort external idle heuristic",
+        ))
+}
+
+// --- 3c. adopt — hidden backward-compat alias for wrap. Remains registered and
+// hidden; invocations route transparently to adopt::run (the wrap handler) so
+// existing callers of `qd adopt <session>` keep working — the same pattern
+// `connect` follows for `attach` above. ---
 fn cmd_adopt() -> Command {
     Command::new("adopt")
-        .about("Adopt a live bare Claude session into managed qrmux")
+        .hide(true)
+        .about("(renamed — use qd wrap)")
         .override_help(help::ADOPT)
         .arg(positional("session"))
         .arg(flag(
@@ -1254,6 +1272,7 @@ mod tests {
             "connect",
             "attach",
             "resume",
+            "wrap",
             "adopt",
             "start",
             "stop",
@@ -1278,22 +1297,43 @@ mod tests {
         ] {
             assert!(names.contains(&v), "missing verb {v}");
         }
-        // 26 registrations here (`adopt` adds the self-adopt shutdown flow;
-        // `attach` is live; renamed `connect` stays registered+hidden as an
-        // erroring stub; `init` added with the eval-init shell integration;
-        // P0 W1 added `start`/`stop` with `new`/`kill` retained as retired
-        // stubs; transcript-archive-spec.md Atomic B's `backup` was retired by
-        // persist-relocation — transcript persistence now lives in frame as
-        // `qf persist`, in-crate, no cross-binary hop); the delivery/receipt
-        // contract (D1) added `delivery:recover`, the dead-dangling recovery
-        // verb; config + survey are dispatched pre-clap (hand-parsed).
-        assert_eq!(names.len(), 26);
+        // 27 registrations here (`wrap` is the primary self-wrap shutdown flow;
+        // renamed `adopt` stays registered+hidden as a backward-compat alias
+        // routing to the same handler; `attach` is live; renamed `connect` stays
+        // registered+hidden as an erroring stub; `init` added with the eval-init
+        // shell integration; P0 W1 added `start`/`stop` with `new`/`kill`
+        // retained as retired stubs; transcript-archive-spec.md Atomic B's
+        // `backup` was retired by persist-relocation — transcript persistence now
+        // lives in frame as `qf persist`, in-crate, no cross-binary hop); the
+        // delivery/receipt contract (D1) added `delivery:recover`, the
+        // dead-dangling recovery verb; config + survey are dispatched pre-clap
+        // (hand-parsed).
+        assert_eq!(names.len(), 27);
     }
 
     #[test]
-    fn adopt_force_is_a_plain_flag_after_the_session() {
+    fn wrap_force_is_a_plain_flag_after_the_session() {
+        let matches = parse(&["wrap", "bare-one", "--force"]).unwrap();
+        let (name, wrap) = matches.subcommand().unwrap();
+        assert_eq!(name, "wrap");
+        assert_eq!(
+            wrap.get_one::<String>("session").map(String::as_str),
+            Some("bare-one")
+        );
+        assert!(wrap.get_flag("force"));
+
+        let matches = parse(&["wrap", "bare-one"]).unwrap();
+        let (_, wrap) = matches.subcommand().unwrap();
+        assert!(!wrap.get_flag("force"));
+    }
+
+    // `adopt` is the hidden backward-compat alias for `wrap`; it must still parse
+    // the same positional + `-f/--force` surface so existing callers keep working.
+    #[test]
+    fn adopt_alias_force_is_a_plain_flag_after_the_session() {
         let matches = parse(&["adopt", "bare-one", "--force"]).unwrap();
-        let (_, adopt) = matches.subcommand().unwrap();
+        let (name, adopt) = matches.subcommand().unwrap();
+        assert_eq!(name, "adopt");
         assert_eq!(
             adopt.get_one::<String>("session").map(String::as_str),
             Some("bare-one")
@@ -1303,6 +1343,18 @@ mod tests {
         let matches = parse(&["adopt", "bare-one"]).unwrap();
         let (_, adopt) = matches.subcommand().unwrap();
         assert!(!adopt.get_flag("force"));
+    }
+
+    // The hidden `adopt` alias carries the redirect notice, exactly as `connect`
+    // does for `attach`; the primary `wrap` help teaches the real verb.
+    #[test]
+    fn adopt_alias_help_redirects_to_wrap() {
+        assert!(help::ADOPT.contains("(renamed — use qd wrap)"));
+        assert!(help::WRAP.contains("Wrap a live bare Claude Code session"));
+        assert!(!help::WRAP.contains("(renamed"));
+        // The hidden alias stays out of the top-level command list, like `connect`.
+        assert!(help::TOP.contains("wrap <session>"));
+        assert!(!help::TOP.contains("adopt <session>"));
     }
 
     #[test]

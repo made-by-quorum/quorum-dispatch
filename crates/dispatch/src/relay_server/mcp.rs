@@ -58,7 +58,7 @@ pub const INSTRUCTIONS: &str = "Messages from other sessions arrive as <channel 
 /// The verbatim `reply` tool description (server.ts:96 / fixture line 96).
 const REPLY_TOOL_DESCRIPTION: &str = "Reply to a message from another Claude session. Delivers to a sender waiting in qd send:relay --wait, or posts the reply back to the origin session as a new channel message. Returns an error (with guidance) when neither delivery path works — the reply has NOT reached anyone in that case.";
 
-const SHUTDOWN_TOOL_DESCRIPTION: &str = "Finish a self-adoption prepared by `qd adopt <name>`. Writes pending-adopt state, prints the complete manual qrmux restart command to the operator's terminal, returns that command here as a fallback, and only then attempts to terminate this Claude Code process. Never restarts automatically.";
+const SHUTDOWN_TOOL_DESCRIPTION: &str = "Finish a self-wrap prepared by `qd wrap <name>`. Writes pending-adopt state, prints the complete manual qrmux restart command to the operator's terminal, returns that command here as a fallback, and only then attempts to terminate this Claude Code process. Never restarts automatically.";
 
 /// The default `protocolVersion` echoed when the client omits one (the bun SDK
 /// echoes the client's request; the fixture shows `2024-11-05` in → out). If a
@@ -264,7 +264,7 @@ fn report_termination_failure(
     } = action;
     let cleanup = suppression_cleanup_status(state_dir, session_id);
     let failure = format!(
-        "qd adopt: adoption termination FAILED: {reason}; the session is still running; {cleanup}"
+        "qd wrap: adoption termination FAILED: {reason}; the session is still running; {cleanup}"
     );
     match tty_write(&failure) {
         Ok(()) => failure,

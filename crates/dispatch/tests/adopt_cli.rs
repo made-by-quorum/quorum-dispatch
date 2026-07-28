@@ -1,4 +1,8 @@
-//! Real-binary error surface for `qd adopt`.
+//! Real-binary error surface for `qd wrap` and its hidden backward-compat alias
+//! `qd adopt`. The verb was renamed `adopt` → `wrap`; `adopt` stays registered
+//! and hidden, routing to the same handler. The error-surface tests below invoke
+//! the `adopt` spelling, which now doubles as end-to-end coverage that the hidden
+//! alias still functions; `wrap_*` tests cover the primary verb and the redirect.
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -249,7 +253,7 @@ fn adopt_bare_send_real_binary_refuses_before_queueing() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     eprintln!("bare-send stderr evidence: {}", stderr.trim());
-    let expected = "Destination \"bare-one\" is non-receivable (bare); no message was queued. Ask the human to have that Claude Code session run `qd adopt bare-one`. Adoption requires a manual qrmux restart with `qd relay:serve` and `--dangerously-load-development-channels server:relay`.";
+    let expected = "Destination \"bare-one\" is non-receivable (bare); no message was queued. Ask the human to have that Claude Code session run `qd wrap bare-one`. Wrapping requires a manual qrmux restart with `qd relay:serve` and `--dangerously-load-development-channels server:relay`.";
     assert!(stderr.contains(expected), "{stderr}");
 }
 
@@ -354,5 +358,75 @@ fn adopt_external_uses_kernel_start_when_registry_started_at_lags() {
         output.status,
         String::from_utf8_lossy(&output.stdout),
         stderr
+    );
+}
+
+#[test]
+fn wrap_help_teaches_wrap_and_adopt_help_shows_redirect() {
+    let qd = env!("CARGO_BIN_EXE_qd");
+
+    // Primary verb: `qd wrap --help` teaches `wrap` and carries no redirect notice.
+    let wrap_help = Command::new(qd).args(["wrap", "--help"]).output().unwrap();
+    assert!(wrap_help.status.success(), "qd wrap --help exits 0");
+    let wrap_help = String::from_utf8_lossy(&wrap_help.stdout);
+    assert!(
+        wrap_help.contains("Usage: qd wrap"),
+        "wrap --help teaches wrap: {wrap_help}"
+    );
+    assert!(
+        wrap_help.contains("Wrap a live bare Claude Code session"),
+        "wrap --help teaches the wrap verb: {wrap_help}"
+    );
+    assert!(
+        !wrap_help.contains("renamed"),
+        "the primary verb carries no redirect notice: {wrap_help}"
+    );
+
+    // Hidden alias: `qd adopt --help` carries the redirect pointing at `qd wrap`,
+    // exactly as `connect` does for `attach`.
+    let adopt_help = Command::new(qd).args(["adopt", "--help"]).output().unwrap();
+    assert!(adopt_help.status.success(), "qd adopt --help exits 0");
+    let adopt_help = String::from_utf8_lossy(&adopt_help.stdout);
+    assert!(
+        adopt_help.contains("renamed") && adopt_help.contains("use qd wrap"),
+        "adopt --help redirects to qd wrap: {adopt_help}"
+    );
+}
+
+#[test]
+fn wrap_and_adopt_alias_route_to_identical_behavior() {
+    let qd = env!("CARGO_BIN_EXE_qd");
+    let run = |verb: &str| {
+        let jail = tempfile::tempdir().unwrap();
+        let output = Command::new(qd)
+            .args([verb, "missing-session"])
+            .env("HOME", jail.path())
+            .env_remove("QD_HOME")
+            .env_remove("QD_SESSION_ID")
+            .output()
+            .unwrap();
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+
+    let (wrap_code, wrap_err) = run("wrap");
+    let (adopt_code, adopt_err) = run("adopt");
+
+    // Byte-identical routing: the primary verb and the hidden alias reach the same
+    // handler and produce the same failure surface.
+    assert_eq!(wrap_code, Some(1), "wrap on a missing session fails closed");
+    assert_eq!(
+        wrap_code, adopt_code,
+        "wrap and adopt exit identically (wrap={wrap_code:?}, adopt={adopt_code:?})"
+    );
+    assert_eq!(
+        wrap_err, adopt_err,
+        "wrap and adopt print the identical error surface"
+    );
+    assert!(
+        wrap_err.contains("No session matching \"missing-session\""),
+        "clear fail-closed error: {wrap_err}"
     );
 }

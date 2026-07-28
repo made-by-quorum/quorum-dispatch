@@ -1,4 +1,4 @@
-//! `qd adopt <name>` — self-adopt preparation or fenced external adoption.
+//! `qd wrap <name>` — self-wrap preparation or fenced external wrap.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ fn run_for_query(query: &str, force: bool) -> i32 {
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(home) => std::path::PathBuf::from(home),
         None => {
-            eprintln!("qd adopt: current-session identity indeterminate (HOME is not set).");
+            eprintln!("qd wrap: current-session identity indeterminate (HOME is not set).");
             return 1;
         }
     };
@@ -76,7 +76,7 @@ fn run_for_query(query: &str, force: bool) -> i32 {
 fn run_self_adopt(target: &Session, relay_port: Option<u16>, home: &Path, paths: &QdPaths) -> i32 {
     let Some(relay_port) = relay_port else {
         eprintln!(
-            "qd adopt: \"{}\" is bare but its relay MCP server is not running, so Claude cannot call shutdown_for_adoption. Register the relay with `qd relay:register`, restart this Claude session, then retry self-adopt.",
+            "qd wrap: \"{}\" is bare but its relay MCP server is not running, so Claude cannot call shutdown_for_adoption. Register the relay with `qd relay:register`, restart this Claude session, then retry self-wrap.",
             target_label(target)
         );
         return 1;
@@ -85,14 +85,14 @@ fn run_self_adopt(target: &Session, relay_port: Option<u16>, home: &Path, paths:
 
     let Some(pid) = target.pid else {
         eprintln!(
-            "qd adopt: current-session identity indeterminate (target pid identity is incomplete)."
+            "qd wrap: current-session identity indeterminate (target pid identity is incomplete)."
         );
         return 1;
     };
     let pid = pid as i32;
     let Some(start_ms) = dispatch::effects::proc_start_ms(pid) else {
         eprintln!(
-            "qd adopt: current-session identity indeterminate (could not read kernel start time for target pid {pid})."
+            "qd wrap: current-session identity indeterminate (could not read kernel start time for target pid {pid})."
         );
         return 1;
     };
@@ -105,14 +105,14 @@ fn run_self_adopt(target: &Session, relay_port: Option<u16>, home: &Path, paths:
         RealClock.now_ms(),
     );
     if let Err(e) = adoption::write_prepared(&paths.state_dir, &record) {
-        eprintln!("qd adopt: could not prepare self-adoption state: {e}. Session left running.");
+        eprintln!("qd wrap: could not prepare self-wrap state: {e}. Session left running.");
         return 1;
     }
 
     println!(
-        "Self-adoption prepared for \"{}\".\n\
+        "Self-wrap prepared for \"{}\".\n\
          Claude Code: call the relay MCP tool `shutdown_for_adoption` now.\n\
-         It will register pending-adopt state, print the manual qrmux restart command to this terminal, and terminate this Claude process. It will never restart automatically.",
+         It will register pending-wrap state, print the manual qrmux restart command to this terminal, and terminate this Claude process. It will never restart automatically.",
         record.name
     );
     0
@@ -130,14 +130,14 @@ fn adoption_mode(current: whoami::Resolution, target: &Session) -> Result<Adopti
             Ok(true) => Ok(AdoptionMode::SelfAdopt),
             Ok(false) => Ok(AdoptionMode::External),
             Err(reason) => Err(format!(
-                "qd adopt: current-session identity indeterminate ({reason})."
+                "qd wrap: current-session identity indeterminate ({reason})."
             )),
         },
         // A caller with no managed/Claude identity is the ordinary external
         // operator shell. This is positive non-self context, not a failure.
         whoami::Resolution::NotManaged => Ok(AdoptionMode::External),
         whoami::Resolution::PartialCold(_) | whoami::Resolution::Indeterminate => Err(
-            "qd adopt: current-session identity indeterminate; refusing to decide whether the target is self or external."
+            "qd wrap: current-session identity indeterminate; refusing to decide whether the target is self or external."
                 .to_string(),
         ),
     }
@@ -155,10 +155,10 @@ fn require_bare_target(management: Management, label: &str) -> Result<(), String
     match management {
         Management::Bare => Ok(()),
         Management::Managed => Err(format!(
-            "qd adopt: \"{label}\" is already managed and receivable; there is nothing to adopt."
+            "qd wrap: \"{label}\" is already managed and receivable; there is nothing to wrap."
         )),
         Management::NotApplicable => Err(format!(
-            "qd adopt: \"{label}\" is not a live Claude Code session; only a live bare session can self-adopt."
+            "qd wrap: \"{label}\" is not a live Claude Code session; only a live bare session can self-wrap."
         )),
     }
 }
@@ -201,7 +201,7 @@ fn read_incarnation(home: &std::path::Path, name: Option<&str>) -> u64 {
         .unwrap_or(0)
 }
 
-const FORCE_NOTE: &str = "qd adopt: --force skipped only the best-effort idle heuristic; identity fences, SIGTERM-only grace, relaunch identity, and readiness checks remain enabled.";
+const FORCE_NOTE: &str = "qd wrap: --force skipped only the best-effort idle heuristic; identity fences, SIGTERM-only grace, relaunch identity, and readiness checks remain enabled.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RelaunchEvidence {
@@ -240,13 +240,13 @@ trait ExternalAdoptOps {
 
 fn run_external_adopt(target: &Session, force: bool, home: &Path, paths: &QdPaths) -> i32 {
     let Some(pid) = target.pid else {
-        eprintln!("qd adopt: external target identity is incomplete (pid is required).");
+        eprintln!("qd wrap: external target identity is incomplete (pid is required).");
         return 1;
     };
     let pid = pid as i32;
     let Some(start_ms) = dispatch::effects::proc_start_ms(pid) else {
         eprintln!(
-            "qd adopt: external target identity is incomplete (could not read kernel start time for target pid {pid})."
+            "qd wrap: external target identity is incomplete (could not read kernel start time for target pid {pid})."
         );
         return 1;
     };
@@ -265,7 +265,7 @@ fn run_external_adopt(target: &Session, force: bool, home: &Path, paths: &QdPath
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
-            eprintln!("qd adopt: cannot resolve the qd executable for relaunch: {error}");
+            eprintln!("qd wrap: cannot resolve the qd executable for relaunch: {error}");
             return 1;
         }
     };
@@ -314,7 +314,7 @@ fn execute_external_adopt(
     if let Err(error) = ops.write_prepared(record) {
         return Err(fail_with_cleanup(
             format!(
-                "qd adopt: could not write prepared adoption state: {error}. No signal was sent."
+                "qd wrap: could not write prepared wrap state: {error}. No signal was sent."
             ),
             record,
             ops,
@@ -323,7 +323,7 @@ fn execute_external_adopt(
     if let Err(error) = ops.register_pending(record) {
         return Err(fail_with_cleanup(
             format!(
-                "qd adopt: registration write failed before SIGTERM: {error}. No signal was sent."
+                "qd wrap: registration write failed before SIGTERM: {error}. No signal was sent."
             ),
             record,
             ops,
@@ -331,7 +331,7 @@ fn execute_external_adopt(
     }
     if let Err(error) = ops.verify_kill_fence(record) {
         return Err(fail_with_cleanup(
-            format!("qd adopt: kill-seam identity fence mismatch: {error}. No signal was sent."),
+            format!("qd wrap: kill-seam identity fence mismatch: {error}. No signal was sent."),
             record,
             ops,
         ));
@@ -339,7 +339,7 @@ fn execute_external_adopt(
     if let Err(error) = ops.send_sigterm(record.identity.pid) {
         return Err(fail_with_cleanup(
             format!(
-                "qd adopt: could not send SIGTERM to pid {}: {error}.",
+                "qd wrap: could not send SIGTERM to pid {}: {error}.",
                 record.identity.pid
             ),
             record,
@@ -351,7 +351,7 @@ fn execute_external_adopt(
         Ok(false) => {
             return Err(fail_with_cleanup(
                 format!(
-                    "qd adopt: process did not exit within {}ms after SIGTERM; the session may be mid-turn or in a protected state. If you are sure it is idle, retry with `qd adopt {} --force`.",
+                    "qd wrap: process did not exit within {}ms after SIGTERM; the session may be mid-turn or in a protected state. If you are sure it is idle, retry with `qd wrap {} --force`.",
                     ADOPT_SIGTERM_GRACE_MS, record.name
                 ),
                 record,
@@ -360,7 +360,7 @@ fn execute_external_adopt(
         }
         Err(error) => {
             return Err(fail_with_cleanup(
-                format!("qd adopt: could not verify process exit after SIGTERM: {error}."),
+                format!("qd wrap: could not verify process exit after SIGTERM: {error}."),
                 record,
                 ops,
             ));
@@ -371,7 +371,7 @@ fn execute_external_adopt(
         Ok(path) => path,
         Err(error) => {
             return Err(fail_with_cleanup(
-                format!("qd adopt: Stop-hook installation failed before relaunch: {error}."),
+                format!("qd wrap: Stop-hook installation failed before relaunch: {error}."),
                 record,
                 ops,
             ));
@@ -387,7 +387,7 @@ fn execute_external_adopt(
         Ok(evidence) => evidence,
         Err(error) => {
             return Err(fail_with_cleanup(
-                format!("qd adopt: qrmux relaunch failed: {error}. Session not marked managed."),
+                format!("qd wrap: qrmux relaunch failed: {error}. Session not marked managed."),
                 record,
                 ops,
             ));
@@ -402,7 +402,7 @@ fn execute_external_adopt(
     {
         return Err(fail_after_relaunch_with_cleanup(
             format!(
-                "qd adopt: resume identity mismatch: expected name={expected_name:?} sessionId={:?}, observed name={:?} sessionId={:?}. Session not marked managed.",
+                "qd wrap: resume identity mismatch: expected name={expected_name:?} sessionId={:?}, observed name={:?} sessionId={:?}. Session not marked managed.",
                 record.session_id, evidence.observed_name, evidence.observed_session_id
             ),
             record,
@@ -418,7 +418,7 @@ fn execute_external_adopt(
             .unwrap_or_default();
         return Err(fail_after_relaunch_with_cleanup(
             format!(
-                "qd adopt: readiness failed closed after {}ms: resume boot success {}; managed relay proof {}. Session not marked managed.{diagnostic}",
+                "qd wrap: readiness failed closed after {}ms: resume boot success {}; managed relay proof {}. Session not marked managed.{diagnostic}",
                 ADOPT_READINESS_TIMEOUT_MS,
                 confirmed_word(evidence.resume_boot_success),
                 confirmed_word(evidence.managed_relay_proof),
@@ -431,7 +431,7 @@ fn execute_external_adopt(
     if !any_identity_observed {
         return Err(fail_after_relaunch_with_cleanup(
             format!(
-                "qd adopt: resume identity mismatch: readiness completed but no live row proved name={expected_name:?} sessionId={:?}. Session not marked managed.",
+                "qd wrap: resume identity mismatch: readiness completed but no live row proved name={expected_name:?} sessionId={:?}. Session not marked managed.",
                 record.session_id
             ),
             record,
@@ -441,7 +441,7 @@ fn execute_external_adopt(
 
     if let Err(error) = ops.finalize(record) {
         return Err(fail_with_cleanup(
-            format!("qd adopt: final managed-registration write failed: {error}. Session not marked managed."),
+            format!("qd wrap: final managed-registration write failed: {error}. Session not marked managed."),
             record,
             ops,
         ));
@@ -459,7 +459,7 @@ fn confirmed_word(value: bool) -> &'static str {
 
 fn busy_error(name: &str, observed: &str) -> String {
     format!(
-        "qd adopt: \"{name}\" is busy by the best-effort idle heuristic: observed direct child process(es): {observed}. This check can detect some foreground tools, but generation with no running tool is externally invisible; it cannot prove the session is idle. If a human has confirmed the session is idle, rerun with `qd adopt {name} --force`."
+        "qd wrap: \"{name}\" is busy by the best-effort idle heuristic: observed direct child process(es): {observed}. This check can detect some foreground tools, but generation with no running tool is externally invisible; it cannot prove the session is idle. If a human has confirmed the session is idle, rerun with `qd wrap {name} --force`."
     )
 }
 
@@ -494,7 +494,7 @@ fn fail_after_relaunch_with_cleanup(
 fn external_success_lines(name: &str) -> [String; 2] {
     [
         format!(
-            "Adopted \"{name}\": verified the same session identity and managed relay readiness."
+            "Wrapped \"{name}\": verified the same session identity and managed relay readiness."
         ),
         format!("qd attach {name}"),
     ]
@@ -502,7 +502,7 @@ fn external_success_lines(name: &str) -> [String; 2] {
 
 fn external_relaunch_line(name: &str) -> String {
     format!(
-        "Relaunch spawned for \"{name}\". If adoption does not complete, reconnect with `qd attach {name}` once relaunch finishes; do not use `claude --resume`, because a second bare copy would fork the session."
+        "Relaunch spawned for \"{name}\". If wrapping does not complete, reconnect with `qd attach {name}` once relaunch finishes; do not use `claude --resume`, because a second bare copy would fork the session."
     )
 }
 
@@ -518,7 +518,7 @@ impl ExternalAdoptOps for RealExternalOps {
             .map_err(|error| format!("could not enumerate the process tree: {error}"))?;
         if !rows.contains_key(&claude_pid) {
             return Err(format!(
-                "qd adopt: target pid {claude_pid} disappeared before the idle heuristic"
+                "qd wrap: target pid {claude_pid} disappeared before the idle heuristic"
             ));
         }
         let children: Vec<i32> = rows
@@ -744,9 +744,9 @@ impl ExternalAdoptOps for RealExternalOps {
             failures.push(error);
         }
         if failures.is_empty() {
-            "Adoption state rolled back.".to_string()
+            "Wrap state rolled back.".to_string()
         } else {
-            format!("Adoption state cleanup FAILED: {}", failures.join("; "))
+            format!("Wrap state cleanup FAILED: {}", failures.join("; "))
         }
     }
 }
@@ -1135,7 +1135,7 @@ mod tests {
 
         fn cleanup(&mut self, _session_id: &str) -> String {
             self.events.push("cleanup");
-            "Adoption state rolled back.".to_string()
+            "Wrap state rolled back.".to_string()
         }
     }
 
@@ -1296,7 +1296,7 @@ mod tests {
             execute_external_adopt(Some("bare-one"), &record(), false, &mut ops).unwrap_err();
         assert_eq!(
             error,
-            "qd adopt: \"bare-one\" is busy by the best-effort idle heuristic: observed direct child process(es): pid 5001 argv=[\"/bin/bash\", \"-lc\", \"sleep 30\"]. This check can detect some foreground tools, but generation with no running tool is externally invisible; it cannot prove the session is idle. If a human has confirmed the session is idle, rerun with `qd adopt bare-one --force`."
+            "qd wrap: \"bare-one\" is busy by the best-effort idle heuristic: observed direct child process(es): pid 5001 argv=[\"/bin/bash\", \"-lc\", \"sleep 30\"]. This check can detect some foreground tools, but generation with no running tool is externally invisible; it cannot prove the session is idle. If a human has confirmed the session is idle, rerun with `qd wrap bare-one --force`."
         );
         assert_eq!(ops.events, vec!["idle"]);
     }
@@ -1315,7 +1315,7 @@ mod tests {
             ops.events,
             vec!["prepared", "pending", "fence", "term", "grace", "hook", "relaunch", "final"]
         );
-        assert_eq!(FORCE_NOTE, "qd adopt: --force skipped only the best-effort idle heuristic; identity fences, SIGTERM-only grace, relaunch identity, and readiness checks remain enabled.");
+        assert_eq!(FORCE_NOTE, "qd wrap: --force skipped only the best-effort idle heuristic; identity fences, SIGTERM-only grace, relaunch identity, and readiness checks remain enabled.");
     }
 
     #[test]
@@ -1349,7 +1349,7 @@ mod tests {
             error.contains("did not exit within 5000ms after SIGTERM"),
             "{error}"
         );
-        assert!(error.contains("qd adopt bare-one --force"), "{error}");
+        assert!(error.contains("qd wrap bare-one --force"), "{error}");
         assert_eq!(
             ops.events,
             vec!["idle", "prepared", "pending", "fence", "term", "grace", "cleanup"]
@@ -1460,7 +1460,7 @@ mod tests {
         let error =
             execute_external_adopt(Some("bare-one"), &record(), false, &mut prepared).unwrap_err();
         assert!(
-            error.contains("could not write prepared adoption state"),
+            error.contains("could not write prepared wrap state"),
             "{error}"
         );
         assert_eq!(prepared.events.last(), Some(&"cleanup"));
@@ -1509,13 +1509,13 @@ mod tests {
         assert_eq!(
             external_success_lines("bare-one"),
             [
-                "Adopted \"bare-one\": verified the same session identity and managed relay readiness.".to_string(),
+                "Wrapped \"bare-one\": verified the same session identity and managed relay readiness.".to_string(),
                 "qd attach bare-one".to_string(),
             ]
         );
         assert_eq!(
             external_relaunch_line("bare-one"),
-            "Relaunch spawned for \"bare-one\". If adoption does not complete, reconnect with `qd attach bare-one` once relaunch finishes; do not use `claude --resume`, because a second bare copy would fork the session."
+            "Relaunch spawned for \"bare-one\". If wrapping does not complete, reconnect with `qd attach bare-one` once relaunch finishes; do not use `claude --resume`, because a second bare copy would fork the session."
         );
     }
 

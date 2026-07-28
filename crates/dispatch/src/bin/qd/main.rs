@@ -159,7 +159,7 @@ fn run_adoption_stop(args: &[String]) -> i32 {
 /// `qd adoption:relaunch`: hidden verb used by the external-adoption flow to
 /// relaunch a session's Claude process without depending on a live registry row.
 ///
-/// When `qd adopt` SIGTERMs a bare session and the process exits, Claude may
+/// When `qd wrap` SIGTERMs a bare session and the process exits, Claude may
 /// delete its own registry row on exit (zero-turn sessions that never wrote a
 /// JSONL file leave no tombstone at all). `qd resume <name>` would fail with
 /// "No session matching" because the row is gone. This verb bypasses that

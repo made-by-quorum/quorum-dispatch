@@ -37,6 +37,10 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         // so existing shell wrappers that call `qd connect <session>` keep working.
         Some(("connect", m)) => attach::run(m),
         Some(("resume", m)) => resume::run(m),
+        Some(("wrap", m)) => adopt::run(m),
+        // `adopt` was renamed to `wrap`; kept as a hidden backward-compat alias
+        // so existing callers of `qd adopt <session>` keep working (same pattern
+        // as `connect` → `attach` above).
         Some(("adopt", m)) => adopt::run(m),
         // P0 W1 (qb spec-cli §11): start/stop are the lifecycle verbs — same
         // backends as the old new/kill (renamed, not forked). new/kill are

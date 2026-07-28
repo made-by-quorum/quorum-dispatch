@@ -1591,8 +1591,8 @@ fn no_relay_exit(name: &str, message: &str, target_session: Option<&Session>) ->
 fn bare_destination_message(name: &str) -> String {
     format!(
         "Destination \"{name}\" is non-receivable (bare); no message was queued. \
-         Ask the human to have that Claude Code session run `qd adopt {name}`. \
-         Adoption requires a manual qrmux restart with `qd relay:serve` and \
+         Ask the human to have that Claude Code session run `qd wrap {name}`. \
+         Wrapping requires a manual qrmux restart with `qd relay:serve` and \
          `--dangerously-load-development-channels server:relay`."
     )
 }
@@ -1981,11 +1981,11 @@ mod tests {
     }
 
     #[test]
-    fn adopt_guidance_for_bare_destination_is_actionable_and_non_queuing() {
+    fn wrap_guidance_for_bare_destination_is_actionable_and_non_queuing() {
         let message = bare_destination_message("bare-one");
         assert_eq!(
             message,
-            "Destination \"bare-one\" is non-receivable (bare); no message was queued. Ask the human to have that Claude Code session run `qd adopt bare-one`. Adoption requires a manual qrmux restart with `qd relay:serve` and `--dangerously-load-development-channels server:relay`."
+            "Destination \"bare-one\" is non-receivable (bare); no message was queued. Ask the human to have that Claude Code session run `qd wrap bare-one`. Wrapping requires a manual qrmux restart with `qd relay:serve` and `--dangerously-load-development-channels server:relay`."
         );
     }
 

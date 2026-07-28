@@ -88,16 +88,26 @@ Options:
   -h, --help         display help for command
 "####;
 
-pub const ADOPT: &str = r####"Usage: qd adopt [options] <session>
+pub const WRAP: &str = r####"Usage: qd wrap [options] <session>
 
-Adopt a live bare Claude Code session under qrmux with the relay development
+Wrap a live bare Claude Code session under qrmux with the relay development
 channel enabled.
 
-When run from the target session, self-adoption prepares the existing manual
+When run from the target session, self-wrap prepares the existing manual
 shutdown flow. For an external target, qd uses a best-effort foreground-child
 idle heuristic, sends SIGTERM only after identity re-fencing, installs a
 session-scoped Stop hook, resumes the same transcript under qrmux, and marks the
-adoption final only after managed readiness is positively observed.
+wrap final only after managed readiness is positively observed.
+
+Options:
+  -f, --force  Skip only the best-effort external idle heuristic
+  -h, --help   display help for command
+"####;
+
+// `adopt` is the retired spelling, kept as a hidden backward-compat alias for wrap.
+pub const ADOPT: &str = r####"Usage: qd adopt [options] <session>
+
+(renamed — use qd wrap)
 
 Options:
   -f, --force  Skip only the best-effort external idle heuristic
@@ -473,7 +483,7 @@ Commands:
   ls|list [options]                         List Claude Code sessions (use --json for scripting)
   attach <session>                          Get into a session (live/cold Claude → terminal; codex → driving guidance)
   resume [options] <session>                Resume a dead session (wraps in zmx by default)
-  adopt <session>                           Prepare this bare Claude session for a manual qrmux relaunch
+  wrap <session>                            Prepare this bare Claude session for a manual qrmux relaunch
   start [options] <name> [claudeArgs...]    Create a new session (Claude Code in zmx, or OpenCode server)
   stop [options] <session>                  Stop a session
   kill [options]                            (retired — use qd stop)

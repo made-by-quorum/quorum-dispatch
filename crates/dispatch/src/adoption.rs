@@ -576,7 +576,7 @@ pub fn load_prepared(
     match matches.len() {
         1 => validate_prepared(matches.pop().expect("len 1"), claude_pid),
         0 => Err(
-            "no prepared self-adoption request for this Claude session; run `qd adopt <name>` first"
+            "no prepared self-wrap request for this Claude session; run `qd wrap <name>` first"
                 .to_string(),
         ),
         n => Err(format!(
@@ -946,7 +946,7 @@ pub fn find_claude_ancestor(relay_pid: i32, rows: &HashMap<i32, ProcRow>) -> Opt
 /// the MCP result. It never goes to the relay's protocol stdout.
 pub fn shutdown_notice(record: &AdoptRecord) -> String {
     format!(
-        "qd adopt: pending adoption registered for \"{}\".\n\
+        "qd wrap: pending adoption registered for \"{}\".\n\
          Claude Code is about to be terminated. It will NOT restart automatically.\n\
          If termination is suppressed or fails, an explicit failure line will follow.\n\
          Restart it manually in this terminal with:\n{}",

@@ -104,7 +104,7 @@ fn resolve_identity(
 }
 
 /// The shipped four-state identity resolver with real storage supplied through
-/// injected env/exec seams. `qd adopt` calls this function directly so it uses
+/// injected env/exec seams. `qd wrap` calls this function directly so it uses
 /// the same QD_SESSION_ID-preferred path, conflict handling, and ppid fallback as
 /// `qd whoami` rather than re-reading identity variables ad hoc.
 pub(super) fn resolve_current_identity(
