@@ -40,6 +40,7 @@ use crate::relay::{RelayContract, RelayError};
 pub mod acp;
 pub mod codex;
 pub mod fixture;
+pub mod opencode;
 pub mod pi;
 
 pub use fixture::FixtureDaemonProvider;

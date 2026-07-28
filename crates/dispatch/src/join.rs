@@ -178,6 +178,15 @@ pub struct JoinInputs {
     /// pi store is empty OR its root is absent (`scan_transcripts` returns empty on
     /// a missing root) → a clean zero, byte-stable no-op for every non-pi fleet.
     pub pi_cold: Vec<TranscriptMeta>,
+    /// lsview A3: COLD OpenCode rows — sessions read from the monolithic
+    /// `opencode.db` `session` table (via [`gather_opencode`]). The ColdJsonl
+    /// analog for the OpenCode provider (the way `codex_cold` is for codex). Their
+    /// stats arrive PRE-DERIVED on the row (R1's ONE enumerate query), NOT via the
+    /// shared `stats_for` cache — an OpenCode SQL read is not a transcript read, so
+    /// it never touches the A1 read-counter. EMPTY when the OpenCode store is empty
+    /// OR its root is absent → a clean zero, byte-stable no-op for every non-opencode
+    /// fleet.
+    pub opencode_cold: Vec<OpencodeColdRow>,
 }
 
 /// A discovered COLD codex row (codex-p2-spec section 7.4) — a foreign or dead
@@ -198,6 +207,36 @@ pub struct CodexColdRow {
     pub jsonl_path: Option<String>,
     /// Last-active epoch ms (sqlite `updated_at` seconds → ms, or the rollout
     /// mtime), for the lastActive sort. None → 0 in the sort.
+    pub last_active_ms: Option<i64>,
+}
+
+/// A discovered COLD OpenCode row (lsview A3) — an OpenCode session read from the
+/// monolithic `opencode.db` `session` table (via `provider::opencode`). The
+/// ColdJsonl analog for the OpenCode provider, the way [`CodexColdRow`] is for
+/// codex: a small pre-derived carrier so the pure join stays I/O-free. Unlike the
+/// pi cold path (per-session transcript files whose stats ride the shared
+/// `stats_for` cache), OpenCode's stats are pre-aggregated COLUMNS read in ONE
+/// query — so they arrive already-derived on this struct and NEVER route through
+/// the A1 transcript-read cache/counter (an OpenCode SQL read is not a transcript
+/// read). Built by [`gather_opencode`]; emitted as a `Cold` row carrying provider
+/// `opencode`. EMPTY when no OpenCode store exists → byte-stable no-op.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpencodeColdRow {
+    /// `session.id` (`ses_…`) — the session id / dedup key.
+    pub id: String,
+    /// `session.title` (fallback `session.slug`), nonempty → None otherwise.
+    pub name: Option<String>,
+    /// `session.directory` — the absolute cwd, nonempty → None otherwise.
+    pub cwd: Option<String>,
+    /// turns = `count(*) FROM message WHERE session_id = id`.
+    pub turns: u64,
+    /// Cumulative input-side tokens (`tokens_input + tokens_cache_read +
+    /// tokens_cache_write`). OpenCode has NO on-disk live context-window
+    /// occupancy gauge (R1 §9), so this is the cumulative input-side total — the
+    /// closest available analog of claude's occupancy formula.
+    pub tokens: u64,
+    /// `session.time_updated` (epoch ms) — the lastActive signal (the only
+    /// timestamp a cold row renders).
     pub last_active_ms: Option<i64>,
 }
 
@@ -844,6 +883,64 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
         });
     }
 
+    // --- COLD OpenCode rows (lsview A3 — the ColdJsonl analog for the OpenCode
+    //     provider, the way the codex/pi cold branches above are for theirs). An
+    //     ADDITIVE step: sessions read from the monolithic `opencode.db`
+    //     (`gather_opencode`), already ordered; here we only drop any id already
+    //     seen as live/cold/tombstoned (the SAME seen-guard the other cold branches
+    //     use). Unlike pi, the stats are PRE-DERIVED on the row (R1's ONE enumerate
+    //     query — tokens are aggregated columns, turns a `message` count), so
+    //     nothing is read via `stats_for` and NO A1 transcript-read counter is
+    //     touched (an OpenCode SQL read is not a transcript read). Emitted as `Cold`
+    //     ColdJsonl-shaped rows carrying provider "opencode", with NO zmx name-merge
+    //     (OpenCode is daemon-/process-hosted, not a mux pane) and NO per-session
+    //     jsonl file (the db is not a per-session transcript → jsonlPath None).
+    //     EMPTY for every non-opencode fleet → byte-stable. ---
+    for cold in &inputs.opencode_cold {
+        if seen_session_ids.contains(&cold.id) {
+            continue;
+        }
+        seen_session_ids.insert(cold.id.clone());
+        let name = nonempty(cold.name.clone());
+        sessions.push(Session {
+            // A present title/slug is a derived label (OpenCode always writes one),
+            // not necessarily human-chosen — treat present as named so it surfaces
+            // in the default view (the codex cold-row posture).
+            user_named: Some(name.is_some()),
+            name,
+            session_id: cold.id.clone(),
+            code: None,
+            qd_id: None,
+            pid: None,
+            status: SessionStatus::Cold,
+            zmx_name: None,
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: cold.turns,
+            tokens: cold.tokens,
+            cwd: nonempty(cold.cwd.clone()),
+            last_active_ms: cold.last_active_ms,
+            // Cold rows do not serialize `version`/`startedAt` in the ColdJsonl
+            // JSON (render.rs:151-170, TS session.ts:960-977), and codex/pi cold
+            // rows carry both None — OpenCode matches for cross-provider cold-row
+            // uniformity (neither is a rendered surface for a cold row here).
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: None,
+            last_turns: None,
+            // lsview A3: the OpenCode provider value — a cold opencode row is the
+            // opencode lane by construction (read from the opencode store). ACTING
+            // verbs route it through the opencode provider dispatch, NOT the
+            // unknown-provider refusal (the pi/codex carried-constraint posture).
+            provider: "opencode".to_string(),
+            entrypoint: None,
+            lineage: None,
+            which_branch: SessionBranch::ColdJsonl,
+        });
+    }
+
     // --- Sort by lastActive descending (session.ts:1043-1045). null → 0. ---
     // TS Array.sort is stable; Rust sort_by_key is stable — equal keys keep order.
     sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active_ms.unwrap_or(0)));
@@ -1219,6 +1316,12 @@ pub fn gather_with_dirs(
     //     The claude/codex branches are byte-untouched. ---
     let (pi_status_for, pi_turns_for) = gather_pi(&registry);
 
+    // --- OpenCode gather step (lsview A3) — ADDITIVE, reads the OpenCode store
+    //     ONLY. ONE read-only query over `opencode.db`; a cheap no-op when no
+    //     OpenCode store exists. The claude/codex/pi branches are byte-untouched,
+    //     and this never touches the A1 transcript-read cache/counter. ---
+    let opencode_cold = gather_opencode(env);
+
     JoinInputs {
         zmx_sessions,
         registry,
@@ -1238,6 +1341,7 @@ pub fn gather_with_dirs(
         pi_status_for,
         pi_turns_for,
         pi_cold,
+        opencode_cold,
     }
 }
 
@@ -1509,6 +1613,50 @@ fn gather_codex(
     });
 
     (status_for, jsonl_for, cold, stats_for)
+}
+
+/// The OpenCode gather step (lsview A3) — the OpenCode analog of [`gather_codex`],
+/// kept in ONE place so the claude/codex/pi gather stays untouched. Reads the
+/// monolithic `opencode.db` `session` table in ONE read-only query (via
+/// `provider::opencode`) and returns the discovered sessions as cold rows.
+///
+/// PERMISSIVE (L8 / R1 §5, §7): an unresolvable store root, a missing/garbage db,
+/// or a malformed row contributes NOTHING and never errors — `opencode::sessions`
+/// degrades every failure to empty. A cheap no-op when no OpenCode store exists.
+///
+/// The stats (turns, tokens) are PRE-AGGREGATED columns read here in the single
+/// enumerate query — they do NOT flow through the shared `stats_for` cache and do
+/// NOT touch the A1 transcript-read counter (an OpenCode SQL read is not a
+/// transcript read; the coordinator's cache-key ruling). Live-wins dedup against
+/// live/tombstoned OpenCode rows is handled by the pure join's `seen_session_ids`
+/// guard (OpenCode `ses_…` ids share no id-space with claude/codex).
+fn gather_opencode(env: &dyn Env) -> Vec<OpencodeColdRow> {
+    use crate::provider::opencode;
+    let Some(store_dir) = opencode::store_dir(env) else {
+        return Vec::new();
+    };
+    opencode::sessions(&store_dir)
+        .into_iter()
+        .map(|s| {
+            // name = title || slug (R1 §5 fallback). tokens = cumulative input-side
+            // (input + cache_read + cache_write), saturating so a malformed negative
+            // column never underflows u64. turns/timestamps carried as-is (ms).
+            let name = nonempty(Some(s.title)).or_else(|| nonempty(Some(s.slug)));
+            let tokens = s
+                .tokens_input
+                .saturating_add(s.tokens_cache_read)
+                .saturating_add(s.tokens_cache_write)
+                .max(0) as u64;
+            OpencodeColdRow {
+                id: s.id,
+                name,
+                cwd: nonempty(Some(s.directory)),
+                turns: s.turns.max(0) as u64,
+                tokens,
+                last_active_ms: Some(s.time_updated_ms),
+            }
+        })
+        .collect()
 }
 
 // --- small helpers ---
