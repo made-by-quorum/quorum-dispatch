@@ -988,6 +988,16 @@ pub fn gather_with_dirs(
         .expect("claude-code provider is always registered");
     let transcripts = claude.scan_transcripts(&paths.projects_dir);
 
+    // lsview A1: the persistent per-transcript stats cache. ONE cache, shared by
+    // EVERY provider's stats acquisition below (claude here, codex in
+    // `gather_codex`) — the cache is provider-agnostic; each site injects its own
+    // reader. Built from the state dir (the `marks.jsonl` sibling), consulted at
+    // every `read_stats` site, persisted once after the gather. A warm `ls` over
+    // an unchanged transcript fleet re-reads NO transcript content. The reader is
+    // ALWAYS invoked with `include_preview = true` (store full, serve subsets), so
+    // a preview request is always servable from a warm hit.
+    let mut stats_cache = crate::stats_cache::StatsCache::load(&paths.state_dir);
+
     let mut stats_for: HashMap<PathBuf, JsonlStats> = HashMap::new();
     let mut jsonl_path_for: HashMap<String, PathBuf> = HashMap::new();
 
@@ -1010,9 +1020,10 @@ pub fn gather_with_dirs(
                 pid: scanned.entry.pid,
             };
             if let Some(p) = prov.transcript_path(&paths.projects_dir, &key) {
-                stats_for
-                    .entry(p.clone())
-                    .or_insert_with(|| jsonl::read_stats(&p, opts.include_preview));
+                stats_for.entry(p.clone()).or_insert_with(|| {
+                    stats_cache
+                        .get_or_read(&p, opts.include_preview, |pp| jsonl::read_stats(pp, true))
+                });
                 jsonl_path_for.insert(sid.clone(), p);
             }
         }
@@ -1034,9 +1045,10 @@ pub fn gather_with_dirs(
                     pid: t.data.pid,
                 };
                 if let Some(p) = prov.transcript_path(&paths.projects_dir, &key) {
-                    stats_for
-                        .entry(p.clone())
-                        .or_insert_with(|| jsonl::read_stats(&p, opts.include_preview));
+                    stats_for.entry(p.clone()).or_insert_with(|| {
+                        stats_cache
+                            .get_or_read(&p, opts.include_preview, |pp| jsonl::read_stats(pp, true))
+                    });
                     jsonl_path_for.insert(sid.clone(), p);
                 }
             }
@@ -1045,9 +1057,9 @@ pub fn gather_with_dirs(
     // Cold transcripts: getJsonlStats per scanned file (the join reads stats_for
     // by transcript path). Pre-gather every transcript's stats.
     for t in &transcripts {
-        stats_for
-            .entry(t.path.clone())
-            .or_insert_with(|| jsonl::read_stats(&t.path, opts.include_preview));
+        stats_for.entry(t.path.clone()).or_insert_with(|| {
+            stats_cache.get_or_read(&t.path, opts.include_preview, |pp| jsonl::read_stats(pp, true))
+        });
     }
 
     // --- codex gather step (codex-p2-spec section 7.4) — ADDITIVE. Resolves the
@@ -1056,7 +1068,7 @@ pub fn gather_with_dirs(
     //     hosts) or there are no codex rows + no on-disk threads. The claude branches
     //     above are byte-untouched: this reads the codex root only. ---
     let (codex_status_for, codex_jsonl_for, codex_cold, codex_stats_for) =
-        gather_codex(env, &registry);
+        gather_codex(env, &registry, &mut stats_cache);
     // The codex rollout path is resolved off the codex root (NOT paths.projects_dir);
     // surface it into jsonl_path_for so the live codex row carries jsonlPath = the
     // rollout path (the per-row gather loop above resolved claude rows under
@@ -1070,6 +1082,19 @@ pub fn gather_with_dirs(
     // new keys (no claude/codex collision — different roots).
     for (path, stats) in codex_stats_for {
         stats_for.entry(path).or_insert(stats);
+    }
+
+    // lsview A1: every stats-acquisition site above (claude + codex) has now run
+    // through `stats_cache`. Persist the snapshot atomically (tmp + rename;
+    // best-effort — a write failure never fails the `ls`). An all-hit run is not
+    // dirty and skips the write entirely. `QD_CACHE_STATS=1` emits a one-line
+    // hit/miss/rebuild summary to stderr (a cheap real-fleet observability hook).
+    let _ = stats_cache.persist();
+    if env
+        .var("QD_CACHE_STATS")
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        eprintln!("{}", stats_cache.debug_line());
     }
 
     // --- pi gather step (B1) — ADDITIVE, ONLY touches pi rows. Resolves each live
@@ -1202,6 +1227,10 @@ fn gather_pi(registry: &[ScannedEntry]) -> (HashMap<String, SessionStatus>, Hash
 fn gather_codex(
     env: &dyn Env,
     registry: &[ScannedEntry],
+    // lsview A1: the SHARED stats cache (provider-agnostic). The codex rollout
+    // reads below route through it exactly like the claude sites — the cache holds
+    // no codex-specific code; this site just injects the codex reader.
+    stats_cache: &mut crate::stats_cache::StatsCache,
 ) -> (
     HashMap<String, SessionStatus>,
     HashMap<String, PathBuf>,
@@ -1267,18 +1296,33 @@ fn gather_codex(
         // else date-walk tier 2). None ⇒ a fresh thread with no rollout yet (lazy
         // rollout — W4 fact): no jsonlPath, Idle status (the absent-from-map case).
         if let Some(path) = provider.transcript_path(&sessions_root, &key) {
-            // Rollout-tail status (NO socket): open turn ⇒ Busy, balanced ⇒ Idle,
-            // no anchors/unreadable ⇒ None (the join falls back to Idle).
-            if let Some(status) = codex::derive_status(&codex::rollout::read_lines(&path)) {
+            // lsview A1 (F1): the rollout-tail STATUS and the occupancy STATS from
+            // ONE content read, BOTH served through the shared cache. Pre-fix, the
+            // status read (`derive_status` over `read_lines`) ran here
+            // UNCONDITIONALLY on every `ls` — uncached and invisible to the counter
+            // seam — so a warm `ls` still re-read every live codex rollout in full.
+            // Now the status-aware seam memoizes the derived status ALONGSIDE the
+            // stats in the same `(path, mtime, size)` entry: a warm hit re-reads
+            // NOTHING (status AND stats) and the counter observes the read. The
+            // injected reader does a SINGLE `read_lines` pass, deriving both stats
+            // and the connectionless status (open turn ⇒ Busy, balanced ⇒ Idle, no
+            // anchors/unreadable ⇒ None → the join falls back to Idle). No socket.
+            //
+            // `include_preview=false` is preserved (codex live previews are not a
+            // rendered surface here); the reader still reads FULL so the store is
+            // preview-complete — the served stats are byte-identical to
+            // `read_stats(path, false)`, and turns still derive from the rollout's
+            // task_complete anchors (Pete #5 occupancy from the token_count tail).
+            let (stats, status) = stats_cache.get_or_read_with_status(&path, false, |pp| {
+                let lines = codex::rollout::read_lines(pp);
+                let stats = codex::rollout::read_stats_from_lines(&lines, true);
+                let status = codex::derive_status(&lines);
+                (stats, status)
+            });
+            if let Some(status) = status {
                 status_for.insert(sid.clone(), status);
             }
-            // Occupancy (Pete #5): the rollout reader is codex-aware; the claude
-            // `stats_for` pre-gather never reaches the codex root. `include_preview`
-            // is false (codex live previews are not a rendered surface here; turns
-            // still derive from the rollout's task_complete anchors).
-            stats_for
-                .entry(path.clone())
-                .or_insert_with(|| codex::rollout::read_stats(&path, false));
+            stats_for.entry(path.clone()).or_insert(stats);
             jsonl_for.insert(sid, path);
         }
     }
@@ -1319,7 +1363,8 @@ fn gather_codex(
         }
         // Permissive enrichment: read the rollout for a cwd (session_meta). A
         // garbage/gzip rollout yields nothing → the row still surfaces (id-only).
-        let stats = codex::rollout::read_stats(&meta.path, false);
+        let stats =
+            stats_cache.get_or_read(&meta.path, false, |pp| codex::rollout::read_stats(pp, true));
         cold_by_id.insert(
             meta.session_id.clone(),
             CodexColdRow {

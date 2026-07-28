@@ -262,9 +262,21 @@ fn open_turns(lines: &[RolloutRecord]) -> Vec<String> {
 /// per `task_complete`), the last timestamp seen on any line, and — when
 /// `include_preview` — a preview from the LAST `agent_message`. Permissive: an
 /// unreadable file yields the zeroed default (NEVER a panic or error).
+///
+/// `read_stats(path, ..)` is exactly `read_stats_from_lines(&read_lines(path), ..)`
+/// — the file read plus the derivation. Its behavior is unchanged by the split.
 pub fn read_stats(path: &Path, include_preview: bool) -> JsonlStats {
+    read_stats_from_lines(&read_lines(path), include_preview)
+}
+
+/// The stats derivation over ALREADY-PARSED rollout lines — the body of
+/// [`read_stats`] minus the file read. Split out (lsview A1 F1) so the codex
+/// live-row gather can derive stats AND connectionless status from a SINGLE
+/// [`read_lines`] pass: the stats cache's status-aware reader calls this and
+/// [`derive_status`] on ONE parse rather than reading the rollout twice. An
+/// empty slice degrades to the zeroed default exactly as an unreadable file does.
+pub fn read_stats_from_lines(lines: &[RolloutRecord], include_preview: bool) -> JsonlStats {
     let mut stats = JsonlStats::default();
-    let lines = read_lines(path);
     if lines.is_empty() {
         // Degrade: unreadable / empty / gzip → zeroed default (caller treats it
         // as a fallback row, never an error).
@@ -274,7 +286,7 @@ pub fn read_stats(path: &Path, include_preview: bool) -> JsonlStats {
     // Context occupancy (Pete #5): last-wins from `token_count` events that carry
     // a usable `last_token_usage.total_tokens` (current window fill, not lifetime).
     let mut last_occupancy: Option<u64> = None;
-    for rec in &lines {
+    for rec in lines {
         if let Some(ts) = &rec.timestamp {
             if !ts.is_empty() {
                 stats.last_timestamp = Some(ts.clone());

@@ -69,6 +69,7 @@ pub mod safe_kill;
 pub mod secrets;
 pub mod sendpty;
 pub mod shell_init;
+pub mod stats_cache;
 pub mod status_recency;
 pub mod stray;
 pub mod submit;
