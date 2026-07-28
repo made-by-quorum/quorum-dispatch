@@ -78,6 +78,10 @@ fn run_with_early_close(home: &PathBuf) -> (Option<i32>, String) {
     let mut child = Command::new(qd_binary())
         .args(["ls", "--all", "--json"])
         .env("HOME", home)
+        // lsview A4 (CF-F1): jail the ls bare-proc gather against host `ps`/`lsof`
+        // so a real bare harness on the host cannot append rows to this pipe
+        // repro's `ls --all --json` output. Test-lane only.
+        .env("QD_TEST_NO_BARE_PROCS", "1")
         .env("QD_HOME", home)
         .env("ZMX_DIR", home.join("zmx"))
         .env("QD_DEBUG", "0")

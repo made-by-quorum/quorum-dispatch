@@ -136,6 +136,10 @@ pub fn run_qd_jailed(
     cmd.args(args);
     cmd.env_clear()
         .env("HOME", &j.home)
+        // lsview A4 (CF-F1): jail the ls bare-proc gather against host `ps`/`lsof`
+        // — a real bare codex/opencode/pi on the host must not leak extra rows into
+        // this jailed harness's exact `qd ls` assertions. Test-lane only.
+        .env("QD_TEST_NO_BARE_PROCS", "1")
         .env("QD_HOME", &j.qd_home)
         .env("XDG_RUNTIME_DIR", &j.xdg)
         .env("TMPDIR", j.root.join("tmp"))

@@ -286,6 +286,31 @@ fn run_inner(
     // the exact development-channel argv and matching live relay ancestry.
     let management: Vec<dispatch::adoption::Management> = session_management(&sessions);
 
+    // lsview A4: BARE (outside-qd) non-claude harness processes — codex / opencode
+    // / pi — detected via the process table (R2's census predicates) and surfaced
+    // as an ADDITIVE row per proc in the DEFAULT view (`qd`, `qd ls`, `qd ls -a`),
+    // carrying provider + pid + best-effort cwd. NOT gathered for `--live` (a
+    // scripting live-session filter), `--short` (name/handle-only), or under a
+    // `--prefix` name filter (a bare proc has no name to match). A proc whose pid
+    // is already shown as a session row is dropped (managed → not bare — the
+    // registry-pid posture `stray::classify` uses). Visibility only: these never
+    // enter session resolution, so ACTING-verb refusal semantics are unchanged.
+    let bare_procs: Vec<dispatch::effects::BareProc> = if !live && !short && prefix.is_none() {
+        let session_pids: std::collections::HashSet<i32> = sessions
+            .iter()
+            .filter_map(|s| s.pid)
+            .map(|p| p as i32)
+            .collect();
+        common::ls_bare_process_table()
+            .bare_nonclaude_procs()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|b| !session_pids.contains(&b.pid))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     if emit_json {
         // ls JSON surface (render::ls_json) — selected by `--json` OR the agent/pipe
         // auto-default (WP-B7 PIECE 1). The byte-faithful TS surface. Strays are an
@@ -345,6 +370,14 @@ fn run_inner(
                 }
             }
         }
+        // lsview A4: append the bare non-claude harness rows AFTER the session
+        // rows (and after the management zip, which stops at the session count) —
+        // purely additive, so every existing row's bytes are unchanged.
+        if let Some(rows) = value.as_array_mut() {
+            for b in &bare_procs {
+                rows.push(render::bare_proc_to_value(b));
+            }
+        }
         // `{}\n` reproduces `println!` byte-for-byte; emit_or_pipe_exit replaces
         // the panic-on-broken-pipe with a clean exit-141 (item 20).
         emit_or_pipe_exit(&format!("{}\n", render::to_pretty(&value)));
@@ -372,15 +405,20 @@ fn run_inner(
         }
         emit_or_pipe_exit(&buf);
     } else if sessions.is_empty() {
-        emit_or_pipe_exit("No sessions found.\n");
+        // lsview A4: a machine with no managed sessions may still have bare
+        // non-claude processes — show them rather than a bare "No sessions found."
+        let mut out = String::from("No sessions found.\n");
+        out.push_str(&render_bare_section(&bare_procs));
+        emit_or_pipe_exit(&out);
     } else {
         // (L) Item 3: the acp rows ride the PRIMARY-SOURCED Status override (computed
         // once above); non-acp rows → None → the byte-identical golden path.
-        emit_or_pipe_exit(&render_table_human_with(
-            &sessions,
-            &acp_status_overrides,
-            &management,
-        ));
+        // lsview A4: the bare non-claude proc section is appended AFTER the table —
+        // it never participates in the table's column-width computation, so every
+        // existing row stays byte-identical.
+        let mut out = render_table_human_with(&sessions, &acp_status_overrides, &management);
+        out.push_str(&render_bare_section(&bare_procs));
+        emit_or_pipe_exit(&out);
     }
 
     // ONE trailer emission, covering every TEXT mode (short / empty / table) —
@@ -389,6 +427,33 @@ fn run_inner(
         eprintln!("{t}");
     }
     0
+}
+
+/// lsview A4 — the appended "Bare (unmanaged) processes" section for the human
+/// `qd ls` view: one line per detected bare non-claude harness process, showing
+/// provider + pid + best-effort cwd (the narrow session table carries neither a
+/// pid nor a cwd column, so this is where a human sees them). Fully ADDITIVE and
+/// printed AFTER the table, so it never touches the table's column widths — every
+/// existing row stays byte-identical. Empty input → "" (no section, no header).
+/// Plain text (no SGR): a bare proc is not a session and gets no status color.
+fn render_bare_section(bare: &[dispatch::effects::BareProc]) -> String {
+    if bare.is_empty() {
+        return String::new();
+    }
+    let prov_w = bare
+        .iter()
+        .map(|b| b.provider.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::from("\nBare (unmanaged) processes:\n");
+    for b in bare {
+        let cwd = b.cwd.as_deref().unwrap_or("-");
+        out.push_str(&format!(
+            "  {:<prov_w$}  pid {:<7}  {cwd}\n",
+            b.provider, b.pid
+        ));
+    }
+    out
 }
 
 /// Shared table render for `qd live`'s refresh loop (status.ts renderTable).

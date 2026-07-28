@@ -46,6 +46,10 @@ impl Jail {
         let out = Command::new(qd_bin())
             .args(["ls", "--json"])
             .env("HOME", &self.home)
+            // lsview A4 (CF-F1): jail the ls bare-proc gather against host
+            // `ps`/`lsof` so a real bare harness on the host cannot leak extra
+            // rows into this exact `ls --json` assertion. Test-lane only.
+            .env("QD_TEST_NO_BARE_PROCS", "1")
             .env_remove("QD_HOME")
             .env_remove("QD_MUX")
             .output()

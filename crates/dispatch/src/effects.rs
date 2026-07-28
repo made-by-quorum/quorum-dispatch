@@ -100,6 +100,29 @@ pub struct ProcInfo {
     pub started_ms: Option<i64>,
 }
 
+/// A BARE (outside-qd) non-claude harness process detected in the process table
+/// (lsview A4). `provider` is the harness id (`"codex"` | `"opencode"` | `"pi"`),
+/// `pid` its process id, `cwd` its working directory when the `lsof` enrichment
+/// succeeded (best-effort — `None` on failure, the same posture `claude_procs`
+/// takes today; a detectable-but-unidentifiable process still renders as a bare
+/// row of its provider). Visibility only: a bare proc is NEVER a session and
+/// ACTING verbs never resolve one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BareProc {
+    pub provider: String,
+    pub pid: i32,
+    pub cwd: Option<String>,
+}
+
+/// One `ps`-row candidate for a bare non-claude harness session: the detected
+/// `provider` and the row's `pid`, AFTER R2's representative-pick (only the
+/// canonical harness-executable row survives — see [`classify_bare_nonclaude`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BareCandidate {
+    pub provider: &'static str,
+    pub pid: i32,
+}
+
 /// Process-table seam.
 ///
 /// TS shells out to `ps -eo pid=,ppid=` for ancestry walks
@@ -129,6 +152,19 @@ pub trait ProcessTable {
     /// by the SAME single `ps` parse as the rest of this trait (no extra spawn
     /// point; tests substitute a `FixtureProcessTable`).
     fn cmdline(&self, pid: i32) -> Option<String>;
+
+    /// Best-effort list of BARE (outside-qd) non-claude harness processes —
+    /// codex / opencode / pi — detected in the process table (lsview A4). The
+    /// non-claude analog of [`ProcessTable::claude_procs`]: the per-harness `ps`
+    /// predicate, the representative-pick that collapses a session's multiple
+    /// matching rows to one, and the `lsof` cwd enrichment are R2's census
+    /// contract (`findings/R2-bareproc-census.md`). Default: NONE — the fixture
+    /// table exposes no bare procs, so every existing gather/join test is
+    /// unchanged; [`RealProcessTable`] overrides with the live `ps`+`lsof`
+    /// detection. The CLAUDE path is untouched (this is purely additive).
+    fn bare_nonclaude_procs(&self) -> io::Result<Vec<BareProc>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Real process table. Both `ppid_map` and `claude_procs` are served by ONE
@@ -151,6 +187,22 @@ impl<E: Exec> RealProcessTable<E> {
     fn ps_rows(&self) -> io::Result<HashMap<i32, ProcRow>> {
         let r = self.exec.run("ps", &ps_args(), &[], None, None)?;
         Ok(parse_ps_rows(&r.stdout))
+    }
+
+    /// A single process's cwd via `lsof -a -p <pid> -d cwd -Fn`, routed through
+    /// the SAME [`Exec`] seam as `ps` (so tests inject a synthetic `lsof` through
+    /// a [`ScriptedExec`]). Best-effort: `None` when the pid is non-positive, the
+    /// spawn/read failed, or no `n<path>` line was produced (lsview A4 — the R2
+    /// cwd-enrichment recipe; the same posture `claude_procs` takes on failure).
+    fn cwd_via_lsof(&self, pid: i32) -> Option<String> {
+        if pid <= 0 {
+            return None;
+        }
+        let r = self
+            .exec
+            .run("lsof", &bare_cwd_lsof_args(pid), &[], None, None)
+            .ok()?;
+        parse_lsof_cwd(&r.stdout)
     }
 }
 
@@ -238,6 +290,33 @@ impl<E: Exec> ProcessTable for RealProcessTable<E> {
         // Reuse the single `ps` parse (no extra spawn point); pick this pid's row.
         self.ps_rows().ok()?.get(&pid).map(|row| row.cmd.clone())
     }
+
+    fn bare_nonclaude_procs(&self) -> io::Result<Vec<BareProc>> {
+        // ONE `ps` parse (the shared source), then R2's detection + representative
+        // pick (pure), then a per-candidate `lsof` cwd read, then collapse a
+        // session's residual multi-rows to one per (provider, cwd). The claude
+        // path is not touched.
+        let rows = self.ps_rows()?;
+        let mut procs: Vec<BareProc> = classify_bare_nonclaude(&rows)
+            .into_iter()
+            .map(|c| BareProc {
+                provider: c.provider.to_string(),
+                pid: c.pid,
+                cwd: self.cwd_via_lsof(c.pid),
+            })
+            .collect();
+        // Dedup: one row per (provider, cwd) when the cwd is known (the canonical
+        // pick already yields one row per session, so this is a backstop). A
+        // cwd-unknown row is kept as-is — distinct by pid, and visibility is the
+        // bar. `classify_bare_nonclaude` pre-sorts by (provider, pid), so retain
+        // keeps the lowest pid per (provider, cwd) deterministically.
+        let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+        procs.retain(|p| match &p.cwd {
+            Some(cwd) => seen.insert((p.provider.clone(), cwd.clone())),
+            None => true,
+        });
+        Ok(procs)
+    }
 }
 
 /// One row of `ps -eo pid=,ppid=,command=` output.
@@ -263,6 +342,100 @@ fn command_program_is_claude(cmdline: &str) -> bool {
         .file_name()
         .and_then(|s| s.to_str())
         == Some("claude")
+}
+
+/// lsview A4 — the `command=` basename of a row's argv[0]: the first whitespace
+/// token, quotes stripped, reduced to its path file-name (`node
+/// /opt/homebrew/bin/codex` → `node`; `/…/vendor/…/bin/codex` → `codex`; `pi` →
+/// `pi`). Mirrors the argv[0] extraction in [`command_program_is_claude`].
+fn argv0_basename(cmd: &str) -> Option<&str> {
+    let program = cmd
+        .split_whitespace()
+        .next()
+        .map(|s| s.trim_matches(['\'', '"']))?;
+    std::path::Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+}
+
+/// lsview A4 — R2's DETECTION predicate: which non-claude harness (if any) a
+/// `ps` `command=` row matches. The tokens + shapes are the census contract
+/// (`findings/R2-bareproc-census.md` §4):
+///   - **pi**: ANCHORED exact-match — the whole trimmed command is `pi` (pi
+///     renames its process title to `pi`, masking argv+env). NEVER
+///     `contains("pi")` — that matched 21/714 ambient decoys
+///     (`pid`/`ppid`/`pidfile`/`spindump`/…).
+///   - **codex** / **opencode**: `contains(...)` — 0/714 ambient false positives
+///     each; the substring covers both bare and path-launched sessions (the
+///     representative-pick below drops the wrapper rows a path launch also
+///     matches).
+/// pi is tested first (its anchored form cannot overlap the `contains` tokens).
+fn bare_provider_for(cmd: &str) -> Option<&'static str> {
+    if cmd.trim() == "pi" {
+        return Some("pi");
+    }
+    if cmd.contains("codex") {
+        return Some("codex");
+    }
+    if cmd.contains("opencode") {
+        return Some("opencode");
+    }
+    None
+}
+
+/// lsview A4 — classify the process table into bare non-claude harness session
+/// candidates (PURE; the `RealProcessTable` method layers `lsof` cwd on top).
+///
+/// Two-stage per R2 §4: (1) DETECTION — [`bare_provider_for`] tags a row's
+/// harness; (2) REPRESENTATIVE-PICK — keep ONLY the canonical session row, the
+/// one whose argv[0] basename IS the harness executable (`codex` / `opencode` /
+/// `pi`). That single test drops every non-session match a `contains` predicate
+/// also catches: codex's `node` shim and `codex-mcp` child (argv[0] `node`), and
+/// opencode's `script`/`bash`/`tmux`/`env`/`nohup` path-launch wrappers (argv[0]
+/// the wrapper, not `opencode`). Because the pick is a SUBSET of the detection
+/// matches, it can only ever be as clean or cleaner than R2's 0/714 predicate —
+/// it never widens the match. Result is sorted by (provider, pid) for a
+/// deterministic downstream dedup.
+pub fn classify_bare_nonclaude(rows: &HashMap<i32, ProcRow>) -> Vec<BareCandidate> {
+    let mut out: Vec<BareCandidate> = rows
+        .iter()
+        .filter_map(|(pid, row)| {
+            let provider = bare_provider_for(&row.cmd)?;
+            // Representative-pick: only the canonical harness-executable row is a
+            // session (drops shims, MCP children, and launch wrappers).
+            (argv0_basename(&row.cmd) == Some(provider)).then_some(BareCandidate {
+                provider,
+                pid: *pid,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.provider.cmp(b.provider).then(a.pid.cmp(&b.pid)));
+    out
+}
+
+/// The `lsof` argv for a single pid's cwd read (R2 §4 recipe): `lsof -a -p <pid>
+/// -d cwd -Fn`. `-a` ANDs the `-p`/`-d` filters; `-Fn` emits the name field so
+/// the cwd path arrives on an `n`-prefixed line.
+fn bare_cwd_lsof_args(pid: i32) -> Vec<String> {
+    vec![
+        "-a".to_string(),
+        "-p".to_string(),
+        pid.to_string(),
+        "-d".to_string(),
+        "cwd".to_string(),
+        "-Fn".to_string(),
+    ]
+}
+
+/// PURE: parse `lsof -Fn` output → the cwd path (the first `n`-prefixed line's
+/// remainder). `None` when no non-empty `n<path>` line is present (best-effort;
+/// permissive — never panics on unexpected `lsof` output, the L8 posture).
+pub fn parse_lsof_cwd(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .find_map(|l| l.strip_prefix('n'))
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
 }
 
 /// Read a live process's real argv with element boundaries intact.
@@ -1359,5 +1532,208 @@ mod tests {
         // A wildly-high PID that is not alive → kill_pid short-circuits true.
         assert!(!is_pid_alive(2_000_000_000));
         assert!(kill_pid(2_000_000_000, 10));
+    }
+
+    // ===================== lsview A4: bare non-claude detection =====================
+
+    /// R2's DETECTION predicate, per harness. codex/opencode are `contains`; pi is
+    /// the ANCHORED exact-match (`cmd.trim() == "pi"`), NEVER `contains("pi")`.
+    #[test]
+    fn bare_provider_for_matches_r2_predicates() {
+        // codex — bare, node shim, native path, and codex-mcp child all contain it.
+        assert_eq!(bare_provider_for("codex"), Some("codex"));
+        assert_eq!(bare_provider_for("node /opt/homebrew/bin/codex"), Some("codex"));
+        assert_eq!(
+            bare_provider_for("/opt/homebrew/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"),
+            Some("codex")
+        );
+        // opencode — bare + path.
+        assert_eq!(bare_provider_for("opencode"), Some("opencode"));
+        assert_eq!(bare_provider_for("/opt/homebrew/bin/opencode /tmp/proj"), Some("opencode"));
+        // pi — ANCHORED: only the exact trimmed "pi" (title-masked). Padding OK.
+        assert_eq!(bare_provider_for("pi"), Some("pi"));
+        assert_eq!(bare_provider_for("  pi  "), Some("pi"));
+    }
+
+    /// The pi predicate must be ANCHORED — none of R2's 21/714 `contains("pi")`
+    /// ambient decoys (`pid`/`ppid`/`pidfile`/`spindump`/`--capture-python…`/a
+    /// running `ps` matching itself/…) may match ANY provider.
+    #[test]
+    fn bare_provider_for_rejects_the_contains_pi_decoys() {
+        for decoy in [
+            "/usr/sbin/spindump",
+            "limactl hostagent --pidfile /run/lima/ha.pid",
+            "/Applications/Dropbox.app/Contents/MacOS/Dropbox --capture-python-tracebacks",
+            "ps -eo pid=,ppid=,command=",
+            "/opt/homebrew/bin/pidof something",
+            "python /some/pipeline.py",
+            "Claude Helper (Renderer)",
+        ] {
+            assert_eq!(bare_provider_for(decoy), None, "decoy must not match: {decoy:?}");
+        }
+        // And a claude row is never a bare NON-claude candidate.
+        assert_eq!(
+            bare_provider_for("claude --dangerously-skip-permissions --name wk"),
+            None
+        );
+    }
+
+    /// The REPRESENTATIVE-PICK collapses a codex session's multi-row tree (tmux
+    /// launcher + node shim + native binary + codex-mcp child) to the ONE canonical
+    /// native-binary row — the only one whose argv[0] basename is `codex`.
+    #[test]
+    fn classify_bare_nonclaude_codex_tree_picks_native_only() {
+        let ps = "\
+47493 1 tmux new-session -d -s r2codex -c /work/cwd-codex codex
+47500 47493 node /opt/homebrew/bin/codex
+47553 47500 /opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex
+47988 47553 /opt/homebrew/bin/node /home/u/.local/share/codex-mcp/macos-desktop.js
+";
+        let cands = classify_bare_nonclaude(&parse_ps_rows(ps));
+        assert_eq!(cands, vec![BareCandidate { provider: "codex", pid: 47553 }]);
+    }
+
+    /// The REPRESENTATIVE-PICK drops opencode PATH-LAUNCH wrappers (`bash`, `tmux`,
+    /// `script`) — one session presents as four `contains("opencode")` rows, only the
+    /// real `/…/opencode` process (argv[0] basename `opencode`) is a session (R2 §2b).
+    #[test]
+    fn classify_bare_nonclaude_opencode_pathlaunch_picks_real_only() {
+        let ps = "\
+37723 47865 /bin/bash -c eval 'script -q /tmp/t.txt /opt/homebrew/bin/opencode /tmp/proj'
+37734 1 tmux new-session -d script -q /tmp/t.txt /opt/homebrew/bin/opencode /tmp/proj
+37735 37734 script -q /tmp/t.txt /opt/homebrew/bin/opencode /tmp/proj
+37737 37735 /opt/homebrew/bin/opencode /tmp/proj
+";
+        let cands = classify_bare_nonclaude(&parse_ps_rows(ps));
+        assert_eq!(cands, vec![BareCandidate { provider: "opencode", pid: 37737 }]);
+    }
+
+    /// Full-snapshot classify: codex native + bare opencode + pi survive; the pi
+    /// `contains` decoys, the claude rows, and the wrapper/shim rows do NOT. Sorted
+    /// (provider, pid).
+    #[test]
+    fn classify_bare_nonclaude_full_snapshot_zero_false_positives() {
+        let ps = "\
+1 0 /sbin/launchd
+6400 6398 pi
+92222 92221 opencode
+47500 1 node /opt/homebrew/bin/codex
+47553 47500 /opt/homebrew/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex
+71884 71806 claude --dangerously-skip-permissions --name wk
+555 1 /usr/sbin/spindump
+556 1 limactl hostagent --pidfile /run/lima/ha.pid
+557 1 ps -eo pid=,ppid=,command=
+558 1 node /some/pipeline.js
+";
+        let cands = classify_bare_nonclaude(&parse_ps_rows(ps));
+        assert_eq!(
+            cands,
+            vec![
+                BareCandidate { provider: "codex", pid: 47553 },
+                BareCandidate { provider: "opencode", pid: 92222 },
+                BareCandidate { provider: "pi", pid: 6400 },
+            ]
+        );
+    }
+
+    /// The `lsof -Fn` cwd parse: the first `n<path>` line's remainder; permissive on
+    /// junk / empty / missing-name output → `None`.
+    #[test]
+    fn parse_lsof_cwd_reads_the_n_line() {
+        assert_eq!(
+            parse_lsof_cwd("p47553\nfcwd\nn/work/cwd-codex\n").as_deref(),
+            Some("/work/cwd-codex")
+        );
+        assert_eq!(parse_lsof_cwd("n/only/a/path").as_deref(), Some("/only/a/path"));
+        // no n-line / empty / junk → None (best-effort).
+        assert_eq!(parse_lsof_cwd("p123\nfcwd\n"), None);
+        assert_eq!(parse_lsof_cwd(""), None);
+        assert_eq!(parse_lsof_cwd("n\n"), None, "empty path → None");
+    }
+
+    /// END-TO-END through the SAME `Exec` seam production uses: a scripted `ps`
+    /// snapshot + per-pid scripted `lsof` drives the whole `bare_nonclaude_procs`
+    /// path (classify → representative-pick → lsof cwd → dedup) with NO real
+    /// process launched. codex+opencode get cwds; pi's `lsof` is unscripted →
+    /// best-effort `None` (still rendered). Sorted (provider, pid).
+    #[test]
+    fn bare_nonclaude_procs_end_to_end_via_scripted_exec() {
+        let ps_out = "\
+1 0 /sbin/launchd
+6400 6398 pi
+92222 92221 opencode
+47500 1 node /opt/homebrew/bin/codex
+47553 47500 /opt/homebrew/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex
+71884 71806 claude --dangerously-skip-permissions --name wk
+555 1 limactl hostagent --pidfile /run/lima/ha.pid
+";
+        let exec = ScriptedExec::new()
+            .on("ps", &["-eo"], Some(0), ps_out, "")
+            .on(
+                "lsof",
+                &["-a", "-p", "47553"],
+                Some(0),
+                "p47553\nfcwd\nn/work/cwd-codex\n",
+                "",
+            )
+            .on(
+                "lsof",
+                &["-a", "-p", "92222"],
+                Some(0),
+                "p92222\nfcwd\nn/work/cwd-opencode\n",
+                "",
+            );
+        // pid 6400 (pi) has NO scripted lsof → ScriptedExec's benign empty success
+        // → parse yields None → cwd best-effort None (but the row is still emitted).
+        let pt = RealProcessTable::new(exec);
+        let bare = pt.bare_nonclaude_procs().unwrap();
+        assert_eq!(
+            bare,
+            vec![
+                BareProc { provider: "codex".into(), pid: 47553, cwd: Some("/work/cwd-codex".into()) },
+                BareProc { provider: "opencode".into(), pid: 92222, cwd: Some("/work/cwd-opencode".into()) },
+                BareProc { provider: "pi".into(), pid: 6400, cwd: None },
+            ]
+        );
+
+        // CLAUDE BYTE-IDENTITY: the claude path is untouched — claude_procs still
+        // returns exactly the claude rows, and the bare detector never claimed one.
+        let claude = pt.claude_procs().unwrap();
+        assert_eq!(claude.iter().map(|p| p.pid).collect::<Vec<_>>(), vec![71884]);
+        assert!(!bare.iter().any(|b| b.pid == 71884), "claude row is never a bare non-claude proc");
+    }
+
+    /// Dedup backstop: two canonical native-codex rows resolving to the SAME cwd
+    /// collapse to ONE (lowest pid, deterministic); a cwd-unknown row is kept
+    /// distinct (visibility is the bar).
+    #[test]
+    fn bare_nonclaude_procs_dedups_by_provider_cwd_keeps_unknown() {
+        let ps_out = "\
+47553 1 /a/vendor/bin/codex
+47554 1 /b/vendor/bin/codex
+47600 1 /c/vendor/bin/codex
+";
+        let exec = ScriptedExec::new()
+            .on("ps", &["-eo"], Some(0), ps_out, "")
+            // 47553 and 47554 share cwd /work/shared → dedup to one (47553).
+            .on("lsof", &["-a", "-p", "47553"], Some(0), "n/work/shared\n", "")
+            .on("lsof", &["-a", "-p", "47554"], Some(0), "n/work/shared\n", "");
+        // 47600 has no scripted lsof → cwd None → kept as a distinct row.
+        let bare = RealProcessTable::new(exec).bare_nonclaude_procs().unwrap();
+        assert_eq!(
+            bare,
+            vec![
+                BareProc { provider: "codex".into(), pid: 47553, cwd: Some("/work/shared".into()) },
+                BareProc { provider: "codex".into(), pid: 47600, cwd: None },
+            ]
+        );
+    }
+
+    /// The DEFAULT trait impl (fixture table) exposes NO bare procs, so every
+    /// existing gather/join fixture test sees an unchanged process table.
+    #[test]
+    fn fixture_process_table_has_no_bare_nonclaude_procs() {
+        let pt = FixtureProcessTable::default();
+        assert!(pt.bare_nonclaude_procs().unwrap().is_empty());
     }
 }

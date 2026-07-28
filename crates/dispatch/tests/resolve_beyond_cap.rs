@@ -63,6 +63,10 @@ fn run_qd(
     let out = Command::new(qd_bin())
         .args(args)
         .env("HOME", &home)
+        // lsview A4 (CF-F1): jail the ls bare-proc gather against host `ps`/`lsof`
+        // so a real bare harness on the host cannot leak extra rows into these
+        // exact default-view `qd ls` cap assertions. Test-lane only.
+        .env("QD_TEST_NO_BARE_PROCS", "1")
         .env("ZMX_DIR", &zmx)
         .env("CLAUDE_BIN", "/nonexistent/claude-resolve-beyond-cap")
         .env_remove("QD_HOME") // pin the idstore/state dir to the jail's HOME

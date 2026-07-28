@@ -123,6 +123,26 @@ pub fn build_mux_dirs(
     }
 }
 
+/// lsview A4 fix (CF-F1): the process table the `ls` bare-proc gather reads.
+/// TEST LANES ONLY — `QD_TEST_NO_BARE_PROCS` (any non-empty value) selects the
+/// fixture table (empty bare gather) so a jailed integration test is hermetic
+/// against real bare harnesses on the host; the test process table cannot be
+/// jailed the way `HOME`/`ZMX_DIR` jail the registry, so this is the reachable-
+/// across-the-process-boundary suppression the spawned `qd` binary needs (same
+/// discipline as `QD_TEST_SCAN_ROOTS`, above). Unset ⇒ the real `ps`/`lsof`
+/// table (the production default) — bare rows render exactly as today.
+pub fn ls_bare_process_table() -> Box<dyn dispatch::effects::ProcessTable> {
+    if RealEnv
+        .var("QD_TEST_NO_BARE_PROCS")
+        .filter(|v| !v.is_empty())
+        .is_some()
+    {
+        Box::new(dispatch::effects::FixtureProcessTable::default())
+    } else {
+        Box::new(RealProcessTable::new(RealExec))
+    }
+}
+
 /// Run the A1 gather → join_sessions → assign_codes pipeline with the REAL deps,
 /// returning the joined+coded session list. This is the shared `getAllSessions`
 /// (session.ts:830-1048) + `assignShortCodes` (index.ts:55) path that ls / info /

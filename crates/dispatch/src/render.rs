@@ -301,6 +301,26 @@ fn stray_to_value(s: &Stray) -> Value {
     Value::Object(m)
 }
 
+/// lsview A4 — a BARE (outside-qd) non-claude harness process row, appended
+/// AFTER the session rows in the DEFAULT `qd ls --json` view (visibility, not
+/// adoption). Carries the R2-established best-effort identity: `provider`, `pid`,
+/// and `cwd` when the `lsof` enrichment succeeded (omitted otherwise — a
+/// detectable-but-unidentifiable proc still renders). `"bare": true` marks it as
+/// a process-detected row distinct from a session or a stray; `status` reuses the
+/// stray "unmanaged" vocabulary. ACTING verbs never see this surface — it is
+/// never folded into the session list, so refusal semantics are unchanged.
+pub fn bare_proc_to_value(b: &crate::effects::BareProc) -> Value {
+    let mut m = Map::new();
+    m.insert("provider".into(), Value::String(b.provider.clone()));
+    m.insert("pid".into(), json!(b.pid));
+    m.insert("status".into(), Value::String("unmanaged".into()));
+    if let Some(cwd) = &b.cwd {
+        m.insert("cwd".into(), Value::String(cwd.clone()));
+    }
+    m.insert("bare".into(), json!(true));
+    Value::Object(m)
+}
+
 /// Offset-0 short code for a stray's session id (sha256 → big-endian u32 →
 /// base36, first 3 chars right-padded with '0'). Mirrors `codes::short_code_at`
 /// at offset 0; kept local so render does not widen the `codes` API or touch the
