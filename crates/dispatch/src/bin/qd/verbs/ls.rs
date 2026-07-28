@@ -548,10 +548,15 @@ fn render_table_human_at_with_management(
     management: &[dispatch::adoption::Management],
 ) -> String {
     let include_management = !management.is_empty();
+    // lsview A2: the additive provider column sits right after the Id handle —
+    // the same slot the wide `qd live` table gives its "Prov" column — so the
+    // existing Status/[Mode]/Last active/Tokens columns keep their order and
+    // Tokens stays the last (right-aligned) column. The existing columns' cell
+    // CONTENT is byte-identical; this only adds a new column.
     let headers: Vec<&str> = if include_management {
-        vec!["Name", "Id", "Status", "Mode", "Last active", "Tokens"]
+        vec!["Name", "Id", "Prov", "Status", "Mode", "Last active", "Tokens"]
     } else {
-        vec!["Name", "Id", "Status", "Last active", "Tokens"]
+        vec!["Name", "Id", "Prov", "Status", "Last active", "Tokens"]
     };
     let max_name = NAME_COL_MAX;
     // Shortest-unique prefixes among the LISTED sessions' stable ids (min 2
@@ -582,6 +587,17 @@ fn render_table_human_at_with_management(
                 None => Cell::new("---", dim("---")),
             };
 
+            // Prov: keyed off the row's provider id — the SAME rendering the wide
+            // `qd live` table uses (ls.rs render_table): "CC" cyan for claude-code,
+            // "OC" magenta for opencode, any OTHER provider value verbatim with
+            // default (plain) styling. L8 permissive: an unknown provider never
+            // panics and never kills the row (only ACTING verbs refuse/redirect).
+            let prov_cell = match s.provider.as_str() {
+                "claude-code" => Cell::new("CC", cyan("CC")),
+                "opencode" => Cell::new("OC", magenta("OC")),
+                other => Cell::plain_only(other.to_string()),
+            };
+
             // Status: colorStatus (idle=cyan busy=yellow shell=green cold=dim killed=red).
             // (L) Item 3: an acp row carries a PRIMARY-SOURCED override (live/stopped/
             // dead-endpoint), colored via the matching variant; non-acp rows keep the
@@ -605,7 +621,7 @@ fn render_table_human_at_with_management(
             // the natural "0". Right-aligned (it's a number).
             let tokens_cell = Cell::plain_right(format_tokens(s.tokens));
 
-            let mut cells = vec![name_cell, id_cell, status_cell];
+            let mut cells = vec![name_cell, id_cell, prov_cell, status_cell];
             if include_management {
                 let mode = management
                     .get(i)
@@ -1055,8 +1071,10 @@ mod tests {
         let overrides = vec![Some(("live".to_string(), SessionStatus::Idle)), None];
         let out = render_table_human_at_with(&rows, NOW_MS, &overrides);
         let plain: String = out.lines().map(strip_ansi).collect::<Vec<_>>().join("\n");
-        // still 5 columns (no NEW column), and the acp Status shows "live".
-        assert_eq!(out.lines().next().unwrap().split_whitespace().collect::<Vec<_>>(), vec!["Name", "Id", "Status", "Last", "active", "Tokens"]);
+        // the acp override rides the EXISTING Status column and adds NO column of
+        // its own; the header is the fixed set (lsview A2 added the Prov column,
+        // present in the override AND non-override render alike).
+        assert_eq!(out.lines().next().unwrap().split_whitespace().collect::<Vec<_>>(), vec!["Name", "Id", "Prov", "Status", "Last", "active", "Tokens"]);
         assert!(plain.contains("live"), "acp Status override rides the Status column: {plain:?}");
         assert!(plain.contains("busy"), "the non-acp row keeps its stored status: {plain:?}");
 
@@ -1112,16 +1130,17 @@ mod tests {
     }
 
     #[test]
-    fn human_table_is_five_columns() {
+    fn human_table_is_six_columns() {
         let out = render_table_human_at(&fixtures(), NOW_MS);
-        // The header carries EXACTLY the five columns in order.
+        // The header carries EXACTLY the six columns in order — lsview A2 added the
+        // Prov column (after Id, the wide-table slot); Tokens stays last.
         let header = out.lines().next().unwrap();
         let plain: String = strip_ansi(header);
         let cols: Vec<&str> = plain.split_whitespace().collect();
-        // "Last active" is two words → header has 6 whitespace-split tokens.
+        // "Last active" is two words → header has 7 whitespace-split tokens.
         assert_eq!(
             cols,
-            vec!["Name", "Id", "Status", "Last", "active", "Tokens"]
+            vec!["Name", "Id", "Prov", "Status", "Last", "active", "Tokens"]
         );
         for row in out.lines().skip(2) {
             let plain = strip_ansi(row);
@@ -1325,7 +1344,7 @@ mod tests {
         assert_eq!(lines.len(), 2, "header + separator only: {out:?}");
         assert_eq!(
             strip_ansi(lines[0]).trim_end(),
-            "Name  Id  Status  Last active  Tokens"
+            "Name  Id  Prov  Status  Last active  Tokens"
         );
     }
 

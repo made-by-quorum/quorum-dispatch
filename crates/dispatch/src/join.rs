@@ -171,6 +171,13 @@ pub struct JoinInputs {
     /// round-trip as `pi_status_for`. A row present here OVERRIDES the generic
     /// transcript-derived `turns` for that pi row; absent → the transcript value.
     pub pi_turns_for: HashMap<String, u64>,
+    /// lsview A2: COLD pi rows — on-disk pi transcripts discovered under the pi
+    /// sessions root by the gather step's per-provider scan union (the ColdJsonl
+    /// analog for the pi provider, the way `codex_cold` is for codex). Their stats
+    /// ride the shared `stats_for` map (keyed by transcript path). EMPTY when the
+    /// pi store is empty OR its root is absent (`scan_transcripts` returns empty on
+    /// a missing root) → a clean zero, byte-stable no-op for every non-pi fleet.
+    pub pi_cold: Vec<TranscriptMeta>,
 }
 
 /// A discovered COLD codex row (codex-p2-spec section 7.4) — a foreign or dead
@@ -776,6 +783,67 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
         });
     }
 
+    // --- COLD pi rows (lsview A2 — the ColdJsonl analog for the pi provider, the
+    //     way the codex-cold branch above is for codex). An ADDITIVE step: on-disk
+    //     pi transcripts discovered under the pi sessions root by the gather step's
+    //     per-provider scan union (`inputs.pi_cold`), joined-against-live by the
+    //     SAME seen-guard the tombstone/codex branches use (any id already emitted
+    //     as live/cold/tombstoned wins). Emitted as `Cold` ColdJsonl-shaped rows
+    //     carrying provider "pi", with stats pulled from the shared cache
+    //     (`stats_for` by transcript path) exactly like the claude ColdJsonl branch
+    //     — but with NO zmx name-merge (pi is daemon-hosted, not a mux pane) and NO
+    //     `project_dir` cwd fallback (pi's `project_dir` slot is the ENCODED bucket
+    //     dir NAME, not a real cwd — cwd comes from the parsed stats only). EMPTY
+    //     when the pi store is empty or its root is absent → a clean zero,
+    //     byte-stable no-op for every non-pi fleet. ---
+    for meta in &inputs.pi_cold {
+        if seen_session_ids.contains(&meta.session_id) {
+            continue;
+        }
+        seen_session_ids.insert(meta.session_id.clone());
+        let stats = inputs.stats_for.get(&meta.path).cloned().unwrap_or_default();
+        // lastActive = new Date(lastTimestamp) if present, else the file mtime
+        // (the same derivation the claude ColdJsonl branch uses).
+        let last_active_ms = stats
+            .last_timestamp
+            .as_deref()
+            .and_then(parse_iso_ms)
+            .unwrap_or(meta.mtime_ms);
+        let name = stats.name.clone();
+        sessions.push(Session {
+            user_named: Some(stats.user_named),
+            name,
+            session_id: meta.session_id.clone(),
+            code: None,
+            qd_id: None,
+            pid: None,
+            status: SessionStatus::Cold,
+            zmx_name: None,
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: stats.turns,
+            tokens: stats.tokens,
+            // cwd from the parsed stats ONLY — pi's `project_dir` is the encoded
+            // bucket dir name, not a real path, so it is NOT a cwd fallback.
+            cwd: nonempty(stats.cwd.clone()),
+            last_active_ms: Some(last_active_ms),
+            version: None,
+            started_at_ms: None,
+            git_branch: stats.git_branch.clone(),
+            jsonl_path: Some(path_to_string(meta.path.clone())),
+            last_turns: stats.last_turns.clone(),
+            // lsview A2: the pi provider value — a cold pi row is the pi lane by
+            // construction (discovered under the pi sessions root). ACTING verbs
+            // route it through the pi Hosting::Daemon redirect, NOT the
+            // unknown-provider refusal (unchanged — carried constraint #2).
+            provider: "pi".to_string(),
+            entrypoint: None,
+            lineage: None,
+            which_branch: SessionBranch::ColdJsonl,
+        });
+    }
+
     // --- Sort by lastActive descending (session.ts:1043-1045). null → 0. ---
     // TS Array.sort is stable; Rust sort_by_key is stable — equal keys keep order.
     sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active_ms.unwrap_or(0)));
@@ -977,16 +1045,52 @@ pub fn gather_with_dirs(
     let ppid_map = pt.ppid_map().unwrap_or_default();
     let claude_procs = pt.claude_procs().unwrap_or_default();
 
-    // --- transcripts scan + per-path stats. ---
-    // codex P1 W7 (codex-p1-spec section 7.2): the SCAN is the claude transcript
-    // store scan — gather scans claude's surface (jsonl.rs is claude's transcript
-    // store; `state_root` IS the projects dir). Route it through the claude
-    // provider's `scan_transcripts` (delegates to `jsonl::scan_all`, byte-identical
-    // result). P2 NOTE: a multi-provider gather will UNION per-provider scans
-    // (each provider's own store under its own root); this is the n=1 shape.
+    // --- transcripts scan + per-path stats: the PER-PROVIDER SCAN UNION (P2). ---
+    // lsview A2: the P2 note below anticipated this — a multi-provider gather that
+    // UNIONS per-provider scans, each provider's own store under its own root.
+    // Every provider whose cold store is a `scan_transcripts` surface contributes
+    // its scan through the SAME shape; the shared stats-acquisition loop (further
+    // down, after the cache loads) reads every scanned transcript through the ONE
+    // A1 cache with that provider's reader.
+    //
+    //   - claude: the n=1 case (codex P1 W7) — its store IS the projects dir
+    //     (`jsonl.rs` is claude's transcript surface), so the root is
+    //     `paths.projects_dir` and the scan is byte-identical to the pre-union
+    //     single scan. It still feeds the existing ColdJsonl channel unchanged.
+    //   - pi: its own sessions root (`$PI_CODING_AGENT_SESSION_DIR` else
+    //     `$HOME/.pi/agent/sessions`, resolved off `fx.env` ONLY). An absent or
+    //     empty store yields ZERO rows (`scan_transcripts` returns empty on a
+    //     missing root), never an error — the brano-today live case.
+    //   - codex: its cold store is a sqlite index + rollout tree (NOT a
+    //     `scan_transcripts` surface), so its cold discovery stays in
+    //     `gather_codex` (result-identical, per the A2 discretion).
     let claude = crate::provider::provider_for("claude-code")
         .expect("claude-code provider is always registered");
+    let pi_provider =
+        crate::provider::provider_for("pi").expect("pi provider is always registered");
+    // A MINIMAL fx for pi's root resolution: pi reads ONLY `fx.env` (HOME /
+    // PI_CODING_AGENT_SESSION_DIR), never `fx.paths` — the placeholder home is
+    // unused by it (the same minimal-fx shape `gather_codex` builds for codex).
+    let pi_fx_home = QdPaths::from_home(Path::new("/nonexistent-pi-fx-home"));
+    let pi_fx = crate::provider::ProviderFx {
+        env,
+        paths: &pi_fx_home,
+        socket_dir: PathBuf::new(),
+        mux: None,
+        clock: None,
+        sleeper: None,
+        relay: None,
+        relay_port: None,
+        app_server: None,
+        codex_expected_turn_id: None,
+        acp_client: None,
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
+    // claude's scan → the existing ColdJsonl channel (byte-identical). pi's scan →
+    // the additive `pi_cold` channel (join emits those as `provider: "pi"` rows).
     let transcripts = claude.scan_transcripts(&paths.projects_dir);
+    let pi_cold = pi_provider.scan_transcripts(&pi_provider.transcript_root(&pi_fx));
 
     // lsview A1: the persistent per-transcript stats cache. ONE cache, shared by
     // EVERY provider's stats acquisition below (claude here, codex in
@@ -1054,12 +1158,24 @@ pub fn gather_with_dirs(
             }
         }
     }
-    // Cold transcripts: getJsonlStats per scanned file (the join reads stats_for
-    // by transcript path). Pre-gather every transcript's stats.
-    for t in &transcripts {
-        stats_for.entry(t.path.clone()).or_insert_with(|| {
-            stats_cache.get_or_read(&t.path, opts.include_preview, |pp| jsonl::read_stats(pp, true))
-        });
+    // Cold transcripts (the PER-PROVIDER SCAN UNION): getJsonlStats per scanned
+    // file (the join reads stats_for by transcript path). Pre-gather every scanned
+    // transcript's stats through the ONE cache, each with ITS provider's reader
+    // (claude: `jsonl::read_stats`; pi: same today, via `PiProvider`). The reader
+    // ALWAYS reads full (`true`); the cache serves the `include_preview` subset
+    // (A1's store-full/serve-subset design — byte-identical to the pre-union
+    // claude call). First-writer-wins (`or_insert_with`) preserves the live/
+    // tombstone pre-gather above; per-provider roots are disjoint path spaces so
+    // no cross-provider key collides. An empty `pi_cold` (empty/absent pi store)
+    // adds nothing → byte-stable.
+    for (provider, metas) in [(claude, &transcripts), (pi_provider, &pi_cold)] {
+        for t in metas {
+            stats_for.entry(t.path.clone()).or_insert_with(|| {
+                stats_cache.get_or_read(&t.path, opts.include_preview, |pp| {
+                    provider.transcript_stats(pp, true)
+                })
+            });
+        }
     }
 
     // --- codex gather step (codex-p2-spec section 7.4) — ADDITIVE. Resolves the
@@ -1121,6 +1237,7 @@ pub fn gather_with_dirs(
         codex_cold,
         pi_status_for,
         pi_turns_for,
+        pi_cold,
     }
 }
 
@@ -1760,6 +1877,83 @@ mod tests {
         assert_eq!(cold.turns, 3);
         // Only one row total (no leftover ZmxOnly for "ghost").
         assert_eq!(out.len(), 1, "zmx consumed by name-merge, no ZmxOnly row");
+    }
+
+    // --- lsview A2: pi cold rows (the per-provider scan union's pi channel) ---
+
+    /// An on-disk pi transcript (discovered by the gather union's pi scan)
+    /// surfaces as a `Cold` ColdJsonl row tagged provider "pi", with stats pulled
+    /// from the shared cache by transcript path — no registry row, no zmx, no pid.
+    #[test]
+    fn pi_cold_rows_emit_as_cold_provider_pi() {
+        let mut inputs = base_inputs();
+        inputs.pi_cold = vec![meta("pi-sid-1", "--work-pi--", 9_000)];
+        let stats = JsonlStats {
+            name: Some("pi-session".to_string()),
+            user_named: true,
+            turns: 4,
+            tokens: 1_200,
+            cwd: Some("/work/pi".to_string()),
+            ..Default::default()
+        };
+        inputs.stats_for = [(
+            PathBuf::from("/projects/--work-pi--/pi-sid-1.jsonl"),
+            stats,
+        )]
+        .into_iter()
+        .collect();
+
+        let out = join_sessions(&inputs, JoinOpts::default());
+        let row = find(&out, "pi-sid-1");
+        assert_eq!(row.provider, "pi", "a cold pi row carries provider pi");
+        assert_eq!(row.status, SessionStatus::Cold);
+        assert_eq!(row.which_branch, SessionBranch::ColdJsonl);
+        assert_eq!(row.turns, 4, "stats flow from the shared cache by path");
+        assert_eq!(row.tokens, 1_200);
+        assert_eq!(row.cwd.as_deref(), Some("/work/pi"));
+        assert_eq!(row.pid, None, "a cold pi row has no pid");
+        assert_eq!(row.zmx_name, None, "pi is daemon-hosted — no zmx name-merge");
+        assert_eq!(out.len(), 1);
+    }
+
+    /// An empty pi store (empty/absent root → `scan_transcripts` returns empty →
+    /// `pi_cold` empty) contributes ZERO rows and never disturbs existing rows —
+    /// the brano-today clean-zero case, additive no-op.
+    #[test]
+    fn empty_pi_cold_adds_nothing_to_existing_rows() {
+        let mut inputs = base_inputs();
+        // one ordinary claude cold row; pi_cold left empty (the default).
+        inputs.transcripts = vec![meta("cc-sid", "-proj", 5_000)];
+        inputs.stats_for = [(
+            PathBuf::from("/projects/-proj/cc-sid.jsonl"),
+            JsonlStats { name: Some("cc".into()), user_named: true, ..Default::default() },
+        )]
+        .into_iter()
+        .collect();
+        assert!(inputs.pi_cold.is_empty());
+
+        let out = join_sessions(&inputs, JoinOpts::default());
+        assert_eq!(out.len(), 1, "empty pi_cold adds no rows");
+        assert_eq!(out[0].provider, "claude-code", "the existing row is untouched");
+    }
+
+    /// trap #4 (registry-row vs cold-row collision): a session id already emitted
+    /// (here a live registry row) is NOT re-emitted as a cold pi row — the shared
+    /// seen-guard the tombstone/codex branches use, live-wins.
+    #[test]
+    fn pi_cold_row_deduped_against_live_same_id_live_wins() {
+        let mut inputs = base_inputs();
+        inputs.registry = vec![live(4242, "dup-sid", Some("live-row"), 10_000)];
+        inputs.pi_cold = vec![meta("dup-sid", "--work-pi--", 9_000)];
+
+        let out = join_sessions(
+            &inputs,
+            JoinOpts { include_all: true, ..Default::default() },
+        );
+        let rows: Vec<&Session> = out.iter().filter(|s| s.session_id == "dup-sid").collect();
+        assert_eq!(rows.len(), 1, "one row for the shared id (live wins, no cold dup)");
+        assert_eq!(rows[0].which_branch, SessionBranch::LiveRegistry);
+        assert_ne!(rows[0].provider, "pi", "the live row is not overwritten by a cold pi row");
     }
 
     // --- zmx-only row epoch math ---
