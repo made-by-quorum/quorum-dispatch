@@ -1,0 +1,10 @@
+G-ISOL (POSITIVE) VERDICT: PASS — A,B on DISTINCT per-session daemons (one pid each); SIGKILL A's daemon → A child DEAD + world torn down, B PROVEN ALIVE BY OPERATION (send:pty acks + daemon serves a history read + list finds bravo; the polite fire correctly VERIFY-BLOCKS a blind inject into the non-composer cat — QS-5 upheld, g_isol Fix A), A recoverable cold (qd start relaunch). The shared-fate NEGATIVE control (must RED) is the qrmux-level g_isol_negative_shared_fate_red arm (QRMUX_TEST_SHARED seam).
+
+POS create: alpha exit=0 (stderr ), bravo exit=0 (stderr )
+POS precondition: alpha daemon pid=Some(2516820), bravo daemon pid=Some(2516850), DISTINCT=true
+POS children: alpha child pid=Some(2516827), bravo child pid=Some(2516857)
+POS kill: alpha daemon pid 2516820 dead in 9.908366ms = true
+POS teardown: alpha child pid 2516827 dead = true
+POS B-alive-by-operation: bravo daemon pid alive=true, send:pty exit=0 (stderr ), history-read-served=true, list-finds-bravo=true, verify-block marker-absent=true
+POS recover-cold: qd start alpha exit=0 (stderr WARNING: stable-id divergence for session "alpha": env carries vv8s6hwi, registry session sid-alpha already maps to fj3p7htj — sessions disagree; `qd ls` will surface fj3p7htj, not the session's QD_SESSION_ID.), daemon relaunched=true
+
