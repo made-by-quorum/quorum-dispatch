@@ -107,6 +107,10 @@ pub fn run_qd(jail: &Path, args: &[&str]) -> Output {
     Command::new(qd_bin())
         .args(args)
         .env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
         .envs(jail_vars(jail))
         .current_dir(jail.join("work"))
         .output()

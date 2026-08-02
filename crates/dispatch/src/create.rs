@@ -214,6 +214,11 @@ pub struct NewOutcome {
     pub socket_dir: PathBuf,
     /// The assembled `command 'claude' ...` shell command (for diagnostics).
     pub claude_cmd: String,
+    /// Lifecycle-collapse A-1 (spec D4): the session's pre-minted stable id,
+    /// plumbed back out so `qd start --json` can emit it. Mirrors
+    /// [`NewParams::qd_session_id`] (None only for unit fixtures that never
+    /// exercise identity).
+    pub qd_session_id: Option<String>,
 }
 
 /// Why `run_new` failed. EVERY variant maps to a nonzero exit ([`NewError::exit_code`])
@@ -439,6 +444,7 @@ fn build_claude_command(deps: &NewDeps, params: &NewParams) -> String {
     // are boot/inject-only and absent for the launch-cmd build (launch_plan reads
     // only env + paths).
     let fx = ProviderFx {
+        await_relay: None,
         env: &deps.env,
         paths: deps.paths,
         socket_dir: deps.canonical_dir.clone(),
@@ -953,6 +959,7 @@ fn run_to_boot_inner(
         name: params.name.clone(),
         socket_dir: deps.canonical_dir.clone(),
         claude_cmd,
+        qd_session_id: params.qd_session_id.clone(),
     })
 }
 

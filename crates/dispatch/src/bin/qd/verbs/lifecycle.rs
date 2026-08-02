@@ -316,6 +316,22 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         return 1;
     }
     let attach = m.get_flag("attach");
+    // Lifecycle-collapse A-1 (spec D4): machine-readable identity output. Under
+    // --json the human "Started detached session" line moves to stderr and
+    // stdout carries exactly one JSON object (success identity, or the A-2
+    // error object on a bind-arm failure).
+    let json_out = m.get_flag("json");
+    // Lifecycle-collapse A-3 (spec D5, Pete's ruling): relay readiness is
+    // DEFAULT-ON for start; --no-await-relay is the opt-out. Precedence:
+    // flag > QD_BOOT_AWAIT_RELAY env (the transition alias: "1"/"true" was the
+    // old opt-in and is now redundant; "0"/"false" is an explicit env opt-out —
+    // the jailed test harnesses' central lever) > default ON.
+    let await_relay = if m.get_flag("no-await-relay") {
+        false
+    } else {
+        !env.var("QD_BOOT_AWAIT_RELAY")
+            .is_some_and(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+    };
     // WP-B-CS-1 (D2): the driver-mode override flags (auto-detect escape hatch).
     let headless_flag = m.get_flag("headless");
     let interactive_flag = m.get_flag("interactive");
@@ -678,6 +694,10 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // launch-only members (relay/relay_port) are None; boot consumes mux/clock/
     // sleeper/socket_dir/paths.sessions_dir.
     let boot_fx = dispatch::provider::ProviderFx {
+        // A-3 (spec D5): the START verb's explicit relay-wait decision —
+        // default ON, `--no-await-relay` opts out. Some(...) overrides the
+        // legacy env opt-in inside the claude boot_waiter.
+        await_relay: Some(await_relay),
         env: &env,
         paths: &paths,
         socket_dir: canonical.clone(),
@@ -750,68 +770,137 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                 }
             }
             eprintln!("{e}");
+            // A-1: a --json caller always gets one machine object on stdout.
+            // Pre-bind create/boot failures use the catch-all class
+            // "start-failed" (the three RULED classes — unbound | ambiguous |
+            // diverged — are the bind phase's, below); the recipe treats any
+            // other class as fail-to-operator.
+            if json_out {
+                let obj = serde_json::json!({
+                    "error": {
+                        "class": "start-failed",
+                        "session": { "name": name, "pid": serde_json::Value::Null },
+                        "message": e.to_string(),
+                    }
+                });
+                println!("{obj}");
+            }
             return e.exit_code();
         }
     };
-    println!("Started detached session \"{}\"", out.name);
+    // Under --json the human line moves to stderr: stdout carries exactly one
+    // machine object (the identity on success, the A-2 error object on a
+    // bind-arm failure). Human output without the flag is byte-unchanged.
+    if json_out {
+        eprintln!("Started detached session \"{}\"", out.name);
+    } else {
+        println!("Started detached session \"{}\"", out.name);
+    }
 
-    // --- P0 wave-2 (spec-w2-env D1, design option (a)): bind at boot-confirm --
-    // The boot waiter confirmed the registry row exists (run_pid_phase found it
-    // by name), so the provider UUID is readable NOW — for a fork this is the
-    // NEW provider UUID the forked boot minted. Append the `bind` event
-    // folding the pre-minted unbound id onto it — from here the id in the
-    // child's env equals the id the registry/ls surface, forever. A bind
-    // failure warns loudly (the session is up; killing it would not help) —
-    // the id stays unbound and `ls` would lazily mint a DIFFERENT id, which
-    // the warning names so the divergence is visible, never silent.
-    // P0 redfix F1: row selection is liveness-filtered (pick_live_named_row) so
-    // a crash-leftover same-name DEAD row can never win by read-dir order, and
-    // bind's typed outcome surfaces the already-mapped-to-a-different-id case
-    // (the divergence the old Ok(winner) shape swallowed).
-    {
-        let rows = dispatch::registry::read_entries(&paths.sessions_dir, false);
+    // --- Lifecycle-collapse A-2: the FOURTH boot micro-phase — bind --------
+    // Supersedes the P0 wave-2 warn-only bind-at-boot-confirm block: exit 0
+    // now GUARANTEES the pre-minted stable id is bound to the live registry
+    // row (spec D4). The four short-of-bound arms are ruled per F3 (see
+    // `dispatch::bindphase`): NoneBindable/bind-Err retry to the budget —
+    // pinned by reference to the existing boot-phase timeout, one knob
+    // (BootTimeouts::pid_phase_ms) — Ambiguous and Diverged fail immediately.
+    // A failure leaves the session RUNNING (killing it would not help; the I6
+    // posture: say exactly what was left) and exits 1; the exit-code meanings
+    // are unchanged (bind failure = "any other failure" = 1).
+    let bound = {
+        let timeouts = dispatch::boot::BootTimeouts::default();
         let alive = |pid: i64| dispatch::effects::is_pid_alive(pid as i32);
-        match dispatch::registry::pick_live_named_row(&rows, &name, &alive) {
-            dispatch::registry::LiveNamePick::One { session_id: sid } => {
-                match dispatch::idstore::bind(&ids_path, &qd_session_id, &sid, &clock) {
-                    // Bound, or an idempotent re-bind of the same pair: silent.
-                    Ok(dispatch::idstore::BindOutcome::Bound)
-                    | Ok(dispatch::idstore::BindOutcome::AlreadyBoundSameId) => {}
-                    // The divergence case: the registry session already maps to
-                    // a DIFFERENT stable id — name BOTH ids, never silent.
-                    Ok(dispatch::idstore::BindOutcome::SessionHasDifferentId { existing }) => {
-                        eprintln!(
-                            "WARNING: stable-id divergence for session \"{name}\": env \
-                             carries {qd_session_id}, registry session {sid} already \
-                             maps to {existing} — sessions disagree; `qd ls` will \
-                             surface {existing}, not the session's QD_SESSION_ID."
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "WARNING: could not bind stable id {qd_session_id} to session \
-                             {sid}: {e} — `qd ls` may surface a different id than the \
-                             session's QD_SESSION_ID."
-                        );
-                    }
+        dispatch::bindphase::run_bind_phase(
+            &paths.sessions_dir,
+            &ids_path,
+            &name,
+            &qd_session_id,
+            &clock,
+            &sleeper,
+            &alive,
+            timeouts.pid_phase_ms,
+            timeouts.poll_ms,
+        )
+    };
+    let bound = match bound {
+        Ok(ok) => ok,
+        Err(fail) => {
+            let (pid, registry_id): (Option<i64>, Option<String>) = match &fail {
+                dispatch::bindphase::BindPhaseFailure::Unbound { pid, last_bind_err } => {
+                    let detail = last_bind_err
+                        .as_ref()
+                        .map(|e| format!(" (last id-store error: {e})"))
+                        .unwrap_or_default();
+                    eprintln!(
+                        "qd start: session \"{name}\" booted but its stable id \
+                         {qd_session_id} is still UNBOUND — the registry row never \
+                         carried a sessionId within the boot-phase budget{detail}. \
+                         The session IS RUNNING; inspect with `qd ls` or `qd attach \
+                         {name}`. A caller may retry ONCE after stopping it."
+                    );
+                    (*pid, None)
                 }
+                dispatch::bindphase::BindPhaseFailure::Ambiguous { count } => {
+                    eprintln!(
+                        "qd start: {count} RUNNING sessions claim the name \"{name}\" — \
+                         refusing to bind stable id {qd_session_id} to either, and \
+                         NEVER retrying (retrying a duplicated name mints a third \
+                         same-name session). The just-started session IS RUNNING; \
+                         resolve the duplicate (`qd ls` + `qd stop`) before trusting \
+                         name addressing."
+                    );
+                    (None, None)
+                }
+                dispatch::bindphase::BindPhaseFailure::Diverged {
+                    registry_session_id,
+                    existing_id,
+                    pid,
+                } => {
+                    eprintln!(
+                        "qd start: stable-id divergence for session \"{name}\": env \
+                         carries {qd_session_id}, registry session \
+                         {registry_session_id} already maps to {existing_id} — \
+                         sessions disagree; `qd ls` will surface {existing_id}. The \
+                         session IS RUNNING; operator attention required."
+                    );
+                    (*pid, Some(existing_id.clone()))
+                }
+            };
+            if json_out {
+                // The ruled machine error object (spec A-2): the prime recipe
+                // branches on `class` — unbound → stop-and-retry once;
+                // ambiguous → never retry; diverged → fail to operator.
+                let mut ids = serde_json::json!({ "env": qd_session_id });
+                if let Some(reg) = registry_id {
+                    ids["registry"] = serde_json::Value::String(reg);
+                }
+                let obj = serde_json::json!({
+                    "error": {
+                        "class": fail.class(),
+                        "session": { "name": name, "pid": pid },
+                        "ids": ids,
+                    }
+                });
+                println!("{obj}");
             }
-            dispatch::registry::LiveNamePick::NoneBindable => {
-                eprintln!(
-                    "WARNING: session \"{name}\" booted but its registry row carries no \
-                     sessionId yet — stable id {qd_session_id} is unbound; `qd ls` may \
-                     surface a different id than the session's QD_SESSION_ID."
-                );
-            }
-            dispatch::registry::LiveNamePick::Ambiguous { count } => {
-                eprintln!(
-                    "WARNING: {count} RUNNING sessions claim the name \"{name}\" — \
-                     refusing to bind stable id {qd_session_id} to either (two live \
-                     sessions sharing a name is an anomaly; resolve it, e.g. `qd ls` + \
-                     `qd kill`, before trusting name addressing)."
-                );
-            }
+            return 1;
         }
+    };
+    // --- Lifecycle-collapse A-1 (spec D4): machine-readable identity --------
+    // Emitted only after the bind phase: exit 0 ⇒ the printed id is bound.
+    if json_out {
+        let live = bound
+            .pid
+            .map(|p| dispatch::effects::is_pid_alive(p as i32))
+            .unwrap_or(true);
+        let obj = serde_json::json!({
+            "name": out.name,
+            "qdId": qd_session_id,
+            "sessionId": bound.session_id,
+            "status": bound.status,
+            "live": live,
+        });
+        println!("{obj}");
     }
 
     // --- Warranty belt (2026-06-11): warn at BIRTH if the session is born

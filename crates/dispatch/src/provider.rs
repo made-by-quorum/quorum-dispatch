@@ -224,6 +224,14 @@ pub struct ProviderFx<'a> {
     /// (`provider/pi/residence.rs`) owns the pi child + the stdio driver; this is
     /// the verb-layer borrow of the reach to it.
     pub pi_rpc: Option<&'a dyn crate::provider::pi::rpc::PiRpc>,
+    /// Lifecycle-collapse A-3 (spec D5, Pete's ruling: relay readiness is
+    /// DEFAULT-ON for `qd start`): the CALLER's relay-wait decision for the boot
+    /// waiter. `Some(true)` arms the relay-sidecar phase, `Some(false)` disarms
+    /// it (`--no-await-relay`), `None` = no caller decision — the legacy
+    /// `QD_BOOT_AWAIT_RELAY` env opt-in governs (resume + every fx site that
+    /// predates the flag keep today's behavior byte-for-byte). CONSUMED BY:
+    /// `ClaudeProvider::boot_waiter`; every other impl ignores it.
+    pub await_relay: Option<bool>,
 }
 
 impl<'a> ProviderFx<'a> {
@@ -462,17 +470,15 @@ impl Provider for ClaudeProvider {
         // priming transport is sound (§4.3). `relay_dir` is the global
         // `<home>/.claude/relay` sidecar dir.
         //
-        // OPT-IN (QD_BOOT_AWAIT_RELAY): dispatch's `boot_waiter` is SHARED by every
-        // claude boot, but only the relay-DEFAULT PRIMING create-head needs the
-        // sidecar wait — and a fresh dispatch boot cannot tell a relay-priming boot
-        // from a non-relay one (a plain `qd start`, or a fakerepl-backed test boot
-        // that never writes a sidecar: `fx.relay`/`relay_port` are None on EVERY
-        // boot path, lifecycle.rs:1013). So the phase is engaged only when the
-        // caller opts in via QD_BOOT_AWAIT_RELAY — armed by the commission/priming
-        // create-head; OFF for plain starts, resume, and the fakerepl suite (which
-        // keeps the pre-Fix-A pid+idle readiness, byte-for-byte). See the
-        // BUILD-REPORT bubble: whether to keep this opt-in, default it on with a
-        // fakerepl sidecar-emulation, or scope it consumer-side is a coordinator call.
+        // Lifecycle-collapse A-3 (spec D5, Pete's ruling): relay readiness is
+        // DEFAULT-ON for `qd start` — the START verb passes `fx.await_relay =
+        // Some(!--no-await-relay)`, so exit 0 means idle AND relay-reachable.
+        // `fx.await_relay = None` (resume, tests, every pre-flag fx site) keeps
+        // the legacy behavior: the phase engages only on the QD_BOOT_AWAIT_RELAY
+        // env opt-in (kept as a transition alias — frame's engine::start still
+        // sets it; harmless under default-on). The old BUILD-REPORT bubble
+        // ("keep opt-in vs default-on") is RESOLVED by D5: default-on,
+        // consumer-scoped opt-out.
         let waiter = crate::boot::EventBootWaiter::new(
             mux,
             fx.socket_dir.clone(),
@@ -480,10 +486,11 @@ impl Provider for ClaudeProvider {
             clock,
             sleeper,
         );
-        let await_relay = fx
-            .env
-            .var("QD_BOOT_AWAIT_RELAY")
-            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        let await_relay = fx.await_relay.unwrap_or_else(|| {
+            fx.env
+                .var("QD_BOOT_AWAIT_RELAY")
+                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        });
         Box::new(if await_relay {
             waiter.with_relay_dir(fx.paths.relay_dir.clone())
         } else {

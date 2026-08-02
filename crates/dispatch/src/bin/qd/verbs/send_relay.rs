@@ -82,6 +82,7 @@ pub(super) fn run_claude_relay_unified(
         home.as_deref().unwrap_or("/"),
     ));
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: paths.sessions_dir.clone(),
@@ -638,6 +639,7 @@ fn inject_via_provider(
     let paths =
         dispatch::paths::QdPaths::from_home(std::path::Path::new(home.as_deref().unwrap_or("/")));
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: paths.sessions_dir.clone(),
@@ -809,6 +811,7 @@ pub(super) fn run_codex_send(session: &Session, message: &str) -> i32 {
     // to inject; the trait never holds a transport handle / endpoint string).
     let rpc_ref: &dyn AppServerRpc = &rpc;
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: paths.sessions_dir.clone(),
@@ -1023,6 +1026,7 @@ pub(super) fn run_acp_send(session: &Session, message: &str) -> i32 {
         }
     };
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: paths.sessions_dir.clone(),
@@ -1172,6 +1176,7 @@ pub(super) fn run_pi_send(session: &Session, message: &str) -> i32 {
     };
     let rpc_ref: &dyn PiRpc = &remote;
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: paths.sessions_dir.clone(),
@@ -1328,6 +1333,7 @@ fn pi_resolve_fx<'a>(
     paths: &'a dispatch::paths::QdPaths,
 ) -> dispatch::provider::ProviderFx<'a> {
     dispatch::provider::ProviderFx {
+        await_relay: None,
         env,
         paths,
         socket_dir: paths.sessions_dir.clone(),
@@ -1352,6 +1358,7 @@ fn codex_resolve_fx<'a>(
     paths: &'a dispatch::paths::QdPaths,
 ) -> dispatch::provider::ProviderFx<'a> {
     dispatch::provider::ProviderFx {
+        await_relay: None,
         env,
         paths,
         socket_dir: paths.sessions_dir.clone(),

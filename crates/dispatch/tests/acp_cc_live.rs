@@ -203,6 +203,7 @@ fn acp_host_queue_overflow_honors_configured_capacity() {
     let env = MapEnv::default();
     let paths = QdPaths::from_home(tmp.path());
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: tmp.path().to_path_buf(),
@@ -295,6 +296,7 @@ fn acp_cc_live_full_lifecycle() {
     let env = MapEnv::default();
     let paths = QdPaths::from_home(work.path());
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: work.path().to_path_buf(),

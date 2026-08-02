@@ -549,6 +549,7 @@ fn try_spawn_and_connect<'a>(
     // launch_plan resolves the bin + CODEX_HOME passthrough off `fx.env` (W3); we
     // append the transport flag (port allocation is a create-path concern).
     let fx = ProviderFx {
+        await_relay: None,
         env: deps.env,
         // launch_plan reads only env (codex) — paths/socket_dir/mux/etc. unused;
         // a placeholder QdPaths keeps the borrow valid without a real home.

@@ -240,6 +240,7 @@ fn cf_argv_golden_strips_forbidden_from_env() {
         uid: 501,
     };
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: home.join("zmx-501"),

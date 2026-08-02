@@ -1170,6 +1170,7 @@ pub fn gather_with_dirs(
     // unused by it (the same minimal-fx shape `gather_codex` builds for codex).
     let pi_fx_home = QdPaths::from_home(Path::new("/nonexistent-pi-fx-home"));
     let pi_fx = crate::provider::ProviderFx {
+        await_relay: None,
         env,
         paths: &pi_fx_home,
         socket_dir: PathBuf::new(),
@@ -1476,6 +1477,7 @@ fn gather_codex(
     // paths member is unused by it). Built once and reused per row.
     let placeholder = QdPaths::from_home(Path::new("/nonexistent-codex-fx-home"));
     let fx = ProviderFx {
+        await_relay: None,
         env,
         paths: &placeholder,
         socket_dir: PathBuf::new(),

@@ -217,6 +217,7 @@ struct Fixture {
 impl Fixture {
     fn fx(&self) -> ProviderFx<'_> {
         ProviderFx {
+            await_relay: None,
             env: &self.env,
             paths: &self.paths,
             socket_dir: self.paths.home.join("zmx-501"),
@@ -748,6 +749,7 @@ fn daemon_launch_plan_minimal_fx_consumes_no_claude_config() {
     let paths = QdPaths::from_home(&home); // config toml path does not exist.
     let env = MapEnv::default(); // empty env.
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: home.join("zmx-501"),
@@ -789,6 +791,7 @@ fn daemon_steer_stale_precondition_is_typed_error() {
     let paths = QdPaths::from_home(&fx_tmp.path().join("home"));
     let env = MapEnv::default();
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: fx_tmp.path().to_path_buf(),
@@ -878,6 +881,7 @@ fn claude_launch_plan_matches_launch_rs_helpers() {
     let paths = QdPaths::from_home(&home);
     let env = MapEnv::default();
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: home.join("zmx-501"),
@@ -958,6 +962,7 @@ fn claude_inject_preserves_relay_error_class() {
     let env = MapEnv::default();
     let relay = FailingRelay(RelayError::Timeout);
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: tmp.path().to_path_buf(),
@@ -986,6 +991,7 @@ fn claude_inject_preserves_relay_error_class() {
 
     // No port → NoTransport (send.ts:406-409 "has no relay." class).
     let fx_no_port = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: tmp.path().to_path_buf(),
@@ -1064,6 +1070,7 @@ fn daemon_boot_unready_fails_with_handshake_detail() {
     let paths = QdPaths::from_home(&tmp.path().join("home"));
     let env = MapEnv::default();
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: tmp.path().to_path_buf(),
@@ -1255,6 +1262,7 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
     let paths = QdPaths::from_home(&home);
     let env = MapEnv::default(); // empty env.
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: home.join("zmx-501"),
@@ -1291,6 +1299,7 @@ fn codex_launch_plan_minimal_fx_uses_codex_bin() {
     env2.vars
         .insert("CODEX_HOME".to_string(), "/jail/codex-home".to_string());
     let fx2 = ProviderFx {
+        await_relay: None,
         env: &env2,
         paths: &paths,
         socket_dir: home.join("zmx-501"),
@@ -1329,6 +1338,7 @@ fn codex_inject_no_transport_when_app_server_absent() {
     let paths = QdPaths::from_home(&tmp.path().join("home"));
     let env = MapEnv::default();
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: tmp.path().to_path_buf(),
@@ -1464,6 +1474,7 @@ fn ladder_fx<'a>(
     expected: Option<&'a str>,
 ) -> ProviderFx<'a> {
     ProviderFx {
+        await_relay: None,
         env,
         paths,
         socket_dir: W6PathBuf::new(),

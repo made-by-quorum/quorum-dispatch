@@ -221,6 +221,7 @@ fn wait_dead(pid: i64) {
 /// borrow). Owned `paths` is passed in so the borrow outlives the fx.
 fn codex_root(env: &JailEnv, paths: &dispatch::paths::QdPaths) -> PathBuf {
     let fx = ProviderFx {
+        await_relay: None,
         env,
         paths,
         socket_dir: paths.sessions_dir.clone(),
@@ -354,6 +355,7 @@ fn codex_resume_kill_live_jailed_e2e() {
 
         let rpc_ref: &dyn AppServerRpc = &rpc;
         let fx = ProviderFx {
+            await_relay: None,
             env: &env,
             paths: &dispatch::paths::QdPaths::from_home(&jail.join("home")),
             socket_dir: sessions_dir.clone(),

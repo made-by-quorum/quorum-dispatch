@@ -53,13 +53,15 @@ pub fn run_kill_retired() -> i32 {
 /// The retired `qd start --agent` stub's exact stderr line. Role/agent CONTENT
 /// (the `<name>.md` definitions the old static-agent path resolved under
 /// `~/.quorum/dispatch/plugins/core/agents/`) now lives in the work-model PLUGIN; spawning a
-/// role is `frame commission <role>.md`, not the engine's native `--agent`. The
-/// engine refuses the flag with this teaching error instead of resolving a
-/// path it no longer owns (the new/kill/attach retirement pattern). Pinned
-/// by a unit test so the wording can't drift.
+/// role is start-and-call (`qd start` + `qf call` — the prime skill's recipe;
+/// lifecycle-collapse spec A-4: `frame commission` is retired), not the
+/// engine's native `--agent`. The engine refuses the flag with this teaching
+/// error instead of resolving a path it no longer owns (the new/kill/attach
+/// retirement pattern). Pinned by a unit test so the wording can't drift.
 pub fn start_agent_retired_line() -> &'static str {
     "qd start --agent is retired: role/agent content lives in the work-model plugin now. \
-     Commission a role via `frame commission <path-to-role>.md --name … --goal …` instead."
+     Spawn a role with `qd start --interactive <name>` and deliver its goal with \
+     `qf call <name> --body-from <goal.md>` (see the prime skill)."
 }
 
 /// `qd start --agent <name>` retired guard: helpful stderr, exit 1. Fires from
@@ -90,7 +92,8 @@ mod tests {
         assert_eq!(
             start_agent_retired_line(),
             "qd start --agent is retired: role/agent content lives in the work-model plugin now. \
-             Commission a role via `frame commission <path-to-role>.md --name … --goal …` instead."
+             Spawn a role with `qd start --interactive <name>` and deliver its goal with \
+             `qf call <name> --body-from <goal.md>` (see the prime skill)."
         );
     }
 

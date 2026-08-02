@@ -239,8 +239,17 @@ fn g_e() {
     let env: &[(&str, &str)] = &[("QD_MUX", "zmx"), ("CLAUDE_BIN", "/bin/cat")];
     // create: `qd start` under zmx. We cannot boot real claude; use a fake-claude
     // that writes the row + execs cat (zmx hosts the pty).
-    let app = "cat";
-    let fake = write_fake_claude(&jail, app);
+    // A-2 fixture fixes (lifecycle-collapse): (1) BAKE the name — the zmx pane
+    // does not inherit QD_FAKE_NAME, so the row was silently named "fake";
+    // (2) the child must SURVIVE the detached pty — `cat` exits on the detached
+    // ghostty-vt pane's EOF within seconds (invisible pre-A-2: nothing
+    // re-checked child liveness once the row appeared; the bind micro-phase now
+    // requires a LIVE named row for exit 0, and refusing to bind a corpse row
+    // is the ruled behavior). Real claude is a TUI that never EOF-exits;
+    // `sleep` is the minimal survivor (the row's send/list/kill assertions
+    // never required a living reader — they passed with a dead cat).
+    let app = "sleep 2147483647";
+    let fake = write_fake_claude_named(&jail, app, "ge-sess");
     let fake_s = fake.to_string_lossy().into_owned();
     let mut create_env = env.to_vec();
     create_env.push(("CLAUDE_BIN", &fake_s));

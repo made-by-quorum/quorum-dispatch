@@ -248,11 +248,27 @@ impl Config {
         // W8 conversation-JSONL emulation path (None = unset → no transcript).
         let convo_jsonl = std::env::var_os("QD_FAKEREPL_CONVO_JSONL").map(PathBuf::from);
 
-        // W8 end-to-end leg: optional sessionId for the registry row.
-        // QD_FAKEREPL_SESSION_ID pins it for the env-driven tests; absent, fall
-        // back to the `--resume <id>` argv (WP-B5-iii — real claude continues that
-        // session id) so a Mechanism-S fork adopts its seeded uuid.
-        let session_id = std::env::var("QD_FAKEREPL_SESSION_ID").ok().or(resume_id);
+        // Registry-row sessionId. Precedence:
+        //   1. QD_FAKEREPL_SESSION_ID pins it (the W8 env-driven tests);
+        //   2. `--resume <id>` argv (WP-B5-iii — real claude continues that
+        //      session id) so a Mechanism-S fork adopts its seeded uuid;
+        //   3. lifecycle-collapse A-2: a DETERMINISTIC default derived from the
+        //      pid ("fakerepl-<pid>") — real claude always populates sessionId
+        //      during boot, and the SUT's bind micro-phase now REQUIRES it for
+        //      exit 0, so a sessionId-less default row would fail every boot.
+        //      QD_FAKEREPL_OMIT_SESSION_ID=1 suppresses it — the seeded
+        //      NoneBindable fixture (spec §3 acceptance, N1).
+        let omit_session_id = std::env::var("QD_FAKEREPL_OMIT_SESSION_ID")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let session_id = if omit_session_id {
+            None
+        } else {
+            std::env::var("QD_FAKEREPL_SESSION_ID")
+                .ok()
+                .or(resume_id)
+                .or_else(|| Some(format!("fakerepl-{}", std::process::id())))
+        };
 
         // ACK-1 seams (ack1-spec §4.2). The both-set conflict is refused in
         // main() (exit 13 — fail-loud, no silent precedence).

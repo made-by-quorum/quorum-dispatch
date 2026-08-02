@@ -135,6 +135,10 @@ pub fn run_qd_jailed(
     let mut cmd = Command::new(qd_bin());
     cmd.args(args);
     cmd.env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
         .env("HOME", &j.home)
         // lsview A4 (CF-F1): jail the ls bare-proc gather against host `ps`/`lsof`
         // — a real bare codex/opencode/pi on the host must not leak extra rows into

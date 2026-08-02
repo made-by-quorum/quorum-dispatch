@@ -154,8 +154,20 @@ Options:
   --cwd <dir>            Working directory for the session
   --fork <session>       Fork an existing session's transcript into this new
                          participant (session = name, id, or unique prefix)
+  --turn <ordinal>       With --fork: rewind the fork to a past conversational-turn
+                         boundary (default: latest safe)
   --attach               Attach interactively instead of starting detached
-  --agent <name>         Start with a specific agent definition
+  --interactive          Force the interactive native-TUI launch (agent-marked
+                         callers must pass it: QD_SESSION_ID in the caller's env
+                         routes the auto-detect headless otherwise)
+  --headless             Force a headless stream-json launch (override the
+                         driver auto-detect)
+  --json                 Emit the started session's identity as JSON on stdout:
+                         {name, qdId, sessionId, status, live}. Exit 0 guarantees
+                         the id is bound; a bind failure emits {error: {class:
+                         "unbound"|"ambiguous"|"diverged", ...}} and exits 1
+  --no-await-relay       Skip the default relay-readiness wait (exit 0 then
+                         means idle, not relay-reachable)
   -p, --prompt <prompt>  Send an initial prompt after the session starts
   --model <model>        Set the model before sending the prompt
   --provider <provider>  Provider: claude-code (default) or opencode
@@ -167,10 +179,12 @@ Options:
   -h, --help             display help for command
 
 Exit codes (with -p, for external composition — see doc/PROTOCOL.md, ADR 0008):
-  0   Session created and ready; the prompt was accepted (the session went busy).
+  0   Session created and ready — idle, stable id BOUND, and (unless
+      --no-await-relay) relay-reachable; the prompt was accepted (went busy).
   10  Session created and ready, but the prompt was NOT confirmed submitted after
       bounded remediation. The session EXISTS — attach and check the composer.
-  1   Any other failure (create/boot error, or the PID file vanished after boot).
+  1   Any other failure (create/boot/bind error, or the PID file vanished after
+      boot). Bind failures leave the session RUNNING and say so on stderr.
 "####;
 
 // P0 W1 (qb spec-cli §11): `new` is RETIRED — erroring stub pointing at

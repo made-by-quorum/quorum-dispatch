@@ -1076,6 +1076,7 @@ fn queue_overflow_via_host(runner: &Runner, provider_id: &str) -> Outcome {
     let env = MapEnv::default();
     let paths = QdPaths::from_home(&tmp);
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: tmp.clone(),
@@ -1562,6 +1563,7 @@ fn queue_slot_released_via_host(runner: &Runner, provider_id: &str) -> Outcome {
     let env = MapEnv::default();
     let paths = QdPaths::from_home(&tmp);
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: tmp.clone(),
@@ -2208,6 +2210,7 @@ fn run_one_pong_turn(runner: &Runner, provider_id: &str) -> Result<PongTurnEvide
     let env = MapEnv::default();
     let paths = QdPaths::from_home(&tmp);
     let fx = ProviderFx {
+        await_relay: None,
         env: &env,
         paths: &paths,
         socket_dir: tmp.clone(),
@@ -2449,7 +2452,7 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
             return runner.fail(commands, format!("spawn error (host1): {e}"), "cannot exercise resume-recall without a live AcpHost");
         }
     };
-    let fx1 = ProviderFx { env: &env, paths: &paths, socket_dir: tmp.clone(), mux: None, clock: None, sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None, acp_client: Some(&host1), pi_rpc: None, acp_pre_dispatch: None };
+    let fx1 = ProviderFx { await_relay: None, env: &env, paths: &paths, socket_dir: tmp.clone(), mux: None, clock: None, sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None, acp_client: Some(&host1), pi_rpc: None, acp_pre_dispatch: None };
     if let Err(e) = provider.boot_waiter(&fx1).wait_ready("c1-resume-recall-1") {
         let _ = std::fs::remove_dir_all(&tmp);
         return runner.fail(commands, format!("boot_waiter.wait_ready error (host1): {e:?}"), "the ACP initialize handshake must succeed through the provider seam");
@@ -2493,7 +2496,7 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         let _ = std::fs::remove_dir_all(&tmp);
         return runner.fail(commands, format!("post-load session id {resumed_id:?} != original {session:?}"), "resume must re-establish the SAME session id, never re-mint or fork");
     }
-    let fx2 = ProviderFx { env: &env, paths: &paths, socket_dir: tmp.clone(), mux: None, clock: None, sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None, acp_client: Some(&host2), pi_rpc: None, acp_pre_dispatch: None };
+    let fx2 = ProviderFx { await_relay: None, env: &env, paths: &paths, socket_dir: tmp.clone(), mux: None, clock: None, sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None, acp_client: Some(&host2), pi_rpc: None, acp_pre_dispatch: None };
     let key2 = SessionKey { id: &session, name: Some("c1-resume-recall"), cwd: Some(&cwd), pid: None };
     if let Err(e) = provider.inject(&fx2, &key2, &turn2_prompt, "c1-resume-recall-test") {
         let _ = std::fs::remove_dir_all(&tmp);

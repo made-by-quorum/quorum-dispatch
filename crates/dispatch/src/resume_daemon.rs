@@ -766,6 +766,7 @@ fn try_spawn_and_connect<'a>(
         .unwrap_or(".");
 
     let fx = ProviderFx {
+        await_relay: None,
         env: deps.env,
         paths: &placeholder_paths(),
         socket_dir: PathBuf::new(),

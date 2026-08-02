@@ -293,6 +293,9 @@ fn g_coldstart_n() {
                     // would auto-detect headless. Tests concurrent cold-start.
                     .args(["start", "--interactive", "alpha"])
                     .env_clear()
+                    // Lifecycle-collapse A-3: relay wait is DEFAULT-ON now; these
+                    // hermetic boots have no sidecar — explicit env opt-out.
+                    .env("QD_BOOT_AWAIT_RELAY", "0")
                     .env("HOME", &home)
                     .env("QD_HOME", &qd_home)
                     .env("XDG_RUNTIME_DIR", &xdg)
@@ -358,6 +361,9 @@ fn g_coldstart_n() {
                     // WP-B-CS-1 (D2): force the interactive surface (piped stdio).
                     .args(["start", "--interactive", &name])
                     .env_clear()
+                    // Lifecycle-collapse A-3: relay wait is DEFAULT-ON now; these
+                    // hermetic boots have no sidecar — explicit env opt-out.
+                    .env("QD_BOOT_AWAIT_RELAY", "0")
                     .env("HOME", &home)
                     .env("QD_HOME", &qd_home)
                     .env("XDG_RUNTIME_DIR", &xdg)
@@ -531,6 +537,9 @@ fn g_evsplit() {
                 let mut child = match Command::new(&bin)
                     .args(["send:pty", name, &format!("{marker}{i}")])
                     .env_clear()
+                    // Lifecycle-collapse A-3: relay wait is DEFAULT-ON now; these
+                    // hermetic boots have no sidecar — explicit env opt-out.
+                    .env("QD_BOOT_AWAIT_RELAY", "0")
                     .env("HOME", &home)
                     .env("QD_HOME", &qd_home)
                     .env("XDG_RUNTIME_DIR", &xdg)

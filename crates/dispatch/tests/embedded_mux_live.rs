@@ -219,6 +219,10 @@ fn start_daemon(jail: &Jail, dir: &Path, name: &str) -> (DaemonGuard, PathBuf) {
         .arg("--session")
         .arg(name)
         .env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
         .env("HOME", &jail.home)
         .env("XDG_RUNTIME_DIR", &jail.xdg_runtime)
         .env("PATH", "/usr/bin:/bin")

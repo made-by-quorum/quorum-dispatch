@@ -183,6 +183,10 @@ impl Jail {
     /// Apply the jailed embedded env to a std::process::Command.
     fn apply_embedded(&self, cmd: &mut Command) {
         cmd.env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
             .env("HOME", &self.home)
             .env("QD_HOME", self.root.join("qdhome"))
             .env("XDG_RUNTIME_DIR", &self.xdg_runtime)
@@ -294,6 +298,10 @@ fn start_daemon(
         .arg("--session")
         .arg(name)
         .env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
         .env("HOME", &jail.home)
         .env("XDG_RUNTIME_DIR", &jail.xdg_runtime)
         .env("PATH", "/usr/bin:/bin")
@@ -376,7 +384,7 @@ fn mux_create(jail: &Jail, dir: &Path, name: &str, shell_cmd: &str) -> MuxSessio
 /// its socket_dir. This is the SANCTIONED forged-row technique (tests/verbs_a4.rs).
 fn forge_registry_row(jail: &Jail, name: &str, pid: u32) {
     let body = format!(
-        r#"{{"pid":{pid},"sessionId":"sid-{name}","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","name":"{name}","version":"0.1.0","kind":"claude-code","entrypoint":"claude"}}"#
+        r#"{{"pid":{pid},"sessionId":"sid-{name}-{pid}","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","name":"{name}","version":"0.1.0","kind":"claude-code","entrypoint":"claude"}}"#
     );
     std::fs::write(jail.sessions_dir.join(format!("{pid}.json")), body)
         .expect("forge registry row");
@@ -799,6 +807,17 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// `$QD_FAKE_NAME` carries the session name (set by the caller via env). The
 /// script writes `<sessions_dir>/<pid>.json` with that name + status idle.
 fn write_fake_claude(jail: &Jail, app: &str) -> PathBuf {
+    // Default (env-carried name) — the embedded lane propagates the caller env.
+    write_fake_claude_named(jail, app, "fake")
+}
+
+/// Lifecycle-collapse A-2 fixture fix: the ZMX lane does NOT propagate arbitrary
+/// caller env (QD_FAKE_NAME) into the pane child, so the row was silently named
+/// "fake" there — invisible pre-A-2 because an unbound id only warned. Bake the
+/// intended name as the script's fallback default; an env-carried QD_FAKE_NAME
+/// still wins where the lane delivers it (real claude derives its own identity,
+/// so this is fixture-faithfulness, not a production seam).
+fn write_fake_claude_named(jail: &Jail, app: &str, default_name: &str) -> PathBuf {
     let path = jail.root.join("fake-claude.sh");
     let sessions = jail.sessions_dir.to_string_lossy().into_owned();
     let script = format!(
@@ -806,7 +825,7 @@ fn write_fake_claude(jail: &Jail, app: &str) -> PathBuf {
 # Fake-claude (TEST INFRA): write the registry row real Claude writes, then exec
 # a real interactive app so the engine attach/send paths have a live child.
 PID=$$
-NAME="${{QD_FAKE_NAME:-fake}}"
+NAME="${{QD_FAKE_NAME:-{default_name}}}"
 SESS="{sessions}"
 mkdir -p "$SESS"
 # startedAt/updatedAt = NOW (fidelity: real Claude stamps its boot instant —
@@ -814,7 +833,7 @@ mkdir -p "$SESS"
 # against startedAt; a hardcoded past timestamp models a session LYING about
 # its boot, which reads as a reused pid).
 NOW_MS="$(($(date +%s) * 1000))"
-printf '{{"pid":%s,"sessionId":"sid-%s","cwd":"/w","startedAt":%s,"updatedAt":%s,"status":"idle","name":"%s","version":"0.1.0","kind":"claude-code","entrypoint":"claude"}}' "$PID" "$NAME" "$NOW_MS" "$NOW_MS" "$NAME" > "$SESS/$PID.json"
+printf '{{"pid":%s,"sessionId":"sid-%s-%s","cwd":"/w","startedAt":%s,"updatedAt":%s,"status":"idle","name":"%s","version":"0.1.0","kind":"claude-code","entrypoint":"claude"}}' "$PID" "$NAME" "$PID" "$NOW_MS" "$NOW_MS" "$NAME" > "$SESS/$PID.json"
 exec {app}
 "#
     );

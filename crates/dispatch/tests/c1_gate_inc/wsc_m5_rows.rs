@@ -101,6 +101,9 @@ fn release_jail_env(jail: &Jail) -> Vec<(String, String)> {
         ("PATH".into(), "/usr/bin:/bin".into()),
         ("TERM".into(), "xterm-256color".into()),
         ("QD_EMBEDDED_DAEMON_PROGRAM".into(), rel),
+        // Lifecycle-collapse A-3: relay wait is DEFAULT-ON now; these hermetic
+        // boots have no sidecar — explicit env opt-out.
+        ("QD_BOOT_AWAIT_RELAY".into(), "0".into()),
     ]
 }
 
@@ -154,6 +157,9 @@ fn start_release_shared_daemon(jail: &Jail, dir: &Path) -> (DaemonGuard, PathBuf
         .arg("--session")
         .arg("shared")
         .env_clear()
+                    // Lifecycle-collapse A-3: relay wait is DEFAULT-ON now; these
+                    // hermetic boots have no sidecar — explicit env opt-out.
+                    .env("QD_BOOT_AWAIT_RELAY", "0")
         .env("HOME", &jail.home)
         .env("XDG_RUNTIME_DIR", &jail.xdg_runtime)
         .env("PATH", "/usr/bin:/bin")
@@ -221,7 +227,7 @@ PID=$$
 NAME="${{QD_FAKE_NAME:-flood}}"
 SESS="{sessions}"
 mkdir -p "$SESS"
-printf '{{"pid":%s,"sessionId":"sid-%s","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","name":"%s","version":"0.1.0","kind":"claude-code","entrypoint":"claude"}}' "$PID" "$NAME" "$NAME" > "$SESS/$PID.json"
+printf '{{"pid":%s,"sessionId":"sid-%s-%s","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","name":"%s","version":"0.1.0","kind":"claude-code","entrypoint":"claude"}}' "$PID" "$NAME" "$PID" "$NAME" > "$SESS/$PID.json"
 read x
 i=0
 while :; do i=$((i+1)); echo "FLOOD $i {pad}"; done

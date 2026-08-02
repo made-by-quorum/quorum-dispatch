@@ -157,6 +157,10 @@ impl CrashArena {
                 &self.daemon_session,
             ])
             .env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
             .env("HOME", &self.root) // hermetic: no real ~/.quorum touch
             .env("QD_HOME", &self.qd_home)
             .env("PATH", "/usr/bin:/bin")

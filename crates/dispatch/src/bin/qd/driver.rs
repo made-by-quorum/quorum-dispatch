@@ -324,10 +324,28 @@ mod tests {
     /// END-TO-END: `--interactive` at a pipe with an agent marker present forces the
     /// interactive route (override beats both context signals) — a human escape
     /// hatch even from an agent-looking context.
+    ///
+    /// PTY-LANE PREMISE (heir to frame's retired P4DB C3 source-canary; the
+    /// lifecycle collapse removed `frame commission` → `engine::start`, which
+    /// injected `--interactive` unconditionally): an agent-marked session
+    /// (QD_SESSION_ID/CLAUDECODE set) that starts WITHOUT `--interactive`
+    /// auto-routes to Headless — a route no persistent fleet seat can ride —
+    /// so every commissioned/relay/tracked agent start MUST pass
+    /// `--interactive` (the prime recipe does; frame's help documents it).
+    /// This composition (override → Human → Interactive) is the create lane
+    /// the whole fleet rides; if either half regresses, this REDs — and a
+    /// launch-time breakage of every primed agent is what it is reporting.
     #[test]
     fn interactive_override_routes_to_interactive_even_with_agent_marker() {
         let driver = resolve_driver(DriverOverride::Interactive, false, &agent_env("CLAUDECODE"));
         assert_eq!(start_route(driver, false), StartRoute::Interactive);
+        // The converse half of the premise, stated in the same place: the SAME
+        // agent-marked context WITHOUT the override routes away from the PTY
+        // lane (headless with a prompt, refused without) — dropping the flag
+        // from the recipe is never silently interactive.
+        let bare = resolve_driver(DriverOverride::None, false, &agent_env("CLAUDECODE"));
+        assert_eq!(start_route(bare, true), StartRoute::Headless);
+        assert_eq!(start_route(bare, false), StartRoute::RefuseNoPrompt);
     }
 
     // --- WP-B-CS-2: ls render-mode auto-detect (override wins) --------------

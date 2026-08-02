@@ -333,6 +333,23 @@ fn cmd_start() -> Command {
             "interactive",
             "Force the interactive native-TUI launch (override the driver auto-detect)",
         ))
+        // Lifecycle-collapse A-1 (spec D4): machine-readable identity output.
+        // Exit 0 with --json guarantees the printed id is BOUND (A-2); on a
+        // bind-arm failure a machine-readable error object rides stdout.
+        .arg(long_flag(
+            "json",
+            "Emit the started session's identity as JSON on stdout \
+             ({name, qdId, sessionId, status, live})",
+        ))
+        // Lifecycle-collapse A-3 (spec D5, Pete's ruling): the relay-sidecar
+        // readiness wait is DEFAULT-ON for start; this is the opt-out for
+        // callers that want raw boot speed (and for boots with no relay, e.g.
+        // fakerepl-backed test lanes).
+        .arg(long_flag(
+            "no-await-relay",
+            "Skip the default relay-readiness wait (exit 0 then means idle, \
+             not relay-reachable)",
+        ))
         .args(render_mode_flags())
 }
 

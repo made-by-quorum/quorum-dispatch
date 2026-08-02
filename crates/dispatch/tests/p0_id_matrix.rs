@@ -725,15 +725,23 @@ fn codex_start_refuses_fork_loudly() {
 }
 
 // ===========================================================================
-// B — bind-residual WARNING (wave-2 open-q 3): row present, sessionId missing
+// B — bind-residual (wave-2 open-q 3): SUPERSEDED by lifecycle-collapse A-2.
+//
+// The wave-2 contract this section pinned — row present / sessionId missing →
+// start SUCCEEDS with a loud WARNING, mint reserved-but-unbound, `ls` later
+// lazy-mints a DIVERGENT id for the late-stamped UUID — is dead: the A-2 bind
+// micro-phase makes exit 0 GUARANTEE the id is bound (spec D4), the unbound
+// arm exits 1 after the boot-phase budget, and the lazy-mint divergence is
+// exactly what A-2 kills. The residual shape is no longer even constructible
+// with a default fakerepl (it now stamps a deterministic sessionId; the seeded
+// fixture is QD_FAKEREPL_OMIT_SESSION_ID=1). New-contract coverage:
+//   - bindphase.rs unit arms (fake clock: unbound-at-budget, ambiguous
+//     never-retries, diverged names both ids)
+//   - start_surface_a.rs a2_seeded_nonebindable_exits_1_class_unbound
+//     (#[ignore] acceptance row — burns the real ~40s budget by design)
 // ===========================================================================
 
-/// The booted row carries NO sessionId at the verb's post-boot read (real-world
-/// shape: claude registered its row but hasn't stamped sessionId yet, and never
-/// does before the read). The start still SUCCEEDS; the warning is LOUD and
-/// names the unbound id; the mint stays reserved-but-unbound (never surfaces on
-/// any session; `ls` shows the id-less row as `---`).
-#[test]
+#[cfg(any())] // SUPERSEDED — kept for the wave-2 record; never compiled.
 fn b_bind_residual_unbound_mint_warns_loud() {
     require_bins();
     let jail = Jail::establish("bres");
@@ -908,6 +916,10 @@ fn b_whoami_env_id_of_tombstoned_row_answers_without_the_dead_name() {
         let out = Command::new(qd_bin())
             .args(args)
             .env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
             .env("HOME", &jail.dirs.home)
             .env("QD_HOME", &jail.dirs.qd_home)
             .env("QD_SESSION_ID", "ab3kx9mq")
@@ -1072,6 +1084,10 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
     let out = Command::new(qd_bin())
         .args(["whoami", "--json"])
         .env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
         .env("HOME", &jail.dirs.home)
         .env("QD_HOME", &jail.dirs.qd_home)
         .env("QD_SESSION_ID", "AB3KX9MQ") // case-insensitive resolution
@@ -1091,6 +1107,10 @@ fn b_queryability_surfaces_and_stable_id_resolution() {
     let out = Command::new(qd_bin())
         .args(["whoami", "--json"])
         .env_clear()
+        // Lifecycle-collapse A-3: relay readiness is DEFAULT-ON for `qd start`
+        // now; these hermetic boots never write a relay sidecar, so opt out via
+        // the transition alias (env "0" = explicit off; flag > env > default).
+        .env("QD_BOOT_AWAIT_RELAY", "0")
         .env("HOME", &jail.dirs.home)
         .env("QD_HOME", &jail.dirs.qd_home)
         .env("PATH", "/usr/bin:/bin")

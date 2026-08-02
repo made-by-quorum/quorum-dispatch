@@ -1184,6 +1184,7 @@ fn codex_root_fx<'a>(
     paths: &'a dispatch::paths::QdPaths,
 ) -> dispatch::provider::ProviderFx<'a> {
     dispatch::provider::ProviderFx {
+        await_relay: None,
         env,
         paths,
         socket_dir: paths.sessions_dir.clone(),

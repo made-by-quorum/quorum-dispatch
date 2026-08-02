@@ -17,6 +17,7 @@ pub mod acp_residence;
 pub mod adoption;
 pub mod archive;
 pub mod backends;
+pub mod bindphase;
 pub mod boot;
 pub mod bootstrap;
 pub mod codes;

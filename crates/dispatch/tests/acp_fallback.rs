@@ -39,6 +39,7 @@ fn fx_with_acp_and_pre_dispatch<'a>(
     acp_pre_dispatch: Option<&'a dyn Fn()>,
 ) -> ProviderFx<'a> {
     ProviderFx {
+        await_relay: None,
         env,
         paths,
         socket_dir,

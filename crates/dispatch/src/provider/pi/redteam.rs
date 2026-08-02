@@ -454,6 +454,7 @@ fn battery_inject_map() -> Vec<RedFinding> {
     for (name, outcome, want, want_label) in cases {
         let fake = FakePiRpc { outcome };
         let fx = ProviderFx {
+            await_relay: None,
             env: &env,
             paths: &paths,
             socket_dir: paths.sessions_dir.clone(),
@@ -484,6 +485,7 @@ fn battery_inject_map() -> Vec<RedFinding> {
     }
     // inject with NO transport → NoTransport (the absent-rpc guard).
     let fx = ProviderFx {
+        await_relay: None,
         env: &env, paths: &paths, socket_dir: paths.sessions_dir.clone(), mux: None, clock: None,
         sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None,
         acp_client: None, pi_rpc: None,
@@ -519,6 +521,7 @@ fn battery_frame_injection() -> Vec<RedFinding> {
     // the exact bytes (no split, no interpretation).
     let cap = CapturingPiRpc { seen: RefCell::new(Vec::new()) };
     let fx = ProviderFx {
+        await_relay: None,
         env: &env, paths: &paths, socket_dir: paths.sessions_dir.clone(), mux: None, clock: None,
         sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None,
         acp_client: None, pi_rpc: Some(&cap),
@@ -683,6 +686,7 @@ fn battery_tail_deep(workdir: &Path) -> Vec<RedFinding> {
         let evil = "x\u{0}\u{1}\n\t\r{\"type\":\"bash\"}";
         let cap = CapturingPiRpc { seen: RefCell::new(Vec::new()) };
         let fx = ProviderFx {
+            await_relay: None,
             env: &env, paths: &paths, socket_dir: paths.sessions_dir.clone(), mux: None, clock: None,
             sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None,
             acp_client: None, pi_rpc: Some(&cap),

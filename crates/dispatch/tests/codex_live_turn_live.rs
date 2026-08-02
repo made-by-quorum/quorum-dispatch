@@ -424,6 +424,7 @@ fn resolve_rollout(env: &JailEnv, sp: &Spawned, thread_id: &str) -> Option<PathB
 /// $CODEX_HOME/$HOME — never paths; the placeholder QdPaths satisfies the borrow).
 fn codex_root(env: &JailEnv, paths: &dispatch::paths::QdPaths) -> PathBuf {
     let fx = ProviderFx {
+        await_relay: None,
         env,
         paths,
         socket_dir: PathBuf::new(),
