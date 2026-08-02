@@ -2,7 +2,7 @@
 //! (`sigv4.rs`) over the hand-rolled HTTP/1.1 transport (`http.rs`). See
 //! `http.rs`'s module doc for why this is hand-rolled.
 
-use crate::archive::credentials::S3Credentials;
+use crate::archive::credentials::{S3CredentialSource, S3Credentials};
 use crate::archive::http::{self, HttpError};
 use crate::archive::sigv4::{self, SignParams};
 
@@ -22,8 +22,8 @@ impl std::fmt::Display for S3Error {
             S3Error::Unreachable(e) => write!(f, "S3 store unreachable: {e}"),
             S3Error::UnsupportedScheme(s) => write!(
                 f,
-                "unsupported archive endpoint scheme {s:?}: only http:// (garage/minio-style \
-                 local stores) and https:// (rustls, see archive/http.rs's module doc) are spoken"
+                "unsupported S3 endpoint scheme {s:?}: plaintext http:// is refused; only https:// \
+                 (rustls, see archive/http.rs's module doc) is supported"
             ),
             S3Error::Http { status, body } => write!(f, "S3 request failed: HTTP {status} {body}"),
         }
@@ -92,7 +92,7 @@ pub struct S3Client {
     tls_server_name: Option<String>,
     bucket: String,
     region: String,
-    credentials: S3Credentials,
+    credentials: S3CredentialSource,
 }
 
 impl S3Client {
@@ -109,19 +109,24 @@ impl S3Client {
         region: &str,
         credentials: S3Credentials,
     ) -> Result<Self, S3Error> {
+        Self::new_with_credential_source(
+            endpoint,
+            bucket,
+            region,
+            S3CredentialSource::static_credentials(credentials),
+        )
+    }
+
+    pub fn new_with_credential_source(
+        endpoint: &str,
+        bucket: &str,
+        region: &str,
+        credentials: S3CredentialSource,
+    ) -> Result<Self, S3Error> {
         let (scheme, authority) = split_endpoint(endpoint)
             .ok_or_else(|| S3Error::Unreachable(format!("malformed endpoint {endpoint:?}")))?;
         let (authority, connect_addr, tls_server_name) = match scheme {
-            // Garage/minio convention preserved byte-for-byte: Host header
-            // always carries an explicit port.
-            "http" => {
-                let authority = if authority.contains(':') {
-                    authority.to_string()
-                } else {
-                    format!("{authority}:80")
-                };
-                (authority.clone(), authority, None)
-            }
+            "http" => return Err(S3Error::UnsupportedScheme("http".to_string())),
             "https" => match authority.split_once(':') {
                 Some((host, _port)) => (
                     authority.to_string(),
@@ -152,8 +157,15 @@ impl S3Client {
     /// gaps standard).
     pub fn get_object(&self, key: &str, now: &str) -> Result<Option<Vec<u8>>, S3Error> {
         let path = sigv4::uri_encode_path(&format!("/{}/{key}", self.bucket));
-        let headers = self.sign("GET", &path, &[], now);
-        let resp = http::request_on(&self.connect_addr, self.tls_server_name.as_deref(), "GET", &path, &headers, &[])?;
+        let headers = self.sign("GET", &path, &[], now)?;
+        let resp = http::request_on(
+            &self.connect_addr,
+            self.tls_server_name.as_deref(),
+            "GET",
+            &path,
+            &headers,
+            &[],
+        )?;
         match resp.status {
             404 => Ok(None),
             200..=299 => Ok(Some(resp.body)),
@@ -168,8 +180,15 @@ impl S3Client {
     /// wrapped, or re-encoded (spec: "Transcript layout").
     pub fn put_object(&self, key: &str, body: &[u8], now: &str) -> Result<(), S3Error> {
         let path = sigv4::uri_encode_path(&format!("/{}/{key}", self.bucket));
-        let headers = self.sign("PUT", &path, body, now);
-        let resp = http::request_on(&self.connect_addr, self.tls_server_name.as_deref(), "PUT", &path, &headers, body)?;
+        let headers = self.sign("PUT", &path, body, now)?;
+        let resp = http::request_on(
+            &self.connect_addr,
+            self.tls_server_name.as_deref(),
+            "PUT",
+            &path,
+            &headers,
+            body,
+        )?;
         match resp.status {
             200..=299 => Ok(()),
             status => Err(S3Error::Http {
@@ -188,8 +207,15 @@ impl S3Client {
     /// one), so this never blocks reading a body the server did not send.
     pub fn head_object(&self, key: &str, now: &str) -> Result<bool, S3Error> {
         let path = sigv4::uri_encode_path(&format!("/{}/{key}", self.bucket));
-        let headers = self.sign("HEAD", &path, &[], now);
-        let resp = http::request_on(&self.connect_addr, self.tls_server_name.as_deref(), "HEAD", &path, &headers, &[])?;
+        let headers = self.sign("HEAD", &path, &[], now)?;
+        let resp = http::request_on(
+            &self.connect_addr,
+            self.tls_server_name.as_deref(),
+            "HEAD",
+            &path,
+            &headers,
+            &[],
+        )?;
         match resp.status {
             404 => Ok(false),
             200..=299 => Ok(true),
@@ -209,21 +235,31 @@ impl S3Client {
     /// stamps EACH request at sign time and ignores the caller's `now`; the
     /// parameter stays on the [`ObjectStore`] surface for fakes and call-site
     /// compatibility.
-    fn sign(&self, method: &str, encoded_path: &str, body: &[u8], _caller_now: &str) -> Vec<(String, String)> {
+    fn sign(
+        &self,
+        method: &str,
+        encoded_path: &str,
+        body: &[u8],
+        _caller_now: &str,
+    ) -> Result<Vec<(String, String)>, S3Error> {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
         let now = crate::render::epoch_ms_to_amz_date(now_ms);
         let now = now.as_str();
+        let credentials = self
+            .credentials
+            .credentials()
+            .map_err(|e| S3Error::Unreachable(format!("S3 credentials: {e}")))?;
         let signed = sigv4::sign(&SignParams {
             method,
             host: &self.authority,
             path: encoded_path,
             region: &self.region,
-            access_key_id: &self.credentials.access_key_id,
-            secret_access_key: &self.credentials.secret_access_key,
-            session_token: self.credentials.session_token.as_deref(),
+            access_key_id: &credentials.access_key_id,
+            secret_access_key: &credentials.secret_access_key,
+            session_token: credentials.session_token.as_deref(),
             payload: body,
             amz_date: now,
         });
@@ -239,11 +275,11 @@ impl S3Client {
         if let Some(token) = signed.x_amz_security_token {
             headers.push(("x-amz-security-token".to_string(), token));
         }
-        headers
+        Ok(headers)
     }
 }
 
-/// Split `"http://host:port"` into `("http", "host:port")`. Authority-only —
+/// Split `"scheme://host:port"` into `("scheme", "host:port")`. Authority-only —
 /// a path/query on the configured endpoint is rejected by the empty check
 /// below firing on garbage input rather than silently dropped.
 fn split_endpoint(endpoint: &str) -> Option<(&str, &str)> {
@@ -269,8 +305,13 @@ mod tests {
 
     #[test]
     fn https_endpoint_default_port_signs_bare_host_and_dials_443() {
-        let client = S3Client::new("https://s3.us-east-2.amazonaws.com", "b", "us-east-2", creds())
-            .unwrap();
+        let client = S3Client::new(
+            "https://s3.us-east-2.amazonaws.com",
+            "b",
+            "us-east-2",
+            creds(),
+        )
+        .unwrap();
         // AWS SigV4 convention: the Host header (== signed authority) omits
         // the default port; the socket still dials :443; the certificate must
         // match the bare hostname.
@@ -291,10 +332,10 @@ mod tests {
     }
 
     #[test]
-    fn http_endpoint_stays_plaintext_no_tls_name() {
-        let client = S3Client::new("http://127.0.0.1:3900", "b", "us-east-1", creds()).unwrap();
-        assert_eq!(client.tls_server_name, None);
-        assert_eq!(client.connect_addr, "127.0.0.1:3900");
+    fn http_endpoint_is_refused_before_requests() {
+        let err = S3Client::new("http://127.0.0.1:3900", "b", "us-east-1", creds()).unwrap_err();
+        assert!(matches!(&err, S3Error::UnsupportedScheme(s) if s == "http"));
+        assert!(err.to_string().contains("plaintext"), "{err}");
     }
 
     #[test]
@@ -303,16 +344,73 @@ mod tests {
         // (here: epoch) must NOT control the signed x-amz-date — the client
         // stamps at sign time, keeping every request inside AWS's 15-min skew
         // window no matter how long the calling walk runs.
-        let client =
-            S3Client::new("https://s3.us-east-2.amazonaws.com", "b", "us-east-2", creds())
-                .unwrap();
-        let headers = client.sign("PUT", "/b/k", b"x", "19700101T000000Z");
+        let client = S3Client::new(
+            "https://s3.us-east-2.amazonaws.com",
+            "b",
+            "us-east-2",
+            creds(),
+        )
+        .unwrap();
+        let headers = client
+            .sign("PUT", "/b/k", b"x", "19700101T000000Z")
+            .unwrap();
         let amz_date = &headers.iter().find(|(k, _)| k == "x-amz-date").unwrap().1;
-        assert_ne!(amz_date, "19700101T000000Z", "stale caller time must be ignored");
+        assert_ne!(
+            amz_date, "19700101T000000Z",
+            "stale caller time must be ignored"
+        );
         assert!(
             amz_date.len() == 16 && amz_date.ends_with('Z') && amz_date.contains('T'),
             "fresh YYYYMMDD'T'HHMMSS'Z' stamp, got {amz_date:?}"
         );
+    }
+
+    #[test]
+    fn sign_includes_security_token_for_temporary_credentials() {
+        let client = S3Client::new(
+            "https://s3.us-east-2.amazonaws.com",
+            "b",
+            "us-east-2",
+            S3Credentials {
+                access_key_id: "AKID".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: Some("tok".to_string()),
+            },
+        )
+        .unwrap();
+        let headers = client.sign("GET", "/b/k", &[], "ignored").unwrap();
+        assert_eq!(
+            headers
+                .iter()
+                .find(|(k, _)| k == "x-amz-security-token")
+                .map(|(_, v)| v.as_str()),
+            Some("tok")
+        );
+        assert!(headers
+            .iter()
+            .find(|(k, _)| k == "authorization")
+            .unwrap()
+            .1
+            .contains("x-amz-security-token"));
+    }
+
+    #[test]
+    fn sign_omits_security_token_for_static_credentials_without_token() {
+        let client = S3Client::new(
+            "https://s3.us-east-2.amazonaws.com",
+            "b",
+            "us-east-2",
+            creds(),
+        )
+        .unwrap();
+        let headers = client.sign("GET", "/b/k", &[], "ignored").unwrap();
+        assert!(headers.iter().all(|(k, _)| k != "x-amz-security-token"));
+        assert!(!headers
+            .iter()
+            .find(|(k, _)| k == "authorization")
+            .unwrap()
+            .1
+            .contains("x-amz-security-token"));
     }
 
     #[test]
@@ -322,21 +420,21 @@ mod tests {
     }
 
     #[test]
-    fn http_endpoint_without_port_defaults_to_80() {
-        let client = S3Client::new("http://example.com", "b", "us-east-1", creds()).unwrap();
-        assert_eq!(client.authority, "example.com:80");
+    fn http_endpoint_without_port_is_refused() {
+        let err = S3Client::new("http://example.com", "b", "us-east-1", creds()).unwrap_err();
+        assert!(matches!(err, S3Error::UnsupportedScheme(s) if s == "http"));
     }
 
     #[test]
-    fn http_endpoint_with_port_preserved() {
-        let client = S3Client::new("http://127.0.0.1:3900", "b", "us-east-1", creds()).unwrap();
-        assert_eq!(client.authority, "127.0.0.1:3900");
+    fn http_endpoint_with_port_is_refused() {
+        let err = S3Client::new("http://127.0.0.1:3900", "b", "us-east-1", creds()).unwrap_err();
+        assert!(matches!(err, S3Error::UnsupportedScheme(s) if s == "http"));
     }
 
     #[test]
     fn trailing_slash_on_endpoint_is_tolerated() {
-        let client = S3Client::new("http://127.0.0.1:3900/", "b", "us-east-1", creds()).unwrap();
-        assert_eq!(client.authority, "127.0.0.1:3900");
+        let client = S3Client::new("https://minio.local:9443/", "b", "us-east-1", creds()).unwrap();
+        assert_eq!(client.authority, "minio.local:9443");
     }
 
     #[test]

@@ -224,6 +224,116 @@ pub fn request_on(
     Ok(HttpResponse { status, body })
 }
 
+/// The live-body outcome of [`request_stream_on`]: the parsed response head
+/// plus the connection positioned exactly at the first body byte, so the
+/// caller can stream the body without ever buffering it whole.
+///
+/// `reader` is the same TLS-or-plaintext transport [`request_on`] uses,
+/// wrapped in a `BufReader` and advanced past the status line and headers.
+/// The caller applies its own body framing (Content-Length `take`, or a
+/// chunked decoder) using `content_length`/`chunked`, then reads to EOF —
+/// the `connection: close` this request sends guarantees the socket closes
+/// at end-of-body.
+pub struct HttpStream {
+    pub status: u16,
+    pub content_length: Option<u64>,
+    pub chunked: bool,
+    pub reader: Box<dyn BufRead + Send + 'static>,
+}
+
+/// Issue one streaming HTTP/1.1 GET over a fresh connection to `authority`,
+/// TLS-wrapped iff `tls_server_name` is `Some` (identical scheme handling to
+/// [`request_on`]). Parses the status line and headers, then hands back the
+/// live connection at the first body byte via [`HttpStream`] — the body is
+/// NEVER read here, so an arbitrarily large object streams through the caller
+/// without a full-object allocation [M3]. This is the streaming twin of
+/// `request_on`; it exists so callers that must stream (qbt-serve's chunked
+/// serve path) get the exact same rustls TLS session as the buffering path,
+/// rather than re-implementing TLS at each call site.
+///
+/// `headers` are sent verbatim; a `content-length: 0` and `connection: close`
+/// are appended (a GET carries no body and this client does one request per
+/// connection). Only GET is supported — the streaming contract is a read.
+pub fn request_stream_on(
+    authority: &str,
+    tls_server_name: Option<&str>,
+    path: &str,
+    headers: &[(String, String)],
+) -> Result<HttpStream, HttpError> {
+    let stream = TcpStream::connect(authority)
+        .map_err(|e| HttpError(format!("connect {authority}: {e}")))?;
+    stream
+        .set_read_timeout(Some(TIMEOUT))
+        .map_err(|e| HttpError(format!("set_read_timeout: {e}")))?;
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .map_err(|e| HttpError(format!("set_write_timeout: {e}")))?;
+    let stream = match tls_server_name {
+        None => Transport::Plain(stream),
+        Some(name) => {
+            let server_name = rustls::pki_types::ServerName::try_from(name.to_string())
+                .map_err(|e| HttpError(format!("invalid TLS server name {name:?}: {e}")))?;
+            let conn = rustls::ClientConnection::new(tls_config(), server_name)
+                .map_err(|e| HttpError(format!("TLS session setup for {name}: {e}")))?;
+            Transport::Tls(Box::new(rustls::StreamOwned::new(conn, stream)))
+        }
+    };
+
+    let mut request_bytes = Vec::with_capacity(512);
+    request_bytes.extend_from_slice(format!("GET {path} HTTP/1.1\r\n").as_bytes());
+    for (k, v) in headers {
+        request_bytes.extend_from_slice(format!("{k}: {v}\r\n").as_bytes());
+    }
+    request_bytes.extend_from_slice(b"content-length: 0\r\nconnection: close\r\n\r\n");
+
+    let mut stream = stream;
+    stream
+        .write_all(&request_bytes)
+        .map_err(|e| HttpError(format!("write to {authority}: {e}")))?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader
+        .read_line(&mut status_line)
+        .map_err(|e| HttpError(format!("read status line from {authority}: {e}")))?;
+    let status = parse_status_line(&status_line)
+        .ok_or_else(|| HttpError(format!("malformed status line: {status_line:?}")))?;
+
+    let mut content_length: Option<u64> = None;
+    let mut chunked = false;
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|e| HttpError(format!("read header from {authority}: {e}")))?;
+        if line.is_empty() {
+            return Err(HttpError(format!(
+                "connection closed before headers completed ({authority})"
+            )));
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = trimmed.split_once(':') {
+            let k = k.trim().to_ascii_lowercase();
+            let v = v.trim();
+            match k.as_str() {
+                "content-length" => content_length = v.parse().ok(),
+                "transfer-encoding" if v.eq_ignore_ascii_case("chunked") => chunked = true,
+                _ => {}
+            }
+        }
+    }
+
+    Ok(HttpStream {
+        status,
+        content_length,
+        chunked,
+        reader: Box::new(reader),
+    })
+}
+
 fn parse_status_line(line: &str) -> Option<u16> {
     // "HTTP/1.1 200 OK\r\n"
     let mut parts = line.split_whitespace();
@@ -374,6 +484,50 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp.status, 200);
+    }
+
+    #[test]
+    fn stream_get_returns_head_and_a_live_content_length_body() {
+        let addr = one_shot_server(|req| {
+            assert!(req.starts_with("GET /bucket/blob HTTP/1.1\r\n"), "{req}");
+            assert!(req.contains("connection: close\r\n"), "{req}");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nhello world".to_vec()
+        });
+        let mut s = request_stream_on(
+            &addr,
+            None,
+            "/bucket/blob",
+            &[("x-amz-date".to_string(), "20260707T000000Z".to_string())],
+        )
+        .unwrap();
+        assert_eq!(s.status, 200);
+        assert_eq!(s.content_length, Some(11));
+        assert!(!s.chunked);
+        // The body is still on the wire — read it now, framed by content-length.
+        let mut body = Vec::new();
+        (&mut s.reader).take(11).read_to_end(&mut body).unwrap();
+        assert_eq!(body, b"hello world");
+    }
+
+    #[test]
+    fn stream_get_surfaces_chunked_flag_and_leaves_body_on_the_wire() {
+        let addr = one_shot_server(|_req| {
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n".to_vec()
+        });
+        let s = request_stream_on(&addr, None, "/b/k", &[]).unwrap();
+        assert_eq!(s.status, 200);
+        assert!(s.chunked, "chunked flag must be surfaced to the caller");
+        assert_eq!(s.content_length, None);
+    }
+
+    #[test]
+    fn stream_get_reports_status_without_reading_body() {
+        let addr = one_shot_server(|_req| {
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
+        });
+        let s = request_stream_on(&addr, None, "/b/missing", &[]).unwrap();
+        assert_eq!(s.status, 404);
+        assert_eq!(s.content_length, Some(0));
     }
 
     #[test]
