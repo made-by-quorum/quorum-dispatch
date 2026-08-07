@@ -323,8 +323,8 @@ impl std::fmt::Display for DaemonError {
                 f,
                 "qd start: codex {}.{}.{} detected, pinned {}.{} — run the schema \
                  fixture-diff and re-pin (scripts/codex-schema-diff.sh + bump \
-                 VERSION.pin). To proceed at your own risk: QD_CODEX_UNPINNED=1. \
-                 No session was created.",
+                 VERSION.pin + append to doc/codex-repin-log.md). To proceed at \
+                 your own risk: QD_CODEX_UNPINNED=1. No session was created.",
                 found.major, found.minor, found.patch, pin.major, pin.minor
             ),
             DaemonError::VersionUnknown { detail } => write!(
@@ -575,6 +575,7 @@ fn try_spawn_and_connect<'a>(
         // codex daemon argv has no claude --model surface (warranty #2 is claude-lane).
         model: None,
         passthrough: params.passthrough.clone(),
+        interactive: false,
     };
     let plan = deps.provider.launch_plan(&fx, &req);
     let mut argv = plan.argv;
@@ -694,6 +695,7 @@ fn finish_create(
         // Child B (opencode D1): no structured send has been issued on a
         // freshly-created row.
         structured_send_issued: None,
+        hosting: None,
     };
     if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);
@@ -1066,13 +1068,14 @@ mod tests {
         }
     }
 
-    /// codex --version sniff EXACT (the pinned 0.143.0-alpha.14 pre-release binary).
+    /// codex --version sniff EXACT (the pinned binary; re-pinned 0.143.0-alpha.14
+    /// → 0.146.1 — see doc/codex-repin-log.md).
     fn exact_exec() -> ScriptedExec {
         ScriptedExec::new().on(
             "codex",
             &["--version"],
             Some(0),
-            "codex-cli 0.143.0-alpha.14\n",
+            "codex-cli 0.146.1\n",
             "",
         )
     }
@@ -1197,14 +1200,14 @@ mod tests {
         match &err {
             DaemonError::VersionBreaking { found, pin } => {
                 assert_eq!((found.major, found.minor), (0, 140));
-                assert_eq!((pin.major, pin.minor), (0, 143));
+                assert_eq!((pin.major, pin.minor), (0, 146));
             }
             other => panic!("expected VersionBreaking, got {other:?}"),
         }
         // The named text mentions found, pin, and the override knob.
         let msg = err.to_string();
         assert!(msg.contains("0.140.0"), "msg: {msg}");
-        assert!(msg.contains("0.143"), "msg: {msg}");
+        assert!(msg.contains("0.146"), "msg: {msg}");
         assert!(msg.contains("QD_CODEX_UNPINNED=1"), "msg: {msg}");
         // NOTHING was spawned (version gate is BEFORE the spawn loop).
         assert_eq!(spawner.spawn_count(), 0, "version gate blocks before spawn");
@@ -1250,7 +1253,7 @@ mod tests {
     fn version_patch_drift_proceeds() {
         let h = harness();
         let exec =
-            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.143.7\n", "");
+            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.146.7\n", "");
         let rpc = FixtureRpc::happy("T-PATCH");
         let connect =
             |_url: &str| -> Result<Box<dyn AppServerRpc>, RpcError> { Ok(Box::new(RpcRef(&rpc))) };

@@ -17,6 +17,13 @@
             "image"
           ],
           "type": "string"
+        },
+        {
+          "description": "Audio attachments included in user turns.",
+          "enum": [
+            "audio"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -78,6 +85,13 @@
         },
         "model": {
           "type": "string"
+        },
+        "modelSpecialty": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "serviceTiers": {
           "default": [],

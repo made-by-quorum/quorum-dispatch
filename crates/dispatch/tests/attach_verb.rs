@@ -73,6 +73,15 @@ fn codex_row(pid: i64, name: &str) -> String {
     )
 }
 
+/// A codex daemon row with NO endpoint — a row qd cannot open a viewer on
+/// (nothing to point `codex --remote` at). This is the case that still gets the
+/// blanket daemon redirect.
+fn codex_row_no_endpoint(pid: i64, name: &str) -> String {
+    format!(
+        r#"{{"pid":{pid},"sessionId":"019ea0b3-04d3-7400-8d95-f55d41e961e4","cwd":"/work/codexA","startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","name":"{name}","version":"0.134.0","provider":"codex"}}"#
+    )
+}
+
 // A claude registry row (provider absent → claude-code default). In the empty-zmx
 // jail it has no live pane → COLD.
 fn claude_row(pid: i64, name: &str) -> String {
@@ -92,19 +101,29 @@ fn claude_row_autonamed(pid: i64) -> String {
 
 // === Daemon redirect (codex) ===
 
-/// `qd attach <codex-row>` → the LOUD daemon redirect naming BOTH `qd send:relay`
-/// AND `qd resume`, exit 1, and does NOT attach (mutation evidence: there is no
-/// terminal-takeover, and stdout stays empty — the verb never reaches mux.attach).
+/// `qd attach <codex-row-with-no-endpoint>` → the LOUD daemon redirect naming BOTH
+/// `qd send:relay` AND `qd resume`, exit 1, and does NOT attach.
+///
+/// SCOPED to a row with NO endpoint (codex-interactive use case 2): a codex row
+/// that HAS one is now attachable — `qd attach` opens a human viewer bound to its
+/// app server (see `attach_codex_viewer` + the argv pin in
+/// codex_interactive_lane.rs). Without an endpoint there is nothing to bind a
+/// viewer to, so the redirect remains the honest answer, and this keeps that path
+/// covered.
 ///
 /// MUTATION EVIDENCE: removing the `Hosting::Daemon` branch in `attach_resolved`
 /// would fall through to `refuse_unknown_provider` ("unknown provider \"codex\"")
-/// or attempt an attach — both red this (the redirect names send:relay+resume).
+/// or attempt an attach — both red this.
 #[test]
-fn attach_codex_is_daemon_redirect_not_terminal_attach() {
+fn attach_codex_without_endpoint_is_daemon_redirect() {
     let t = tempfile::tempdir().unwrap();
-    let (code, out, err) =
-        run_qd_with_row(t.path(), 5050, &codex_row(5050, "cx"), &["attach", "cx"]);
-    assert_eq!(code, 1, "attach on a daemon-hosted row exits 1");
+    let (code, out, err) = run_qd_with_row(
+        t.path(),
+        5050,
+        &codex_row_no_endpoint(5050, "cx"),
+        &["attach", "cx"],
+    );
+    assert_eq!(code, 1, "attach on an un-viewable daemon row exits 1");
     assert!(
         err.contains("daemon-hosted"),
         "names the daemon hosting reason, got: {err}"
@@ -121,10 +140,31 @@ fn attach_codex_is_daemon_redirect_not_terminal_attach() {
         !err.contains("unknown provider"),
         "codex is supported (daemon), NOT 'unknown provider', got: {err}"
     );
-    // Mutation evidence the verb did NOT attach: no interactive takeover output.
     assert!(
         out.is_empty(),
         "no attach output on the daemon-redirect path, got: {out}"
+    );
+}
+
+/// codex-interactive use case 2: a LIVE codex daemon row WITH an endpoint must NOT
+/// get the blanket redirect any more — `qd attach` opens a viewer on it.
+///
+/// The viewer's argv is pinned in codex_interactive_lane.rs (which has a stand-in
+/// binary to record it); what matters here is the ROUTING decision, i.e. that the
+/// redirect no longer swallows an attachable session.
+#[test]
+fn attach_codex_with_endpoint_opens_a_viewer_not_a_redirect() {
+    let t = tempfile::tempdir().unwrap();
+    let (_code, out, err) =
+        run_qd_with_row(t.path(), 5052, &codex_row(5052, "cx2"), &["attach", "cx2"]);
+    let combined = format!("{out}{err}");
+    assert!(
+        !combined.contains("daemon-hosted (no terminal to attach)"),
+        "a codex row WITH an endpoint is attachable via a viewer, got: {combined}"
+    );
+    assert!(
+        !combined.contains("unknown provider"),
+        "codex is supported, got: {combined}"
     );
 }
 
@@ -139,7 +179,7 @@ fn attach_codex_is_daemon_redirect_not_terminal_attach() {
 fn connect_verb_is_attach_alias() {
     let t = tempfile::tempdir().unwrap();
     let (code, out, err) =
-        run_qd_with_row(t.path(), 5051, &codex_row(5051, "cx"), &["connect", "cx"]);
+        run_qd_with_row(t.path(), 5051, &codex_row_no_endpoint(5051, "cx"), &["connect", "cx"]);
     assert_eq!(code, 1, "codex via connect alias exits 1 (daemon redirect)");
     assert!(
         err.contains("daemon-hosted"),

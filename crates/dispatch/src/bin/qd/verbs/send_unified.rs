@@ -16,7 +16,7 @@ use super::{common, send, send_relay};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UnifiedCarrier {
     ClaudeRelay { port: u16 },
-    ClaudePty,
+    MuxPty,
     CodexDaemon,
     AcpDaemon,
     PiDaemon,
@@ -45,6 +45,30 @@ fn select_carrier(session: &Session) -> Result<UnifiedCarrier, SendRefusal> {
     }
 
     match session.provider.as_str() {
+        // codex-interactive: a codex row is only an app-server row when it is
+        // DAEMON-hosted. The `--interactive` lane has no ws endpoint to reconnect
+        // to — its receive path is the pane's PTY, the same carrier a
+        // relay-less claude pane uses. Routing it to `CodexDaemon` would fail on a
+        // missing endpoint and blame the transport for a session that never had
+        // one.
+        //
+        // What the PTY carrier does for codex today is deliberately conservative:
+        // the attended-send machinery has landed codex composer facts
+        // (`qrmux::attended::fire::CodexFacts`) but codex still exposes no pollable
+        // busy/idle signal, so acceptance is not confirmable and the fire gates
+        // itself OFF before touching the composer — an honest non-delivery rather
+        // than an unverifiable claim. That is the correct answer to give here, and
+        // it improves on its own the day codex grows a confirmable signal.
+        "codex"
+            if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
+                == Some(dispatch::provider::Hosting::MuxPane) =>
+        {
+            if session.zmx_name.is_some() && session.socket_dir.is_some() {
+                Ok(UnifiedCarrier::MuxPty)
+            } else {
+                Err(SendRefusal::NoLiveReceivePath)
+            }
+        }
         "codex" => Ok(UnifiedCarrier::CodexDaemon),
         provider if provider.starts_with("acp/") => Ok(UnifiedCarrier::AcpDaemon),
         "pi" => Ok(UnifiedCarrier::PiDaemon),
@@ -54,7 +78,7 @@ fn select_carrier(session: &Session) -> Result<UnifiedCarrier, SendRefusal> {
         "claude-code" => match session.relay_port {
             Some(port) => Ok(UnifiedCarrier::ClaudeRelay { port }),
             None if session.zmx_name.is_some() && session.socket_dir.is_some() => {
-                Ok(UnifiedCarrier::ClaudePty)
+                Ok(UnifiedCarrier::MuxPty)
             }
             None => Err(SendRefusal::NoLiveReceivePath),
         },
@@ -64,7 +88,7 @@ fn select_carrier(session: &Session) -> Result<UnifiedCarrier, SendRefusal> {
 
 trait UnifiedBackend {
     fn claude_relay(&self, session: &Session, message: &str, port: u16) -> i32;
-    fn claude_pty(&self, session: &Session, message: &str) -> i32;
+    fn mux_pty(&self, session: &Session, message: &str) -> i32;
     fn codex_daemon(&self, session: &Session, message: &str) -> i32;
     fn acp_daemon(&self, session: &Session, message: &str) -> i32;
     fn pi_daemon(&self, session: &Session, message: &str) -> i32;
@@ -77,7 +101,7 @@ impl UnifiedBackend for RealUnifiedBackend {
         send_relay::run_claude_relay_unified(session, message, port)
     }
 
-    fn claude_pty(&self, session: &Session, message: &str) -> i32 {
+    fn mux_pty(&self, session: &Session, message: &str) -> i32 {
         send::run_send_pty_unified(session, message)
     }
 
@@ -102,7 +126,8 @@ fn dispatch_selected(
 ) -> i32 {
     // Unified-send decision table (selection is complete before this match):
     //
-    //   codex                         -> codex daemon lane
+    //   codex, daemon-hosted          -> codex daemon lane
+    //   codex, pane-hosted (--interactive) -> PTY (no ws endpoint exists)
     //   acp/*                         -> ACP daemon lane
     //   pi                            -> pi daemon lane
     //   claude-code + relay_port      -> relay (wins even with a live mux pane)
@@ -115,7 +140,7 @@ fn dispatch_selected(
         UnifiedCarrier::ClaudeRelay { port } => {
             backend.claude_relay(session, message, port)
         }
-        UnifiedCarrier::ClaudePty => backend.claude_pty(session, message),
+        UnifiedCarrier::MuxPty => backend.mux_pty(session, message),
         UnifiedCarrier::CodexDaemon => backend.codex_daemon(session, message),
         UnifiedCarrier::AcpDaemon => backend.acp_daemon(session, message),
         UnifiedCarrier::PiDaemon => backend.pi_daemon(session, message),
@@ -141,6 +166,22 @@ fn resolve_self_session_id(env: &dyn Env) -> Result<Option<String>, i32> {
 fn report_refusal(query: &str, session: &Session, refusal: SendRefusal) -> i32 {
     let label = session.name.as_deref().unwrap_or(query);
     match refusal {
+        // codex-interactive: an interactive codex pane is Bare for a SPECIFIC and
+        // temporary reason — codex does not open its rollout (and so discloses no
+        // thread id) until someone types into the TUI. The generic wording is true
+        // but reads like a broken session; say what it actually is and what clears
+        // it, since the fix is one keystroke away and the session is perfectly fine.
+        SendRefusal::Bare
+            if session.provider == "codex"
+                && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
+                    == Some(dispatch::provider::Hosting::MuxPane) =>
+        {
+            eprintln!(
+                "qd send: \"{label}\" has not been used yet, so codex has not opened a thread \
+                 for it and qd has no id to send to. Type once in the session \
+                 (\"qd attach {label}\") — the thread id binds on the next \"qd ls\"."
+            )
+        }
         SendRefusal::Bare => eprintln!(
             "qd send: found \"{label}\", but it has no bound session identity and is not receivable."
         ),
@@ -267,7 +308,81 @@ mod tests {
             provider: provider.into(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::LiveRegistry,
+        }
+    }
+
+    // === codex-interactive: a codex row's carrier follows its HOSTING ===
+    //
+    // The two codex topologies have disjoint receive paths — the daemon has a ws
+    // endpoint and no pane, the interactive lane has a pane and no endpoint — so
+    // selecting on the provider id alone necessarily gets one of them wrong.
+
+    #[test]
+    fn pane_hosted_codex_selects_the_pty_carrier_not_the_daemon() {
+        let mut s = session("codex");
+        s.hosting = Some("mux-pane".into());
+        assert_eq!(
+            select_carrier(&s),
+            Ok(UnifiedCarrier::MuxPty),
+            "an --interactive codex row has no ws endpoint; its receive path is the pane"
+        );
+    }
+
+    #[test]
+    fn daemon_hosted_codex_still_selects_the_daemon_carrier() {
+        // Both the explicit token and the absent field (every pre-existing codex
+        // row) must keep the app-server lane — this is the regression guard for
+        // the whole codex daemon fleet.
+        let mut explicit = session("codex");
+        explicit.hosting = Some("daemon".into());
+        assert_eq!(select_carrier(&explicit), Ok(UnifiedCarrier::CodexDaemon));
+
+        let absent = session("codex");
+        assert_eq!(absent.hosting, None);
+        assert_eq!(select_carrier(&absent), Ok(UnifiedCarrier::CodexDaemon));
+    }
+
+    #[test]
+    fn unidentified_pane_hosted_codex_refuses_as_bare_not_as_a_daemon() {
+        // The window between starting an interactive codex session and typing into
+        // it: the row exists, the pane is live, but codex has disclosed no thread
+        // id. It must refuse as Bare (no identity) — NOT get routed to the
+        // app-server lane, and NOT be reported as having no receive path.
+        let mut s = session("codex");
+        s.hosting = Some("mux-pane".into());
+        s.session_id = String::new();
+        assert_eq!(select_carrier(&s), Err(SendRefusal::Bare));
+    }
+
+    #[test]
+    fn pane_hosted_codex_without_a_live_pane_refuses_instead_of_lying() {
+        // No pane and no endpoint means nothing can receive. Refuse honestly
+        // rather than dispatch into a carrier that cannot deliver.
+        let mut s = session("codex");
+        s.hosting = Some("mux-pane".into());
+        s.zmx_name = None;
+        assert_eq!(select_carrier(&s), Err(SendRefusal::NoLiveReceivePath));
+
+        let mut s2 = session("codex");
+        s2.hosting = Some("mux-pane".into());
+        s2.socket_dir = None;
+        assert_eq!(select_carrier(&s2), Err(SendRefusal::NoLiveReceivePath));
+    }
+
+    #[test]
+    fn pane_hosted_codex_still_obeys_the_lifecycle_refusals() {
+        // Hosting selects the CARRIER; it does not exempt a row from the
+        // cold/stopped gates that run before carrier selection.
+        for (status, expected) in [
+            (SessionStatus::Cold, SendRefusal::Cold),
+            (SessionStatus::Killed, SendRefusal::Stopped),
+        ] {
+            let mut s = session("codex");
+            s.hosting = Some("mux-pane".into());
+            s.status = status;
+            assert_eq!(select_carrier(&s), Err(expected));
         }
     }
 
@@ -282,7 +397,7 @@ mod tests {
         assert_eq!(select_carrier(&claude), select_carrier(&claude));
 
         claude.relay_port = None;
-        assert_eq!(select_carrier(&claude), Ok(UnifiedCarrier::ClaudePty));
+        assert_eq!(select_carrier(&claude), Ok(UnifiedCarrier::MuxPty));
         claude.zmx_name = None;
         assert_eq!(
             select_carrier(&claude),
@@ -368,7 +483,7 @@ mod tests {
             self.record("relay", session, message, Some(port));
             self.result
         }
-        fn claude_pty(&self, session: &Session, message: &str) -> i32 {
+        fn mux_pty(&self, session: &Session, message: &str) -> i32 {
             self.record("pty", session, message, None);
             self.result
         }
@@ -421,7 +536,7 @@ mod tests {
             let backend = ProbeBackend::default();
             let target = session("claude-code");
             assert_eq!(
-                dispatch_selected(&backend, UnifiedCarrier::ClaudePty, &target, message),
+                dispatch_selected(&backend, UnifiedCarrier::MuxPty, &target, message),
                 0
             );
             let calls = backend.calls.borrow();

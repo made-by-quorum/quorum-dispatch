@@ -203,6 +203,17 @@ pub struct NewParams {
     /// injects `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` as a launch-time birth
     /// property via the env file; [`RenderMode::AltScreen`] injects nothing.
     pub render: RenderMode,
+    /// codex-interactive: carried straight through to
+    /// [`crate::provider::LaunchRequest::interactive`] when the launch cmd is
+    /// built. `false` (the default, and what every claude construction site
+    /// passes) leaves the assembled cmd byte-identical to before this field
+    /// existed — claude's `launch_plan` does not read it.
+    ///
+    /// This create path is provider-generic already (it builds its cmd through
+    /// `provider.launch_plan`), so carrying the caller's request here is all the
+    /// mux-pane pipeline needs to host a codex TUI: same claim, same preflight,
+    /// same I6 verify, different argv.
+    pub interactive: bool,
 }
 
 /// Success outcome of [`run_new`].
@@ -468,6 +479,7 @@ fn build_claude_command(deps: &NewDeps, params: &NewParams) -> String {
         agent: params.agent.clone(),
         model: params.model.clone(),
         passthrough: params.claude_args.clone(),
+        interactive: params.interactive,
     };
     let plan = deps.provider.launch_plan(&fx, &req);
     build_claude_cmd_from_argv(&plan.argv)
@@ -1062,6 +1074,7 @@ Commands:
             // Fixtures pin the PRODUCTION default (inline → the alt-screen-
             // disable birth property rides every fixture launch, punch item 7).
             render: RenderMode::Inline,
+            interactive: false,
         }
     }
 

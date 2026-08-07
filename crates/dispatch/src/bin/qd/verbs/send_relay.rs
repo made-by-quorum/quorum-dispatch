@@ -1788,6 +1788,7 @@ mod tests {
             provider: "claude-code".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: dispatch::model::SessionBranch::ZmxOnly,
         };
 
@@ -2264,6 +2265,7 @@ mod tests {
             provider: "claude-code".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: dispatch::model::SessionBranch::LiveRegistry,
         };
         emit_relay_send_events_with_env(&env, "target-b", Some(&target), message, &message_id);
@@ -2394,6 +2396,7 @@ mod tests {
             provider: "codex".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: dispatch::model::SessionBranch::LiveRegistry,
         };
         emit_door_failure_with_env(&env, "codex-dead-1", Some(&target), message, "daemon-unreachable");
@@ -2478,6 +2481,7 @@ mod tests {
             provider: "acp/claude-code".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: dispatch::model::SessionBranch::LiveRegistry,
         };
         emit_daemon_send_events_with_env(
@@ -2573,6 +2577,7 @@ mod tests {
             provider: "pi".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: dispatch::model::SessionBranch::LiveRegistry,
         };
 

@@ -166,6 +166,34 @@ pub struct RegistryEntry {
     /// `structuredSendIssued` (`rename_all = "camelCase"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_send_issued: Option<bool>,
+    /// codex-interactive: this session's HOSTING topology, recorded at create
+    /// when it is not the provider's structural default.
+    ///
+    /// WHY A ROW FIELD AT ALL. `Provider::hosting()` is a per-PROVIDER constant,
+    /// and for claude/acp/pi it still is the whole truth. codex is the first
+    /// provider with BOTH topologies: `qd start --provider codex` spawns a
+    /// `codex app-server` daemon (no pane), while `qd start --provider codex
+    /// --interactive` runs the codex TUI in a mux pane. The two need OPPOSITE
+    /// answers from attach/kill/send/resume, so the discriminator must be a
+    /// DURABLE property of the session, not of its provider id.
+    ///
+    /// WHY NOT INFER IT. The obvious proxies all lie at the moment they matter
+    /// most — on a COLD row. `zmx_name`/`socket_dir` come from the live mux scan,
+    /// so a stopped interactive session presents exactly like a daemon one (and
+    /// `qd resume` would then revive it into the wrong topology); `endpoint`'s
+    /// absence is only accidentally correlated. The create path KNOWS which lane
+    /// it took, so it records the fact once.
+    ///
+    /// Values: `"mux-pane"` / `"daemon"` (parsed by
+    /// [`crate::provider::parse_hosting`]). ABSENT ⇒ the provider's structural
+    /// default — which is why every pre-existing row, tombstone and golden stays
+    /// byte-stable and every non-codex lane keeps writing nothing here. skip-None
+    /// + appended LAST (the `provider`/`endpoint`/`transport` precedent), pinned
+    /// by the absent-stays-absent round-trip test. On-disk key is `hosting` (a
+    /// single lowercase word — `rename_all = "camelCase"` is a no-op on it;
+    /// pinned by `hosting_disk_key_is_lowercase_hosting`, not assumed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosting: Option<String>,
 }
 
 impl RegistryEntry {
@@ -253,6 +281,12 @@ impl RegistryEntry {
             "structuredSendIssued",
             "structuredSendIssued"
         );
+        // codex-interactive: per-field-permissive hosting read, same R1 discipline.
+        // A wrong-typed `"hosting": 1` DEGRADES to None (row survives, "hosting"
+        // named) — and None is the SAFE degrade: it falls back to the provider's
+        // structural hosting rather than dropping the row or inventing a topology.
+        // The `wrong_typed_hosting_number_degrades` test is the mutation evidence.
+        field!(entry.hosting, Option<String>, "hosting", "hosting");
         // Any remaining keys are unknown fields — ignored (permissive).
 
         Some((entry, degraded))
@@ -1235,6 +1269,7 @@ mod tests {
             endpoint: None,
             transport: None,
             structured_send_issued: None,
+            hosting: None,
         }
     }
 
@@ -1260,6 +1295,7 @@ mod tests {
             endpoint: Some("ws://127.0.0.1:18951".into()),
             transport: None,
             structured_send_issued: None,
+            hosting: None,
         }
     }
 
@@ -1452,6 +1488,7 @@ mod tests {
             pid: Some(4242),
             session_id: Some("sess-tomb".into()),
             structured_send_issued: Some(true),
+            hosting: None,
             ..RegistryEntry::default()
         };
         write_entry(dir.path(), &entry).unwrap();
@@ -1719,6 +1756,60 @@ mod tests {
         );
         let back = read_entry(dir.path(), 4242).unwrap();
         assert_eq!(back.transport, None);
+        assert_eq!(back, entry);
+    }
+
+    // === codex-interactive: RegistryEntry.hosting byte-stability (the same R1 /
+    // provider / endpoint / transport discipline) ===
+
+    // A wrong-typed `"hosting": 1` DEGRADES (row survives, field named) instead of
+    // dropping the whole row. Mutation evidence: removing the `field!(entry.hosting,
+    // ...)` line in `from_value` reds this AND `hosting_round_trips` below (both
+    // regress to reading back `None` even for a well-typed value).
+    #[test]
+    fn wrong_typed_hosting_number_degrades() {
+        let (e, degraded) = read_blob(r#"{"pid":100,"hosting":1}"#);
+        assert_eq!(e.hosting, None, "wrong-typed hosting degrades to None");
+        assert_eq!(e.pid, Some(100), "the row SURVIVES (sibling preserved)");
+        assert_eq!(degraded, vec!["hosting"]);
+    }
+
+    // The on-disk key is the single lowercase word `hosting` (NOT camelCased by
+    // `rename_all`); a populated value round-trips through the per-field parser
+    // `from_value` — which, not derive(Deserialize), is what actually reads a
+    // registry file back in production.
+    #[test]
+    fn hosting_on_disk_key_is_lowercase_word_and_round_trips() {
+        let dir = tempdir().unwrap();
+        let mut entry = codex_entry();
+        // An interactive codex row: pane-hosted, and therefore NO ws endpoint.
+        entry.hosting = Some("mux-pane".into());
+        entry.endpoint = None;
+        write_entry(dir.path(), &entry).unwrap();
+        let text = fs::read_to_string(dir.path().join("90909.json")).unwrap();
+        assert!(text.contains("\"hosting\""), "json: {text}");
+        let back = read_entry(dir.path(), 90909).unwrap();
+        assert_eq!(back, entry);
+        assert_eq!(back.hosting.as_deref(), Some("mux-pane"));
+    }
+
+    // MUTATION EVIDENCE (byte-stability): a row that does NOT record hosting
+    // serializes with NO `hosting` key, so every pre-existing row, tombstone and
+    // golden is untouched by this field's existence. Removing the
+    // `skip_serializing_if` on the field reds this.
+    #[test]
+    fn absent_hosting_stays_absent_and_byte_stable() {
+        let dir = tempdir().unwrap();
+        let entry = full_entry(); // a claude row: hosting None
+        assert_eq!(entry.hosting, None);
+        write_entry(dir.path(), &entry).unwrap();
+        let text = fs::read_to_string(dir.path().join("4242.json")).unwrap();
+        assert!(
+            !text.contains("hosting"),
+            "a None hosting must NOT appear on disk (byte-stability): {text}"
+        );
+        let back = read_entry(dir.path(), 4242).unwrap();
+        assert_eq!(back.hosting, None);
         assert_eq!(back, entry);
     }
 

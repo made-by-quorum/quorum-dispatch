@@ -143,6 +143,62 @@ pub fn run(m: &ArgMatches) -> i32 {
             code
         }
         // W1 phase 2: a COLD claude session auto-revives, then we attach the live pane.
+        //
+        // codex-interactive PROVIDER GUARD (the same reasoning as the --no-attach
+        // guard above, now reachable): `attach_resolved` returns Cold for ANY
+        // pane-hosted row with no live pane, and since codex gained a pane lane
+        // that set is no longer claude-only. `revive_claude` builds a `claude …
+        // --resume <sid>` argv, so feeding it a codex thread id would launch
+        // claude against a rollout uuid it cannot read. Refuse LOUDLY instead of
+        // reviving into the wrong harness.
+        // codex-interactive: a stopped pane-hosted codex session revives into the
+        // SAME thread and we hand over the terminal — the claude cold-attach
+        // experience, for codex. `revive_codex_tui` carries the row's recorded
+        // thread id into `codex resume <id>`, so this reopens the conversation
+        // rather than starting a new one under the old name.
+        AttachOutcome::Cold
+            if session.provider == "codex"
+                && dispatch::provider::row_hosting(
+                    &session.provider,
+                    session.hosting.as_deref(),
+                ) == Some(dispatch::provider::Hosting::MuxPane) =>
+        {
+            match lifecycle::revive_codex_tui(session, render, "attach") {
+                Ok(handle) => {
+                    println!("Revived \"{}\"; attaching...", handle.zmx_name);
+                    let mux = match common::real_mux() {
+                        Ok(m) => m,
+                        Err(code) => return code,
+                    };
+                    match mux.attach(&handle.socket_dir, &handle.zmx_name) {
+                        Ok(code) => {
+                            if code == 0 {
+                                invoked_connect(session);
+                            }
+                            code
+                        }
+                        Err(e) => {
+                            eprintln!("qd attach: {e}");
+                            1
+                        }
+                    }
+                }
+                // revive_codex_tui already printed its own loud error.
+                Err(code) => code,
+            }
+        }
+        // Any OTHER non-claude provider reaching Cold: `revive_claude` builds a
+        // `claude … --resume <sid>` argv, so feeding it a foreign session id would
+        // launch the wrong harness against an id it cannot read. Refuse LOUDLY.
+        AttachOutcome::Cold if session.provider != "claude-code" => {
+            let name = session.name.as_deref().unwrap_or(&session.session_id);
+            eprintln!(
+                "qd attach: \"{name}\" is a stopped {} session and qd cannot revive it in \
+                 place. Start a fresh one with \"qd start <name> --provider {}\".",
+                session.provider, session.provider
+            );
+            1
+        }
         AttachOutcome::Cold => match resume::revive_claude(session, None, render, false) {
             Ok(handle) => {
                 // Attach the now-live pane with a plain mux.attach (NO fused

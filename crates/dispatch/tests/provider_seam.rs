@@ -443,6 +443,7 @@ fn conformance(p: &dyn Provider, fix: &Fixture) {
         agent: None,
         model: None,
         passthrough: vec![],
+        interactive: false,
     };
     let plan = p.launch_plan(&fx, &req);
     assert!(
@@ -904,6 +905,7 @@ fn claude_launch_plan_matches_launch_rs_helpers() {
         agent: Some("reviewer".to_string()),
         model: None,
         passthrough: vec!["--model".to_string(), "opus".to_string()],
+        interactive: false,
     };
     let plan = ClaudeProvider.launch_plan(&fx, &req);
 
@@ -1609,4 +1611,202 @@ fn send_wait_verbs_use_send_vocabulary_only() {
             }
         }
     }
+}
+
+// ===========================================================================
+// codex-interactive: the SECOND codex launch shape (the mux-pane TUI lane).
+//
+// codex is the first provider whose argv depends on HOW the caller wants to
+// drive it. These pin both shapes off one flag, because the failure mode of
+// getting it wrong is silent and expensive in opposite directions: an
+// `app-server` in a pane is a wall of JSON-RPC nobody can type into, and a bare
+// `codex` TUI spawned as a daemon is an invisible process nothing can reach.
+// ===========================================================================
+
+/// Build a minimal codex fx over the given env (the negative-control shape the
+/// existing codex launch_plan test uses: empty home, nothing claude-ish).
+fn codex_fx_env<'a>(
+    paths: &'a QdPaths,
+    env: &'a MapEnv,
+    socket_dir: std::path::PathBuf,
+) -> ProviderFx<'a> {
+    ProviderFx {
+        await_relay: None,
+        env,
+        paths,
+        socket_dir,
+        mux: None,
+        clock: None,
+        sleeper: None,
+        relay: None,
+        relay_port: None,
+        app_server: None,
+        codex_expected_turn_id: None,
+        acp_client: None,
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    }
+}
+
+/// `interactive: true` launches the codex TUI, NOT the app-server.
+///
+/// MUTATION EVIDENCE: dropping the `req.interactive` branch in
+/// `CodexProvider::launch_plan` reds this (the argv keeps `app-server`).
+#[test]
+fn codex_interactive_launch_plan_is_the_bare_tui() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("nonexistent-home");
+    let paths = QdPaths::from_home(&home);
+    let env = MapEnv::default();
+    let fx = codex_fx_env(&paths, &env, home.join("zmx-501"));
+
+    let req = LaunchRequest {
+        name: "wk".to_string(),
+        interactive: true,
+        ..LaunchRequest::default()
+    };
+    let plan = CodexProvider.launch_plan(&fx, &req);
+    assert_eq!(
+        plan.argv,
+        vec!["codex".to_string()],
+        "interactive → the bare codex TUI a human drives in a pane"
+    );
+    assert!(
+        !plan.argv.iter().any(|a| a == "app-server"),
+        "an interactive pane must NEVER be handed the app-server subcommand"
+    );
+}
+
+/// The default is UNCHANGED — the daemon lane cannot regress through this field.
+///
+/// MUTATION EVIDENCE: flipping the `interactive` default, or inverting the
+/// branch, reds this AND the pre-existing
+/// `codex_launch_plan_minimal_fx_uses_codex_bin`.
+#[test]
+fn codex_default_launch_plan_is_still_the_app_server() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("nonexistent-home");
+    let paths = QdPaths::from_home(&home);
+    let env = MapEnv::default();
+    let fx = codex_fx_env(&paths, &env, home.join("zmx-501"));
+
+    // `LaunchRequest::default()` is what every daemon-lane call site builds.
+    assert!(!LaunchRequest::default().interactive);
+    let plan = CodexProvider.launch_plan(&fx, &LaunchRequest::default());
+    assert_eq!(
+        plan.argv,
+        vec!["codex".to_string(), "app-server".to_string()]
+    );
+}
+
+/// The interactive lane honors the QD_CODEX_BIN override + CODEX_HOME
+/// passthrough exactly as the daemon lane does — the pane must read and write the
+/// SAME rollout tree qd watches for the thread id, or discovery can never
+/// succeed in a jail.
+#[test]
+fn codex_interactive_launch_plan_keeps_bin_override_and_codex_home() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("nonexistent-home");
+    let paths = QdPaths::from_home(&home);
+    let mut env = MapEnv::default();
+    env.vars
+        .insert("QD_CODEX_BIN".to_string(), "/opt/codex".to_string());
+    env.vars
+        .insert("CODEX_HOME".to_string(), "/jail/codex-home".to_string());
+    let fx = codex_fx_env(&paths, &env, home.join("zmx-501"));
+
+    let req = LaunchRequest {
+        interactive: true,
+        ..LaunchRequest::default()
+    };
+    let plan = CodexProvider.launch_plan(&fx, &req);
+    assert_eq!(plan.argv, vec!["/opt/codex".to_string()]);
+    assert_eq!(
+        plan.env,
+        vec![("CODEX_HOME".to_string(), "/jail/codex-home".to_string())],
+        "the pane must write its rollout where qd watches for it"
+    );
+}
+
+/// An interactive launch WITH a resume target re-enters that thread — the
+/// `codex resume <thread-id>` CLI fragment, which is exactly what
+/// `Provider::resume_args` already defines. Pinned against `resume_args` itself
+/// so the two cannot drift into two different opinions of the codex CLI.
+#[test]
+fn codex_interactive_launch_plan_resumes_a_thread_via_resume_args() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("nonexistent-home");
+    let paths = QdPaths::from_home(&home);
+    let env = MapEnv::default();
+    let fx = codex_fx_env(&paths, &env, home.join("zmx-501"));
+
+    let tid = "019fc8bf-e3fa-7420-8152-66a1411442bb";
+    let req = LaunchRequest {
+        interactive: true,
+        resume: Some(tid.to_string()),
+        ..LaunchRequest::default()
+    };
+    let plan = CodexProvider.launch_plan(&fx, &req);
+
+    let key = dispatch::provider::SessionKey {
+        id: tid,
+        name: None,
+        cwd: None,
+        pid: None,
+    };
+    let mut expected = vec!["codex".to_string()];
+    expected.extend(CodexProvider.resume_args(&key, false));
+    assert_eq!(plan.argv, expected);
+    assert_eq!(
+        plan.argv,
+        vec!["codex".to_string(), "resume".to_string(), tid.to_string()],
+        "and that fragment is literally `codex resume <thread-id>`"
+    );
+}
+
+/// An EMPTY resume string is not a resume — it must not produce `codex resume ""`,
+/// which codex would reject.
+#[test]
+fn codex_interactive_launch_plan_ignores_an_empty_resume() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("nonexistent-home");
+    let paths = QdPaths::from_home(&home);
+    let env = MapEnv::default();
+    let fx = codex_fx_env(&paths, &env, home.join("zmx-501"));
+
+    let req = LaunchRequest {
+        interactive: true,
+        resume: Some(String::new()),
+        ..LaunchRequest::default()
+    };
+    assert_eq!(
+        CodexProvider.launch_plan(&fx, &req).argv,
+        vec!["codex".to_string()]
+    );
+}
+
+/// claude is INERT to the flag: its only launch shape is the interactive one, so
+/// both values must assemble the identical argv. This is the guard that the new
+/// field cannot perturb the claude lane it does not apply to.
+#[test]
+fn claude_launch_plan_is_unaffected_by_the_interactive_flag() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("h");
+    let paths = QdPaths::from_home(&home);
+    let env = MapEnv::default();
+    let fx = codex_fx_env(&paths, &env, home.join("zmx-501"));
+
+    let base = LaunchRequest {
+        name: "wk".to_string(),
+        ..LaunchRequest::default()
+    };
+    let interactive = LaunchRequest {
+        interactive: true,
+        ..base.clone()
+    };
+    assert_eq!(
+        ClaudeProvider.launch_plan(&fx, &base).argv,
+        ClaudeProvider.launch_plan(&fx, &interactive).argv,
+        "claude's argv must not move when the flag flips"
+    );
 }

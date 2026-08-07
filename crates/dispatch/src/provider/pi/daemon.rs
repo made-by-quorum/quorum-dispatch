@@ -263,6 +263,7 @@ pub fn create_pi_session(
             endpoint: Some(endpoint.clone()),
             transport: None,
             structured_send_issued: None,
+            hosting: None,
         };
         if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
             deps.spawner.kill(spawned.pid);

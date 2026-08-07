@@ -2,7 +2,8 @@
 //!
 //! Single source of truth for the pinned version: the W1 fixture
 //! `tests/fixtures/codex-schema/VERSION.pin` (the installed binary,
-//! `0.143.0-alpha.14` — a PRE-RELEASE pin; see [`Version::parse`]),
+//! `0.146.1`; re-pinned from the pre-release `0.143.0-alpha.14` — see
+//! `doc/codex-repin-log.md` and [`Version::parse`]),
 //! `include_str!`'d so the pin lives in EXACTLY one place — the
 //! schema harness and this drift check read the same byte string.
 //!
@@ -189,10 +190,10 @@ mod tests {
 
     #[test]
     fn pinned_is_the_fixture_version() {
-        // The single-source pin is exactly the W1 fixture's VERSION.pin, trimmed.
-        // It is the PRE-RELEASE binary string; parse yields its (M,m,p) core.
-        assert_eq!(PINNED, "0.143.0-alpha.14");
-        assert_eq!(Version::parse(PINNED), Some(v(0, 143, 0)));
+        // The single-source pin is exactly the fixture's VERSION.pin, trimmed.
+        // Re-pinned 0.143.0-alpha.14 → 0.146.1 (see doc/codex-repin-log.md).
+        assert_eq!(PINNED, "0.146.1");
+        assert_eq!(Version::parse(PINNED), Some(v(0, 146, 1)));
     }
 
     #[test]
@@ -292,16 +293,32 @@ mod tests {
 
     #[test]
     fn sniff_exact_against_pinned_binary() {
-        // The pinned binary IS the pre-release `0.143.0-alpha.14`; its core (0,143,0)
-        // equals the pin core → Exact. THIS is the create-unblock evidence: pre-fix,
-        // this string sniffed Unparseable → VersionUnknown → create blocked.
+        // The pinned binary's own `--version` line sniffs Exact.
+        let exec =
+            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.146.1\n", "");
+        assert_eq!(sniff(&exec), SniffOutcome::Verdict(VersionVerdict::Exact));
+    }
+
+    /// PRE-RELEASE tag handling, kept as its OWN test.
+    ///
+    /// This coverage used to ride on the pin itself, back when the pin WAS a
+    /// pre-release (`0.143.0-alpha.14`) — and the re-pin to a plain `0.146.1`
+    /// would have silently deleted it. The behaviour is independent of whatever
+    /// version is pinned today: a `-alpha.N` suffix must parse to its (M,m,p) core
+    /// rather than sniffing Unparseable, which used to yield VersionUnknown and
+    /// block create outright.
+    #[test]
+    fn prerelease_tag_parses_to_its_core_not_unparseable() {
+        assert_eq!(Version::parse("0.143.0-alpha.14"), Some(v(0, 143, 0)));
+        assert_eq!(Version::parse("1.2.3-rc.1"), Some(v(1, 2, 3)));
         let exec = ScriptedExec::new().on(
             "codex",
             &["--version"],
             Some(0),
-            "codex-cli 0.143.0-alpha.14\n",
+            "codex-cli 0.146.1-alpha.2\n",
             "",
         );
+        // Same core as the pin ⇒ Exact, not Unparseable.
         assert_eq!(sniff(&exec), SniffOutcome::Verdict(VersionVerdict::Exact));
     }
 
@@ -315,7 +332,7 @@ mod tests {
             sniff(&exec),
             SniffOutcome::Verdict(VersionVerdict::Breaking {
                 found: v(0, 140, 0),
-                pin: v(0, 143, 0),
+                pin: v(0, 146, 1),
             }),
             "a drifted codex binary must sniff as Breaking (the launch-path loud error)"
         );
@@ -324,11 +341,11 @@ mod tests {
     #[test]
     fn sniff_patch_drift() {
         let exec =
-            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.143.7\n", "");
+            ScriptedExec::new().on("codex", &["--version"], Some(0), "codex-cli 0.146.7\n", "");
         assert_eq!(
             sniff(&exec),
             SniffOutcome::Verdict(VersionVerdict::PatchDrift {
-                found: v(0, 143, 7)
+                found: v(0, 146, 7)
             })
         );
     }

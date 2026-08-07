@@ -22,6 +22,9 @@
 //!     3.4 designed-degrade).
 //!   - [`index`]   — READ-ONLY best-effort `state_5.sqlite` `threads` cache
 //!     (codex-p2-spec section 6.3); every failure degrades to the rollout scan.
+//!   - [`tui`]     — codex-interactive: identity discovery + the boot waiter for
+//!     a codex TUI hosted in a mux pane (`--interactive`), which speaks no
+//!     protocol to qd, so its thread id is OBSERVED from the rollout it opens.
 //!
 //! Wire truth is the LAW: every envelope mirrors a cited line of the q1c spike
 //! evidence (exec/codex-spike-evidence/jail/), NOT textbook JSON-RPC — the
@@ -40,6 +43,7 @@ use crate::provider::{
 pub mod index;
 pub mod rollout;
 pub mod rpc;
+pub mod tui;
 pub mod version;
 pub mod ws;
 
@@ -86,6 +90,16 @@ const SESSIONS_SUBDIR: &str = "sessions";
 // sequence, NOT by this W3 launch_plan (which only builds the daemon argv). The
 // constants live with that caller, not here.
 
+/// The codex binary to launch: the `QD_CODEX_BIN` override, else `"codex"` off
+/// PATH. Shared so the launch plan and the human viewer
+/// (`verbs::lifecycle::attach_codex_viewer`) can never disagree about which
+/// binary is "codex" on this box.
+pub fn codex_bin(env: &dyn crate::effects::Env) -> String {
+    env.var(CODEX_BIN_ENV)
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "codex".to_string())
+}
+
 /// Resolve `$CODEX_HOME` off `fx.env` ONLY (L9a — NEVER raw `std::env`): the
 /// `CODEX_HOME` var, else `$HOME/.codex` (HOME also read from `fx.env`). Returns
 /// `None` if neither is set (a caller with no home cannot resolve a root).
@@ -115,13 +129,41 @@ impl Provider for CodexProvider {
     /// resolution, not a launch-plan input). env carries `CODEX_HOME` passthrough
     /// when `fx.env` has it. Consumes NO claude config surface (the minimal-fx
     /// negative control: empty env still yields bin `"codex"`).
-    fn launch_plan(&self, fx: &ProviderFx, _req: &LaunchRequest) -> LaunchPlan {
-        let bin = fx
-            .env
-            .var(CODEX_BIN_ENV)
-            .filter(|b| !b.is_empty())
-            .unwrap_or_else(|| "codex".to_string());
-        let argv = vec![bin, "app-server".to_string()];
+    ///
+    /// codex-interactive: `req.interactive` selects the OTHER codex launch shape
+    /// — the bare `codex` TUI a human drives in a mux pane, or `codex resume
+    /// <thread-id>` when re-entering an existing thread (the SAME fragment
+    /// [`Provider::resume_args`] already documents as "the codex CLI fragment,
+    /// TUI-facing"). The `--listen` port append stays a daemon-lane concern and
+    /// never applies here: an interactive pane has no ws transport at all, which
+    /// is exactly why its row records `hosting: "mux-pane"` and carries no
+    /// `endpoint`.
+    ///
+    /// `req.interactive = false` is the DEFAULT and reproduces the pre-existing
+    /// argv byte-for-byte, so the daemon lane is untouched.
+    fn launch_plan(&self, fx: &ProviderFx, req: &LaunchRequest) -> LaunchPlan {
+        let bin = codex_bin(fx.env);
+        let argv = if req.interactive {
+            let mut argv = vec![bin];
+            // A fresh interactive start is a bare `codex`; a revive re-enters the
+            // SAME thread. `fork` is meaningless for codex (a thread appends to
+            // one rollout — no transcript branching), so resume_args ignores it
+            // and the start verb refuses `--fork` for codex upstream.
+            if let Some(id) = req.resume.as_deref().filter(|s| !s.is_empty()) {
+                argv.extend(self.resume_args(
+                    &SessionKey {
+                        id,
+                        name: None,
+                        cwd: None,
+                        pid: None,
+                    },
+                    false,
+                ));
+            }
+            argv
+        } else {
+            vec![bin, "app-server".to_string()]
+        };
         // CODEX_HOME passthrough so the spawned daemon writes rollouts into the
         // SAME root qd reads (jails own it in tests); absent ⇒ codex's default.
         let env = match fx.env.var(CODEX_HOME_ENV).filter(|h| !h.is_empty()) {

@@ -65,6 +65,51 @@ pub enum Hosting {
     Daemon,
 }
 
+impl Hosting {
+    /// The on-disk token for the registry row's `hosting` field.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Hosting::MuxPane => "mux-pane",
+            Hosting::Daemon => "daemon",
+        }
+    }
+}
+
+/// Permissive parse of a registry row's `hosting` token. An unknown/garbage
+/// string maps to `None` — the caller then falls back to the provider's
+/// structural hosting, so a corrupt field degrades to today's behavior instead of
+/// inventing a topology (L8: never a panic, never a guess).
+pub fn parse_hosting(s: &str) -> Option<Hosting> {
+    match s {
+        "mux-pane" => Some(Hosting::MuxPane),
+        "daemon" => Some(Hosting::Daemon),
+        _ => None,
+    }
+}
+
+/// THE hosting question every verb should ask: how is THIS ROW hosted?
+///
+/// codex-interactive: `Provider::hosting()` answers per PROVIDER, which was the
+/// whole truth while each provider had exactly one topology. codex now has two —
+/// the `app-server` daemon lane and the `--interactive` mux-pane lane — so
+/// attach/kill/send/resume must key on the row, not the provider id.
+///
+/// Resolution order:
+///   1. the row's recorded `hosting` field, when present AND parseable;
+///   2. else `provider_for(provider_id).hosting()` — the structural default;
+///   3. else (an UNKNOWN provider id) `None`, so the caller keeps its own
+///      unknown-provider refusal rather than being handed a made-up topology.
+///
+/// Step 2 is what keeps every pre-existing row byte-stable: nothing but the
+/// codex-interactive create path writes the field, so every claude/acp/pi/codex-
+/// daemon row answers exactly as it did before this seam existed.
+pub fn row_hosting(provider_id: &str, hosting_field: Option<&str>) -> Option<Hosting> {
+    if let Some(h) = hosting_field.and_then(parse_hosting) {
+        return Some(h);
+    }
+    provider_for(provider_id).map(|p| p.hosting())
+}
+
 /// Provider-neutral session identity (codex-p1-spec section 2.1).
 ///
 /// `pid` is OPTIONAL BY DESIGN (R3 tooth): a daemon-hosted session has thread-id
@@ -123,6 +168,16 @@ pub struct LaunchRequest {
     pub model: Option<String>,
     /// Pass-through args (everything after `--`).
     pub passthrough: Vec<String>,
+    /// codex-interactive: does the caller want a HUMAN-DRIVABLE launch (a TUI in
+    /// a mux pane) rather than the provider's machine-driven default?
+    ///
+    /// Provider-neutral by construction, and deliberately a REQUEST not a
+    /// topology: it says what the caller wants, and each impl answers for itself.
+    /// claude/acp/pi ignore it — their only launch shape is already the one the
+    /// caller would get. codex is the one provider where it changes the argv:
+    /// `false` (the default, so every existing construction site is unchanged)
+    /// keeps `codex app-server`; `true` launches the bare `codex` TUI.
+    pub interactive: bool,
 }
 
 /// The injected effect bundle (codex-p1-spec section 2.1; the NewDeps pattern,
@@ -580,6 +635,72 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, contents).unwrap();
+    }
+
+    // === codex-interactive: row_hosting — the per-ROW hosting question ===
+    //
+    // The whole point of this helper is that a provider id is no longer a
+    // sufficient answer. These pin both halves: the fallback that keeps every
+    // pre-existing row behaving exactly as before, and the override that makes the
+    // interactive codex lane possible.
+
+    #[test]
+    fn row_hosting_falls_back_to_the_providers_structural_answer() {
+        // No `hosting` field — every row written before this seam existed, and
+        // every row written by a provider with only one topology.
+        assert_eq!(
+            row_hosting("claude-code", None),
+            Some(Hosting::MuxPane),
+            "claude is structurally pane-hosted"
+        );
+        assert_eq!(
+            row_hosting("codex", None),
+            Some(Hosting::Daemon),
+            "a codex row that does not say is the app-server daemon — the \
+             pre-codex-interactive answer, so existing rows are untouched"
+        );
+        assert_eq!(row_hosting("pi", None), Some(Hosting::Daemon));
+        assert_eq!(row_hosting("acp/opencode", None), Some(Hosting::Daemon));
+    }
+
+    #[test]
+    fn row_hosting_lets_the_row_override_the_provider() {
+        // THE case this seam exists for: one provider, two topologies.
+        assert_eq!(
+            row_hosting("codex", Some("mux-pane")),
+            Some(Hosting::MuxPane),
+            "an --interactive codex row is pane-hosted despite codex's structural Daemon"
+        );
+        assert_eq!(row_hosting("codex", Some("daemon")), Some(Hosting::Daemon));
+    }
+
+    #[test]
+    fn row_hosting_of_an_unknown_provider_is_none_not_a_guess() {
+        // Callers keep their own unknown-provider refusal rather than being handed
+        // a fabricated topology.
+        assert_eq!(row_hosting("gemini", None), None);
+    }
+
+    #[test]
+    fn row_hosting_of_a_garbage_field_degrades_to_the_provider_default() {
+        // A corrupt/unknown token must not invent a topology, and must not drop
+        // the row either — it degrades to exactly the pre-field behavior.
+        assert_eq!(row_hosting("codex", Some("banana")), Some(Hosting::Daemon));
+        assert_eq!(row_hosting("codex", Some("")), Some(Hosting::Daemon));
+        assert_eq!(
+            row_hosting("claude-code", Some("banana")),
+            Some(Hosting::MuxPane)
+        );
+    }
+
+    #[test]
+    fn hosting_tokens_round_trip_through_parse() {
+        // The write side (`as_str`) and the read side (`parse_hosting`) must agree
+        // — a drift would make every row we write unreadable to ourselves.
+        for h in [Hosting::MuxPane, Hosting::Daemon] {
+            assert_eq!(parse_hosting(h.as_str()), Some(h));
+        }
+        assert_eq!(parse_hosting("nonsense"), None);
     }
 
     // --- codex P1 W7: provider-routed transcript_path IS jsonl::find_jsonl_path ---

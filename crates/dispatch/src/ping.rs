@@ -599,6 +599,7 @@ mod tests {
             provider: "claude-code".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::LiveRegistry,
         }
     }

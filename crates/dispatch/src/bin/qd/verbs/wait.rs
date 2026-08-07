@@ -133,6 +133,16 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
     // rollout-tail fallback if the daemon is unreachable), NOT the claude pid-file +
     // transcript-content loop. RESIDUAL #1's channel routing below is CLAUDE-ONLY:
     // codex's resolved-status entry path stays byte-stable (no subscriber built).
+    //
+    // codex-interactive: this arm serves BOTH codex topologies unchanged, and
+    // deliberately does not branch on hosting. The entry gate reads the join's
+    // codex status, which is derived CONNECTIONLESSLY from the rollout tail for
+    // every codex row (join.rs `codex_status_for`) — a TUI session writes that
+    // same rollout, so its busy/idle is as live as a daemon thread's. And
+    // `run_codex_wait` already treats a row with no endpoint as the
+    // daemon-unreachable case and waits on the rollout-tail channel, which is the
+    // only channel a pane-hosted session has. No endpoint, no branch, correct
+    // behavior.
     if session.provider == "codex" {
         if session.status == SessionStatus::Idle {
             println!("{label} is idle");
@@ -1566,6 +1576,7 @@ mod tests {
             provider: "pi".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: dispatch::model::SessionBranch::LiveRegistry,
         }
     }

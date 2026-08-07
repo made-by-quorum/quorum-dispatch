@@ -329,9 +329,16 @@ fn cmd_start() -> Command {
             )
             .conflicts_with("interactive"),
         )
+        // codex-interactive: for `--provider codex` this flag does not merely
+        // override the auto-detect (which never routed codex anyway) — it selects
+        // a different TOPOLOGY: the codex TUI in an attachable mux pane instead of
+        // the `codex app-server` daemon. Explicit-only by design, so a bare
+        // `qd start --provider codex` keeps spawning the daemon for every caller.
         .arg(long_flag(
             "interactive",
-            "Force the interactive native-TUI launch (override the driver auto-detect)",
+            "Force the interactive native-TUI launch (override the driver auto-detect). \
+             With --provider codex, runs the codex TUI in an attachable pane instead of \
+             the app-server daemon",
         ))
         // Lifecycle-collapse A-1 (spec D4): machine-readable identity output.
         // Exit 0 with --json guarantees the printed id is BOUND (A-2); on a
@@ -536,13 +543,13 @@ fn cmd_gc() -> Command {
 }
 
 // --- 16b. init <shell> (NET-NEW, 2026-06-09 ruling) — print the shell
-// integration (claude wrapper + zmx-dir pin) for eval'ing from the user's rc
+// integration (claude + codex wrappers + zmx-dir pin) for eval'ing from the rc
 // file. The eval-init pattern: the wrapper body ships in the binary so it can
 // never drift from what `qd new` accepts (the retired TS bootstrap baked the
 // wrapper INTO the rc file, and it fossilized).
 fn cmd_init() -> Command {
     Command::new("init")
-        .about("Print shell integration (claude wrapper) — add `eval \"$(qd init bash)\"` to your rc file")
+        .about("Print shell integration (claude + codex wrappers) — add `eval \"$(qd init bash)\"` to your rc file")
         .override_help(help::INIT)
         .arg(positional("shell"))
 }

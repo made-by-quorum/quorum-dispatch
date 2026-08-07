@@ -257,8 +257,17 @@ fn run_send_pty_resolved(
     strict: bool,
 ) -> i32 {
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
-    if let Some(code) = common::refuse_unknown_provider("send:pty", session) {
-        return code;
+    //
+    // codex-interactive: scoped to rows with no resolvable hosting (the
+    // `attach_resolved` / `kill` narrowing). This body is provider-generic — it
+    // writes to a pane through the mux — and a pane-hosted codex row is routed
+    // here ON PURPOSE by the unified selector. The allow-list this helper carries
+    // predates codex having a pane, so an unconditional call would refuse the very
+    // session the selector just decided this path serves.
+    if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref()).is_none() {
+        if let Some(code) = common::refuse_unknown_provider("send:pty", session) {
+            return code;
+        }
     }
 
     // cold → dead (send.ts:105-108); no zmxName → not-in-zmx (send.ts:110-113).

@@ -159,7 +159,9 @@ pub fn run() -> i32 {
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
-        out.push_str("\n# qd shell integration (claude wrapper) — see `qd init --help`.\n");
+        out.push_str(
+            "\n# qd shell integration (claude + codex wrappers) — see `qd init --help`.\n",
+        );
         out.push_str(init_line(shell));
         out.push('\n');
         std::fs::write(rc, out).map_err(|e| e.to_string())

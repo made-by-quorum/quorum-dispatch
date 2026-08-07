@@ -124,6 +124,20 @@ pub struct Session {
     /// field is a B7-owned golden-delta, deferred). STRICTLY the parent pointer —
     /// never the fork's own qdId (that stays `qd_id`).
     pub lineage: Option<String>,
+    /// codex-interactive: the row's recorded HOSTING topology, flowed from the
+    /// persisted registry `hosting` field at the join's LiveRegistry/Tombstoned
+    /// boundary (exactly like `provider`/`entrypoint`). `None` on every other
+    /// construction branch (cold JSONL / zmx-only have no registry row to source
+    /// it) AND on every row whose provider has only one topology — absent means
+    /// "use the provider's structural hosting", which is why nothing but the
+    /// codex lanes ever needs to read it.
+    ///
+    /// Consumers must go through [`crate::provider::row_hosting`] rather than
+    /// matching this string: that helper owns the absent⇒provider-default rule,
+    /// so a caller cannot accidentally treat an absent field as "not a daemon".
+    /// NOT serialized on `ls --json` (render.rs builds JSON explicitly — the same
+    /// parity-safe treatment as `entrypoint`/`lineage`).
+    pub hosting: Option<String>,
     pub which_branch: SessionBranch,
 }
 

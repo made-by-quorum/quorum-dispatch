@@ -49,7 +49,8 @@
 
 use quorum_delivery_events::Payload;
 use quorum_submit_discipline::{
-    deliver_idle_two_write_in_region, ComposerRegion, IdleDeliverDeps, SubmitOptions, PROMPT_GLYPH,
+    deliver_idle_two_write_in_region, send_text_chunked, ChunkSendOptions, ComposerRegion,
+    IdleDeliverDeps, SubmitOptions, PROMPT_GLYPH, TWO_WRITE_SETTLE_MS,
 };
 use std::sync::Mutex;
 
@@ -143,6 +144,17 @@ pub trait HarnessFacts: Send + Sync {
     ///   blind type. M4 turns `None`s into `Some(_)` per harness.
     fn composer_is_plain(&self, screen_text: &str) -> Option<bool>;
 
+    /// HOW this harness's turn acceptance is confirmed (M5/T6).
+    ///
+    /// Default [`AcceptanceSignal::BusyTransition`]: the session publishes a
+    /// pollable busy/idle status and going busy after the CR proves the turn
+    /// started (claude, via its registry row). codex overrides to
+    /// [`AcceptanceSignal::Landing`] — it publishes no such status, but its
+    /// rollout records the user's message, so the LANDING is the acceptance proof.
+    fn acceptance_signal(&self) -> AcceptanceSignal {
+        AcceptanceSignal::BusyTransition
+    }
+
     /// The composer region the content-verified CR anchors on (M4 — the
     /// generalization of the ❯-only anchor). Default: the claude glyph anchor
     /// `❯`. codex overrides `GlyphAnchor('›')`; pi (no glyph) overrides
@@ -160,6 +172,32 @@ pub trait HarnessFacts: Send + Sync {
     fn clear_strategy(&self) -> ClearStrategy {
         ClearStrategy::once(self.clear_chord())
     }
+}
+
+/// What proves a harness ACCEPTED the turn (M5/T6 — the F1 un-gate).
+///
+/// The fire needs positive evidence that the message became a turn; the two
+/// available proofs differ in strength, and only one is available per harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcceptanceSignal {
+    /// The session goes BUSY after the CR (claude). Cheap and immediate, but only
+    /// evidence that *something* started — the discipline pairs it with a
+    /// content-verified remediation CR for the paste-absorbed case.
+    BusyTransition,
+    /// The message appears in the TRANSCRIPT as a user record (codex).
+    ///
+    /// STRICTLY STRONGER evidence than a busy transition: it identifies the exact
+    /// bytes that landed, so it cannot be fooled by unrelated activity, and — the
+    /// reason codex needs it — it cannot be MISSED the way codex's on-screen
+    /// `esc to interrupt` line can be, since streamed output overwrites that line
+    /// mid-turn. It is also slower (the harness must flush the record), which is
+    /// what `landing_window_ms` budgets for.
+    ///
+    /// A Landing harness takes a SINGLE CR with no busy-keyed remediation: the
+    /// remediation exists to recover a CR the status signal says was absorbed, and
+    /// with no status signal it would be an unconditional second CR — precisely
+    /// the double-submit the F1 gate was protecting against.
+    Landing,
 }
 
 /// How the fire's clear step drives the harness clear-chord (M4). The seam is a
@@ -350,6 +388,16 @@ impl HarnessFacts for CodexFacts {
 
     fn composer_region(&self) -> ComposerRegion {
         ComposerRegion::GlyphAnchor(CODEX_PROMPT_GLYPH)
+    }
+
+    /// codex publishes no pollable busy/idle status (the Q7 residual that gated
+    /// its delivery off entirely), but every codex session writes its rollout, and
+    /// a submitted message appears there as a `response_item` user record with the
+    /// exact input text. That is the acceptance proof — verified against a live
+    /// codex-cli 0.146.1 rollout, from which `CodexLandingProbe` extracts typed
+    /// messages verbatim.
+    fn acceptance_signal(&self) -> AcceptanceSignal {
+        AcceptanceSignal::Landing
     }
 
     fn clear_strategy(&self) -> ClearStrategy {
@@ -818,7 +866,14 @@ pub fn fire(
     //    exactly as a missing composer fact degrades to verify-blocked). claude
     //    (`claude_default`) is confirmable and skips this gate → fires normally,
     //    byte-for-byte. When the codex/pi status source lands (M5), this un-gates.
-    if !effects.acceptance_confirmable() {
+    //
+    // M5/T6 UN-GATE: the gate asks whether acceptance is confirmable AT ALL, and a
+    // missing busy/idle status is no longer the same question. A
+    // `AcceptanceSignal::Landing` harness (codex) confirms acceptance from its
+    // TRANSCRIPT instead — strictly stronger evidence than a busy transition,
+    // since it identifies the exact bytes. So the gate now closes only on a
+    // harness with NEITHER signal.
+    if !effects.acceptance_confirmable() && facts.acceptance_signal() != AcceptanceSignal::Landing {
         // M5 observability nicety (M4-noted): a DISTINCT reason from the QS-5
         // plain-composer `verify-blocked` below. Both are honest non-deliveries with
         // the composer untouched, but this one means "the harness has no confirmable
@@ -890,11 +945,44 @@ pub fn fire(
     //    blind, QS-5). The content-verify anchors on the PER-HARNESS composer
     //    region (claude/codex glyph, pi two-rule). The remediation CR is bounded to
     //    ≤1 by the core.
-    let outcome =
-        deliver_idle_two_write_in_region(&AsIdle(effects), message, cfg.submit, facts.composer_region());
-    if !outcome.accepted {
-        // The session never went busy: the turn was not accepted. Honest failure.
-        return finish_failure(effects, lock, &draft, true, rec, "not-accepted");
+    match facts.acceptance_signal() {
+        AcceptanceSignal::BusyTransition => {
+            let outcome = deliver_idle_two_write_in_region(
+                &AsIdle(effects),
+                message,
+                cfg.submit,
+                facts.composer_region(),
+            );
+            if !outcome.accepted {
+                // The session never went busy: the turn was not accepted. Honest failure.
+                return finish_failure(effects, lock, &draft, true, rec, "not-accepted");
+            }
+        }
+        AcceptanceSignal::Landing => {
+            // The SAME two-write shape (chunked text, settle, separate CR — the
+            // shape a paste burst does not collapse), but WITHOUT the
+            // acceptance-keyed remediation loop.
+            //
+            // The remediation CR is keyed on "the status says we did not go busy".
+            // With no status signal that key is always true, so the loop would fire
+            // an unconditional second CR on every send — the double-submit the F1
+            // gate existed to prevent. Dropping it costs the one-CR recovery for an
+            // absorbed CR; that case now surfaces as an honest non-delivery the
+            // caller retries, and a retry is SAFE because step 4 clears the composer
+            // first (the stale text cannot compound).
+            //
+            // Acceptance is then decided by the landing verify below, which is the
+            // point of this signal: we do not guess from the screen, we read what
+            // the harness actually recorded.
+            send_text_chunked(
+                &mut |chunk| effects.send_text(chunk),
+                &mut |ms| effects.sleep(ms),
+                message,
+                ChunkSendOptions::default(),
+            );
+            effects.sleep(TWO_WRITE_SETTLE_MS);
+            effects.send_cr();
+        }
     }
 
     // Accepted ⇒ mark fire_completed durable (a crash now reconciles by probing
@@ -916,7 +1004,7 @@ pub fn fire(
 
     // 8. BOUNDED LANDING VERIFY (RT-R2) — a success terminal requires a CONFIRMED
     //    landing; mere acceptance is not terminal (no false "landed").
-    landing_terminal(effects, probe, &rec, message, cfg)
+    landing_terminal(effects, probe, &rec, message, cfg, facts.acceptance_signal())
 }
 
 /// Arm the input lock and snapshot the draft ATOMICALLY: acquire the input lock,
@@ -1031,6 +1119,7 @@ fn landing_terminal(
     rec: &PendingRecord,
     message: &str,
     cfg: &FireConfig,
+    signal: AcceptanceSignal,
 ) -> FireOutcome {
     let deadline = effects.now_ms() + cfg.landing_window_ms;
     loop {
@@ -1058,7 +1147,15 @@ fn landing_terminal(
             LandingScan::Unconfirmed => {
                 // Session observed gone before landing confirmed ⇒ recipient-gone
                 // (QS-4). `None` status = the status source vanished (session died).
-                if effects.read_status().is_none() {
+                //
+                // M5/T6: that inference is only sound for a harness that HAS a
+                // status source. A Landing harness reads `None` always and by
+                // design, so applying it here would report `recipient-gone` on the
+                // very first poll of a perfectly healthy codex session that simply
+                // has not flushed its rollout line yet — turning the normal case
+                // into a false death. For Landing, absence of a landing is just
+                // "not yet": poll to the deadline and stay Pending.
+                if signal == AcceptanceSignal::BusyTransition && effects.read_status().is_none() {
                     return FireOutcome::Terminal(Payload::SeenFailed {
                         send_id: rec.send_id.clone(),
                         reason: "recipient-gone".to_string(),
@@ -1784,14 +1881,172 @@ mod tests {
         assert!(fx.texts.lock().unwrap().is_empty(), "no inject after a failed reverify");
     }
 
+    // ---- M5/T6: LANDING-as-acceptance un-gates codex delivery ---------------
+
+    /// A `AcceptanceSignal::Landing` harness (codex) FIRES — it is no longer gated
+    /// off — and its acceptance comes from the transcript, not from a busy status
+    /// it never publishes.
+    ///
+    /// Note the fixture: `confirmable = false` (codex genuinely has no status
+    /// source) and every `read_status()` is `None`. Under the old contract that
+    /// combination meant "cannot deliver"; the whole point of the un-gate is that
+    /// it now means "ask the transcript instead".
+    ///
+    /// MUTATION EVIDENCE: reverting the gate to `if !effects.acceptance_confirmable()`
+    /// reds this — the fire returns `acceptance-unconfirmable` with no inject.
+    #[test]
+    fn landing_harness_fires_and_confirms_from_the_transcript() {
+        let plain = "gpt-5.6-sol default \u{00b7} ~/work\n\u{203a} hello";
+        let fx = FakeFx::new(vec![plain], vec![None, None, None]);
+        *fx.confirmable.lock().unwrap() = false; // codex: no status source, ever
+        let (_d, spool) = scratch_spool();
+        let lock = Mutex::new(InputLock::new());
+        let journal = Mutex::new(Journal::new());
+        let out = fire(
+            &fx,
+            &CodexFacts,
+            &FixedProbe(LandingScan::Landed),
+            &lock,
+            &journal,
+            &spool,
+            rec(),
+            "hello",
+            &cfg_fast(),
+        );
+        match out {
+            FireOutcome::Terminal(Payload::MessageSeen { .. }) => {}
+            other => panic!("a landed codex send must be MessageSeen, got {other:?}"),
+        }
+        // It genuinely delivered: the text went out and exactly one CR submitted it.
+        assert_eq!(
+            fx.texts.lock().unwrap().concat(),
+            "hello",
+            "the message must actually be injected"
+        );
+        assert_eq!(
+            fx.crs.load(Ordering::SeqCst),
+            1,
+            "exactly ONE CR — the busy-keyed remediation must not run without a status signal"
+        );
+    }
+
+    /// THE double-submit guarantee, stated as its own test because it is the whole
+    /// reason the F1 gate existed.
+    ///
+    /// With no status source, `wait_for_busy` can never return true, so the
+    /// discipline's acceptance-keyed remediation would fire a SECOND CR on every
+    /// single send — submitting twice whenever the first CR worked. A Landing
+    /// harness therefore takes the two-write shape with ONE CR and lets the
+    /// transcript decide.
+    ///
+    /// MUTATION EVIDENCE: routing Landing through `deliver_idle_two_write_in_region`
+    /// (the BusyTransition path) reds this with 2 CRs.
+    #[test]
+    fn landing_harness_never_fires_a_second_cr() {
+        let plain = "gpt-5.6-sol default \u{00b7} ~/work\n\u{203a} hello";
+        // Landing is never confirmed AND status is always None — the worst case for
+        // a remediation loop keyed on "did we go busy?".
+        let fx = FakeFx::new(vec![plain], vec![None, None, None, None]);
+        *fx.confirmable.lock().unwrap() = false;
+        let (_d, spool) = scratch_spool();
+        let lock = Mutex::new(InputLock::new());
+        let journal = Mutex::new(Journal::new());
+        let out = fire(
+            &fx,
+            &CodexFacts,
+            &FixedProbe(LandingScan::Unconfirmed),
+            &lock,
+            &journal,
+            &spool,
+            rec(),
+            "hello",
+            &cfg_fast(),
+        );
+        assert_eq!(
+            fx.crs.load(Ordering::SeqCst),
+            1,
+            "one CR even when nothing ever confirms — never a blind second submit"
+        );
+        // And an unconfirmed landing is NOT a false delivery and NOT a false death:
+        // it stays Pending for --wait/reconcile to resolve.
+        assert!(
+            matches!(out, FireOutcome::Pending),
+            "unconfirmed landing stays Pending, got {out:?}"
+        );
+    }
+
+    /// A Landing harness must NOT be reported `recipient-gone` just because it has
+    /// no status source.
+    ///
+    /// `landing_terminal` infers a dead session from `read_status() == None`, which
+    /// is sound only where a status source exists. codex reads `None` always and by
+    /// design, so without scoping that inference EVERY codex send would terminate
+    /// as a false death on the first poll — the normal "rollout not flushed yet"
+    /// state misreported as a dead recipient.
+    ///
+    /// MUTATION EVIDENCE: dropping the `signal == BusyTransition` guard reds this
+    /// with a `SeenFailed{recipient-gone}` terminal.
+    #[test]
+    fn landing_harness_unconfirmed_is_not_reported_as_a_dead_recipient() {
+        let plain = "gpt-5.6-sol default \u{00b7} ~/work\n\u{203a} hello";
+        let fx = FakeFx::new(vec![plain], vec![None, None, None, None]);
+        *fx.confirmable.lock().unwrap() = false;
+        let (_d, spool) = scratch_spool();
+        let lock = Mutex::new(InputLock::new());
+        let journal = Mutex::new(Journal::new());
+        let out = fire(
+            &fx,
+            &CodexFacts,
+            &FixedProbe(LandingScan::Unconfirmed),
+            &lock,
+            &journal,
+            &spool,
+            rec(),
+            "hello",
+            &cfg_fast(),
+        );
+        match out {
+            FireOutcome::Terminal(Payload::SeenFailed { reason, .. }) => {
+                panic!("healthy codex session misreported as gone: {reason}")
+            }
+            FireOutcome::Pending => {}
+            other => panic!("expected Pending, got {other:?}"),
+        }
+    }
+
+    /// The claude path must be untouched by all of this: it keeps the
+    /// busy-transition signal and its content-verified remediation CR.
+    #[test]
+    fn busy_transition_harness_keeps_its_remediation_cr() {
+        assert_eq!(
+            SafeDefaultFacts.acceptance_signal(),
+            AcceptanceSignal::BusyTransition,
+            "the default harness keeps the busy-transition signal"
+        );
+        assert_eq!(
+            PiFacts.acceptance_signal(),
+            AcceptanceSignal::BusyTransition,
+            "pi has no live-readable landing, so it stays gated rather than un-gated wrongly"
+        );
+        assert_eq!(CodexFacts.acceptance_signal(), AcceptanceSignal::Landing);
+    }
+
     // ---- F1: acceptance UNCONFIRMABLE (none_source) ⇒ NO clear/inject, composer
     //          UNTOUCHED, honest non-delivery terminal (never a false delivery) ---
 
     #[test]
     fn none_source_harness_never_injects_and_reports_honest_nondelivery() {
-        // For codex AND pi: a LIVE-SHAPED PLAIN composer (composer_is_plain →
-        // Some(true), so the pre-F1 fire WOULD proceed to clear+inject+CR-submit),
-        // but the harness has no confirmable acceptance signal (none_source).
+        // M5/T6: SCOPED TO pi. codex used to be here too, but it now confirms
+        // acceptance from its rollout (`AcceptanceSignal::Landing`) and is
+        // deliberately un-gated — see
+        // `landing_harness_fires_and_confirms_from_the_transcript` below. pi has
+        // NEITHER signal (no pollable status, and its transcript is append-on-exit
+        // so a LIVE landing is unobservable), so the gate is still the honest
+        // answer for it, and this keeps that path covered.
+        //
+        // For pi: a LIVE-SHAPED PLAIN composer (composer_is_plain → Some(true), so
+        // the pre-F1 fire WOULD proceed to clear+inject+CR-submit), but the harness
+        // has no confirmable acceptance signal (none_source).
         // F1: the fire is gated OFF at the top — NO clear-chord, NO inject bytes,
         // NO CR; the composer is UNTOUCHED; the terminal is an honest non-delivery
         // (SendFailed), never a MessageSeen and never a dangling Pending — even
@@ -1800,10 +2055,8 @@ mod tests {
         let pi_rule: String = std::iter::repeat('\u{2500}').take(60).collect();
         let pi_plain = format!("{pi_rule}\nhello\n{pi_rule}\n~/work $0 gpt-5.5\n");
 
-        for (label, facts, screen) in [
-            ("codex", &CodexFacts as &dyn HarnessFacts, codex_plain.to_string()),
-            ("pi", &PiFacts as &dyn HarnessFacts, pi_plain),
-        ] {
+        let _ = codex_plain; // codex is no longer gated; see the Landing test.
+        for (label, facts, screen) in [("pi", &PiFacts as &dyn HarnessFacts, pi_plain)] {
             // Sanity: the composer IS classified plain (so the gate — not the
             // plain-verify — is what stops the fire).
             assert_eq!(

@@ -45,6 +45,7 @@ fn registry_write_roundtrip_through_pipeline() {
         transport: None,
         // Child B (opencode D1): no structured-send history on this row.
         structured_send_issued: None,
+        hosting: None,
     };
     registry::write_entry(&paths.sessions_dir, &entry).unwrap();
 

@@ -33,6 +33,7 @@ use dispatch::resume::{derive_zmx_name, resolve_resume_cwd, validate_session_nam
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 
 use super::common;
+use super::lifecycle;
 
 /// The `--no-attach` boot-confirm-failure stderr line (NAMED DIVERGENCE, ADD-9a).
 /// Factored so the EXACT wording is pinned by a unit test: m-4 (ack3-spec §8)
@@ -117,8 +118,38 @@ pub fn run(m: &ArgMatches) -> i32 {
     // refuse_unknown_provider (which would otherwise refuse "codex" as unknown) and
     // before the must-be-cold gate (codex revive is drivable from any non-alive state,
     // not just Cold).
-    if session.provider == "codex" {
+    //
+    // codex-interactive: SCOPED to DAEMON-hosted codex rows. `run_codex_resume`
+    // revives by re-spawning an app-server and issuing `thread/resume` over ws —
+    // machinery a pane-hosted row has none of (no daemon, no endpoint). It is
+    // handled just below rather than here.
+    if session.provider == "codex"
+        && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
+            == Some(dispatch::provider::Hosting::Daemon)
+    {
         return run_codex_resume(&session);
+    }
+    // codex-interactive: a PANE-hosted codex row revives in place — relaunch
+    // `codex resume <thread-id>` in a fresh pane, carrying the SAME thread. This is
+    // the agent-facing verb, so it revives DETACHED (no interactive tail), exactly
+    // like the codex daemon arm above and the claude `--no-attach` shape; a human
+    // who wants to land inside uses `qd attach`, which revives and then hands over
+    // the terminal.
+    if session.provider == "codex" {
+        // Render mode is a launch-time birth property; resolve it here (the
+        // shared resolution below this branch runs too late for this arm).
+        let render = common::resolve_render_mode(m, &RealEnv);
+        return match lifecycle::revive_codex_tui(&session, render, "resume") {
+            Ok(handle) => {
+                println!(
+                    "Revived codex session \"{}\" — attach with \"qd attach {}\"",
+                    handle.zmx_name, handle.zmx_name
+                );
+                0
+            }
+            // revive_codex_tui already printed its own loud error.
+            Err(code) => code,
+        };
     }
     // scoped-ACP-CC Item 3 (RESUME): an acp/* row is ALSO daemon-hosted (the resident
     // `qd acp-daemon` adapter + its bridge). Resume re-establishes the SAME CC session
@@ -1071,6 +1102,10 @@ fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
             &paths.sessions_dir,
             session.pid,
         ),
+        // acp/* is daemon-hosted with no second topology — absent ⇒ the
+        // provider's structural hosting, which is the right answer here and
+        // keeps the revived row byte-identical to a freshly-created one.
+        hosting: None,
     };
     if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
         spawner.kill(spawned.pid);
@@ -1313,6 +1348,7 @@ mod tests {
             provider: "claude-code".to_string(),
             entrypoint: Some("headless".to_string()),
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::LiveRegistry,
         }
     }

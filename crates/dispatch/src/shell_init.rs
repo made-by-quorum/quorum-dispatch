@@ -44,6 +44,27 @@
 //! would also override the engine launcher's defaults, which is not what a
 //! wrapper-only flag preference means.
 //!
+//! ## The codex wrapper (same shape, one deliberate difference)
+//!
+//! codex now has a mux-pane lane of its own (`qd start <name> --provider codex
+//! --interactive`, verbs/lifecycle.rs), so `codex` gets the same treatment:
+//! bare interactive launch outside zmx → tracked, attachable session; every
+//! other shape → the real binary; `command codex ...` is the escape hatch;
+//! `CODEX_NO_ZMX` disables routing; `QD_CODEX_WRAPPER_FLAGS` rides passthrough
+//! REAL launches only.
+//!
+//! THE DIFFERENCE: the claude wrapper forwards `"$@"` through `qd start ... --
+//! "$@"`, and the codex wrapper forwards NOTHING — an invocation carrying ANY
+//! argument passes through to the real codex instead of being routed. That is
+//! not timidity, it is the engine's contract: the interactive codex lane builds
+//! its argv as a bare `codex` (`create_codex_tui` passes `claude_args: vec![]`)
+//! and `qd start`'s `-p` is explicitly refused there, so routing an
+//! argument-carrying invocation would silently drop what the user typed —
+//! including `codex "fix the parser"`, whose whole content is the argument.
+//! Passing it through loses only the session tracking, and says so by doing the
+//! obvious thing; routing it would lose the prompt. When the engine's codex lane
+//! learns to accept a launch argv, this is the one line to revisit.
+//!
 //! Library-first: everything here is PURE (string emission + path math); the
 //! bin verb wires the real env/zmx-dir.
 
@@ -142,17 +163,28 @@ pub fn rc_path(shell: Shell, home: &Path, env: &dyn Env) -> PathBuf {
 /// always wins — the export only fills the unset case).
 pub fn init_script(shell: Shell, zmx_dir: &str) -> String {
     match shell {
-        Shell::Bash => posix_script(zmx_dir, "$QD_CLAUDE_WRAPPER_FLAGS", "bash"),
+        Shell::Bash => posix_script(
+            zmx_dir,
+            "$QD_CLAUDE_WRAPPER_FLAGS",
+            "$QD_CODEX_WRAPPER_FLAGS",
+            "bash",
+        ),
         // zsh does not word-split unquoted parameters; `${=VAR}` forces the
         // sh-style split the flag list needs.
-        Shell::Zsh => posix_script(zmx_dir, "${=QD_CLAUDE_WRAPPER_FLAGS}", "zsh"),
+        Shell::Zsh => posix_script(
+            zmx_dir,
+            "${=QD_CLAUDE_WRAPPER_FLAGS}",
+            "${=QD_CODEX_WRAPPER_FLAGS}",
+            "zsh",
+        ),
         Shell::Fish => fish_script(zmx_dir),
     }
 }
 
-/// The bash/zsh emission. `wflags` is the (shell-specific) word-splitting
-/// expansion of `QD_CLAUDE_WRAPPER_FLAGS`.
-fn posix_script(zmx_dir: &str, wflags: &str, shell_name: &str) -> String {
+/// The bash/zsh emission. `wflags` / `cxflags` are the (shell-specific)
+/// word-splitting expansions of `QD_CLAUDE_WRAPPER_FLAGS` /
+/// `QD_CODEX_WRAPPER_FLAGS`.
+fn posix_script(zmx_dir: &str, wflags: &str, cxflags: &str, shell_name: &str) -> String {
     format!(
         r#"# qd shell integration — emitted by `qd init {shell_name}`; do not edit.
 # Pin the zmx socket dir so every shell + qd agree on one control socket
@@ -194,6 +226,51 @@ claude() {{
     qd attach "$_qd_name"
   else
     command claude {wflags} "$@"
+  fi
+}}
+
+# codex wrapper: the same shape as claude's — only a bare interactive launch
+# OUTSIDE zmx routes through 'qd start --provider codex --interactive'.
+# Escape hatch: 'command codex ...'. QD_CODEX_WRAPPER_FLAGS (whitespace-split)
+# is injected on passthrough REAL launches only.
+codex() {{
+  local _qd_arg _qd_name
+  # Already inside zmx, or zmx explicitly disabled → never nest, passthrough.
+  if [ -n "$ZMX_SESSION" ] || [ -n "$CODEX_NO_ZMX" ]; then
+    command codex {cxflags} "$@"; return
+  fi
+  # Management subcommands and help/version pass straight through, unflagged.
+  # `exec`/`review`/`resume`/`fork` are deliberately ABSENT: they are real runs,
+  # so they take the wrapper flags on the passthrough below.
+  case "${{1:-}}" in
+    login|logout|mcp|mcp-server|app-server|remote-control|app|plugin|completion|update|doctor|sandbox|debug|apply|archive|unarchive|delete|features|help|--version|-V|-h|--help)
+      command codex "$@"; return ;;
+  esac
+  for _qd_arg in "$@"; do
+    case "$_qd_arg" in
+      --version|-V|-h|--help) command codex "$@"; return ;;
+    esac
+  done
+  # ANY remaining argument → the real codex. The engine's interactive codex lane
+  # launches a BARE `codex` (it accepts no passthrough argv and refuses -p), so
+  # routing an argument-carrying invocation — `codex exec ...`, `codex resume`,
+  # or a bare prompt like `codex "fix the parser"` — would silently drop it.
+  # Passing through costs only the session tracking; routing would cost the args.
+  if [ "$#" -gt 0 ]; then
+    command codex {cxflags} "$@"; return
+  fi
+  # stdout is not a TTY → passthrough.
+  if [ ! -t 1 ]; then
+    command codex {cxflags}; return
+  fi
+  # Remaining case: a bare interactive launch outside zmx → tracked session.
+  # Create detached, then attach; on failure fall back to a direct launch so
+  # `codex` is never worse than running it raw.
+  _qd_name="cx-$(date +%Y%m%d-%H%M%S)-$$"
+  if qd start "$_qd_name" --provider codex --interactive; then
+    qd attach "$_qd_name"
+  else
+    command codex {cxflags}
   fi
 }}
 "#
@@ -246,6 +323,50 @@ function claude
         qd attach $_qd_name
     else
         command claude $_qd_wflags $argv
+    end
+end
+
+# codex wrapper: the same shape as claude's — only a bare interactive launch
+# OUTSIDE zmx routes through 'qd start --provider codex --interactive'.
+# Escape hatch: 'command codex ...'.
+function codex
+    set -l _qd_wflags (string split -n ' ' -- "$QD_CODEX_WRAPPER_FLAGS")
+    if test -n "$ZMX_SESSION"; or test -n "$CODEX_NO_ZMX"
+        command codex $_qd_wflags $argv
+        return
+    end
+    if test (count $argv) -gt 0
+        # Management subcommands and help/version pass through unflagged
+        # (`exec`/`review`/`resume`/`fork` are real runs — flagged, below).
+        switch $argv[1]
+            case login logout mcp mcp-server app-server remote-control app plugin completion update doctor sandbox debug apply archive unarchive delete features help '--version' '-V' '-h' '--help'
+                command codex $argv
+                return
+        end
+        for _qd_arg in $argv
+            switch $_qd_arg
+                case '--version' '-V' '-h' '--help'
+                    command codex $argv
+                    return
+            end
+        end
+        # ANY remaining argument → the real codex. The engine's interactive codex
+        # lane launches a BARE `codex` (no passthrough argv, and -p is refused),
+        # so routing an argument-carrying invocation would silently drop it.
+        command codex $_qd_wflags $argv
+        return
+    end
+    if not isatty stdout
+        command codex $_qd_wflags
+        return
+    end
+    # Create detached, then attach; on failure fall back to a direct launch so
+    # `codex` is never worse than running it raw.
+    set -l _qd_name cx-(date +%Y%m%d-%H%M%S)-$fish_pid
+    if qd start $_qd_name --provider codex --interactive
+        qd attach $_qd_name
+    else
+        command codex $_qd_wflags
     end
 end
 "#
@@ -350,6 +471,10 @@ mod tests {
     //   3. headless (-p/--print) passthrough WITH wrapper flags,
     //   4. --version/--help passthrough WITHOUT wrapper flags,
     //   5. bakes the zmx dir as an overridable default.
+    //
+    // The codex wrapper's contract is the same, minus argv forwarding: it routes
+    // ONLY the zero-argument launch (`qd start --provider codex --interactive`
+    // takes no passthrough argv, so anything else must reach the real binary).
 
     #[test]
     fn bash_script_invariants() {
@@ -379,14 +504,61 @@ mod tests {
     }
 
     #[test]
+    fn bash_codex_wrapper_invariants() {
+        let s = init_script(Shell::Bash, "/run/user/501");
+        assert!(s.contains("codex() {"), "codex wrapper missing: {s}");
+        // Routes through the interactive codex lane, then attaches.
+        assert!(
+            s.contains(r#"if qd start "$_qd_name" --provider codex --interactive; then"#),
+            "route: {s}"
+        );
+        // ...and forwards NO argv (the lane accepts none — see the module docs).
+        assert!(
+            !s.contains(r#"--provider codex --interactive -- "$@""#),
+            "codex lane takes no passthrough argv: {s}"
+        );
+        // Any argument at all reaches the real binary instead of being dropped.
+        assert!(
+            s.contains(
+                r#"if [ "$#" -gt 0 ]; then
+    command codex $QD_CODEX_WRAPPER_FLAGS "$@""#
+            ),
+            "argument passthrough: {s}"
+        );
+        // Create-fail fallback to a direct (argument-free) codex launch.
+        assert!(
+            s.contains(
+                r#"else
+    command codex $QD_CODEX_WRAPPER_FLAGS
+  fi"#
+            ),
+            "fallback: {s}"
+        );
+        assert!(s.contains("login|logout|mcp|mcp-server|app-server"));
+        assert!(s.contains(r#"--version|-V|-h|--help) command codex "$@""#));
+        assert!(s.contains("CODEX_NO_ZMX"));
+        // `exec`/`review`/`resume`/`fork` are REAL runs — they must not sit in
+        // the unflagged management arm.
+        assert!(!s.contains("|exec|"), "exec must take wrapper flags: {s}");
+        assert!(
+            !s.contains("|resume|"),
+            "resume must take wrapper flags: {s}"
+        );
+    }
+
+    #[test]
     fn zsh_script_uses_forced_word_split() {
         let s = init_script(Shell::Zsh, "/run/user/501");
         // zsh must use ${=VAR} (no implicit word splitting in zsh).
         assert!(s.contains("${=QD_CLAUDE_WRAPPER_FLAGS}"), "{s}");
         assert!(!s.contains(" $QD_CLAUDE_WRAPPER_FLAGS "), "{s}");
+        assert!(s.contains("${=QD_CODEX_WRAPPER_FLAGS}"), "{s}");
+        assert!(!s.contains(" $QD_CODEX_WRAPPER_FLAGS "), "{s}");
         assert!(s.contains("qd attach"));
         assert!(s.contains("if qd start"));
         assert!(!s.contains("qd start --attach"));
+        assert!(s.contains("codex() {"));
+        assert!(s.contains("--provider codex --interactive"));
     }
 
     #[test]
@@ -406,6 +578,22 @@ mod tests {
     }
 
     #[test]
+    fn fish_codex_wrapper_invariants() {
+        let s = init_script(Shell::Fish, "/run/user/501");
+        assert!(s.contains("function codex"));
+        assert!(s.contains("if qd start $_qd_name --provider codex --interactive"));
+        // No argv forwarding into the codex lane; args reach the real binary.
+        assert!(
+            !s.contains("--provider codex --interactive -- $argv"),
+            "{s}"
+        );
+        assert!(s.contains("command codex $_qd_wflags $argv"), "{s}");
+        assert!(s.contains("case login logout mcp mcp-server app-server"));
+        assert!(s.contains("CODEX_NO_ZMX"));
+        assert!(s.contains("string split -n ' ' -- \"$QD_CODEX_WRAPPER_FLAGS\""));
+    }
+
+    #[test]
     fn bash_script_is_parseable_by_bash() {
         // Syntax-check the emission with a real bash if one is on PATH (skip
         // silently otherwise — unit tests must not hard-require a shell).
@@ -419,6 +607,25 @@ mod tests {
             assert!(
                 out.status.success(),
                 "bash -n rejected the emission:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn zsh_script_is_parseable_by_zsh() {
+        // The zsh emission diverges from bash's (${=VAR}), so it needs its own
+        // syntax check. Same skip-if-absent posture as the bash one.
+        let script = init_script(Shell::Zsh, "/run/user/501");
+        let out = std::process::Command::new("zsh")
+            .arg("-n")
+            .arg("-c")
+            .arg(&script)
+            .output();
+        if let Ok(out) = out {
+            assert!(
+                out.status.success(),
+                "zsh -n rejected the emission:\n{}",
                 String::from_utf8_lossy(&out.stderr)
             );
         }

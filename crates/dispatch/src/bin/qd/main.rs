@@ -241,6 +241,7 @@ fn run_adoption_relaunch(args: &[String]) -> i32 {
         provider: "claude-code".to_string(),
         entrypoint: None,
         lineage: None,
+        hosting: None,
         which_branch: SessionBranch::LiveRegistry,
     };
 

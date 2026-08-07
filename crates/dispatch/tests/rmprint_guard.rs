@@ -263,6 +263,7 @@ fn cf_argv_golden_strips_forbidden_from_env() {
         agent: None,
         model: None,
         passthrough: vec![],
+        interactive: false,
     };
     let plan = ClaudeProvider.launch_plan(&fx, &req);
 

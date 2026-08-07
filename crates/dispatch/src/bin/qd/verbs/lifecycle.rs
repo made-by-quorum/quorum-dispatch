@@ -65,15 +65,47 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
     // "no terminal to attach, drive with send:relay"), exactly like codex/acp/claude-code.
     // codex (Hosting::Daemon) IS supported but has no terminal to attach — the
     // shared LOUD redirect, NOT the wrong "unknown provider" refusal (latent fix).
-    if let Some(p) = dispatch::provider::provider_for(&session.provider) {
-        if p.hosting() == dispatch::provider::Hosting::Daemon {
-            let name = session.name.as_deref().unwrap_or(&session.session_id);
-            return AttachOutcome::Done(common::daemon_redirect(name));
+    //
+    // codex-interactive: the hosting question is asked of the ROW, not the
+    // provider id. codex now has BOTH topologies — the app-server daemon (no
+    // terminal, redirect) and the `--interactive` TUI pane (a terminal, attach) —
+    // so `row_hosting` reads the row's recorded `hosting` and only falls back to
+    // the provider's structural answer when the row does not say. Every
+    // pre-existing row is silent on it, so every pre-existing row redirects
+    // exactly as before.
+    if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
+        == Some(dispatch::provider::Hosting::Daemon)
+    {
+        // codex-interactive, use case 2: a LIVE daemon-hosted codex session CAN be
+        // attached after all — not by giving the daemon a terminal, but by opening
+        // a second client on it. `attach_codex_viewer` launches the codex TUI
+        // bound to this session's own app server (`codex --remote <endpoint>
+        // resume <thread-id>`), so a human can watch and type in the very thread
+        // an agent is driving, with nothing stopped and nothing converted.
+        //
+        // `None` means this row cannot host one (no endpoint, no thread id, or a
+        // provider with no such affordance) — those still get the honest redirect.
+        if session.provider == "codex" && matches!(session.status, SessionStatus::Idle | SessionStatus::Busy) {
+            if let Some(code) = attach_codex_viewer(session) {
+                return AttachOutcome::Done(code);
+            }
         }
+        let name = session.name.as_deref().unwrap_or(&session.session_id);
+        return AttachOutcome::Done(common::daemon_redirect(name));
     }
     // Unknown provider (not claude/opencode/codex) → refuse LOUDLY.
-    if let Some(code) = common::refuse_unknown_provider(verb, session) {
-        return AttachOutcome::Done(code);
+    //
+    // codex-interactive: SCOPED to rows whose hosting could not be resolved at
+    // all — i.e. genuinely unknown providers. A row that reached here with a
+    // resolved MuxPane hosting is a known provider hosted in a pane, and the pane
+    // handoff below is exactly the right thing for it; running the refusal
+    // unconditionally would reject an interactive codex row for being "unknown"
+    // (this helper's allow-list predates codex having a pane at all) after we just
+    // established what it is.
+    if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref()).is_none() {
+        if let Some(code) = common::refuse_unknown_provider(verb, session) {
+            return AttachOutcome::Done(code);
+        }
     }
 
     // P4DB drive-burn (C2): the drive-coupled WP-B5-i headless-observe resolver
@@ -113,6 +145,44 @@ pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
             1
         }
     })
+}
+
+/// The backend-selected create dirs (C1 D2/D3): `(canonical, legacy)`.
+///
+/// The embedded lane creates in its single qrmux dir (legacy EMPTY); the zmx lane
+/// keeps the canonical + cross-dir legacy scan (Bug-D). Extracted verbatim from
+/// `run_start` when the codex-interactive lane became a second caller — a create
+/// path that resolved these differently would create sessions the other lane's
+/// scans cannot see, which is the Bug-D class this pairing exists to prevent.
+/// `Err(code)` carries the already-printed exit code.
+fn resolve_create_dirs(
+    backend: dispatch::mux_selector::Backend,
+    home: &std::path::Path,
+    env: &RealEnv,
+) -> Result<(PathBuf, Vec<PathBuf>), i32> {
+    match backend {
+        dispatch::mux_selector::Backend::Zmx => {
+            let canonical = resolve_zmx_dir(env);
+            // PRODUCTION: scan `/tmp` AND the env-derived XDG family (independent
+            // axes; ADD-9b red-team BLOCKER 1). A14-2(c): the surviving READ scan
+            // honors QD_TEST_SCAN_ROOTS (test lanes only; production = literal /tmp).
+            let scan_roots =
+                dispatch::zmx_dir::legacy_scan_roots(env, std::path::Path::new("/tmp"));
+            let xdg = XdgFamily::from_env(env, env.uid());
+            let legacy = legacy_zmx_dirs(env.uid(), &canonical, &scan_roots, Some(&xdg));
+            Ok((canonical, legacy))
+        }
+        dispatch::mux_selector::Backend::Embedded => {
+            let canonical = match dispatch::qrmux_dir::resolve_qrmux_dir(home, env) {
+                Ok(d) => d,
+                Err(msg) => {
+                    eprintln!("qd start: {msg}");
+                    return Err(1);
+                }
+            };
+            Ok((canonical, Vec::new())) // embedded: single dir, legacy EMPTY.
+        }
+    }
 }
 
 // --- new (A2 run_new path, commands/lifecycle.ts:707-809) ---
@@ -431,6 +501,21 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // refuse loudly, naming what codex doesn't support and the working revive
     // path. (The R2 --resume refusal arm died with the flag itself — `start
     // --resume` is now an unknown option at parse.)
+    // codex-interactive: `--interactive` means "give me a TUI in a pane I can
+    // attach to". claude has always had one and codex now does too, but acp/* and
+    // pi are daemon-hosted with NO terminal to host — their harnesses speak stdio
+    // protocols to a dispatch-owned adapter, not a screen. Silently ignoring the
+    // flag would promise an attachable session and deliver a daemon, so refuse
+    // BEFORE anything is claimed or spawned and name the lane that does exist.
+    if interactive_flag && (provider_id.starts_with("acp/") || provider_id == "pi") {
+        eprintln!(
+            "qd start: --interactive is not supported with --provider {provider_id} — it is \
+             daemon-hosted and has no terminal to attach. Start it without --interactive \
+             and drive it with \"qd send {name} <text>\". (--interactive is available for \
+             claude-code and codex.)"
+        );
+        return 1;
+    }
     if provider_id == "codex" && fork_target.is_some() {
         eprintln!(
             "qd start: --fork is not supported with --provider codex — codex start \
@@ -544,6 +629,25 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     if provider_impl.id() == "pi" {
         return run_new_pi_daemon(&env, &home, &paths, &name, &cwd, prompt.clone());
     }
+    // codex-interactive: `--provider codex --interactive` takes the MUX-PANE lane
+    // instead of the app-server daemon arm below — the real `codex` TUI in a pane
+    // a human drives with `qd attach`, the claude-session shape for codex.
+    //
+    // Placed BEFORE the codex daemon arm, and gated on the EXPLICIT flag only:
+    // the driver auto-detect deliberately does NOT reach here (Pete's routing
+    // call), so a bare `qd start --provider codex` still spawns the daemon for
+    // every caller, human or agent, exactly as it does today.
+    if provider_impl.id() == "codex" && interactive_flag {
+        return run_new_codex_tui(
+            &env,
+            &home,
+            &paths,
+            &name,
+            &cwd,
+            render,
+            prompt.clone(),
+        );
+    }
     if provider_impl.hosting() == dispatch::provider::Hosting::Daemon {
         return run_new_codex_daemon(
             provider_impl,
@@ -610,28 +714,9 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         Ok(b) => b,
         Err(code) => return code,
     };
-    let (canonical, legacy) = match backend {
-        dispatch::mux_selector::Backend::Zmx => {
-            let canonical = resolve_zmx_dir(&env);
-            // PRODUCTION: scan `/tmp` AND the env-derived XDG family (independent
-            // axes; ADD-9b red-team BLOCKER 1). A14-2(c): the surviving READ scan
-            // honors QD_TEST_SCAN_ROOTS (test lanes only; production = literal /tmp).
-            let scan_roots =
-                dispatch::zmx_dir::legacy_scan_roots(&env, std::path::Path::new("/tmp"));
-            let xdg = XdgFamily::from_env(&env, env.uid());
-            let legacy = legacy_zmx_dirs(env.uid(), &canonical, &scan_roots, Some(&xdg));
-            (canonical, legacy)
-        }
-        dispatch::mux_selector::Backend::Embedded => {
-            let canonical = match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
-                Ok(d) => d,
-                Err(msg) => {
-                    eprintln!("qd start: {msg}");
-                    return 1;
-                }
-            };
-            (canonical, Vec::new()) // embedded: single dir, legacy EMPTY.
-        }
+    let (canonical, legacy) = match resolve_create_dirs(backend, &home, &env) {
+        Ok(dirs) => dirs,
+        Err(code) => return code,
     };
     // --- F1 capture + --via composition (spec §2.2 + §3.2) -------------------
     // Capture the caller's backend env (lifecycle.ts:874) via the injected Env
@@ -747,6 +832,13 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         backend_env_unset,
         qd_session_id: Some(qd_session_id.clone()),
         render,
+        // This is the claude native-TUI create path — only `StartRoute::Interactive`
+        // reaches it — so `true` is the honest answer. INERT for claude:
+        // `ClaudeProvider::launch_plan` does not read the field (claude's only
+        // launch shape is the interactive one), so the assembled cmd is
+        // byte-identical either way. It matters for codex, whose TUI and
+        // app-server lanes are different argv.
+        interactive: true,
     };
 
     let out = match create_run_new(&deps, &params) {
@@ -1255,6 +1347,465 @@ fn bind_minted_id_best_effort(
     }
 }
 
+/// codex-interactive, use case 2: the mux name hosting a HUMAN VIEWER onto a
+/// daemon-hosted session.
+///
+/// Distinct from the session's own name because a viewer is NOT the session — it
+/// is a second process looking at it, with its own lifetime.
+///
+/// `.view` rather than something unmintable: qrmux restricts pane names to
+/// `a-zA-Z0-9_-.`, so there is no separator available that a session name could
+/// not also contain. A user COULD therefore have a real session literally named
+/// `foo.view`, and reusing a pane on name alone would attach them to that instead
+/// of a viewer on `foo`. So reuse is gated on the pane's COMMAND matching our
+/// viewer argv, never on the name — see [`attach_codex_viewer`].
+pub fn viewer_pane_name(session_name: &str) -> String {
+    format!("{session_name}.view")
+}
+
+/// codex-interactive, use case 2: attach a human TUI to a LIVE daemon-hosted
+/// codex session, WITHOUT stopping or converting it.
+///
+/// THE MECHANISM (verified live against codex-cli 0.146.1). The codex TUI is
+/// itself an app-server client — `codex --remote <ws-url>` points it at an
+/// EXISTING app server instead of bootstrapping its own. qd already spawns
+/// exactly such a server per daemon session and records its address in the row's
+/// `endpoint` (`ws://127.0.0.1:<port>`, a loopback ws URL, which is the form
+/// `--remote` accepts). So the human's TUI and the agent's RPC client become two
+/// clients of ONE app server, driving ONE thread.
+///
+/// Proven end to end before this was written: an agent-side `qd send` drove a
+/// turn over RPC, then `codex --remote <endpoint> resume <thread-id>` rendered
+/// that exact exchange in a TUI; only one app-server process ever existed (ours);
+/// and the daemon row was still idle with its thread id afterwards.
+///
+/// WHY THIS BEATS STOP-AND-CONVERT. The obvious way to give a human a terminal on
+/// an agent's session is to stop the daemon and relaunch the thread as a TUI pane.
+/// That costs the agent its session and permanently changes the row's topology —
+/// a debugging action with side effects on the thing being debugged. Here nothing
+/// stops, nothing converts, and the agent keeps driving throughout.
+///
+/// THE VIEWER IS NOT A SESSION. It gets a mux pane (so it can be detached and
+/// re-attached, over SSH or from a phone, like any other qrmux pane) but NO
+/// registry row: it owns no thread, has no identity, and its death means nothing.
+/// A second `qd attach` reuses a live viewer rather than stacking another.
+///
+/// Returns `None` when this row cannot host a viewer (no endpoint or no thread
+/// id) so the caller falls back to the ordinary daemon redirect.
+pub fn attach_codex_viewer(session: &Session) -> Option<i32> {
+    let env = RealEnv;
+    let name = session.name.as_deref().filter(|n| !n.is_empty())?;
+    let thread_id = Some(session.session_id.as_str()).filter(|s| !s.is_empty())?;
+    // The endpoint lives on the registry row, not the joined Session — re-read it
+    // by pid, the same way the wait verb resolves the live channel.
+    let paths = common::paths_from_home(&env).ok()?;
+    let endpoint = session
+        .pid
+        .filter(|&p| p != 0)
+        .and_then(|pid| dispatch::registry::read_entry(&paths.sessions_dir, pid))
+        .and_then(|e| e.endpoint)
+        .filter(|s| !s.is_empty())?;
+
+    let backend = common::select_backend(&env).ok()?;
+    let (canonical, _legacy) = resolve_create_dirs(backend, &paths.home, &env).ok()?;
+    let mux = match common::build_mux(backend, &paths.home, &env) {
+        Ok(m) => m,
+        Err(code) => return Some(code),
+    };
+    let pane = viewer_pane_name(name);
+
+    // Reuse a live viewer: attaching twice should land in the same window, not
+    // stack a second TUI on the same thread.
+    //
+    // Identity is by NAME, with a guard — and it has to be, because the embedded
+    // mux cannot tell us more. qrmux's `SessionInfo` carries no command line, so
+    // `MuxSession::cmd` is synthesized EMPTY under the default backend; a
+    // "does this pane run our argv?" check would be dead code that silently never
+    // matched (and it did: it re-created every time, then failed on the taken
+    // name).
+    //
+    // THE GUARD closes the case a name check alone would get wrong. Nothing but
+    // this function creates a `<name>.view` pane, but a user COULD have started a
+    // real session literally called that — and handing them its terminal when
+    // they asked for a viewer on `<name>` would be a silent wrong-window. A real
+    // session has a live REGISTRY ROW; a viewer never does. So: pane present +
+    // no row claiming that name ⇒ ours.
+    let pane_present = mux
+        .list(&canonical)
+        .unwrap_or_default()
+        .into_iter()
+        .any(|z| z.name == pane);
+    let claimed_by_a_real_session = dispatch::registry::read_entries(&paths.sessions_dir, false)
+        .into_iter()
+        .any(|s| {
+            !s.tombstoned
+                && s.entry.name.as_deref() == Some(pane.as_str())
+                && s.entry
+                    .pid
+                    .is_some_and(|p| p != 0 && dispatch::effects::is_pid_alive(p as i32))
+        });
+    if pane_present && claimed_by_a_real_session {
+        eprintln!(
+            "qd attach: cannot open a viewer on \"{name}\" — a live session is already \
+             named \"{pane}\", which is the name a viewer needs. Rename or stop it, or \
+             attach to \"{pane}\" directly if that is what you meant."
+        );
+        return Some(1);
+    }
+    let already_live = pane_present;
+
+    if !already_live {
+        // argv = `codex --remote <ws endpoint> resume <thread-id>`. `--remote`
+        // binds the TUI to OUR app server; `resume <id>` selects the agent's
+        // thread on it (an explicit UUID bypasses codex's session picker, which
+        // by default hides non-interactive sessions — exactly the kind an agent
+        // creates).
+        let argv = vec![
+            dispatch::provider::codex::codex_bin(&env),
+            "--remote".to_string(),
+            endpoint.clone(),
+            "resume".to_string(),
+            thread_id.to_string(),
+        ];
+        let cmd = dispatch::launch::build_claude_cmd_from_argv(&argv);
+        let cwd = session
+            .cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        match mux.run_detached(&canonical, &pane, &cmd, &cwd) {
+            Ok(res) if res.status == Some(0) => {}
+            Ok(res) => {
+                eprintln!(
+                    "qd attach: could not open a viewer on \"{name}\" (exit {:?}): {}",
+                    res.status,
+                    res.stderr.trim()
+                );
+                return Some(1);
+            }
+            Err(e) => {
+                eprintln!("qd attach: could not open a viewer on \"{name}\": {e}");
+                return Some(1);
+            }
+        }
+        println!("Opened a viewer on \"{name}\" (thread {thread_id}); attaching...");
+    }
+
+    Some(match mux.attach(&canonical, &pane) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("qd attach: {e}");
+            1
+        }
+    })
+}
+
+/// codex-interactive: the shared MUX-PANE create choreography for a codex TUI —
+/// driven by `qd start --interactive` (fresh) and by the revive seam (resume).
+///
+/// WHY THIS REUSES `create::run_new` RATHER THAN COPYING THE DAEMON ARM. The
+/// mux-pane create pipeline is already provider-generic — it builds its launch
+/// command through `provider.launch_plan` and drives an injected `BootWaiter` — so
+/// hosting a codex TUI needs no new pipeline, only a different argv (via
+/// `NewParams::interactive`). Everything a pane session must get right and is easy
+/// to get wrong — the atomic name claim, the scan-under-claim, the zmx preflight,
+/// the I6 attachability verify, the socket-dir-split detection, the
+/// stale-ended-pane reap — is thereby the SAME code claude sessions have been
+/// hardened on, not a second implementation of it.
+///
+/// WHY BOOT DOES NOT WAIT FOR THE THREAD ID (measured; see `codex::tui`'s module
+/// doc for the numbers). A codex TUI opens its rollout at the FIRST INTERACTION,
+/// not at launch — a session left sitting at its composer was observed running 164
+/// seconds with nothing on disk. So session EXISTENCE and thread IDENTITY are
+/// separate events, and waiting for the second would mean blocking until a human
+/// typed. The pane, however, is usable the instant it is up, so readiness is
+/// exactly that: `create::run_new` verifies the pane is registered and ATTACHABLE
+/// (its I6 step) BEFORE it calls the boot waiter, which is why the waiter here is
+/// the trivial [`OkBootWaiter`].
+///
+/// `resume_thread` is what separates the two callers, and it decides identity:
+///   - `None` (fresh start) — argv is a bare `codex`, and the row is written with
+///     NO `sessionId`; the gather step binds one later
+///     (`join::backfill_codex_thread_ids`).
+///   - `Some(id)` (revive) — argv is `codex resume <id>` (verified against the
+///     codex CLI: a positional session UUID on the `resume` subcommand bypasses
+///     the picker and reopens that thread interactively), and the row is written
+///     WITH that id. A revived session is identified from birth: we are not
+///     discovering identity, we are carrying it forward, so no backfill and no
+///     window in which the session cannot be addressed.
+///
+/// THE ONE THING THE PIPELINE CANNOT DO FOR US is the registry row. claude writes
+/// its own (the create path merely waits for it to appear); the codex TUI knows
+/// nothing about qd, so this writes it.
+#[allow(clippy::too_many_arguments)]
+fn create_codex_tui(
+    env: &RealEnv,
+    home: &std::path::Path,
+    paths: &dispatch::paths::QdPaths,
+    name: &str,
+    cwd: &std::path::Path,
+    render: dispatch::launch::RenderMode,
+    resume_thread: Option<&str>,
+    verb: &str,
+) -> Result<CodexTuiOutcome, i32> {
+    let clock = RealClock;
+    let exec = RealExec;
+
+    // THE DISCOVERY FLOOR, sampled BEFORE anything is launched and persisted as
+    // the row's `startedAt`. On a fresh start the backfill compares it against
+    // each rollout's OWN recorded start time, so a thread that predates this
+    // session — the codex the user already had open in this repo — can never be
+    // mistaken for ours no matter how long identification takes.
+    let since_ms = clock.now_ms();
+
+    let backend = common::select_backend(env)?;
+    let (canonical, legacy) = resolve_create_dirs(backend, home, env)?;
+    let mux = common::build_mux(backend, home, env)?;
+
+    // Pre-mint the stable id: it must exist at env-bake time so the pane's env
+    // file can export QD_SESSION_ID (a `qd` run from inside the session then knows
+    // which session it is). Fail-closed, like the claude lane.
+    let ids_path = common::ids_store_path(env)?;
+    let minted = match resume_thread {
+        // A revive already knows the provider session id, so bind the stable id to
+        // it directly (the resume-path parity the claude lane uses): the row and
+        // the env agree from the first instant.
+        Some(tid) => dispatch::idstore::mint_or_get(&ids_path, tid, Some(name), &clock),
+        None => dispatch::idstore::mint_unbound(&ids_path, Some(name), &clock),
+    };
+    let qd_session_id = match minted {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("qd {verb}: could not mint a stable session id: {e}. Nothing was created.");
+            return Err(1);
+        }
+    };
+
+    let cwd_str = cwd.to_string_lossy().into_owned();
+    // Readiness IS the I6 attachability verify that runs before this waiter.
+    let boot_waiter = dispatch::create::OkBootWaiter;
+
+    let deps = NewDeps {
+        mux: mux.as_ref(),
+        exec: &exec,
+        env,
+        clock: &clock,
+        paths,
+        canonical_dir: canonical.clone(),
+        legacy_dirs: legacy,
+        boot_waiter: &boot_waiter,
+        provider: &dispatch::provider::codex::CODEX_PROVIDER,
+        backend,
+    };
+    let params = NewParams {
+        name: name.to_string(),
+        agent: None,
+        resume: resume_thread.map(str::to_string),
+        // `fork` is meaningless for codex (one thread appends to one rollout), and
+        // the codex launch_plan ignores it.
+        fork: false,
+        claude_args: vec![],
+        model: None,
+        cwd: cwd.to_path_buf(),
+        // No F1 backend-env capture on this lane: those pairs are claude-backend
+        // credentials (`--via` profiles), meaningless to codex. The env file is
+        // still written, carrying QD_SESSION_ID + the render birth property.
+        backend_env: vec![],
+        backend_env_unset: vec![],
+        qd_session_id: Some(qd_session_id.clone()),
+        render,
+        interactive: true,
+    };
+
+    // Claim → scan-under-claim → preflight → launch the pane → I6 verify. A live
+    // pane already holding this name fails HERE, loudly, which is also the guard
+    // that keeps a revive from starting a second process on one session.
+    let out = match create_run_new(&deps, &params) {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("{e}");
+            return Err(e.exit_code());
+        }
+    };
+
+    // Key the row by the LIVE pane's pid. Everything downstream — liveness,
+    // `qd stop`, the ls join — reads pid, and the pane process IS the session's
+    // process here (there is no daemon and no self-registering child).
+    let Some(pane) = mux
+        .list(&canonical)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|z| z.name == name)
+    else {
+        eprintln!(
+            "qd {verb}: codex session \"{name}\" booted but its pane vanished from {} before \
+             the registry row could be written. Nothing is tracked; retrying is safe.",
+            canonical.display()
+        );
+        return Err(1);
+    };
+
+    // The row. `hosting: "mux-pane"` is the load-bearing field — it tells attach to
+    // hand over the terminal instead of printing the daemon redirect, and stop to
+    // reap the pane instead of group-killing an app-server that was never spawned.
+    // NO endpoint (an interactive pane has no ws). On a FRESH start `sessionId` is
+    // absent, which is the honest record of the moment: codex will not disclose a
+    // thread until someone types.
+    let entry = dispatch::registry::RegistryEntry {
+        pid: Some(pane.pid as i64),
+        session_id: resume_thread.map(str::to_string),
+        cwd: Some(cwd_str),
+        started_at: Some(since_ms),
+        updated_at: Some(clock.now_ms()),
+        status: Some("idle".to_string()),
+        name: Some(name.to_string()),
+        version: None,
+        kind: None,
+        entrypoint: None,
+        backend: None,
+        spawned_by: None,
+        provider: Some("codex".to_string()),
+        endpoint: None,
+        transport: None,
+        structured_send_issued: None,
+        hosting: Some(dispatch::provider::Hosting::MuxPane.as_str().to_string()),
+    };
+    if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
+        eprintln!(
+            "qd {verb}: codex session \"{name}\" is running but its registry row could not be \
+             written ({e}), so qd cannot track it. Attach with \"qd attach {name}\" or stop \
+             the pane and retry."
+        );
+        return Err(1);
+    }
+
+    Ok(CodexTuiOutcome {
+        name: out.name,
+        zmx_name: name.to_string(),
+        socket_dir: canonical,
+        thread_id: resume_thread.map(str::to_string),
+    })
+}
+
+/// What [`create_codex_tui`] produced. `thread_id` is `None` on a fresh start (the
+/// gather step binds it later) and `Some` on a revive (carried forward).
+pub struct CodexTuiOutcome {
+    pub name: String,
+    pub zmx_name: String,
+    pub socket_dir: PathBuf,
+    pub thread_id: Option<String>,
+}
+
+/// codex-interactive: `qd start --provider codex --interactive` — a FRESH pane.
+fn run_new_codex_tui(
+    env: &RealEnv,
+    home: &std::path::Path,
+    paths: &dispatch::paths::QdPaths,
+    name: &str,
+    cwd: &std::path::Path,
+    render: dispatch::launch::RenderMode,
+    prompt: Option<String>,
+) -> i32 {
+    // A create-time prompt would have to be typed into the TUI's composer, and
+    // codex's PTY acceptance is deliberately NOT confirmable yet (the harness has
+    // no pollable busy/idle signal, so the attended-send path gates itself off
+    // rather than report a delivery it cannot verify). Claiming `-p` worked here
+    // would be exactly that unverifiable claim, so say plainly that it was not
+    // delivered — the session itself is still created.
+    if prompt.as_deref().is_some_and(|s| !s.is_empty()) {
+        eprintln!(
+            "qd start: --provider codex --interactive ignores -p at create (the codex TUI has \
+             no verifiable submit path yet). The session is created; type the prompt after \
+             \"qd attach {name}\"."
+        );
+    }
+    match create_codex_tui(env, home, paths, name, cwd, render, None, "start") {
+        Ok(out) => {
+            println!(
+                "Started codex session \"{}\" — attach with \"qd attach {name}\"",
+                out.name
+            );
+            0
+        }
+        Err(code) => code,
+    }
+}
+
+/// codex-interactive: revive a STOPPED pane-hosted codex session into the SAME
+/// thread, detached — the codex twin of [`super::resume::revive_claude`], and
+/// deliberately the same shape so `attach`'s cold arm can call either.
+///
+/// Identity is carried, not rediscovered: the row's recorded `session_id` becomes
+/// `codex resume <id>`, so the revived pane reopens that conversation and the new
+/// row is addressable immediately.
+///
+/// The old tombstone is consumed on success, so one session never leaves two rows
+/// behind (the `run_acp_resume` precedent).
+pub fn revive_codex_tui(
+    session: &Session,
+    render: dispatch::launch::RenderMode,
+    verb: &str,
+) -> Result<super::resume::ReviveHandle, i32> {
+    let env = RealEnv;
+    let name = match session.name.as_deref().filter(|n| !n.is_empty()) {
+        Some(n) => n.to_string(),
+        None => {
+            eprintln!(
+                "qd {verb}: this codex session has no name, so there is nothing to revive it \
+                 under. Start a fresh one with \"qd start <name> --provider codex --interactive\"."
+            );
+            return Err(1);
+        }
+    };
+    if session.session_id.is_empty() {
+        // It was never used, so codex never opened a thread — there is no
+        // conversation to reopen. Say so rather than launching a bare `codex` and
+        // silently handing back a DIFFERENT session under the same name.
+        eprintln!(
+            "qd {verb}: \"{name}\" was never used, so codex never opened a thread for it — \
+             there is no conversation to resume. Start a fresh session with \
+             \"qd start {name} --provider codex --interactive\"."
+        );
+        return Err(1);
+    }
+    let home = match env.var("HOME").filter(|s| !s.is_empty()) {
+        Some(h) => PathBuf::from(h),
+        None => {
+            eprintln!("qd {verb}: HOME is not set — cannot resolve the session state dir.");
+            return Err(1);
+        }
+    };
+    let paths = dispatch::paths::QdPaths::from_home(&home);
+    let cwd = session
+        .cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let out = create_codex_tui(
+        &env,
+        &home,
+        &paths,
+        &name,
+        &cwd,
+        render,
+        Some(&session.session_id),
+        verb,
+    )?;
+
+    // Consume the prior tombstone (`<old_pid>.json.tombstoned`) so one session does
+    // not leave a dangling second row. Best-effort: a missing tombstone is fine (a
+    // session stopped a different way), and the new live row is authoritative.
+    if let Some(old_pid) = session.pid.filter(|&p| p != 0) {
+        let _ = std::fs::remove_file(paths.sessions_dir.join(format!("{old_pid}.json.tombstoned")));
+    }
+
+    Ok(super::resume::ReviveHandle {
+        socket_dir: out.socket_dir,
+        zmx_name: out.zmx_name,
+    })
+}
+
 /// codex P2 W4 (codex-p2-spec §7.2): the daemon-hosted `qd new` arm. Assembles
 /// the REAL [`dispatch::create_daemon::DaemonDeps`] seams (the daemon analog of how the
 /// claude arm assembles `NewDeps`) and drives the lib-side
@@ -1592,6 +2143,7 @@ fn run_new_acp_daemon(
         // this session before its row ever existed. `None` only for a truly
         // prompt-less create.
         structured_send_issued: dispatched.then_some(true),
+        hosting: None,
     };
     if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
         spawner.kill(spawned.pid);
@@ -2427,6 +2979,7 @@ mod tests {
             provider: "claude-code".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::ColdJsonl,
         }
     }

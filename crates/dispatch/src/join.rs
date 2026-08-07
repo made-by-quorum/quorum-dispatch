@@ -341,10 +341,33 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
     let provider_class_is_acp = |e: &registry::RegistryEntry| -> bool {
         e.provider.as_deref().is_some_and(|p| p.starts_with("acp/"))
     };
+    // codex-interactive: an UNIDENTIFIED row (no sessionId yet) must key on its
+    // PID, not on the empty string.
+    //
+    // The collapse above is for one-session-many-process-generations, keyed on the
+    // identity they share. Rows with NO identity share nothing — but they would all
+    // key under `""` and keep-newest would collapse them into one, so a second
+    // interactive codex session waiting for its first input would silently
+    // disappear from `qd ls` (and from every join-derived surface) until it bound
+    // an id. Keying an id-less row by pid keeps each one distinct while leaving the
+    // identified path byte-for-byte unchanged.
+    //
+    // INERT for every pre-existing row: claude writes its own sessionId and the
+    // daemon lanes get one from `thread/start`, so an id-less registry row does not
+    // arise outside this lane. (A row with neither sessionId nor pid is degenerate;
+    // it falls back to `""` exactly as before.)
+    let dedupe_id = |e: &registry::RegistryEntry| -> String {
+        match e.session_id.as_deref().filter(|s| !s.is_empty()) {
+            Some(sid) => sid.to_string(),
+            None => match e.pid {
+                Some(pid) => format!("\u{0}unidentified-pid:{pid}"),
+                None => String::new(),
+            },
+        }
+    };
     for scanned in &inputs.registry {
         let e = &scanned.entry;
-        let sid = e.session_id.clone().unwrap_or_default();
-        let key = (sid, provider_class_is_acp(e));
+        let key = (dedupe_id(e), provider_class_is_acp(e));
         match pid_by_session_id.get(&key) {
             Some(existing) => {
                 // p.updatedAt > existing.updatedAt (missing → treated as 0).
@@ -557,6 +580,14 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             // branches below carry `None`.
             entrypoint: p.entrypoint.clone(),
             lineage: None,
+            // codex-interactive: carry the registry `hosting` onto the row (the
+            // same read-back shape as `provider`/`entrypoint`) so attach/kill/
+            // send/resume can tell a pane-hosted codex session from a
+            // daemon-hosted one. Only the LiveRegistry + Tombstoned branches have
+            // a registry row to source it; the rest carry `None`, which
+            // `provider::row_hosting` reads as "the provider's structural
+            // hosting" — the pre-codex-interactive answer for every row.
+            hosting: p.hosting.clone(),
             which_branch: SessionBranch::LiveRegistry,
         });
     }
@@ -666,6 +697,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             provider: "claude-code".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::ColdJsonl,
         });
         // Mark this id seen so a later branch (tombstoned / codex-cold) keyed on
@@ -709,6 +741,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             provider: "claude-code".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::ZmxOnly,
         });
     }
@@ -767,6 +800,13 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
                     .unwrap_or_else(|| "claude-code".to_string()),
                 entrypoint: None,
                 lineage: None,
+                // codex-interactive: a STOPPED session keeps its topology — this
+                // is the branch that makes the field worth persisting at all.
+                // `qd resume` on a tombstoned codex row must revive it into the
+                // lane it was born in, and by then every live proxy (pane, pid,
+                // socket dir) is long gone; only the captured tombstone data
+                // still knows.
+                hosting: t.data.hosting.clone(),
                 which_branch: SessionBranch::Tombstoned,
             });
         }
@@ -818,6 +858,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             provider: "codex".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::ColdJsonl,
         });
     }
@@ -879,6 +920,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             provider: "pi".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::ColdJsonl,
         });
     }
@@ -937,6 +979,7 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             provider: "opencode".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::ColdJsonl,
         });
     }
@@ -1128,7 +1171,7 @@ pub fn gather_with_dirs(
     let zmx_sessions = merge_canonical_wins(scans);
 
     // --- registry reads (live + tombstoned). ---
-    let registry = registry::read_entries(&paths.sessions_dir, false);
+    let mut registry = registry::read_entries(&paths.sessions_dir, false);
     let tombstoned = if opts.include_tombstoned {
         registry::get_tombstoned_entries(&paths.sessions_dir)
     } else {
@@ -1282,7 +1325,7 @@ pub fn gather_with_dirs(
     //     hosts) or there are no codex rows + no on-disk threads. The claude branches
     //     above are byte-untouched: this reads the codex root only. ---
     let (codex_status_for, codex_jsonl_for, codex_cold, codex_stats_for) =
-        gather_codex(env, &registry, &mut stats_cache);
+        gather_codex(env, &mut registry, &paths.sessions_dir, &mut stats_cache);
     // The codex rollout path is resolved off the codex root (NOT paths.projects_dir);
     // surface it into jsonl_path_for so the live codex row carries jsonlPath = the
     // rollout path (the per-row gather loop above resolved claude rows under
@@ -1343,6 +1386,73 @@ pub fn gather_with_dirs(
         pi_turns_for,
         pi_cold,
         opencode_cold,
+    }
+}
+
+/// codex-interactive: bind a thread id into every interactive codex row still
+/// waiting for one (a no-op in the overwhelmingly common case).
+///
+/// A row qualifies only if it is codex, MUX-PANE hosted, has no sessionId yet, is
+/// ALIVE, and knows its cwd and start time. The liveness gate is not an
+/// optimization — it is a correctness guard. A dead unidentified row (a session
+/// stopped before anyone ever typed into it) has no thread and never will, but its
+/// cwd and start time would go on matching forever; without this gate it would sit
+/// there ready to adopt the id of some unrelated codex the user starts in that
+/// directory next week.
+///
+/// Binding writes the row back to disk AND updates it in memory, so the `ls` that
+/// discovers the thread also renders it. `owned` accumulates as we go, so two rows
+/// binding in the same pass cannot claim the same thread.
+fn backfill_codex_thread_ids(
+    registry: &mut [ScannedEntry],
+    sessions_dir: &Path,
+    sessions_root: &Path,
+) {
+    use crate::provider::{codex::tui, Hosting};
+
+    let wants_id = |e: &registry::RegistryEntry| -> bool {
+        e.provider.as_deref() == Some("codex")
+            && e.session_id.as_deref().is_none_or(str::is_empty)
+            && crate::provider::row_hosting("codex", e.hosting.as_deref()) == Some(Hosting::MuxPane)
+            && e.pid.is_some_and(|p| p != 0 && crate::effects::is_pid_alive(p as i32))
+            && e.cwd.is_some()
+            && e.started_at.is_some()
+    };
+
+    // The hot-path exit: nothing to bind ⇒ no extra scan, no disk touch.
+    if !registry.iter().any(|s| wants_id(&s.entry)) {
+        return;
+    }
+
+    // Every id ANY row already claims — live AND tombstoned. Tombstones count: a
+    // stopped session still owns its thread's history, and letting a live row
+    // adopt it would silently graft one conversation onto another. This re-scan is
+    // paid only in the bind window, never on an ordinary `ls`.
+    let mut owned: HashSet<String> = registry::read_entries(sessions_dir, true)
+        .into_iter()
+        .filter_map(|s| s.entry.session_id)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    for scanned in registry.iter_mut() {
+        if !wants_id(&scanned.entry) {
+            continue;
+        }
+        let (Some(cwd), Some(started_at)) =
+            (scanned.entry.cwd.clone(), scanned.entry.started_at)
+        else {
+            continue;
+        };
+        let Some(id) = tui::backfill_thread_id(sessions_root, &cwd, started_at, &owned) else {
+            // Not yet, or ambiguous. Either way the row stays honestly
+            // unidentified and the next `ls` tries again.
+            continue;
+        };
+        scanned.entry.session_id = Some(id.clone());
+        // Best-effort persist (L8): a write failure leaves the row unidentified on
+        // disk and we simply rediscover next time — never fatal to an `ls`.
+        let _ = registry::write_entry(sessions_dir, &scanned.entry);
+        owned.insert(id);
     }
 }
 
@@ -1448,7 +1558,14 @@ fn gather_pi(registry: &[ScannedEntry]) -> (HashMap<String, SessionStatus>, Hash
 #[allow(clippy::type_complexity)]
 fn gather_codex(
     env: &dyn Env,
-    registry: &[ScannedEntry],
+    // codex-interactive: MUTABLE because this step also BINDS identity — an
+    // interactive codex row is created without a sessionId (codex discloses none
+    // until the user types) and gets one here, in memory AND on disk, so the same
+    // `ls` that discovers it also renders it identified.
+    registry: &mut [ScannedEntry],
+    // Where to persist a freshly-bound row. Only written when a bind actually
+    // happens — once per session lifetime, never on an ordinary `ls`.
+    sessions_dir: &Path,
     // lsview A1: the SHARED stats cache (provider-agnostic). The codex rollout
     // reads below route through it exactly like the claude sites — the cache holds
     // no codex-specific code; this site just injects the codex reader.
@@ -1496,6 +1613,21 @@ fn gather_codex(
     // `$CODEX_HOME/sessions` (the rollout tree root). Its PARENT is `$CODEX_HOME`,
     // which holds `state_5.sqlite`.
     let sessions_root = provider.transcript_root(&fx);
+
+    // --- codex-interactive: BIND the thread id of any interactive codex row that
+    //     does not have one yet, BEFORE the live-row loop reads ids below. ---
+    //
+    // An `--interactive` codex row is born without a sessionId: codex opens its
+    // rollout at the user's FIRST INTERACTION, not at launch (see
+    // `provider::codex::tui`), so at create time there is nothing to record. This
+    // is where that debt is paid — the same pass that already reads codex rollouts
+    // for status notices the new rollout and writes its id into the row.
+    //
+    // COST DISCIPLINE (this is the hot `qd ls` path): the whole block is behind an
+    // `any()` over rows already in hand. With no unidentified interactive row —
+    // i.e. always, except in the short window between starting such a session and
+    // typing into it — this costs one predicate per codex row and touches no disk.
+    backfill_codex_thread_ids(registry, sessions_dir, &sessions_root);
 
     // The set of live codex thread ids (so cold discovery joins live-wins).
     let mut live_codex_ids: HashSet<String> = HashSet::new();
@@ -1774,6 +1906,7 @@ mod tests {
                 endpoint: None,
                 transport: None,
                 structured_send_issued: None,
+                hosting: None,
             },
             tombstoned: false,
             degraded: Vec::new(),
@@ -1798,6 +1931,191 @@ mod tests {
             .iter()
             .find(|s| s.session_id == sid)
             .unwrap_or_else(|| panic!("no session {sid}"))
+    }
+
+    // === codex-interactive: UNIDENTIFIED rows (no sessionId yet) ===
+    //
+    // An `--interactive` codex row exists before its thread does — codex discloses
+    // no id until the user types. These pin that such a row survives the join
+    // intact, and that two of them stay DISTINCT (the dedupe keys on sessionId,
+    // and id-less rows would otherwise all collapse under "").
+
+    /// A pane-hosted codex row that has not bound a thread id yet.
+    fn unidentified_codex(pid: i64, name: &str, updated: i64) -> ScannedEntry {
+        let mut e = live(pid, "", Some(name), updated);
+        e.entry.session_id = None;
+        e.entry.provider = Some("codex".to_string());
+        e.entry.hosting = Some("mux-pane".to_string());
+        e
+    }
+
+    #[test]
+    fn an_unidentified_row_survives_the_join() {
+        let mut inputs = base_inputs();
+        inputs.registry = vec![unidentified_codex(100, "cx1", 5_000)];
+        let out = join_sessions(&inputs, JoinOpts::default());
+        assert_eq!(out.len(), 1, "the row must not be dropped for lacking an id");
+        assert_eq!(out[0].name.as_deref(), Some("cx1"));
+        assert_eq!(out[0].session_id, "", "no id yet — and that is the honest value");
+        assert_eq!(out[0].provider, "codex");
+        assert_eq!(out[0].hosting.as_deref(), Some("mux-pane"));
+    }
+
+    /// MUTATION EVIDENCE: revert the dedupe key to the bare sessionId and this
+    /// reds — both rows key under "" and keep-newest silently drops one, so a
+    /// second interactive codex session vanishes from every join-derived surface
+    /// until it happens to bind an id.
+    #[test]
+    fn two_unidentified_rows_stay_distinct() {
+        let mut inputs = base_inputs();
+        inputs.registry = vec![
+            unidentified_codex(100, "cx1", 5_000),
+            unidentified_codex(200, "cx2", 9_000),
+        ];
+        let out = join_sessions(&inputs, JoinOpts::default());
+        assert_eq!(out.len(), 2, "two id-less sessions are two sessions");
+        let mut names: Vec<&str> = out.iter().filter_map(|s| s.name.as_deref()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["cx1", "cx2"]);
+    }
+
+    /// The identified path is untouched: two rows that genuinely SHARE an id still
+    /// collapse to the newest, exactly as before.
+    #[test]
+    fn rows_sharing_a_real_id_still_collapse_to_the_newest() {
+        let mut inputs = base_inputs();
+        inputs.registry = vec![
+            live(100, "same-uuid", Some("old"), 1_000),
+            live(200, "same-uuid", Some("new"), 9_000),
+        ];
+        let out = join_sessions(&inputs, JoinOpts::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name.as_deref(), Some("new"));
+    }
+
+    // === codex-interactive: the backfill's guards ===
+
+    /// A dead unidentified row must NEVER bind. Its cwd and start time go on
+    /// matching forever, so without the liveness gate it would sit there waiting to
+    /// adopt the id of an unrelated codex the user starts in that directory later.
+    ///
+    /// MUTATION EVIDENCE: drop the `is_pid_alive` clause from `wants_id` and this
+    /// reds — the dead row binds the thread.
+    #[test]
+    fn backfill_skips_a_dead_unidentified_row() {
+        use tempfile::TempDir;
+        let sessions_dir = TempDir::new().unwrap();
+        let codex_root = TempDir::new().unwrap();
+
+        // A qualifying rollout is sitting right there, ready to be adopted.
+        let uuid = "019fc8bf-e3fa-7420-8152-66a1411442bb";
+        let day = codex_root.path().join("2026/08/06");
+        std::fs::create_dir_all(&day).unwrap();
+        let body = format!(
+            concat!(
+                "{{\"timestamp\":\"2026-08-06T21:10:00Z\",\"type\":\"session_meta\",",
+                "\"payload\":{{\"id\":\"{u}\",\"cwd\":\"/work\",",
+                "\"timestamp\":\"2026-08-06T21:09:59Z\"}}}}\n"
+            ),
+            u = uuid
+        );
+        std::fs::write(
+            day.join(format!("rollout-2026-08-06T00-00-00-{uuid}.jsonl")),
+            body,
+        )
+        .unwrap();
+
+        // pid 0 is never alive (and the guard rejects 0 explicitly).
+        let mut row = unidentified_codex(0, "cx-dead", 5_000);
+        row.entry.cwd = Some("/work".to_string());
+        row.entry.started_at = Some(0);
+        let mut registry = vec![row];
+
+        backfill_codex_thread_ids(&mut registry, sessions_dir.path(), codex_root.path());
+        assert_eq!(
+            registry[0].entry.session_id, None,
+            "a dead row must not adopt a live thread"
+        );
+    }
+
+    /// POSITIVE CONTROL for the test above: the SAME fixture with an ALIVE pid
+    /// does bind. Without this, `backfill_skips_a_dead_unidentified_row` could be
+    /// passing because the rollout never qualified at all, and the liveness gate it
+    /// claims to pin would be untested.
+    #[test]
+    fn backfill_binds_for_a_live_row_with_the_same_fixture() {
+        use tempfile::TempDir;
+        let sessions_dir = TempDir::new().unwrap();
+        let codex_root = TempDir::new().unwrap();
+        let uuid = "019fc8bf-e3fa-7420-8152-66a1411442bb";
+        let day = codex_root.path().join("2026/08/06");
+        std::fs::create_dir_all(&day).unwrap();
+        let body = format!(
+            concat!(
+                "{{\"timestamp\":\"2026-08-06T21:10:00Z\",\"type\":\"session_meta\",",
+                "\"payload\":{{\"id\":\"{u}\",\"cwd\":\"/work\",",
+                "\"timestamp\":\"2026-08-06T21:09:59Z\"}}}}\n"
+            ),
+            u = uuid
+        );
+        std::fs::write(
+            day.join(format!("rollout-2026-08-06T00-00-00-{uuid}.jsonl")),
+            body,
+        )
+        .unwrap();
+
+        // OUR pid — unquestionably alive for the duration of this test.
+        let mut row = unidentified_codex(std::process::id() as i64, "cx-live", 5_000);
+        row.entry.cwd = Some("/work".to_string());
+        row.entry.started_at = Some(0);
+        let mut registry = vec![row];
+
+        backfill_codex_thread_ids(&mut registry, sessions_dir.path(), codex_root.path());
+        assert_eq!(
+            registry[0].entry.session_id.as_deref(),
+            Some(uuid),
+            "a live unidentified row binds the qualifying thread"
+        );
+        // And it PERSISTED: the next process reads the bound row, not a fresh scan.
+        let on_disk = crate::registry::read_entry(sessions_dir.path(), std::process::id() as i64)
+            .expect("the bound row was written back");
+        assert_eq!(on_disk.session_id.as_deref(), Some(uuid));
+    }
+
+    /// The hot-path guarantee: with nothing to bind the backfill touches no disk.
+    /// Nonexistent dirs would surface any read/write attempt; returning cleanly
+    /// with the row untouched proves the early exit held.
+    #[test]
+    fn backfill_is_a_no_op_when_every_row_is_identified() {
+        let mut registry = vec![live(100, "real-uuid", Some("cx"), 5_000)];
+        registry[0].entry.provider = Some("codex".to_string());
+        registry[0].entry.hosting = Some("mux-pane".to_string());
+        backfill_codex_thread_ids(
+            &mut registry,
+            Path::new("/nonexistent-sessions-dir"),
+            Path::new("/nonexistent-codex-root"),
+        );
+        assert_eq!(
+            registry[0].entry.session_id.as_deref(),
+            Some("real-uuid"),
+            "an identified row is left exactly as it was"
+        );
+    }
+
+    /// A DAEMON-hosted codex row is not a backfill target: it got its id from
+    /// `thread/start` at create, and an id-less one is a broken row, not a pending
+    /// one. Binding a rollout to it would invent identity for the wrong topology.
+    #[test]
+    fn backfill_ignores_daemon_hosted_codex_rows() {
+        let mut registry = vec![unidentified_codex(100, "cx-daemon", 5_000)];
+        registry[0].entry.hosting = Some("daemon".to_string());
+        registry[0].entry.cwd = Some("/work".to_string());
+        backfill_codex_thread_ids(
+            &mut registry,
+            Path::new("/nonexistent-sessions-dir"),
+            Path::new("/nonexistent-codex-root"),
+        );
+        assert_eq!(registry[0].entry.session_id, None);
     }
 
     // --- parse_iso_ms ---
@@ -2402,6 +2720,7 @@ mod tests {
             provider: "claude-code".to_string(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: SessionBranch::LiveRegistry,
         }
     }

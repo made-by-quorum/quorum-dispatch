@@ -128,6 +128,7 @@ mod tests {
             provider: String::new(),
             entrypoint: None,
             lineage: None,
+            hosting: None,
             which_branch: dispatch::model::SessionBranch::LiveRegistry,
         }
     }

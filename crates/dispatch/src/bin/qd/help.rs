@@ -159,7 +159,12 @@ Options:
   --attach               Attach interactively instead of starting detached
   --interactive          Force the interactive native-TUI launch (agent-marked
                          callers must pass it: QD_SESSION_ID in the caller's env
-                         routes the auto-detect headless otherwise)
+                         routes the auto-detect headless otherwise).
+                         With --provider codex this selects a different
+                         TOPOLOGY: the codex TUI in an attachable pane
+                         (`qd attach <name>`) instead of the app-server daemon.
+                         Not supported for --provider pi / acp/* (daemon-hosted,
+                         no terminal to attach)
   --headless             Force a headless stream-json launch (override the
                          driver auto-detect)
   --json                 Emit the started session's identity as JSON on stdout:
@@ -170,7 +175,12 @@ Options:
                          means idle, not relay-reachable)
   -p, --prompt <prompt>  Send an initial prompt after the session starts
   --model <model>        Set the model before sending the prompt
-  --provider <provider>  Provider: claude-code (default) or opencode
+  --provider <provider>  Provider: claude-code (default), codex, pi,
+                         opencode (= acp/opencode), or acp/claude-code.
+                         claude-code runs in an attachable pane; codex runs an
+                         app-server daemon by default and an attachable TUI pane
+                         with --interactive; the rest are daemon-hosted (drive
+                         them with `qd send`, not `qd attach`)
   --port <port>          Port for OpenCode server (default: auto-scan 4096-4106)
   --via <name>           Route through a backends.json profile (per-session backend)
   --alt-screen           Fullscreen (alt-screen) rendering for this session
@@ -424,26 +434,34 @@ Options:
 // baked copies fossilized when the engine's CLI moved).
 pub const INIT: &str = r####"Usage: qd init [options] <shell>
 
-Print shell integration for <shell> (bash, zsh, or fish): a `claude` wrapper
-that routes a bare interactive launch into a tracked qd session, plus the
-ZMX_DIR pin. Evaluate it from your shell's rc file:
+Print shell integration for <shell> (bash, zsh, or fish): `claude` and `codex`
+wrappers that route a bare interactive launch into a tracked qd session, plus
+the ZMX_DIR pin. Evaluate it from your shell's rc file:
 
   bash   ~/.bashrc:                     eval "$(qd init bash)"
   zsh    ~/.zshrc:                      eval "$(qd init zsh)"
   fish   ~/.config/fish/conf.d/qd.fish: qd init fish | source
 
-The wrapper passes management subcommands (config, login, mcp, ...), headless
-runs (-p/--print), --version/--help, and non-TTY launches straight through to
-the real claude. Escape hatch: `command claude ...`.
+The claude wrapper passes management subcommands (config, login, mcp, ...),
+headless runs (-p/--print), --version/--help, and non-TTY launches straight
+through to the real claude. Escape hatch: `command claude ...`.
 
-Environment (read by the emitted wrapper at call time):
+The codex wrapper routes to `qd start --provider codex --interactive` and is
+narrower by design: it routes ONLY a bare `codex`, because that lane accepts no
+launch argv — so `codex exec ...`, `codex resume`, and `codex "<prompt>"` reach
+the real binary instead of losing what you typed. Escape hatch:
+`command codex ...`.
+
+Environment (read by the emitted wrappers at call time):
   QD_CLAUDE_WRAPPER_FLAGS  Extra flags (whitespace-split) injected on
                            passthrough REAL launches (headless / non-TTY /
                            inside-zmx) — never on management subcommands or
                            --version/--help. qd-routed launches take their
                            flags from the engine launcher (QD_CLAUDE_FLAGS /
                            config / defaults) instead.
-  CLAUDE_NO_ZMX            Set to disable routing entirely (always passthrough).
+  QD_CODEX_WRAPPER_FLAGS   The same, for the codex wrapper.
+  CLAUDE_NO_ZMX            Set to disable claude routing (always passthrough).
+  CODEX_NO_ZMX             Set to disable codex routing (always passthrough).
 
 Options:
   -h, --help  display help for command
@@ -513,7 +531,7 @@ Commands:
   live [options]                            Live-updating session list — type a 3-char code to attach
   info <session>                            Detailed view of a single session
   gc [options]                              Prune stale sessions and sidecars to recoverable trash
-  init <shell>                              Print shell integration (claude wrapper) — add `eval "$(qd init bash)"` to your rc file
+  init <shell>                              Print shell integration (claude + codex wrappers) — add `eval "$(qd init bash)"` to your rc file
   bootstrap                                 Set up qd's local data directory under ~/.quorum/dispatch (idempotent)
   update                                    Self-update qd via the detected install channel (Homebrew or cargo).
   ping [options] [session]                  Classify session liveness (drop-in for the legacy monitor.sh): exit 0=done 1=stuck 2=active 3=error 4=ambiguous. Use --prefix to sweep all sessions by name prefix.

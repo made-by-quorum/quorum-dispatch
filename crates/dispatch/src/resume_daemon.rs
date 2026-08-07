@@ -790,6 +790,7 @@ fn try_spawn_and_connect<'a>(
         // codex daemon argv has no claude --model surface (warranty #2 is claude-lane).
         model: None,
         passthrough: vec![],
+        interactive: false,
     };
     let plan = deps.provider.launch_plan(&fx, &req);
     let mut argv = plan.argv;
@@ -902,6 +903,7 @@ fn finish_revive(
         transport: None,
         // Child B (opencode D1): a resumed healthy row carries no send-history bit.
         structured_send_issued: None,
+        hosting: None,
     };
     if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);
@@ -1132,13 +1134,14 @@ mod tests {
         }
     }
 
-    /// codex --version sniff EXACT (the pinned 0.143.0-alpha.14 pre-release binary).
+    /// codex --version sniff EXACT (the pinned binary; re-pinned 0.143.0-alpha.14
+    /// → 0.146.1 — see doc/codex-repin-log.md).
     fn exact_exec() -> ScriptedExec {
         ScriptedExec::new().on(
             "codex",
             &["--version"],
             Some(0),
-            "codex-cli 0.143.0-alpha.14\n",
+            "codex-cli 0.146.1\n",
             "",
         )
     }

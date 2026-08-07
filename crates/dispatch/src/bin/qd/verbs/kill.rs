@@ -84,7 +84,19 @@ pub fn run(m: &ArgMatches) -> i32 {
     // zmx/mux reap (a codex row has no pane). THIN dispatch branch → the NEW
     // resume_daemon::kill_codex; RETURNS before any claude zmx/pid dual-reap. Placed
     // BEFORE refuse_unknown_provider (which would otherwise refuse "codex").
-    if session.provider == "codex" {
+    //
+    // codex-interactive: SCOPED to DAEMON-hosted codex rows. An `--interactive`
+    // codex row has no daemon at all — its pid is the mux pane — so the group-kill
+    // above is not merely unnecessary, it silently LEAKS: `cmdline_is_our_daemon`
+    // requires both `codex` and `app-server` on the cmdline, a TUI pane has no
+    // `app-server`, the guard correctly refuses to signal, and the session would
+    // be tombstoned while the pane kept running. A pane-hosted codex row falls
+    // through to the claude-shaped dual-reap below, which is the machinery that
+    // actually reaps a pane (mux kill + pid-targeted kill, loud on partial).
+    if session.provider == "codex"
+        && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
+            == Some(dispatch::provider::Hosting::Daemon)
+    {
         return run_codex_kill(&paths, session);
     }
     // scoped-ACP-CC (F3 / rider-4 kill-no-leak): an acp/* row is daemon-hosted — the
@@ -103,8 +115,16 @@ pub fn run(m: &ArgMatches) -> i32 {
         return run_pi_kill(&paths, session);
     }
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
-    if let Some(code) = common::refuse_unknown_provider("stop", session) {
-        return code;
+    //
+    // codex-interactive: scoped to rows with no resolvable hosting (the same
+    // narrowing as `attach_resolved`'s). A pane-hosted codex row has just fallen
+    // through the daemon arms on purpose, headed for the dual-reap below; this
+    // helper's allow-list predates codex having a pane, so running it
+    // unconditionally would refuse to stop a session we know exactly how to stop.
+    if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref()).is_none() {
+        if let Some(code) = common::refuse_unknown_provider("stop", session) {
+            return code;
+        }
     }
 
     // --- claude-code kill: dual-reap, PID-targeted, loud-on-partial (Bug A / I4) ---
@@ -596,15 +616,25 @@ fn run_codex_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
         &probe,
     );
 
-    // ONE unambiguous success line (the W4 kill format shape): codex rows have no zmx
-    // name, so the zmx slot is `-`. The daemon pid is the reaped identity.
+    // codex-interactive, use case 2: reap any HUMAN VIEWER pane opened on this
+    // session (`qd attach` on a live daemon row spawns `codex --remote <endpoint>
+    // …`). The viewer is not the session and holds no row, but it is a live TUI
+    // pointed at an app server we are about to kill — left behind it would sit
+    // there rendering a dead connection, and its name would block the next
+    // viewer. Best-effort: a missing pane is the normal case.
+    if let Some(vname) = session.name.as_deref() {
+        reap_viewer_pane(&RealEnv, &paths.home, vname);
+    }
+
+    // ONE unambiguous success line (the W4 kill format shape). A daemon-hosted
+    // session has no mux pane at all, so the pid IS the reaped identity.
     let reg_name = session.name.clone().unwrap_or_else(|| "-".to_string());
     if outcome.was_alive {
-        println!("killed {reg_name} (zmx -, pid {pid})");
+        println!("killed {reg_name} (daemon pid {pid})");
     } else {
         // The already-dead edge: the daemon was already gone — we tombstoned the
         // dead row (the dead-row seal). Honest about what happened.
-        println!("killed {reg_name} (zmx -, pid {pid}) [daemon already dead — tombstoned]");
+        println!("killed {reg_name} (daemon pid {pid}) [daemon already dead — tombstoned]");
     }
     0
 }
@@ -614,6 +644,41 @@ fn run_codex_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
 /// AND its bridge child together — gated on the ACP cmdline identity, then tombstones. No
 /// zmx/mux reap (an acp row has no pane). After this, `pgrep` shows ZERO adapter/bridge
 /// procs for the killed session (the no-leaked-procs proof).
+/// codex-interactive, use case 2: best-effort reap of a session's human-viewer
+/// pane (see `verbs::lifecycle::attach_codex_viewer`).
+///
+/// Silent by design at every step: a session with no viewer is the overwhelmingly
+/// common case, and a viewer that cannot be reaped must never turn a successful
+/// `qd stop` into a failure — the session itself is already down.
+fn reap_viewer_pane(env: &RealEnv, home: &Path, session_name: &str) {
+    let pane = super::lifecycle::viewer_pane_name(session_name);
+    let Ok(backend) = common::select_backend(env) else {
+        return;
+    };
+    let Ok(mux) = common::build_mux(backend, home, env) else {
+        return;
+    };
+    let dirs: Vec<PathBuf> = match backend {
+        dispatch::mux_selector::Backend::Embedded => {
+            match dispatch::qrmux_dir::resolve_qrmux_dir(home, env) {
+                Ok(d) => vec![d],
+                Err(_) => return,
+            }
+        }
+        dispatch::mux_selector::Backend::Zmx => vec![resolve_zmx_dir(env)],
+    };
+    for d in dirs {
+        if mux
+            .list(&d)
+            .unwrap_or_default()
+            .into_iter()
+            .any(|z| z.name == pane)
+        {
+            let _ = mux.kill(&d, &pane);
+        }
+    }
+}
+
 fn run_acp_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
     use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
     use dispatch::resume_daemon::kill_acp;
@@ -635,9 +700,9 @@ fn run_acp_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
 
     let reg_name = session.name.clone().unwrap_or_else(|| "-".to_string());
     if outcome.was_alive {
-        println!("killed {reg_name} (zmx -, pid {pid})");
+        println!("killed {reg_name} (daemon pid {pid})");
     } else {
-        println!("killed {reg_name} (zmx -, pid {pid}) [adapter already dead — tombstoned]");
+        println!("killed {reg_name} (daemon pid {pid}) [adapter already dead — tombstoned]");
     }
     0
 }

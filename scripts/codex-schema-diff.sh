@@ -16,6 +16,11 @@
 # canonical-differing). A byte-diff harness would always-fail = noise = a
 # dead harness; canonical-diff fails exactly on real schema change.
 #
+# RE-PIN LOG: every re-pin is recorded in ../doc/codex-repin-log.md — what
+# drifted, whether any of it touched the surface qd binds, and what the new pin
+# was verified against. Append an entry there as part of the ceremony; a bumped
+# VERSION.pin with no log entry is an unreviewed re-pin.
+#
 # Modes:
 #   (default)            full: version-pin check + jailed regenerate + diff
 #   --regen-dir DIR      compare-only: diff fixture vs DIR (no binary needed;
@@ -75,6 +80,7 @@ if [ "$RC" -ne 0 ]; then
   echo "codex-schema-diff: SCHEMA DRIFT detected (fixture vs regenerated):"
   echo "$DIFF"
   echo "codex-schema-diff: FAIL — drift requires the NAMED re-pin ceremony (spec section 5), never a silent re-mint."
+  echo "codex-schema-diff: review the drift against the surface qd binds, then append to doc/codex-repin-log.md."
   exit 1
 fi
 echo "codex-schema-diff: OK — regenerated schema is byte-identical to the committed fixture."
