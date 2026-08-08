@@ -320,8 +320,49 @@ fn report_refusal(query: &str, session: &Session, refusal: SendRefusal) -> i32 {
 }
 
 pub fn run_send_unified(m: &ArgMatches) -> i32 {
-    let query = m.get_one::<String>("session").expect("required by clap");
-    let message = m.get_one::<String>("message").expect("required by clap");
+    // qd–qf W4 — THE MODE SPLIT (before any origin-mode resolution). INBOUND mode
+    // (`--inbound-envelope`) admits a peer's already-minted envelope at the door
+    // and takes NO positionals; ORIGIN mode is the existing W3a/W3b path. The two
+    // are mutually exclusive; a mixed invocation is a SYNC arg refusal here (clap
+    // made the positionals optional so inbound can omit them — this re-imposes the
+    // per-mode requiredness, keeping origin's "requires <target> <message>"
+    // contract with a clear `refused{args}`).
+    let inbound = m.get_one::<String>("inbound-envelope");
+    let session = m.get_one::<String>("session");
+    let message_opt = m.get_one::<String>("message");
+    if let Some(path) = inbound {
+        // INBOUND mode: forbid the origin positionals + `--expires` (an inbound
+        // envelope carries its own target/body/expires_at).
+        if session.is_some() || message_opt.is_some() {
+            return Refusal::refused(
+                "args",
+                "--inbound-envelope takes the address + body from the envelope; \
+                 do not also pass <target> <message>",
+            )
+            .emit();
+        }
+        if m.get_one::<String>("expires").is_some() {
+            return Refusal::refused(
+                "args",
+                "--expires is origin-mode only; an inbound envelope carries its own expires_at",
+            )
+            .emit();
+        }
+        return run_inbound(&RealEnv, &RealUnifiedBackend, &RealWaker, path);
+    }
+
+    // ORIGIN mode: the positionals are REQUIRED (clap-optional → runtime-checked).
+    let (query, message) = match (session, message_opt) {
+        (Some(q), Some(msg)) => (q, msg),
+        _ => {
+            return Refusal::refused(
+                "args",
+                "origin send requires <target> <message> (or use --inbound-envelope <path> \
+                 to admit a peer's envelope)",
+            )
+            .emit();
+        }
+    };
 
     // qd–qf W3 part C: resolve the write-then-deliver expiry window UP FRONT so a
     // malformed `--expires` is a SYNC refusal (before any resolution / side
@@ -447,6 +488,275 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
     }
 }
 
+// ===========================================================================
+// qd–qf W4 — INBOUND MODE ("THE ONE DOOR")
+// ===========================================================================
+
+/// Resolve `target` to exactly one session for the INBOUND door, rendering the
+/// resolver's outcomes through [`Refusal`] (the door's `{class,reason}` family,
+/// exit 12) instead of the origin-mode `resolve_or_die` prints (which exit 1).
+///
+/// Same liveness-aware resolution the acting verbs use (`resolve_session_with_liveness`
+/// against the FULL, uncapped session universe with the SAME pid-aware predicate
+/// as `resolve_or_die`) — we do NOT first-match: `None` ⇒ `refused{unknown}`,
+/// `Many` ⇒ `refused{ambiguous}`, `One` ⇒ the target. The gather / list-build
+/// failure (HOME unset etc.) surfaces as its own printed exit code, wrapped so the
+/// door returns an exit not a panic.
+fn resolve_inbound_target(target: &str) -> Result<Session, Refusal> {
+    use dispatch::effects::is_pid_alive;
+    use dispatch::join::JoinOpts;
+    use dispatch::resolve::{is_live_status, resolve_session_with_liveness, Resolution};
+
+    // The SAME uncapped gather the sealed resolver runs (include_all +
+    // include_tombstoned, no preview, no cap) — a capped resolution stays
+    // unexpressible here too.
+    let opts = JoinOpts {
+        include_all: true,
+        include_tombstoned: true,
+        include_preview: false,
+        limit: None,
+    };
+    let sessions = common::all_sessions(opts).map_err(|_code| {
+        // `all_sessions` already printed the concrete cause (e.g. HOME unset). Give
+        // the door a machine-readable refusal too; the printed cause stays visible.
+        Refusal::refused(
+            "unknown",
+            format!("could not resolve inbound target \"{target}\" (session store unavailable)"),
+        )
+    })?;
+
+    // The pid-aware liveness predicate `resolve_or_die` uses (a dead-pid row whose
+    // on-disk status still says idle/busy does not count as live), so the
+    // ambiguity refinement matches the acting verbs exactly.
+    let is_alive = |s: &Session| {
+        is_live_status(s.status)
+            && match s.pid {
+                Some(p) if p != 0 => is_pid_alive(p as i32),
+                _ => true,
+            }
+    };
+
+    match resolve_session_with_liveness(target, &sessions, is_alive) {
+        Resolution::One(s) => Ok(s.clone()),
+        Resolution::None => Err(Refusal::refused(
+            "unknown",
+            format!("no session matching \"{target}\""),
+        )),
+        Resolution::Many(v) => Err(Refusal::refused(
+            "ambiguous",
+            format!("\"{target}\" matches {} sessions — refusing to guess", v.len()),
+        )),
+    }
+}
+
+/// qd–qf W4 — INBOUND MODE. Admit a peer's ALREADY-minted envelope at the door,
+/// validate it, be idempotent on its id, and (resume-and-)deliver it — WITHOUT
+/// ever appending to this host's own `log.jsonl` (my log = envelopes I
+/// ORIGINATED; the peer's envelope lives in the mirror). The witnessed terminal
+/// is stamped with `authority` = THIS host (the witness), `authored_at` copied
+/// from the envelope, `witnessed_at` = now.
+///
+/// Door order (validate cheap→expensive, side-effect-free until delivery):
+///   1. READ the envelope bytes (`<path>`, or stdin for `-`). IO error ⇒ error.
+///   2. PARSE into [`Envelope`] via serde; a parse failure / `v != 1` / a missing
+///      field ⇒ `refused{malformed}`.
+///   3. PAST-EXPIRY: `expires_at < now` ⇒ `expired{past-expiry}` (REFUSED at the
+///      door, never stamped `expired` — `expired` is a DERIVED view state, §2/§3).
+///   4. RESOLVE the envelope's `target` (via [`resolve_inbound_target`]): unknown
+///      ⇒ `refused{unknown}`, ambiguous ⇒ `refused{ambiguous}` (never first-match).
+///   5. IDEMPOTENCY: a terminal already present for `correlation_id`
+///      ([`has_terminal`]) ⇒ NO-OP SUCCESS (deliver nothing, stamp nothing, exit
+///      0). "First terminal wins" (§2).
+///   6. (Resume-and-)DELIVER: a not-live target is WOKEN first (reuse the W3b
+///      [`Waker`] wake path), then delivered; a wake that cannot succeed stamps
+///      `failed{wake}` (exit 12). NO envelope log append (contract §4).
+///   7. STAMP the witnessed terminal (`delivered` / `failed{delivery}`) via the
+///      SHARED [`deliver_then_stamp`] tail — best-effort append.
+///
+/// Seamed (deps injected — `env`/`backend`/`waker`) so the whole door is proven
+/// with mocks + a jailed store, no live carrier/revive.
+fn run_inbound(
+    env: &dyn Env,
+    backend: &dyn UnifiedBackend,
+    waker: &dyn Waker,
+    envelope_arg: &str,
+) -> i32 {
+    use dispatch::dispositions;
+    use dispatch::effects::{Clock, RealClock};
+
+    // (1) READ the envelope bytes: `-` ⇒ stdin, else the path.
+    let bytes = match read_envelope_bytes(envelope_arg) {
+        Ok(b) => b,
+        Err(e) => {
+            // An unreadable source is not a DOOR refusal (nothing to validate yet)
+            // — it is a plain IO error with a clear message + generic exit.
+            eprintln!("qd send: could not read inbound envelope from {envelope_arg} ({e}) — not admitted.");
+            return 1;
+        }
+    };
+
+    // (2) PARSE into the leaf Envelope. serde rejects a missing REQUIRED field or a
+    // type mismatch; we reject any `v != 1` EXPLICITLY (never guess a version).
+    let envelope: dispatch::dispositions::Envelope = match serde_json::from_slice(&bytes) {
+        Ok(e) => e,
+        Err(e) => {
+            return Refusal::refused(
+                "malformed",
+                format!("inbound envelope is not a valid v1 envelope: {e}"),
+            )
+            .emit();
+        }
+    };
+    if envelope.v != 1 {
+        return Refusal::refused(
+            "malformed",
+            format!("unsupported envelope version {} (this qd speaks v1)", envelope.v),
+        )
+        .emit();
+    }
+
+    let clock = RealClock;
+    let now = clock.now_ms();
+
+    // (3) PAST-EXPIRY door — a past-expiry inbound envelope is REFUSED at the door,
+    // NOT stamped `expired` (that is a DERIVED view state, never authored).
+    if envelope.expires_at < now {
+        return Refusal::expired(
+            "past-expiry",
+            format!(
+                "envelope {} expired at {} (now {})",
+                envelope.correlation_id, envelope.expires_at, now
+            ),
+        )
+        .emit();
+    }
+
+    // (4) RESOLVE the ENVELOPE's target (mis-addressed / ambiguous ⇒ named refusal).
+    let target = match resolve_inbound_target(&envelope.target) {
+        Ok(s) => s,
+        Err(refusal) => return refusal.emit(),
+    };
+
+    // The transport files honor QD_HOME (from_home_env), matching the store + the
+    // W5 reader. HOME/paths already succeeded inside `resolve_inbound_target`'s
+    // gather, so a failure here is only a fresh HOME-unset race — surface it.
+    let paths = match common::paths_from_home(env) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
+
+    // (5) IDEMPOTENCY — a terminal already present for this id ⇒ NO-OP SUCCESS
+    // (deliver nothing, stamp nothing, exit 0). Local-only by design (this qd's
+    // witnessed facts are its own authority). A read error is NOT treated as
+    // "absent" (that would risk a double delivery) — surface it as a generic
+    // failure rather than silently re-delivering.
+    match dispositions::has_terminal(&tpaths, &envelope.correlation_id) {
+        Ok(true) => {
+            eprintln!(
+                "qd send: {} already witnessed — no-op",
+                envelope.correlation_id
+            );
+            return 0;
+        }
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!(
+                "qd send: could not read the disposition ledger for idempotency ({e}) — not admitted."
+            );
+            return 1;
+        }
+    }
+
+    // (6) (resume-and-)DELIVER. The disposition WITNESS authority is THIS host (not
+    // the envelope's origin authority); `authored_at` is copied from the envelope.
+    let witness_authority = dispositions::local_authority(env);
+
+    // A not-live target is WOKEN first (reuse the W3b wake seam), then delivered;
+    // a live target is delivered directly. NO envelope log append either way.
+    if is_live(&target) {
+        let carrier = match select_carrier(&target) {
+            Ok(c) => c,
+            Err(refusal) => return report_refusal(&envelope.target, &target, refusal),
+        };
+        deliver_then_stamp(
+            &tpaths,
+            backend,
+            carrier,
+            &target,
+            &envelope.body,
+            &envelope.correlation_id,
+            envelope.authored_at,
+            &witness_authority,
+            &clock,
+        )
+    } else {
+        // Flag-less render (the `send` verb has no --alt-screen/--inline): config
+        // render-default > the inline default (exactly the origin not-live path).
+        let render = dispatch::launch::resolve_render_mode(
+            None,
+            dispatch::launch::render_default_from_config(env).as_deref(),
+        );
+        // On a wake failure, stamp `failed{wake}` against the ENVELOPE (witnessed
+        // by this host, authored_at copied) + exit 12 — the SAME contract as W3b,
+        // but with NO envelope log append.
+        let stamp_failed_wake = |refusal: Refusal| -> i32 {
+            let disp = dispatch::origin_send::build_disposition(
+                envelope.correlation_id.clone(),
+                dispatch::dispositions::StoredState::Failed,
+                envelope.authored_at,
+                clock.now_ms(),
+                witness_authority.clone(),
+                Some(refusal.class.clone()),
+            );
+            if let Err(e) = dispositions::append_disposition(&tpaths, &disp) {
+                eprintln!("WARNING: could not record the wake-failure disposition (non-fatal): {e}");
+            }
+            refusal.emit()
+        };
+        let (refreshed, carrier) = match waker.wake(&target, render) {
+            Ok(refreshed) => match select_carrier(&refreshed) {
+                Ok(carrier) => (refreshed, carrier),
+                Err(_) => {
+                    let label = refreshed
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| refreshed.session_id.clone());
+                    return stamp_failed_wake(Refusal::failed(
+                        "wake",
+                        format!("revived \"{label}\" but it has no live receive path"),
+                    ));
+                }
+            },
+            Err(refusal) => return stamp_failed_wake(refusal),
+        };
+        deliver_then_stamp(
+            &tpaths,
+            backend,
+            carrier,
+            &refreshed,
+            &envelope.body,
+            &envelope.correlation_id,
+            envelope.authored_at,
+            &witness_authority,
+            &clock,
+        )
+    }
+}
+
+/// Read the inbound envelope bytes: from STDIN when `arg == "-"`, else from the
+/// file at `arg`. A read error propagates (the caller renders it).
+fn read_envelope_bytes(arg: &str) -> std::io::Result<Vec<u8>> {
+    if arg == "-" {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        std::io::stdin().read_to_end(&mut buf)?;
+        Ok(buf)
+    } else {
+        std::fs::read(arg)
+    }
+}
+
 /// qd–qf W3 part A — the write-then-deliver + disposition-stamp wrapper around
 /// the existing unified carrier dispatch. Kept as a seamed helper (deps injected)
 /// so the log-append / terminal-stamp shape is exercised without standing up a
@@ -469,9 +779,9 @@ fn deliver_with_durability(
     message: &str,
     expires_ms: i64,
 ) -> i32 {
-    use dispatch::dispositions::{self, StoredState};
+    use dispatch::dispositions;
     use dispatch::effects::{Clock, RealClock};
-    use dispatch::origin_send::{build_disposition, build_envelope, mint_correlation_id};
+    use dispatch::origin_send::{build_envelope, mint_correlation_id};
 
     // The transport files honor QD_HOME (from_home_env), matching the store's own
     // resolution + the W5 reader — NOT the plain from_home `paths` (which is the
@@ -502,26 +812,67 @@ fn deliver_with_durability(
         return 1;
     }
 
-    // Deliver via the existing unified carrier (unchanged behavior/exit).
+    // Deliver via the existing unified carrier + stamp the witnessed terminal.
+    // (This is the LIVE path — a not-live target's resume-and-deliver /
+    // failed{wake} lives in `wake_then_deliver`.) The deliver + terminal-stamp
+    // tail is the SHARED `deliver_then_stamp` core (identical to the not-live and
+    // W4 inbound tails): exit 0 ⇒ delivered; a definitive failure ⇒
+    // failed{delivery}.
+    deliver_then_stamp(
+        &tpaths,
+        backend,
+        carrier,
+        session,
+        message,
+        &correlation_id,
+        authored_at,
+        &authority,
+        &clock,
+    )
+}
+
+/// qd–qf W3/W4 — the SHARED deliver → stamp-terminal tail (NO log append). The
+/// envelope is ALREADY durable (origin logged it; inbound never logs its own).
+/// One carrier call, then a best-effort terminal `Disposition`:
+///   - exit 0            ⇒ `delivered` (no reason),
+///   - definitive nonzero ⇒ `failed{delivery}`.
+///
+/// `witness_authority` is stamped as the disposition's `authority` (the WITNESS —
+/// this host); `authored_at` is copied verbatim (origin's mint for an origin
+/// send, the ENVELOPE's for an inbound one — a self-contained terminal, §2). Used
+/// by the origin live path, the origin resume-and-deliver path, AND W4 inbound —
+/// so the three cannot drift.
+#[allow(clippy::too_many_arguments)]
+fn deliver_then_stamp(
+    tpaths: &dispatch::paths::QdPaths,
+    backend: &dyn UnifiedBackend,
+    carrier: UnifiedCarrier,
+    session: &Session,
+    message: &str,
+    correlation_id: &str,
+    authored_at: i64,
+    witness_authority: &str,
+    clock: &dyn dispatch::effects::Clock,
+) -> i32 {
+    use dispatch::dispositions::{self, StoredState};
+    use dispatch::origin_send::build_disposition;
+
     let code = dispatch_selected(backend, carrier, session, message);
 
-    // Stamp the witnessed terminal AFTER the attempt. exit 0 ⇒ delivered; a
-    // definitive failure ⇒ failed{delivery}. (This is the LIVE path — a not-live
-    // target's resume-and-deliver / failed{wake} lives in `wake_then_deliver`.)
     let (state, reason) = if code == 0 {
         (StoredState::Delivered, None)
     } else {
         (StoredState::Failed, Some("delivery".to_string()))
     };
     let disp = build_disposition(
-        correlation_id,
+        correlation_id.to_string(),
         state,
         authored_at,
         clock.now_ms(),
-        authority,
+        witness_authority.to_string(),
         reason,
     );
-    if let Err(e) = dispositions::append_disposition(&tpaths, &disp) {
+    if let Err(e) = dispositions::append_disposition(tpaths, &disp) {
         // BEST-EFFORT: the delivery already happened; a lost disposition row must
         // NOT change the send's exit. Warn only (events.rs telemetry posture).
         eprintln!("WARNING: could not record the delivery disposition (non-fatal): {e}");
@@ -624,25 +975,19 @@ fn wake_then_deliver(
         Err(refusal) => return stamp_failed_wake(refusal),
     };
 
-    // (4) DELIVER into the refreshed row + STAMP the witnessed terminal.
-    let code = dispatch_selected(backend, carrier, &refreshed, message);
-    let (state, reason) = if code == 0 {
-        (StoredState::Delivered, None)
-    } else {
-        (StoredState::Failed, Some("delivery".to_string()))
-    };
-    let disp = build_disposition(
-        correlation_id,
-        state,
+    // (4) DELIVER into the refreshed row + STAMP the witnessed terminal (the
+    // SHARED `deliver_then_stamp` tail — identical to the live + inbound paths).
+    deliver_then_stamp(
+        &tpaths,
+        backend,
+        carrier,
+        &refreshed,
+        message,
+        &correlation_id,
         authored_at,
-        clock.now_ms(),
-        authority,
-        reason,
-    );
-    if let Err(e) = dispositions::append_disposition(&tpaths, &disp) {
-        eprintln!("WARNING: could not record the delivery disposition (non-fatal): {e}");
-    }
-    code
+        &authority,
+        &clock,
+    )
 }
 
 #[cfg(test)]

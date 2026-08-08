@@ -409,20 +409,41 @@ fn cmd_send() -> Command {
     Command::new("send")
         .about("Send a message to a session (delivery path selected automatically)")
         .override_help(help::SEND)
-        .arg(positional("session"))
+        // qd–qf W4: `<session>`/`<message>` are ORIGIN-mode positionals. They are
+        // clap-OPTIONAL (not `required(true)`) because the INBOUND mode
+        // (`--inbound-envelope`) carries the address + body inside the envelope and
+        // takes NO positionals. The two modes are validated at RUNTIME
+        // (`run_send_unified`): origin requires both positionals + forbids
+        // `--inbound-envelope`; inbound requires `--inbound-envelope` + forbids
+        // positionals. Origin-mode parsing is byte-identical to W3b when
+        // `--inbound-envelope` is absent — the runtime check re-imposes the
+        // "requires `<target> <message>`" contract with the SAME missing-arg error.
+        .arg(Arg::new("session").value_name("session"))
         // qd–qf W3: the write-then-deliver expiry policy travels with the message
         // (format doc §1 `expires_at`). Absent ⇒ the 12h default; a value is
         // `<int>` (bare = seconds) or `<int>{s|m|h|d}`. A bad form is a SYNC arg
         // refusal (see origin_send::parse_expires). Declared BEFORE the message
         // positional so `--expires` binds as an option, not swallowed as payload.
+        // ORIGIN mode only (an inbound envelope carries its own `expires_at`).
         .arg(long_val(
             "expires",
             "dur",
             "How long this send stays deliverable before it expires (e.g. 12h, 30m, 45s, 1d; bare integer = seconds; default 12h)",
         ))
+        // qd–qf W4 — INBOUND mode ("THE ONE DOOR"): admit a peer's already-minted
+        // envelope (JSON) at the door. `<path>` is a file, or `-` for stdin. When
+        // present, the `<session>`/`<message>` positionals are NOT used (the
+        // envelope carries target + body + its own correlation_id/authored_at/
+        // expires_at/authority). qd validates → idempotency-checks → delivers →
+        // stamps the disposition (it does NOT append to its own log.jsonl).
+        .arg(long_val(
+            "inbound-envelope",
+            "path",
+            "INBOUND mode: admit a peer's already-minted envelope (JSON) from <path>, or `-` for stdin. Mutually exclusive with <target> <message>.",
+        ))
         // A caller's message is opaque payload, including values such as
         // `--literal`; unified send has no transport options to reinterpret it.
-        .arg(positional("message").allow_hyphen_values(true))
+        .arg(Arg::new("message").value_name("message").allow_hyphen_values(true))
 }
 
 // --- 8. send:pty <session> <message>, commands/send.ts:52-58 ---
@@ -976,14 +997,36 @@ mod tests {
                 sm.get_one::<String>("message").map(String::as_str),
                 Some(message)
             );
+            // ORIGIN mode carries no inbound envelope.
+            assert_eq!(sm.get_one::<String>("inbound-envelope"), None);
         }
 
+        // qd–qf W4: `<session>`/`<message>` are now clap-OPTIONAL so INBOUND mode
+        // can omit them; the "origin requires both" contract is re-imposed at
+        // RUNTIME (run_send_unified) with the SAME missing-arg refusal (bin-tested
+        // in inbound_door.rs). So clap ACCEPTS the bare forms here — the mode
+        // split, not clap, decides.
         for argv in [vec!["send"], vec!["send", "sess"]] {
-            assert_eq!(
-                parse(&argv).unwrap_err().kind(),
-                ErrorKind::MissingRequiredArgument,
-                "{argv:?}"
+            assert!(
+                parse(&argv).is_ok(),
+                "{argv:?} parses (runtime enforces origin-mode requiredness)"
             );
+        }
+    }
+
+    #[test]
+    fn unified_send_inbound_envelope_parses_from_path_and_stdin_sentinel() {
+        // INBOUND mode: `--inbound-envelope <path>` binds as an option; `-` is the
+        // stdin sentinel (a legal value). The positionals may be absent.
+        for value in ["/tmp/env.json", "-"] {
+            let m = parse(&["send", "--inbound-envelope", value]).unwrap();
+            let (_, sm) = m.subcommand().unwrap();
+            assert_eq!(
+                sm.get_one::<String>("inbound-envelope").map(String::as_str),
+                Some(value)
+            );
+            assert_eq!(sm.get_one::<String>("session"), None);
+            assert_eq!(sm.get_one::<String>("message"), None);
         }
     }
 
