@@ -18,7 +18,12 @@ pub const LS: &str = r####"Usage: qd ls|list [options]
 List Claude Code sessions (use --json for scripting)
 
 Options:
-  -a, --all            Include killed sessions
+  -a, --all            Everything: all local sessions (uncapped, incl. killed)
+                       PLUS every peer host's mirror, each stamped with its
+                       staleness (now − witnessed_at). No fleet? = local only.
+  --host <host>        One peer host's session mirror (remote/<host>/ls.json),
+                       stamped with the mirror's staleness; conflicts with --all.
+                       No mirror for that host ⇒ refused{no-fleet-state}.
   --live               Live sessions only (idle/busy/shell — excludes cold and
                        killed; includes UNNAMED live rows the default view
                        hides), uncapped; conflicts with --all

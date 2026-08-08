@@ -204,6 +204,16 @@ stable column for the DuckDB projection); `reason` is omitted when absent.
 ord** — they are the live overlay. Frame registers this table fresh each
 evaluation and must **not** apply `--as-of` time-travel to it.
 
+**DuckDB consumer note (the `/dev/stdin` trap).** `qd dispositions` emits these
+records as JSONL (one object per line). When piping them into DuckDB, read with
+**`read_ndjson_auto('/dev/stdin')`** (or `read_json_auto('/dev/stdin',
+format='newline_delimited')`). Do **NOT** use bare
+`read_json_auto('/dev/stdin')`: on a pipe it cannot sample to infer the schema
+and collapses the whole stream into a single `json` column (a
+`Binder Error: … column not found`). Verified on brano (duckdb 1.5.x). This is
+the join the up-projection runs to correlate `authority`/`witnessed_at` back to
+the ledger, so the consumer form is load-bearing.
+
 ---
 
 ## 4 · `ls.json` — a host's session snapshot (published for peers, mirror-read)

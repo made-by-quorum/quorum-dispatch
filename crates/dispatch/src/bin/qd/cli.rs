@@ -82,7 +82,11 @@ fn cmd_ls() -> Command {
         .visible_alias("list")
         .about("List Claude Code sessions (use --json for scripting)")
         .override_help(help::LS)
-        .arg(flag("all", 'a', "Include killed sessions"))
+        .arg(flag(
+            "all",
+            'a',
+            "Everything: all local sessions (uncapped, incl. killed) + every peer host's mirror, each with its staleness (fleet)",
+        ))
         // B5 item 2: liveness-scoped scripting surface. Conflicts with --all at
         // parse — one liveness class per query (the start --alt-screen/--inline
         // render-flag precedent).
