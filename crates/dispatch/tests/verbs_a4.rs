@@ -280,8 +280,12 @@ fn send_default_expires_resolves_normally() {
 // use an UNKNOWN-provider row, which hits the wake path's "cannot be woken
 // headlessly" arm IMMEDIATELY (no ~40-60s live revive) — enough to prove (a) the
 // old cold/stopped/killed REFUSALS are gone (the path proceeds to a WAKE, not a
-// "resume it first" refusal) and (b) the failed{wake} contract: exit 12,
-// failed{wake} stderr, envelope logged FIRST + a failed{wake} disposition row.
+// "resume it first" refusal) and (b) the failed{wake} contract under the R8
+// event model: exit 12, failed{wake} stderr, envelope (with `origin`) logged
+// FIRST + the not-live funnel EVENT rows `attempted, queued,
+// delivery-failed{wake}` in file order (never one terminal state row), folding
+// to a summary `state=failed, last_event=delivery-failed` — NOT absorbing: a
+// later retry may still deliver.
 // The claude cold wake reaching the real revive machinery is the #[ignore]d
 // live test at the bottom (mirrors attach's cold_claude_attach test).
 // ===========================================================================
@@ -312,6 +316,7 @@ fn run_send_with_row(
     let out = Command::new(qd_bin())
         .args(args)
         .env_remove("QD_HOME") // transport files land under <home>/.quorum/dispatch
+        .env_remove("QD_HOST") // origin/witness stamp as the "local" v1 placeholder
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
         .output()
@@ -328,11 +333,43 @@ fn run_send_with_row(
     )
 }
 
+/// Parse a dispositions.jsonl body into its raw EVENT rows (R8: one typed
+/// witnessed event per line — never state records).
+fn parse_event_rows(disps: &str) -> Vec<serde_json::Value> {
+    disps
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("bad event row {l:?}: {e}")))
+        .collect()
+}
+
+/// Run `qd dispositions <args...>` against the SAME jailed HOME a
+/// `run_send_with_row` call used (so the summary view folds the rows that send
+/// just wrote). Returns (exit, stdout, stderr).
+fn run_dispositions_in(dir: &Path, args: &[&str]) -> (i32, String, String) {
+    let home = dir.join("home");
+    let mut full = vec!["dispositions"];
+    full.extend_from_slice(args);
+    let out = Command::new(qd_bin())
+        .args(&full)
+        .env_remove("QD_HOME")
+        .env_remove("QD_HOST")
+        .env("HOME", &home)
+        .output()
+        .expect("spawn qd dispositions");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// A COLD target is no longer refused with "resume it first" / "dead, use resume":
 /// the send proceeds to a WAKE. With an unwakeable (unknown-provider) row the wake
-/// fails → the failed{wake} contract: exit 12, `failed{wake}` stderr, and (because
-/// the envelope is logged BEFORE the wake) an envelope in log.jsonl joined by a
-/// failed{wake} disposition.
+/// fails → the failed{wake} contract under R8: exit 12, `failed{wake}` stderr,
+/// the envelope (carrying `origin`) logged BEFORE the wake, and the not-live
+/// FUNNEL event rows `attempted, queued, delivery-failed{wake}` in file order —
+/// folding to summary `state=failed, last_event=delivery-failed` (NOT absorbing).
 #[test]
 fn send_cold_target_wakes_and_is_not_refused_as_stopped() {
     let temp = tempfile::tempdir().unwrap();
@@ -351,15 +388,39 @@ fn send_cold_target_wakes_and_is_not_refused_as_stopped() {
         err.contains("failed{wake}"),
         "expected the failed{{wake}} render, got: {err}"
     );
-    // Envelope logged FIRST (write-then-deliver) + a failed{wake} disposition.
+    // Envelope logged FIRST (write-then-deliver), in the renamed wire shape
+    // (`origin`, never `authority`).
     assert!(
-        log.contains("mystery-cold-1") || log.contains("coldwk"),
-        "the envelope must be logged before the wake, got log.jsonl: {log:?}"
+        log.contains("coldwk") && log.contains("\"origin\":"),
+        "the envelope (with origin) must be logged before the wake, got log.jsonl: {log:?}"
     );
+    // The funnel EVENT rows, in file order: attempted, queued, then
+    // delivery-failed carrying the REQUIRED reason (the wake class).
+    let rows = parse_event_rows(&disps);
+    let kinds: Vec<&str> = rows.iter().map(|r| r["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        vec!["attempted", "queued", "delivery-failed"],
+        "the origin not-live funnel in file order, got: {disps:?}"
+    );
+    assert_eq!(rows[2]["reason"], "wake", "delivery-failed carries reason wake: {disps:?}");
     assert!(
-        disps.contains("\"state\":\"failed\"") && disps.contains("\"reason\":\"wake\""),
-        "a failed{{wake}} disposition row must be written, got dispositions.jsonl: {disps:?}"
+        rows[0].get("reason").is_none() && rows[1].get("reason").is_none(),
+        "reason FORBIDDEN on attempted/queued: {disps:?}"
     );
+
+    // The summary VIEW folds the funnel to failed (latest event delivery-failed,
+    // pre-expiry, no delivered event) — with last_event surfacing the detail.
+    let (dcode, dstdout, dstderr) = run_dispositions_in(temp.path(), &[]);
+    assert_eq!(dcode, 0, "qd dispositions exit 0 (stderr: {dstderr})");
+    let summary: serde_json::Value = serde_json::from_str(dstdout.trim())
+        .unwrap_or_else(|e| panic!("one summary row expected, got {dstdout:?} ({e})"));
+    assert_eq!(summary["state"], "failed", "summary folds to failed: {dstdout}");
+    assert_eq!(
+        summary["last_event"], "delivery-failed",
+        "last_event carries the fine grain: {dstdout}"
+    );
+    assert_eq!(summary["attempts"], 1, "one attempted event: {dstdout}");
 }
 
 /// A TOMBSTONED (killed) target is likewise no longer rejected by the send path's
@@ -382,33 +443,40 @@ fn send_tombstoned_target_wakes_and_is_not_rejected() {
     assert_eq!(code, 12, "unwakeable tombstoned target → failed{{wake}} exit 12 (stderr: {err})");
     assert!(err.contains("failed{wake}"), "expected failed{{wake}}, got: {err}");
     assert!(
-        log.contains("mystery-tomb-2") || log.contains("tombwk"),
-        "envelope logged before the wake, got log.jsonl: {log:?}"
+        log.contains("tombwk") && log.contains("\"origin\":"),
+        "envelope (with origin) logged before the wake, got log.jsonl: {log:?}"
     );
-    assert!(
-        disps.contains("\"state\":\"failed\"") && disps.contains("\"reason\":\"wake\""),
-        "failed{{wake}} disposition written, got dispositions.jsonl: {disps:?}"
+    // Same R8 funnel as the cold arm: attempted, queued, delivery-failed{wake}.
+    let rows = parse_event_rows(&disps);
+    let kinds: Vec<&str> = rows.iter().map(|r| r["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        vec!["attempted", "queued", "delivery-failed"],
+        "funnel event rows written, got dispositions.jsonl: {disps:?}"
     );
+    assert_eq!(rows[2]["reason"], "wake", "the wake-failure class, got: {disps:?}");
 }
 
 // ===========================================================================
 // qd–qf W3c: caller-supplied `--correlation-id` (the frame↔qd origin seam,
 // provider-contract §4). Frame's ledger event id rides through the flag as the
 // envelope's correlation_id; qd mints its own ULID only for BARE sends. Driven
-// through the REAL binary to a deterministic terminal: an UNWAKEABLE
+// through the REAL binary to a deterministic outcome: an UNWAKEABLE
 // (unknown-provider cold) row fails{wake} FAST, and because write-then-deliver
-// logs the envelope FIRST + stamps the failed{wake} disposition, BOTH the
-// log.jsonl envelope AND the dispositions.jsonl terminal are observable and must
-// carry the SUPPLIED id (not a minted ULID). The empty-id + inbound-conflict
-// refusals are sync (no state) and are asserted via run_qd.
+// logs the envelope FIRST + stamps the funnel events, BOTH the log.jsonl
+// envelope AND every dispositions.jsonl EVENT row are observable and must
+// carry the SUPPLIED id (not a minted ULID) — the whole funnel correlates on
+// the one origin-minted id. The empty-id + inbound-conflict refusals are sync
+// (no state) and are asserted via run_qd.
 // ===========================================================================
 
 /// `qd send --correlation-id FRAME-EVT-123 <target> <body>` — the supplied id
-/// becomes the envelope's correlation_id AND the terminal disposition's, keyed on
-/// the same id (never a minted ULID). Uses an unwakeable cold row so the path
-/// drives to a deterministic failed{wake} terminal hermetically (no live fleet).
+/// becomes the envelope's correlation_id AND rides on EVERY stamped event row
+/// of the funnel (attempted, queued, delivery-failed), keyed on the same id
+/// (never a minted ULID). Uses an unwakeable cold row so the path drives to a
+/// deterministic failed{wake} outcome hermetically (no live fleet).
 #[test]
-fn send_correlation_id_rides_into_envelope_and_disposition() {
+fn send_correlation_id_rides_into_envelope_and_every_event_row() {
     let temp = tempfile::tempdir().unwrap();
     let row = r#"{"pid":90110,"sessionId":"mystery-cid-1","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"cold","name":"cidwk","version":"0.1.0","provider":"mystery"}"#;
     let (code, _out, err, log, disps) = run_send_with_row(
@@ -418,18 +486,29 @@ fn send_correlation_id_rides_into_envelope_and_disposition() {
         row,
         &["send", "--correlation-id", "FRAME-EVT-123", "cidwk", "hi"],
     );
-    // Drives to the failed{wake} terminal (unwakeable), exit 12 — the point here is
-    // the id, not the outcome; a terminal is stamped either way.
-    assert_eq!(code, 12, "unwakeable target still reaches a terminal (stderr: {err})");
-    // The SUPPLIED id is in the log envelope AND the disposition — NOT a ULID.
+    // Drives to the failed{wake} outcome (unwakeable), exit 12 — the point here
+    // is the id, not the outcome; the funnel is stamped either way.
+    assert_eq!(code, 12, "unwakeable target still stamps its funnel (stderr: {err})");
+    // The SUPPLIED id is in the log envelope — NOT a ULID.
     assert!(
         log.contains("\"correlation_id\":\"FRAME-EVT-123\""),
         "the log envelope must carry the caller-supplied id, got log.jsonl: {log:?}"
     );
-    assert!(
-        disps.contains("\"correlation_id\":\"FRAME-EVT-123\""),
-        "the disposition must key on the SAME supplied id, got dispositions.jsonl: {disps:?}"
+    // …AND on EVERY event row of the funnel (the frame↔qd seam: frame's ledger
+    // event id correlates the whole funnel).
+    let rows = parse_event_rows(&disps);
+    let kinds: Vec<&str> = rows.iter().map(|r| r["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        vec!["attempted", "queued", "delivery-failed"],
+        "the funnel rows, got dispositions.jsonl: {disps:?}"
     );
+    for r in &rows {
+        assert_eq!(
+            r["correlation_id"], "FRAME-EVT-123",
+            "every event row keys on the SAME supplied id, got: {disps:?}"
+        );
+    }
 }
 
 /// Absent `--correlation-id` ⇒ qd mints a 26-char ULID (unchanged bare-send
@@ -538,11 +617,12 @@ fn send_cold_claude_wakes_via_real_revive_then_failed_wake() {
         err.contains("could not revive claude session"),
         "the wake ran the real claude revive (its failure surfaced), got: {err}"
     );
-    // Write-then-deliver still held: envelope logged, failed{wake} stamped.
+    // Write-then-deliver still held: envelope logged, funnel stamped through to
+    // the delivery-failed{wake} event.
     assert!(log.contains("cold-claude-4") || log.contains("coldclaudewk"), "envelope logged: {log:?}");
     assert!(
-        disps.contains("\"state\":\"failed\"") && disps.contains("\"reason\":\"wake\""),
-        "failed{{wake}} disposition written: {disps:?}"
+        disps.contains("\"event\":\"delivery-failed\"") && disps.contains("\"reason\":\"wake\""),
+        "delivery-failed{{wake}} event written: {disps:?}"
     );
 }
 
@@ -552,10 +632,10 @@ fn send_cold_claude_wakes_via_real_revive_then_failed_wake() {
 // (refused{host}), name@local ≡ bare, and origin ambiguity/unknown aligned to
 // the shared Refusal (refused{ambiguous} / refused{unknown}, exit 12, never
 // first-match). These drive the REAL binary against a jailed HOME. A foreign
-// host is set via QD_HOST so local_authority != the target host.
+// host is set via QD_HOST so local_host != the target host.
 // ===========================================================================
 
-/// Like `run_qd` but with a `QD_HOST` override, so `local_authority` (which reads
+/// Like `run_qd` but with a `QD_HOST` override, so `local_host` (which reads
 /// QD_HOST) is a known value and a `--host`/`@host` for a DIFFERENT host is
 /// genuinely foreign (single-machine box, no `remote/<h>/`).
 fn run_qd_host(dir: &Path, qd_host: &str, args: &[&str]) -> (i32, String, String) {
@@ -579,7 +659,7 @@ fn run_qd_host(dir: &Path, qd_host: &str, args: &[&str]) -> (i32, String, String
     )
 }
 
-/// `qd send alpha@brano hi` where local_authority ("thisbox") != "brano" and there
+/// `qd send alpha@brano hi` where local_host ("thisbox") != "brano" and there
 /// is no `remote/brano/` ⇒ the single-machine host-qualified refusal:
 /// refused{no-fleet-state} exit 12. Bare/local is unaffected (proven elsewhere).
 #[test]
@@ -611,12 +691,12 @@ fn send_host_flag_foreign_is_refused_no_fleet_state_exit_12() {
     assert!(err.contains("brano"), "names the host, got: {err}");
 }
 
-/// `name@local` where local == local_authority ("thisbox") is treated as THIS host
+/// `name@local` where local == local_host ("thisbox") is treated as THIS host
 /// (≡ bare): it does NOT hit the no-fleet-state refusal — it falls through to LOCAL
 /// resolution and, on an empty registry, is refused{unknown} exit 12 (the aligned
 /// local-resolution miss), never refused{no-fleet-state}.
 #[test]
-fn send_name_at_local_authority_resolves_locally_like_bare() {
+fn send_name_at_local_host_resolves_locally_like_bare() {
     let temp = tempfile::tempdir().unwrap();
     // Address host == QD_HOST ⇒ local. Empty registry ⇒ the local resolver misses.
     let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "ghost@thisbox", "hi"]);

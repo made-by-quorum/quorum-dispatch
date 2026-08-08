@@ -1,47 +1,60 @@
-//! The qd–qf transition ACCEPTANCE suite (TRANSITION §6), assembled as ONE
-//! committed integration file. Drives the REAL `qd` binary against a JAILED,
-//! empty HOME (L9a — never the real home; HOME points into a per-test tempdir,
-//! QD_HOME removed so the transport files land under `<HOME>/.quorum/dispatch`).
+//! The qd–qf transition ACCEPTANCE suite (TRANSITION §6, amended to the
+//! R8/R8a/R8b disposition-event-log model), assembled as ONE committed
+//! integration file. Drives the REAL `qd` binary against a JAILED, empty HOME
+//! (L9a — never the real home; HOME points into a per-test tempdir, QD_HOME
+//! removed so the transport files land under `<HOME>/.quorum/dispatch`).
 //!
-//! §6 acceptance bar (verbatim): "a local send round-trip showing **log row →
-//! disposition row → `qd dispositions` output → a DuckDB join over the pipe**;
-//! an inbound-mode round-trip showing **idempotence** (same payload twice → one
-//! delivery, one no-op success); a **door refusal with a named reason**
-//! (malformed payload, ambiguous target, past-expiry)."
+//! **This file IS the v1 conformance cell for the disposition transport
+//! surface** (format doc "Conformance (v1)"): the log→events→`qd dispositions`→
+//! DuckDB round-trip (via `read_ndjson_auto`), inbound-mode idempotence, and
+//! the named door refusals. The per-provider conformance battery covers the
+//! older per-session `events.jsonl` transport (`send_id`/`content_sha256`), not
+//! this `correlation_id`-keyed surface.
 //!
-//! The three demonstrations, each in its own section below:
-//!   #1 LOCAL SEND ROUND-TRIP + DuckDB JOIN (the centerpiece):
-//!      envelope (log.jsonl) → terminal (dispositions.jsonl) → `qd dispositions`
-//!      stdout → piped into DuckDB (`read_ndjson_auto('/dev/stdin')`) → the JOIN
-//!      yields the `delivered` record (correlation_id + non-null witnessed_at),
-//!      and a second envelope with no terminal + far-future expiry projects as
-//!      `pending` (witnessed_at NULL) in the same DuckDB result.
-//!   #2 INBOUND IDEMPOTENCE: `qd send --inbound-envelope <file>` TWICE → one
-//!      terminal, second is a no-op success, log.jsonl empty throughout.
+//! §6 acceptance bar, under R8 — three demonstrations, each in its own section:
+//!   #1 LOCAL SEND ROUND-TRIP + DuckDB JOIN (the centerpiece): envelope
+//!      (log.jsonl) → witnessed EVENT rows (dispositions.jsonl) →
+//!      `qd dispositions` SUMMARY stdout → piped into DuckDB
+//!      (`read_ndjson_auto('/dev/stdin')`) → the join yields the `delivered`
+//!      summary (delivered-event-exists absorbs, even past expiry) AND a
+//!      zero-events `pending` summary whose nullable columns surface as SQL
+//!      NULLs (stable columns) — plus an `--events` DuckDB read counting the
+//!      funnel by event type (the fine grain frame's analytics views project
+//!      over).
+//!      §6 PERMANENT DISCRIMINATING SCENARIO (kills "first terminal wins"):
+//!      the REAL binary's failed leg (attempted + queued +
+//!      delivery-failed{wake} rows land through the actual stamp points), then
+//!      the retry's success appended as byte-exact `attempted` + `delivered`
+//!      events for the SAME correlation_id → the summary reads `delivered`
+//!      WHILE the `delivery-failed` row still EXISTS in `--events`, and
+//!      `--events` shows the whole funnel in order.
+//!   #2 INBOUND IDEMPOTENCE keyed on a `delivered` EVENT EXISTING: the first
+//!      presentation stamps the full admission funnel (accepted → attempted →
+//!      queued → delivery-failed{wake} on an unwakeable target); after the
+//!      retry's success is recorded, replaying the SAME payload is a no-op
+//!      success ("already delivered — no-op", exit 0, NO new rows — not even
+//!      `accepted`); log.jsonl empty throughout (inbound never appends).
 //!   #3 DOOR REFUSALS with named reasons: malformed → refused{malformed};
-//!      past-expiry → expired{past-expiry}; ambiguous target → refused{ambiguous}.
+//!      past-expiry → expired{past-expiry}; ambiguous target →
+//!      refused{ambiguous}. Refusals stamp NOTHING.
 //!
 //! ── WRITE-HALF of #1 (documented choice) ──────────────────────────────────
-//! The `delivered` arm of the round-trip is seeded DETERMINISTICALLY: a byte-
-//! exact `log.jsonl` envelope + a `delivered` `dispositions.jsonl` terminal in
-//! the documented wire shape (format doc §§1–2, matching what
-//! `origin_send::build_envelope` / `build_disposition` + the
-//! `dispositions::append_*` writers emit). WHY not a live `qd send`: a real
-//! `delivered` terminal requires a LIVE receive carrier (a relay port, a joined
-//! zmx mux pane, or a codex/acp/pi daemon — see `send_unified::select_carrier`);
-//! a bare PTY session in a jailed, empty-ZMX test has none and hits
-//! `NoLiveReceivePath` (exit 1, no envelope, no terminal — pinned by
-//! `verbs_a4::send_live_unroutable_claude_is_unchanged_no_wake_no_envelope`).
-//! Standing up a live relay/mux for a committed test is heavy + flaky (the
-//! existing suites defer the live claude wake to an `#[ignore]`d test). So the
-//! `delivered` chain is seeded; the REAL binary write-then-deliver path is
-//! nonetheless exercised end-to-end into DuckDB by the
-//! `roundtrip_real_qd_send_failed_wake_terminal_flows_into_duckdb` arm below,
-//! which drives the ACTUAL `qd send` to a genuine `failed{wake}` terminal
-//! (deterministic + hermetic — an unwakeable unknown-provider row) and pipes
-//! THAT real terminal through `qd dispositions` → DuckDB. Between the two arms,
-//! every link of the §6 chain is asserted, and at least one link is proven on
-//! the real binary write path.
+//! The `delivered` arm of the round-trip is seeded DETERMINISTICALLY: byte-
+//! exact `log.jsonl` envelope + `dispositions.jsonl` EVENT rows in the
+//! documented wire shape (format doc §§1–2, the same lines the leaf crate's
+//! golden tests pin). WHY not a live `qd send`: a real `delivered` event
+//! requires a LIVE receive carrier (a relay port, a joined zmx mux pane, or a
+//! codex/acp/pi daemon — see `send_unified::select_carrier`); a bare PTY
+//! session in a jailed, empty-ZMX test has none and hits `NoLiveReceivePath`.
+//! A live-carrier delivered leg is DEFERRED TO CUTOVER per ruling R7 — the
+//! seam-level twin test in `src/bin/qd/verbs/send_unified.rs` proves the full
+//! funnel through the real stamp points. The REAL binary write path is
+//! nonetheless exercised end-to-end here by the §6 discriminating scenario
+//! below, which drives the ACTUAL `qd send` to a genuine failed{wake} funnel
+//! (deterministic + hermetic — an unwakeable unknown-provider row) before the
+//! seeded retry-success completes the fail→retry→delivered story. Between the
+//! arms, every link of the §6 chain is asserted, and the failed leg is proven
+//! on the real binary write path.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -52,7 +65,7 @@ fn qd_bin() -> &'static str {
 }
 
 /// The absolute path to the DuckDB CLI on this box (Homebrew). The round-trip
-/// test GATES on its presence: absent ⇒ skip with a loud `eprintln!` (so a CI
+/// tests GATE on its presence: absent ⇒ skip with a loud `eprintln!` (so a CI
 /// host without DuckDB does not red), present ⇒ run the join for real.
 const DUCKDB: &str = "/opt/homebrew/bin/duckdb";
 
@@ -94,25 +107,31 @@ fn jail(dir: &Path) -> Jail {
     Jail { home, sessions, zmx }
 }
 
-// --- byte-exact wire fixtures (format doc §§1–2, the emitted-record wire) ----
+// --- byte-exact wire fixtures (format doc §§1–2, matching the leaf goldens) --
 
-/// An origin `log.jsonl` envelope row in the documented key order (format doc §1:
-/// `v, correlation_id, authored_at, expires_at, target, authority, body`). This
-/// is byte-shape-identical to what `origin_send::build_envelope` +
+/// An origin `log.jsonl` envelope row in the documented key order (format doc
+/// §1: `v, correlation_id, authored_at, expires_at, target, origin, body`).
+/// Byte-shape-identical to what `origin_send::build_envelope` +
 /// `Envelope::to_jsonl_line` write on a real origin send.
 fn log_row(id: &str, authored: i64, expires: i64) -> String {
     format!(
-        r#"{{"v":1,"correlation_id":"{id}","authored_at":{authored},"expires_at":{expires},"target":"alpha@brano","authority":"brano","body":"hello over the pipe"}}"#
+        r#"{{"v":1,"correlation_id":"{id}","authored_at":{authored},"expires_at":{expires},"target":"alpha@brano","origin":"brano","body":"hello over the pipe"}}"#
     )
 }
 
-/// A `delivered` terminal `dispositions.jsonl` row (format doc §2 key order:
-/// `v, correlation_id, state, authored_at, witnessed_at, authority`; no reason
-/// for `delivered`). Byte-shape-identical to `build_disposition(.., Delivered,
-/// ..)` + `Disposition::to_jsonl_line`.
-fn disp_delivered(id: &str, authored: i64, witnessed: i64) -> String {
+/// A reason-less witnessed EVENT row (format doc §2 key order: `v,
+/// correlation_id, event, witnessed_at, witness, origin, authored_at`).
+fn ev_row(id: &str, kind: &str, witnessed: i64, witness: &str, origin: &str, authored: i64) -> String {
     format!(
-        r#"{{"v":1,"correlation_id":"{id}","state":"delivered","authored_at":{authored},"witnessed_at":{witnessed},"authority":"brano"}}"#
+        r#"{{"v":1,"correlation_id":"{id}","event":"{kind}","witnessed_at":{witnessed},"witness":"{witness}","origin":"{origin}","authored_at":{authored}}}"#
+    )
+}
+
+/// A `delivery-failed` EVENT row — the ONE type carrying `reason` (last on the
+/// wire, format doc §2).
+fn ev_failed_row(id: &str, witnessed: i64, witness: &str, origin: &str, authored: i64, reason: &str) -> String {
+    format!(
+        r#"{{"v":1,"correlation_id":"{id}","event":"delivery-failed","witnessed_at":{witnessed},"witness":"{witness}","origin":"{origin}","authored_at":{authored},"reason":"{reason}"}}"#
     )
 }
 
@@ -125,6 +144,17 @@ fn write_lines(path: &Path, lines: &[&str]) {
     std::fs::write(path, body).unwrap();
 }
 
+/// Append raw JSONL lines to an existing transport file (test-side seeding of a
+/// "later invocation's" rows — e.g. the retry's success events).
+fn append_lines(path: &Path, lines: &[&str]) {
+    let mut body = std::fs::read_to_string(path).unwrap_or_default();
+    for l in lines {
+        body.push_str(l);
+        body.push('\n');
+    }
+    std::fs::write(path, body).unwrap();
+}
+
 /// Run `qd dispositions <args...>` in the jail (QD_HOME removed) and return its
 /// raw stdout (the JSONL projection to be piped into DuckDB).
 fn qd_dispositions_stdout(home: &Path, args: &[&str]) -> (i32, String, String) {
@@ -134,6 +164,7 @@ fn qd_dispositions_stdout(home: &Path, args: &[&str]) -> (i32, String, String) {
         .args(&full)
         .env("HOME", home)
         .env_remove("QD_HOME")
+        .env_remove("QD_HOST")
         .output()
         .expect("spawn qd dispositions");
     (
@@ -164,6 +195,7 @@ fn duckdb_over_pipe(home: &Path, disp_args: &[&str], sql: &str) -> String {
         .arg(&pipeline)
         .env("HOME", home)
         .env_remove("QD_HOME")
+        .env_remove("QD_HOST")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -184,18 +216,38 @@ fn duckdb_present() -> bool {
     Path::new(DUCKDB).exists()
 }
 
+/// Parse a dispositions.jsonl body / `--events` stdout into raw event values.
+fn parse_event_rows(body: &str) -> Vec<serde_json::Value> {
+    body.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("bad event row {l:?}: {e}")))
+        .collect()
+}
+
 // ===========================================================================
 // DEMONSTRATION #1 — LOCAL SEND ROUND-TRIP + DuckDB JOIN (the centerpiece).
 //
 // The whole §6 chain, asserted link by link:
-//   log.jsonl envelope  →  dispositions.jsonl `delivered` terminal (same
-//   correlation_id)  →  `qd dispositions` stdout  →  DuckDB join over the pipe.
-// Plus a derived-state arm: a second envelope with NO terminal + far-future
-// expiry projects as `pending` (witnessed_at NULL) in the SAME DuckDB result.
+//   log.jsonl envelope  →  dispositions.jsonl EVENT funnel (same
+//   correlation_id)  →  `qd dispositions` summary stdout  →  DuckDB join over
+//   the pipe (+ an `--events` DuckDB read over the raw funnel).
 // ===========================================================================
 
+/// The reference DELIVERED summary line (byte-exact — the leaf crate's
+/// `summary_record_golden_line` golden): the fail→retry→succeed fold. The seeds
+/// below reproduce it through the REAL binary's read path. NOTE the golden's
+/// `expires_at` (2026-06) is already in the PAST at any run date ≥ 2026-08 —
+/// the summary still reads `delivered` because a delivered event EXISTING is
+/// the only absorbing state (R10 precedence: delivered > expired).
+const GOLDEN_DELIVERED_SUMMARY: &str = r#"{"v":1,"correlation_id":"01ABC","state":"delivered","attempts":2,"last_event":"delivered","last_attempt_at":1781241500200,"first_delivered_at":1781241500500,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"brano","witness":"mira"}"#;
+
+/// The reference `delivery-failed` EVENT line (byte-exact — the leaf crate's
+/// `delivery_failed_event_golden_line` golden), seeded verbatim as an
+/// orphan-event id (01DEF) so the `--events` read carries a reasoned failure.
+const GOLDEN_FAILED_EVENT: &str = r#"{"v":1,"correlation_id":"01DEF","event":"delivery-failed","witnessed_at":1781241600000,"witness":"brano","origin":"mira","authored_at":1781241499000,"reason":"wake"}"#;
+
 #[test]
-fn roundtrip_log_to_disposition_to_dispositions_to_duckdb_join() {
+fn roundtrip_log_to_events_to_summary_to_duckdb_join() {
     if !duckdb_present() {
         eprintln!(
             "SKIP roundtrip_...duckdb_join: DuckDB CLI absent at {DUCKDB} — \
@@ -211,28 +263,35 @@ fn roundtrip_log_to_disposition_to_dispositions_to_duckdb_join() {
     let root = dispatch_root(&j.home);
 
     let far_future = 8_000_000_000_000i64; // ~year 2223 — always > now.
-    let authored = 1_700_000_000_000i64;
-    let witnessed = 1_700_000_000_500i64;
-    let delivered_id = "01DELIVEREDROUNDTRIPAAAAAA";
-    let pending_id = "01PENDINGNOTERMINALAAAAAAA";
+    let authored = 1_781_241_499_000i64; // the golden's origin timeline.
+    let delivered_id = "01ABC";
+    let pending_id = "01PENDINGNOEVENTSAAAAAAAAA";
 
     // WRITE HALF (seeded, byte-exact — see the module doc for why not a live
-    // send): the DELIVERED envelope + its matching `delivered` terminal, and a
-    // second PENDING envelope with a far-future expiry and NO terminal.
+    // send): the DELIVERED envelope + its fail→retry→succeed EVENT funnel
+    // (witnessed by "mira", origin "brano" — matching the golden summary), a
+    // PENDING envelope with far-future expiry and NO events, and the reference
+    // orphan delivery-failed event (01DEF) verbatim.
     write_lines(
         &root.join("log.jsonl"),
         &[
-            &log_row(delivered_id, authored, far_future),
+            &log_row(delivered_id, authored, 1_781_284_700_000),
             &log_row(pending_id, authored, far_future),
         ],
     );
     write_lines(
         &root.join("dispositions.jsonl"),
-        &[&disp_delivered(delivered_id, authored, witnessed)],
+        &[
+            &ev_row(delivered_id, "attempted", 1_781_241_500_100, "mira", "brano", authored),
+            &ev_failed_row(delivered_id, 1_781_241_500_150, "mira", "brano", authored, "delivery"),
+            &ev_row(delivered_id, "attempted", 1_781_241_500_200, "mira", "brano", authored),
+            &ev_row(delivered_id, "delivered", 1_781_241_500_500, "mira", "brano", authored),
+            GOLDEN_FAILED_EVENT,
+        ],
     );
 
-    // LINK 1 — the on-disk transport carries the envelope + the matching terminal
-    // (same correlation_id). This is the "log row → disposition row" leg.
+    // LINK 1 — the on-disk transport carries the envelope + the matching EVENT
+    // funnel (same correlation_id). This is the "log row → event rows" leg.
     let log_body = std::fs::read_to_string(root.join("log.jsonl")).unwrap();
     let disp_body = std::fs::read_to_string(root.join("dispositions.jsonl")).unwrap();
     assert!(
@@ -240,34 +299,46 @@ fn roundtrip_log_to_disposition_to_dispositions_to_duckdb_join() {
         "log.jsonl carries the delivered envelope, got: {log_body:?}"
     );
     assert!(
-        disp_body.contains(delivered_id) && disp_body.contains("\"state\":\"delivered\""),
-        "dispositions.jsonl carries the matching `delivered` terminal for the SAME id, got: {disp_body:?}"
+        disp_body.contains(delivered_id) && disp_body.contains("\"event\":\"delivered\""),
+        "dispositions.jsonl carries the delivered EVENT for the SAME id, got: {disp_body:?}"
     );
 
-    // LINK 2 — `qd dispositions` PROJECTS both into the emitted-record JSONL: the
-    // delivered terminal (witnessed_at set) + the derived `pending` (no terminal,
-    // far-future expiry ⇒ witnessed_at null). This is the "→ `qd dispositions`
-    // output" leg.
+    // LINK 2 — `qd dispositions` FOLDS the funnel into the emitted summary: the
+    // delivered id's line is BYTE-EXACTLY the published golden (delivered
+    // absorbs both the earlier failure AND the passed expiry), and the
+    // zero-events envelope derives `pending` with paired-null last_event/witness
+    // (R11.1 — stable columns as JSON null, never skipped).
     let (code, stdout, stderr) = qd_dispositions_stdout(&j.home, &[]);
     assert_eq!(code, 0, "qd dispositions exit 0 (stderr: {stderr})");
-    assert!(
-        stdout.lines().any(|l| l.contains(delivered_id) && l.contains("\"delivered\"")),
-        "qd dispositions emits the delivered record, got: {stdout}"
+    let delivered_line = stdout
+        .lines()
+        .find(|l| l.contains("\"correlation_id\":\"01ABC\""))
+        .unwrap_or_else(|| panic!("delivered summary emitted: {stdout}"));
+    assert_eq!(
+        delivered_line, GOLDEN_DELIVERED_SUMMARY,
+        "the emitted summary is byte-exactly the published golden"
     );
+    let pending_line = stdout
+        .lines()
+        .find(|l| l.contains(pending_id))
+        .unwrap_or_else(|| panic!("pending summary emitted: {stdout}"));
     assert!(
-        stdout.lines().any(|l| l.contains(pending_id) && l.contains("\"pending\"")),
-        "qd dispositions derives the pending record (silence pre-expiry), got: {stdout}"
+        pending_line.contains("\"state\":\"pending\"")
+            && pending_line.contains("\"last_event\":null")
+            && pending_line.contains("\"witness\":null"),
+        "zero-events pending summary carries paired-null stable columns, got: {pending_line}"
     );
 
-    // LINK 3 — the DuckDB JOIN over the pipe: qd's stdout → DuckDB
-    // `read_ndjson_auto('/dev/stdin')`. Assert the DELIVERED record with the right
-    // correlation_id + a NON-NULL witnessed_at.
+    // LINK 3 — the DuckDB JOIN over the pipe (summary mode): qd's stdout →
+    // DuckDB `read_ndjson_auto('/dev/stdin')`. The DELIVERED summary row with
+    // the folded analytics; the PENDING row with SQL NULLs in the stable
+    // nullable columns.
     let delivered_json = duckdb_over_pipe(
         &j.home,
         &[],
-        "SELECT correlation_id, state, witnessed_at \
+        "SELECT correlation_id, state, attempts, last_event, first_delivered_at, witness \
          FROM read_ndjson_auto('/dev/stdin') \
-         WHERE state = 'delivered' AND witnessed_at IS NOT NULL",
+         WHERE state = 'delivered'",
     );
     let delivered: serde_json::Value =
         serde_json::from_str(&delivered_json).expect("DuckDB -json emits a JSON array");
@@ -275,66 +346,104 @@ fn roundtrip_log_to_disposition_to_dispositions_to_duckdb_join() {
     assert_eq!(
         delivered_rows.len(),
         1,
-        "exactly one delivered record joins over the pipe, got: {delivered_json}"
+        "exactly one delivered summary joins over the pipe, got: {delivered_json}"
     );
+    assert_eq!(delivered_rows[0]["correlation_id"], "01ABC", "{delivered_json}");
+    assert_eq!(delivered_rows[0]["attempts"], 2, "two attempts folded: {delivered_json}");
+    assert_eq!(delivered_rows[0]["last_event"], "delivered", "{delivered_json}");
     assert_eq!(
-        delivered_rows[0]["correlation_id"], delivered_id,
-        "the joined delivered record carries the right correlation_id: {delivered_json}"
+        delivered_rows[0]["first_delivered_at"], 1_781_241_500_500i64,
+        "first_delivered_at carried through: {delivered_json}"
     );
-    assert_eq!(
-        delivered_rows[0]["state"], "delivered",
-        "state column is delivered: {delivered_json}"
-    );
-    assert_eq!(
-        delivered_rows[0]["witnessed_at"], witnessed,
-        "witnessed_at is the stamped terminal time (non-null): {delivered_json}"
-    );
+    assert_eq!(delivered_rows[0]["witness"], "mira", "{delivered_json}");
 
-    // DERIVED-STATE arm — the SAME pipeline surfaces the `pending` record with a
-    // NULL witnessed_at (silence-pre-expiry, view-computed, never a stored row).
+    // The zero-events pending summary: last_event/witness/last_attempt_at/
+    // first_delivered_at surface as SQL NULLs (stable DuckDB columns).
     let pending_json = duckdb_over_pipe(
         &j.home,
         &[],
-        "SELECT correlation_id, state, witnessed_at \
-         FROM read_ndjson_auto('/dev/stdin') \
-         WHERE correlation_id = '01PENDINGNOTERMINALAAAAAAA'",
+        &format!(
+            "SELECT correlation_id, state, attempts, last_event, last_attempt_at, \
+                    first_delivered_at, witness \
+             FROM read_ndjson_auto('/dev/stdin') \
+             WHERE correlation_id = '{pending_id}'"
+        ),
     );
     let pending: serde_json::Value =
         serde_json::from_str(&pending_json).expect("DuckDB -json emits a JSON array");
     let pending_rows = pending.as_array().expect("array");
     assert_eq!(pending_rows.len(), 1, "the pending record is present: {pending_json}");
     assert_eq!(pending_rows[0]["state"], "pending", "derived pending: {pending_json}");
+    assert_eq!(pending_rows[0]["attempts"], 0, "{pending_json}");
+    for null_col in ["last_event", "last_attempt_at", "first_delivered_at", "witness"] {
+        assert_eq!(
+            pending_rows[0][null_col],
+            serde_json::Value::Null,
+            "zero-events ⇒ {null_col} is SQL NULL in the DuckDB result: {pending_json}"
+        );
+    }
+
+    // LINK 4 — the `--events` DuckDB read: the raw funnel is the fine grain
+    // frame's analytics views project over. Count-by-event-type over the piped
+    // funnel, and `reason` non-null EXACTLY on the delivery-failed rows.
+    let counts_json = duckdb_over_pipe(
+        &j.home,
+        &["--events"],
+        "SELECT event, count(*)::INT AS n \
+         FROM read_ndjson_auto('/dev/stdin') \
+         GROUP BY event ORDER BY event",
+    );
+    let counts: serde_json::Value = serde_json::from_str(&counts_json).expect("json array");
     assert_eq!(
-        pending_rows[0]["witnessed_at"],
-        serde_json::Value::Null,
-        "pending has NO witness → witnessed_at is SQL NULL in the DuckDB result: {pending_json}"
+        counts,
+        serde_json::json!([
+            {"event": "attempted", "n": 2},
+            {"event": "delivered", "n": 1},
+            {"event": "delivery-failed", "n": 2}
+        ]),
+        "count-by-event-type over the piped funnel: {counts_json}"
+    );
+    let reasons_json = duckdb_over_pipe(
+        &j.home,
+        &["--events"],
+        "SELECT count(*)::INT AS reasoned, \
+                (count(*) FILTER (WHERE event = 'delivery-failed'))::INT AS failed \
+         FROM read_ndjson_auto('/dev/stdin') WHERE reason IS NOT NULL",
+    );
+    let reasons: serde_json::Value = serde_json::from_str(&reasons_json).expect("json array");
+    assert_eq!(
+        reasons[0]["reasoned"], 2,
+        "reason present exactly on the delivery-failed rows: {reasons_json}"
+    );
+    assert_eq!(
+        reasons[0]["reasoned"], reasons[0]["failed"],
+        "every reasoned row IS a delivery-failed row: {reasons_json}"
     );
 }
 
-/// The write-half proven on the REAL binary, into DuckDB. Drives the ACTUAL
-/// `qd send` origin path to a GENUINE terminal (a `failed{wake}` — an unwakeable
-/// unknown-provider row: deterministic + hermetic, the same fast path
-/// `verbs_a4::send_cold_target_wakes_and_is_not_refused_as_stopped` uses), then
-/// pipes that real, binary-written terminal through `qd dispositions` → DuckDB.
-/// This closes the "seeded delivered" gap: at least one arm of the centerpiece
-/// exercises the genuine write-then-deliver code path (envelope appended to
-/// log.jsonl BEFORE the attempt + a terminal appended after) end-to-end into the
-/// DuckDB join.
+/// THE §6 PERMANENT DISCRIMINATING SCENARIO (TRANSITION §6 amended) — the
+/// assertion that kills "first terminal wins".
+///
+/// The REAL binary drives the failed leg: `qd send` to an unwakeable
+/// (unknown-provider cold) row lands the genuine funnel — envelope logged
+/// first, then `attempted` + `queued` + `delivery-failed{wake}` EVENT rows
+/// through the actual stamp points. Then the retry's success is appended as
+/// byte-exact `attempted` + `delivered` events for the SAME correlation_id (a
+/// live-carrier delivered leg is deferred to cutover per ruling R7 — the
+/// seam-level twin in `send_unified.rs` proves the full funnel through the
+/// real stamp points). Assert: the summary reads `delivered` WHILE the
+/// `delivery-failed` row still EXISTS in `--events`, and `--events` replays
+/// the whole funnel in order.
 #[test]
-fn roundtrip_real_qd_send_failed_wake_terminal_flows_into_duckdb() {
-    if !duckdb_present() {
-        eprintln!("SKIP roundtrip_real_qd_send_...duckdb: DuckDB CLI absent at {DUCKDB}.");
-        return;
-    }
-
+fn sec6_failed_then_retry_summary_delivered_while_failure_row_persists() {
     let temp = tempfile::tempdir().unwrap();
     let j = jail(temp.path());
+    let root = dispatch_root(&j.home);
 
-    // An UNWAKEABLE cold target: a live-registry row with an unknown provider.
+    // An UNWAKEABLE cold target: a registry row with an unknown provider.
     // `qd send` ACCEPTS it (resume-and-deliver), attempts the wake, the wake
-    // fails immediately (no headless revive for an unknown provider) → a REAL
-    // failed{wake} terminal is written, WITHOUT a live carrier. The envelope is
-    // logged FIRST (write-then-deliver).
+    // fails immediately (no headless revive for an unknown provider) → the REAL
+    // failed leg lands, without a live carrier.
     let row = r#"{"pid":90099,"sessionId":"mystery-cold-acc","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"cold","name":"accwk","version":"0.1.0","provider":"mystery"}"#;
     std::fs::write(j.sessions.join("90099.json"), row).unwrap();
 
@@ -343,59 +452,113 @@ fn roundtrip_real_qd_send_failed_wake_terminal_flows_into_duckdb() {
         .args(["send", "accwk", "please ack"])
         .env("HOME", &j.home)
         .env_remove("QD_HOME")
+        .env_remove("QD_HOST")
         .env("ZMX_DIR", &j.zmx)
         .output()
         .expect("spawn qd send");
     let code = out.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(code, 12, "unwakeable cold target → real failed{{wake}} exit 12 (stderr: {stderr})");
-    assert!(stderr.contains("failed{wake}"), "the real send stamped failed{{wake}}: {stderr}");
+    assert!(stderr.contains("failed{wake}"), "the real send failed{{wake}}: {stderr}");
 
-    // The REAL binary wrote an envelope into log.jsonl (write-then-deliver) + a
-    // `failed` terminal (reason wake) into dispositions.jsonl.
-    let root = dispatch_root(&j.home);
+    // The REAL binary wrote the envelope (write-then-deliver, with `origin`) +
+    // the funnel EVENT rows attempted, queued, delivery-failed{wake}.
     let log_body = std::fs::read_to_string(root.join("log.jsonl")).unwrap_or_default();
     let disp_body = std::fs::read_to_string(root.join("dispositions.jsonl")).unwrap_or_default();
-    assert!(
-        log_body.contains("mystery-cold-acc") || log_body.contains("accwk"),
-        "the real send logged the envelope BEFORE the wake, got log.jsonl: {log_body:?}"
-    );
-    assert!(
-        disp_body.contains("\"state\":\"failed\"") && disp_body.contains("\"reason\":\"wake\""),
-        "the real send wrote a failed{{wake}} terminal, got dispositions.jsonl: {disp_body:?}"
-    );
-
-    // Pull the real correlation_id out of the envelope the binary minted (a 26-char
-    // ULID) so the DuckDB assertion keys on the ACTUAL id qd wrote, not a fixture.
     let env_val: serde_json::Value = serde_json::from_str(log_body.lines().next().unwrap())
         .expect("the logged envelope is valid JSON");
+    assert!(env_val["origin"].is_string(), "the envelope carries `origin`: {log_body:?}");
     let real_id = env_val["correlation_id"].as_str().expect("correlation_id string").to_string();
+    let authored = env_val["authored_at"].as_i64().expect("authored_at i64");
+    let witness = env_val["origin"].as_str().unwrap().to_string(); // origin send: witness == origin host
+    let failed_leg = parse_event_rows(&disp_body);
+    let kinds: Vec<&str> = failed_leg.iter().map(|r| r["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        vec!["attempted", "queued", "delivery-failed"],
+        "the REAL failed leg landed through the actual stamp points: {disp_body:?}"
+    );
+    assert_eq!(failed_leg[2]["reason"], "wake", "{disp_body:?}");
+    assert!(failed_leg.iter().all(|r| r["correlation_id"] == real_id.as_str()));
 
-    // The §6 round-trip on the REAL terminal: `qd dispositions` → DuckDB join.
-    // Assert the failed record (state=failed, reason=wake, non-null witnessed_at)
-    // for the id qd actually minted.
-    let failed_json = duckdb_over_pipe(
-        &j.home,
-        &[],
-        &format!(
-            "SELECT correlation_id, state, reason, witnessed_at \
-             FROM read_ndjson_auto('/dev/stdin') \
-             WHERE correlation_id = '{real_id}'"
-        ),
+    // The RETRY's success, appended as byte-exact events for the SAME id (the
+    // deferred live-carrier leg — R7): a fresh `attempted`, then `delivered`.
+    let t_retry = now_ms() + 1_000;
+    let t_landed = now_ms() + 2_000;
+    append_lines(
+        &root.join("dispositions.jsonl"),
+        &[
+            &ev_row(&real_id, "attempted", t_retry, &witness, &witness, authored),
+            &ev_row(&real_id, "delivered", t_landed, &witness, &witness, authored),
+        ],
     );
-    let failed: serde_json::Value = serde_json::from_str(&failed_json).expect("json array");
-    let rows = failed.as_array().expect("array");
-    assert_eq!(rows.len(), 1, "the real terminal joins over the pipe: {failed_json}");
-    assert_eq!(rows[0]["state"], "failed", "the real terminal is failed: {failed_json}");
-    assert_eq!(rows[0]["reason"], "wake", "carrying reason wake: {failed_json}");
+
+    // ── THE DISCRIMINATING ASSERTION PAIR ────────────────────────────────────
+    // (a) The summary VIEW resolves `delivered` (a delivered event EXISTS — the
+    //     only absorbing state) with both attempts folded in…
+    let (scode, sstdout, sstderr) = qd_dispositions_stdout(&j.home, &[&real_id]);
+    assert_eq!(scode, 0, "summary exit 0 (stderr: {sstderr})");
+    let summary: serde_json::Value = serde_json::from_str(sstdout.trim())
+        .unwrap_or_else(|e| panic!("one summary row for {real_id}, got {sstdout:?} ({e})"));
+    assert_eq!(
+        summary["state"], "delivered",
+        "summary = delivered DESPITE the earlier delivery-failed row (first-terminal-wins is DEAD): {sstdout}"
+    );
+    assert_eq!(summary["attempts"], 2, "both attempts folded: {sstdout}");
+    assert_eq!(summary["last_event"], "delivered", "{sstdout}");
+    assert_eq!(summary["last_attempt_at"], t_retry, "{sstdout}");
+    assert_eq!(summary["first_delivered_at"], t_landed, "{sstdout}");
+    // (b) …WHILE the delivery-failed row still EXISTS in the raw `--events`
+    //     funnel — history is never rewritten, and the whole funnel reads in
+    //     file order.
+    let (ecode, estdout, estderr) = qd_dispositions_stdout(&j.home, &["--events", &real_id]);
+    assert_eq!(ecode, 0, "--events exit 0 (stderr: {estderr})");
+    let funnel = parse_event_rows(&estdout);
+    let funnel_kinds: Vec<&str> = funnel.iter().map(|r| r["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        funnel_kinds,
+        vec!["attempted", "queued", "delivery-failed", "attempted", "delivered"],
+        "--events shows the WHOLE funnel in order: {estdout}"
+    );
     assert!(
-        rows[0]["witnessed_at"].is_i64(),
-        "a witnessed terminal has a non-null witnessed_at: {failed_json}"
+        funnel.iter().any(|r| r["event"] == "delivery-failed" && r["reason"] == "wake"),
+        "the delivery-failed{{wake}} row EXISTS alongside the delivered summary: {estdout}"
     );
+
+    // The same pair over the DuckDB pipe (the §6 join on the REAL binary's
+    // write path), when DuckDB is present.
+    if duckdb_present() {
+        let sjson = duckdb_over_pipe(
+            &j.home,
+            &[],
+            &format!(
+                "SELECT state, attempts FROM read_ndjson_auto('/dev/stdin') \
+                 WHERE correlation_id = '{real_id}'"
+            ),
+        );
+        let s: serde_json::Value = serde_json::from_str(&sjson).expect("json array");
+        assert_eq!(s[0]["state"], "delivered", "DuckDB sees the delivered summary: {sjson}");
+        assert_eq!(s[0]["attempts"], 2, "{sjson}");
+        let ejson = duckdb_over_pipe(
+            &j.home,
+            &["--events"],
+            &format!(
+                "SELECT count(*)::INT AS n FROM read_ndjson_auto('/dev/stdin') \
+                 WHERE correlation_id = '{real_id}' AND event = 'delivery-failed'"
+            ),
+        );
+        let e: serde_json::Value = serde_json::from_str(&ejson).expect("json array");
+        assert_eq!(
+            e[0]["n"], 1,
+            "DuckDB sees the persisted delivery-failed row over --events: {ejson}"
+        );
+    } else {
+        eprintln!("SKIP (DuckDB leg only) sec6_...: DuckDB CLI absent at {DUCKDB}.");
+    }
 }
 
 /// The non-DuckDB links of the #1 chain, always run (no DuckDB gate) so the
-/// log→disposition→`qd dispositions` legs are covered even on a host without
+/// log→events→`qd dispositions` legs are covered even on a host without
 /// DuckDB. (The DuckDB leg itself is `roundtrip_..._duckdb_join` above.)
 #[test]
 fn roundtrip_chain_links_without_duckdb() {
@@ -403,11 +566,15 @@ fn roundtrip_chain_links_without_duckdb() {
     let j = jail(temp.path());
     let root = dispatch_root(&j.home);
     let far_future = 8_000_000_000_000i64;
+    let authored = 1_700_000_000_000i64;
     let id = "01CHAINLINKSNODUCKDBAAAAAA";
-    write_lines(&root.join("log.jsonl"), &[&log_row(id, 1_700_000_000_000, far_future)]);
+    write_lines(&root.join("log.jsonl"), &[&log_row(id, authored, far_future)]);
     write_lines(
         &root.join("dispositions.jsonl"),
-        &[&disp_delivered(id, 1_700_000_000_000, 1_700_000_000_500)],
+        &[
+            &ev_row(id, "attempted", 1_700_000_000_400, "brano", "brano", authored),
+            &ev_row(id, "delivered", 1_700_000_000_500, "brano", "brano", authored),
+        ],
     );
 
     let (code, stdout, stderr) = qd_dispositions_stdout(&j.home, &[id]);
@@ -415,41 +582,41 @@ fn roundtrip_chain_links_without_duckdb() {
     let rec: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("the point-query record is one JSON line");
     assert_eq!(rec["correlation_id"], id);
-    assert_eq!(rec["state"], "delivered", "log⟕disposition projects delivered");
-    assert_eq!(rec["witnessed_at"], 1_700_000_000_500i64, "witnessed terminal time carried through");
+    assert_eq!(rec["state"], "delivered", "log ∪ events folds to delivered");
+    assert_eq!(rec["first_delivered_at"], 1_700_000_000_500i64, "delivered witness time carried");
+    assert_eq!(rec["witness"], "brano", "witness of the last_event pick");
+    assert_eq!(rec["last_event"], "delivered");
 }
 
 // ===========================================================================
-// DEMONSTRATION #2 — INBOUND IDEMPOTENCE (same payload twice → one delivery,
-// one no-op success; dispositions.jsonl EXACTLY ONE terminal; log.jsonl EMPTY).
-//
-// The canonical §6 idempotence assertion in one place. Mirrors
-// inbound_mode.rs's approach: an origin-minted envelope FILE admitted at the
-// inbound door twice. The target is an UNWAKEABLE cold row so the FIRST inbound
-// wakes → fails → stamps exactly ONE `failed{wake}` TERMINAL without a live
-// carrier (fast, hermetic); the SECOND inbound of the SAME id hits the
-// idempotency key (a terminal is already present) → no-op success exit 0. That
-// the terminal is `failed{wake}` not `delivered` is immaterial to idempotence:
-// ANY terminal for the id wins (format doc §2 "First terminal wins"). Inbound
-// NEVER appends to its own log.jsonl (a peer's envelope lives in the mirror).
+// DEMONSTRATION #2 — INBOUND IDEMPOTENCE keyed on a `delivered` EVENT EXISTING
+// (R8). The first presentation of the payload is ADMITTED and stamps the full
+// funnel (accepted → attempted → queued → delivery-failed{wake} on an
+// unwakeable target — fast, hermetic, real stamp points); after the retry's
+// success is recorded, replaying the SAME payload is a NO-OP SUCCESS with NO
+// new rows (not even `accepted`). Inbound NEVER appends to its own log.jsonl
+// (a peer's envelope lives in the mirror). NOTE the R8 shift: a
+// delivery-failed row alone would NOT no-op the replay (pinned in
+// inbound_mode.rs `inbound_prior_delivery_failed_event_does_not_block_readmission`);
+// only the delivered event does.
 // ===========================================================================
 
 #[test]
-fn inbound_same_payload_twice_is_one_delivery_one_noop_never_logs() {
+fn inbound_replay_after_delivered_event_is_a_noop_and_never_logs() {
     let temp = tempfile::tempdir().unwrap();
     let j = jail(temp.path());
     let root = dispatch_root(&j.home);
 
-    // Unwakeable cold target: resolves (sole name match), wake fails → one
-    // failed{wake} terminal on the FIRST inbound.
+    // Unwakeable cold target: resolves (sole name match), wake fails → the
+    // admission funnel lands on the FIRST inbound.
     let row = r#"{"pid":92002,"sessionId":"inbound-acc-cold","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"cold","name":"accinbwk","version":"0.1.0","provider":"mystery"}"#;
     std::fs::write(j.sessions.join("92002.json"), row).unwrap();
 
     let cid = "01ACCEPTIDEMPOTENCEAAAAAAA";
+    let authored = now_ms();
     let envelope = format!(
-        r#"{{"v":1,"correlation_id":"{cid}","authored_at":{a},"expires_at":{e},"target":"accinbwk","authority":"peerhost","body":"idempotent payload"}}"#,
-        a = now_ms(),
-        e = now_ms() + 3_600_000,
+        r#"{{"v":1,"correlation_id":"{cid}","authored_at":{authored},"expires_at":{e},"target":"accinbwk","origin":"peerhost","body":"idempotent payload"}}"#,
+        e = authored + 3_600_000,
     );
     let env_path = j.home.join("acc-inbound.json");
     std::fs::write(&env_path, &envelope).unwrap();
@@ -459,6 +626,7 @@ fn inbound_same_payload_twice_is_one_delivery_one_noop_never_logs() {
             .args(["send", "--inbound-envelope", env_path.to_str().unwrap()])
             .env("HOME", home)
             .env_remove("QD_HOME")
+            .env_remove("QD_HOST")
             .env("ZMX_DIR", &j.zmx)
             .output()
             .expect("spawn qd send --inbound-envelope");
@@ -468,32 +636,56 @@ fn inbound_same_payload_twice_is_one_delivery_one_noop_never_logs() {
         )
     };
 
-    // FIRST inbound: wakes, fails, stamps EXACTLY ONE failed{wake} terminal.
+    // FIRST inbound: ADMITTED — the full funnel lands (accepted, attempted,
+    // queued, delivery-failed{wake}), exit 12, log.jsonl untouched.
     let (code1, err1) = run_inbound(&j.home);
     assert_eq!(code1, 12, "first inbound (unwakeable) → failed{{wake}} exit 12 (stderr: {err1})");
-    assert!(err1.contains("failed{wake}"), "first inbound stamped a terminal, got: {err1}");
+    assert!(err1.contains("failed{wake}"), "first inbound outcome, got: {err1}");
 
     let disps1 = std::fs::read_to_string(root.join("dispositions.jsonl")).unwrap_or_default();
     let log1 = std::fs::read_to_string(root.join("log.jsonl")).unwrap_or_default();
-    let terminals1 = disps1.lines().filter(|l| l.contains(cid)).count();
-    assert_eq!(terminals1, 1, "exactly ONE terminal after the first delivery, got: {disps1:?}");
+    let rows1 = parse_event_rows(&disps1);
+    let kinds1: Vec<&str> = rows1.iter().map(|r| r["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds1,
+        vec!["accepted", "attempted", "queued", "delivery-failed"],
+        "the inbound admission funnel after the first delivery attempt, got: {disps1:?}"
+    );
+    assert!(rows1.iter().all(|r| r["correlation_id"] == cid));
     assert!(log1.is_empty(), "INBOUND never appends to its own log.jsonl, got: {log1:?}");
 
-    // SECOND inbound of the SAME payload: the idempotency key (a terminal already
-    // present for this id) ⇒ NO-OP SUCCESS. No second delivery, no second
-    // terminal, log still empty.
+    // The RETRY's success is recorded (byte-exact, the deferred live-carrier
+    // leg — R7): attempted + delivered, witnessed by THIS host ("local"),
+    // origin the PEER's ("peerhost"), authored_at copied from the envelope.
+    append_lines(
+        &root.join("dispositions.jsonl"),
+        &[
+            &ev_row(cid, "attempted", now_ms() + 1_000, "local", "peerhost", authored),
+            &ev_row(cid, "delivered", now_ms() + 2_000, "local", "peerhost", authored),
+        ],
+    );
+    let before_replay = std::fs::read_to_string(root.join("dispositions.jsonl")).unwrap();
+
+    // REPLAY of the SAME payload: the delivered event EXISTS ⇒ NO-OP SUCCESS.
+    // No re-delivery, NO new rows (not even a fresh `accepted`), log still empty.
     let (code2, err2) = run_inbound(&j.home);
-    assert_eq!(code2, 0, "second inbound of the same id → no-op SUCCESS exit 0 (stderr: {err2})");
+    assert_eq!(code2, 0, "replay after delivered → no-op SUCCESS exit 0 (stderr: {err2})");
     assert!(
-        err2.contains(cid) && (err2.contains("no-op") || err2.contains("already")),
-        "the no-op prints a brief already-witnessed note, got: {err2}"
+        err2.contains(cid) && err2.contains("already delivered — no-op"),
+        "the no-op names the id + the delivered fact, got: {err2}"
     );
 
     let disps2 = std::fs::read_to_string(root.join("dispositions.jsonl")).unwrap_or_default();
     let log2 = std::fs::read_to_string(root.join("log.jsonl")).unwrap_or_default();
-    let terminals2 = disps2.lines().filter(|l| l.contains(cid)).count();
-    assert_eq!(terminals2, 1, "STILL exactly one terminal after the no-op (no second stamp), got: {disps2:?}");
-    assert_eq!(disps1, disps2, "the no-op appends NOTHING to dispositions.jsonl (byte-unchanged)");
+    assert_eq!(
+        disps2, before_replay,
+        "the no-op appends NOTHING to dispositions.jsonl (byte-unchanged)"
+    );
+    let accepted_count = parse_event_rows(&disps2)
+        .iter()
+        .filter(|r| r["event"] == "accepted")
+        .count();
+    assert_eq!(accepted_count, 1, "no fresh accepted row on the replay, got: {disps2:?}");
     assert!(log2.is_empty(), "log.jsonl still empty after the no-op, got: {log2:?}");
 }
 
@@ -501,6 +693,7 @@ fn inbound_same_payload_twice_is_one_delivery_one_noop_never_logs() {
 // DEMONSTRATION #3 — DOOR REFUSALS WITH NAMED REASONS (exact
 // `qd send: <family>{<class>}:` stderr + exit 12). One canonical place for the
 // §6 named-refusal bar: malformed payload, past-expiry, ambiguous target.
+// Refusals stamp NOTHING — only an ADMITTED envelope stamps `accepted`.
 // ===========================================================================
 
 /// Run `qd send --inbound-envelope <path>` on a written envelope file, returning
@@ -512,6 +705,7 @@ fn run_inbound_file(j: &Jail, contents: &str) -> (i32, String, String, String) {
         .args(["send", "--inbound-envelope", path.to_str().unwrap()])
         .env("HOME", &j.home)
         .env_remove("QD_HOME")
+        .env_remove("QD_HOST")
         .env("ZMX_DIR", &j.zmx)
         .output()
         .expect("spawn qd send --inbound-envelope");
@@ -540,13 +734,14 @@ fn door_malformed_payload_is_refused_malformed_exit_12() {
 }
 
 /// Past-expiry payload → `expired{past-expiry}` exit 12, refused at the door;
-/// nothing is stamped `expired` (expired is a DERIVED view state, never authored).
+/// nothing is stamped (expired is a DERIVED view state — there is no expired
+/// event type, and a refusal stamps not even `accepted`).
 #[test]
 fn door_past_expiry_is_expired_past_expiry_exit_12() {
     let temp = tempfile::tempdir().unwrap();
     let j = jail(temp.path());
     let envelope = format!(
-        r#"{{"v":1,"correlation_id":"01ACCPASTEXPIRYAAAAAAAAAAA","authored_at":{a},"expires_at":{e},"target":"accwk","authority":"peerhost","body":"stale"}}"#,
+        r#"{{"v":1,"correlation_id":"01ACCPASTEXPIRYAAAAAAAAAAA","authored_at":{a},"expires_at":{e},"target":"accwk","origin":"peerhost","body":"stale"}}"#,
         a = now_ms(),
         e = now_ms() - 60_000, // strictly in the past.
     );
@@ -558,7 +753,7 @@ fn door_past_expiry_is_expired_past_expiry_exit_12() {
     );
     assert!(
         log.is_empty() && disps.is_empty(),
-        "past-expiry is a DOOR refusal — nothing is stamped `expired`, got disps: {disps:?}"
+        "past-expiry is a DOOR refusal — no event stamped, got disps: {disps:?}"
     );
 }
 
@@ -580,7 +775,7 @@ fn door_ambiguous_target_is_refused_ambiguous_exit_12() {
     }
 
     let envelope = format!(
-        r#"{{"v":1,"correlation_id":"01ACCAMBIGUOUSAAAAAAAAAAAA","authored_at":{a},"expires_at":{e},"target":"acctwin","authority":"peerhost","body":"hi"}}"#,
+        r#"{{"v":1,"correlation_id":"01ACCAMBIGUOUSAAAAAAAAAAAA","authored_at":{a},"expires_at":{e},"target":"acctwin","origin":"peerhost","body":"hi"}}"#,
         a = now_ms(),
         e = now_ms() + 3_600_000,
     );

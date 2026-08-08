@@ -1,15 +1,19 @@
 # Dispatch transport formats — the qd–qf transition (v1)
 
-Status: **draft 1**, 2026-08-08. Author: build lead (session on brano), from
+Status: **draft 2** (R8/R8a/R8b event model + R9/R10/R11 naming and summary
+fold), 2026-08-08. Author: build lead (session on brano), from
 `ws/quorum/qd-qf/TRANSITION.md` §§1–3 + `provider-contract.md` §4 + Annex A.
-Design authority: session `qfd-qbt`.
+Design authority: session `qdqf-why` (succeeded `qfd-qbt`; rulings in
+`ws/quorum/qd-qf/RULINGS.md`).
 
 "**Formats are contracts**" (TRANSITION §1): each file gets a JSON-Schema-first
 contract — framing, field semantics, ordering guarantee, torn-tail rule, version
 marker. The Rust structs (crate `quorum-dispositions`) are reflections of these
-schemas, not the other way round. The **emitted disposition record** (§3) is the
-one data shape frame projects over; it is **versioned with the provider
-contract**.
+schemas, not the other way round. Under R8/R8a/R8b, `dispositions.jsonl` is an
+**append-only log of typed witnessed events** (§2); state is a **view** over it,
+published as the **emitted summary record** (§3a) — the one data shape frame's
+simple views project over — with the raw event funnel available via `--events`
+(§3b). Both emitted shapes are **versioned with the provider contract**.
 
 Common framing for every `*.jsonl` file here:
 - **JSONL**: one JSON object per line, UTF-8, `\n`-terminated (LF, never CRLF).
@@ -35,7 +39,7 @@ Files (all directly under `~/.quorum/dispatch/` = `qd_home`, **not** under
 ```
 log.jsonl                   §1  every envelope qd ORIGINATED (write-then-deliver)
 log.archive.jsonl           §1  archive tier (v2 tiering; born absent, additive)
-dispositions.jsonl          §2  witnessed terminal facts THIS qd authored
+dispositions.jsonl          §2  typed witnessed-event log THIS qd authored
 dispositions.archive.jsonl  §2  archive tier (v2)
 remote/<host>/log.jsonl         peer's replicated log        (mover-written)
 remote/<host>/dispositions.jsonl peer's replicated dispositions (mover-written)
@@ -68,137 +72,239 @@ durable envelope backs resume-and-deliver's active `pending` (Amendment 2).
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "qd log.jsonl row (envelope, v1)",
   "type": "object",
-  "required": ["v", "correlation_id", "authored_at", "expires_at", "target", "body", "authority"],
+  "required": ["v", "correlation_id", "authored_at", "expires_at", "target", "body", "origin"],
   "additionalProperties": false,
   "properties": {
     "v":              { "const": 1 },
     "correlation_id": { "type": "string", "minLength": 1,
-                        "description": "The envelope id — minted EXACTLY ONCE at origin by the originating program's append: frame's ledger event id when frame originates (riding as correlation_id), else qd's own log ULID for bare sends. Traveling verbatim; the idempotency + disposition key. Never a content hash." },
+                        "description": "The envelope id — minted EXACTLY ONCE at origin by the originating program's append: frame's ledger event id when frame originates (riding as correlation_id), else qd's own log ULID for bare sends. Traveling verbatim; the idempotency + disposition key. Never a content hash. The name is RULED (R9.1): an event log holds many rows per envelope — the field correlates rows, it identifies none; contract §4 names it." },
     "authored_at":    { "type": "integer",
                         "description": "epoch-ms, stamped once at origin (derived from the ULID clock when qd mints; otherwise the origin-append time). N10 authored timeline." },
     "expires_at":     { "type": "integer",
                         "description": "epoch-ms. Default authored_at + 12h; overridable per send (--expires). `expired` is minted from ABSENCE past this value. Policy travels with the message; there is no global rolling cutoff." },
     "target":         { "type": "string", "minLength": 1,
-                        "description": "The address as given by the caller (name | stable_id | name@host). Operational record; resolution happens at delivery. Not load-bearing for the disposition join (that keys on correlation_id)." },
+                        "description": "The address as given by the caller (name | stable_id | name@host), RAW (R9.4): a parsed-out target_host at write time is derived state materialized into the log; views split on `@` at query time. Operational record; resolution happens at delivery. Not load-bearing for the disposition join (that keys on correlation_id)." },
     "body":           { "type": "string",
                         "description": "The opaque prose, verbatim, delivered as one message. qd never parses it. Persisted so write-then-deliver / resume-and-deliver can redeliver." },
-    "authority":      { "type": "string", "minLength": 1,
-                        "description": "Origin host id (this qd's host). On a single machine this is the local host id; disambiguates origin when a peer's log is read from remote/<host>/." }
+    "origin":         { "type": "string", "minLength": 1,
+                        "description": "Origin host id (this qd's host) — named for its N10 role (R9.2). On a single machine this is the local host id; disambiguates origin when a peer's log is read from remote/<host>/." }
   }
 }
 ```
 
 Key order on the wire (byte-exact, `preserve_order`): `v, correlation_id,
-authored_at, expires_at, target, authority, body`. (`body` last: it is the
+authored_at, expires_at, target, origin, body`. (`body` last: it is the
 largest and most variable field; keeping it last keeps the head of every line
 cheap to scan.)
 
 ---
 
-## 2 · `dispositions.jsonl` — witnessed terminal facts (stored)
+## 2 · `dispositions.jsonl` — the typed witnessed-event log (R8/R8a/R8b)
 
-Witnessed facts about deliveries **this qd** made. **Only terminal, witnessed
-states are ever stored here**: `delivered` and `failed`. It is the physical
-"witnessed facts" file — witnessed order == append order.
+An **append-only log of typed, witnessed EVENTS** — one row per witnessed
+moment in an envelope's life at this host. **Never a state record.** Witnessed
+order == append order. State is not stored; it is a **view** computed over this
+log (§3). "First terminal wins" is dead: a `delivery-failed` row no longer
+resolves an id to FAILED forever, and idempotence keys on a `delivered` **event
+existing**, never on "any terminal" (R8 — the bug fix; a failed@t1 → delivered@t3
+retry now correctly resolves *delivered*).
 
-**Never stored here** (these are *derived*, §3):
-- `pending` — the *absence* of a terminal record (before `expires_at`). "Silence
-  is pending, never success." Never a row.
-- `expired` — minted from *absence* past the envelope's own `expires_at`.
-  View-computed at the query surface, never authored into the file (keeps
-  clock/policy out of the durable log; matches the witnessed-facts-only joint
-  position with qfd-qbt).
+**The five event types** (each past tense — a moment qd WITNESSED; each its own
+row schema, not a value of a shared `outcome` field — R8a). The set is **open**:
+future witnessed facts arrive as NEW types, never as new outcome values.
 
-### Row schema (stored)
+| `event`            | witnessed moment | `reason` |
+|---|---|---|
+| `accepted`         | inbound envelope presented and accepted through the door (inbound mode) | forbidden |
+| `attempted`        | a delivery attempt STARTED (each retry = a fresh `attempted`) | forbidden |
+| `queued`           | the attempt placed the message into the target's delivery queue / awaiting idle or wake (a witnessed moment, possibly minutes before landing — busy or waking session) | forbidden |
+| `delivered`        | the prose LANDED in the session — existence of this row IS the irreversible delivered fact | forbidden |
+| `delivery-failed`  | the attempt definitively did not arrive | **required** |
+
+**Guard — only witnessed moments get events.** qd emits an event when it
+witnesses the thing HAPPEN, never a speculative/planned state. "Will retry at X"
+stays view-computed (`next_attempt` is policy, §3 / R8b guard 1); there is no
+`pending`/`expired` row here (both are *absence*-derived at the query surface,
+§3), and no `outcome` field anywhere.
+
+**Per-event-type `reason` invariant** (schema-per-event-type, tighter than any
+shared enum — R8a): `reason` is REQUIRED on `delivery-failed` (the failure
+class, e.g. `"wake"` — the `{class,reason}` family; `failed{wake}` =
+`delivery-failed` reason `"wake"`) and FORBIDDEN on every other type. A
+`delivery-failed` row without `reason`, or any other type carrying `reason`, is
+**corrupt** (counted, never returned — the reader enforces this per type).
+
+### Row schema (one witnessed event)
 
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "qd dispositions.jsonl row (witnessed terminal, v1)",
+  "title": "qd dispositions.jsonl row (witnessed event, v1)",
   "type": "object",
-  "required": ["v", "correlation_id", "state", "authored_at", "witnessed_at", "authority"],
+  "required": ["v", "correlation_id", "event", "witnessed_at", "witness", "origin", "authored_at"],
   "additionalProperties": false,
   "properties": {
     "v":              { "const": 1 },
     "correlation_id": { "type": "string", "minLength": 1,
-                        "description": "The envelope's origin-minted id. The idempotency key: a terminal row present for this id ⇒ inbound-mode no-op success. First terminal wins." },
-    "state":          { "enum": ["delivered", "failed"],
-                        "description": "Witnessed terminal only. `delivered` = the prose landed. `failed` = attempted and definitively did not arrive (carries a reason)." },
-    "authored_at":    { "type": "integer",
-                        "description": "epoch-ms, copied from the envelope at witness time so this file is self-contained for terminal states (the envelope may live in a remote mirror). N10 authored timeline." },
+                        "description": "The envelope's origin-minted id — the join key to the log envelope and the correlation key across an event's whole funnel. (Name RULED — R9.1, see §1.)" },
+    "event":          { "enum": ["accepted", "attempted", "queued", "delivered", "delivery-failed"],
+                        "description": "Which witnessed moment this row records. Past tense; the type set is open (new witnessed facts are new types, never new values of an outcome field)." },
     "witnessed_at":   { "type": "integer",
-                        "description": "epoch-ms, stamped by THIS authority at the moment of witnessing = the moment qd accepted it (N10 / Amendment 1). Effects at this host order solely by this." },
-    "authority":      { "type": "string", "minLength": 1,
-                        "description": "The witnessing host id (this qd). In a --host/--all union, disambiguates which host witnessed." },
+                        "description": "epoch-ms, stamped by THIS witness at the moment of witnessing. Effects order — and the view's latest-event pick — key on this (N10 / Amendment 1)." },
+    "witness":        { "type": "string", "minLength": 1,
+                        "description": "The witnessing host id (this qd) — R9.3. In a --host/--all union, disambiguates which host witnessed." },
+    "origin":         { "type": "string", "minLength": 1,
+                        "description": "The envelope's origin host id, copied from the envelope at witness time (R11): self-containment when the envelope lives in an un-unioned mirror; all witnesses copy the same envelope field, so unions agree." },
+    "authored_at":    { "type": "integer",
+                        "description": "epoch-ms, the envelope's origin timeline, copied at witness time so this row is self-contained when the envelope lives in a mirror. N10 authored timeline." },
     "reason":         { "type": "string",
-                        "description": "OPTIONAL. For `failed`, the failure class (e.g. \"wake\" for failed{wake}). Absent for `delivered`. Part of the {class,reason} failure family (contract §6)." }
+                        "description": "REQUIRED on `delivery-failed` (the failure class, e.g. \"wake\"); FORBIDDEN on every other event type. Part of the {class,reason} failure family (contract §6). Omitted from the wire when absent." }
   }
 }
 ```
 
-Key order on the wire: `v, correlation_id, state, authored_at, witnessed_at,
-authority, reason` (`reason` omitted entirely when absent).
+Key order on the wire: `v, correlation_id, event, witnessed_at, witness,
+origin, authored_at, reason` (`reason` omitted entirely when absent — present
+only on `delivery-failed`).
+
+**Witness note (the N10 split as field naming — R9.3).** Every event row
+carries both timelines: **{`origin`, `authored_at`}** is the ORIGIN timeline
+(who minted the envelope, when it was authored — copied from the envelope at
+witness time) vs **{`witness`, `witnessed_at`}** the WITNESS timeline (who saw
+this moment, when). Event rows deliberately carry **no `expires_at`** (ruled):
+the door refuses past-expiry presentations; an orphan's expiry status stays a
+documented degenerate analytics case (§3a note 3), not a schema driver.
 
 ---
 
-## 3 · The emitted disposition record — `qd dispositions` output (published, versioned with the contract)
+## 3 · The emitted disposition output — `qd dispositions` (published, versioned with the contract)
 
-This is **the one data shape frame projects over** (contract §4 "the disposition
-record schema is published and versioned with this contract"). `qd dispositions`
-emits it as **JSONL on stdout**, one record per `correlation_id` in scope, for
-piping into DuckDB. It is a **stateless, caller-windowed projection**: the caller
-brings the window; qd stores no read-state, no cursors, ever (N2).
+`qd dispositions` publishes **two** shapes, both JSONL on stdout, both versioned
+with the provider contract. Both are **stateless, caller-windowed projections**:
+the caller brings the window; qd stores no read-state, no cursors, ever (N2).
+Both are computed fresh at query time over `log.jsonl` ∪ `dispositions.jsonl`
+(and their `remote/<host>/` replicas under `--host`/`--all`, `*.archive.jsonl`
+under `--archive`).
 
-It is computed fresh at query time from `log.jsonl` **⟕ (left join)**
-`dispositions.jsonl` (and their `remote/<host>/` replicas under `--host`/`--all`,
-`*.archive.jsonl` under `--archive`):
+- **DEFAULT — the summary record** (§3a): one row per `correlation_id`, carrying
+  the coarse 4-state view + folded analytics. **This is the one data shape
+  frame's simple views project over** — the 4-state enum is UNCHANGED (R8b guard
+  2), so those views stay stable.
+- **`--events` — the raw event record** (§3b): the funnel itself — every
+  [§2 witnessed event](#2--dispositionsjsonl--the-typed-witnessed-event-log-r8r8ar8b),
+  emitted verbatim (published/versioned), for history/analytics views
+  (attempts-before-landing, queue→delivered latency, wake-latency — R8b payoff).
 
-- envelope has a `delivered` terminal        → `state = "delivered"`
-- envelope has a `failed` terminal            → `state = "failed"` (+ `reason`)
-- envelope, no terminal, `now < expires_at`   → `state = "pending"`  (witnessed_at = null)
-- envelope, no terminal, `now >= expires_at`  → `state = "expired"`  (witnessed_at = null)
+**State is a view, always.** The summary's `state` is DERIVED from the event
+log; nothing stores it. Idempotence and the delivered-view both key on a
+`delivered` **event existing** (R8), never "any terminal."
 
-If more than one terminal exists for a `correlation_id` (normally impossible —
-at most one authority witnesses a given id — but a replication-merge or race
-artifact must resolve deterministically), the **earliest `witnessed_at` wins**,
-ties broken by scan order. This coincides with "first terminal wins" for a
-single-writer append-ordered file (§2), and generalizes it across a
-multi-authority union.
+### 3a · The summary record (DEFAULT)
 
-Where a disposition terminal exists but its originating envelope is not in scope
-(e.g. a locally-witnessed inbound delivery whose envelope is in a mirror not
-being unioned), the terminal is emitted from the disposition row alone (it is
-self-contained: it carries `authored_at` + `authority`). `pending`/`expired`
-require the envelope (only it knows `expires_at`), so they are only derivable
-where the log/mirror is in scope.
+Folded per `correlation_id` over the event log ∪ the envelope:
 
-### Emitted record schema
+- `state` — the coarse 4-state view (below).
+- `attempts` — count of `attempted` events.
+- `last_event` — the event MAX by `(witnessed_at, witness)` lexicographic
+  (R11.2, note 2 below) — detail beneath `state` without widening the enum (R8b
+  guard 2). **`null` iff no events exist** (R11.1).
+- `last_attempt_at` — max `witnessed_at` over `attempted` (null if none).
+- `first_delivered_at` — min `witnessed_at` over `delivered` (null if none).
+- `expires_at` — from the joined envelope (null when the envelope is out of
+  scope — an orphan-event summary).
+- `authored_at` — from the envelope if in scope, else from the (first) event
+  (self-contained).
+- `origin` — from the envelope's `origin` if in scope, else copied from the
+  (first) event's `origin` (every event carries it, R11 — no nullable escape).
+  REQUIRED.
+- `witness` — the witness of the `last_event` pick; **`null` iff no events
+  exist** (paired with `last_event`, R11.1).
+
+**Paired-null rule (R11.1):** `{last_event, witness}` are null together,
+exactly when no events exist. A summary never reports a witnessed moment nobody
+witnessed — the old behavior of defaulting a zero-events envelope to `accepted`
+is **overruled** (a fabricated `accepted` poisons `WHERE last_event='accepted'`
+views).
+
+**State precedence** (**RATIFIED — R10**; isolated in a single `derive_state`
+fn in the crate so it stays auditable in one place):
+
+1. `delivered` — a `delivered` event exists: the only absorbing state
+   (irreversible; wins over expiry and any later failure).
+2. `expired`   — no delivered event AND `now >= expires_at` — expired > failed
+   is the contract transported: `delivery-failed` is not terminal under the
+   retry model; expired = no delivered event by the envelope's own `expires_at`,
+   failure history or none. (Only derivable where the envelope/mirror is in
+   scope, so an orphan-event summary — no envelope — is **never** `expired`.)
+3. `failed`    — no delivered event, not expired, and `last_event` is
+   `delivery-failed` — awaiting retry.
+4. `pending`   — otherwise (latest is `accepted`/`attempted`/`queued`, or none —
+   an envelope with no witnessed event yet). "Silence is pending, never
+   success."
+
+Multi-witness resolution simplifies (R8): `delivered`-exists **anywhere** wins
+(deterministic, no tie-break — delivery is an irreversible fact); attempt
+histories from different witnesses UNION harmlessly into the counts.
+
+**Consumer notes:**
+
+1. **`failed` is NOT absorbing.** Across retries a row moves failed → pending →
+   failed → …; `delivered` is the only absorbing state; `failed` → `expired` at
+   `expires_at`. Frame alert views must predicate on undelivered-past-N or
+   attempts ≥ K (view policy), NEVER on "reached failed once" — the old
+   first-terminal-wins habit is dead. (R10 delta 2.)
+2. **Determinism.** Across a multi-witness union, `last_event` orders by
+   `(witnessed_at, witness)` lexicographic; within one witness's file, file
+   order IS witnessed order — at equal `witnessed_at` the later row wins (the
+   ms timestamp is a lossy projection of append order). (R11.2.)
+3. An envelope-out-of-scope summary (events in scope, envelope in an un-unioned
+   mirror) has `expires_at: null` ⇒ `expired` is underivable there; the door's
+   past-expiry refusal bounds the exposure. (R10 note b.)
 
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "qd disposition record (emitted / published, v1)",
+  "title": "qd disposition summary record (emitted / published, v1)",
   "type": "object",
-  "required": ["v", "correlation_id", "state", "authored_at", "authority"],
+  "required": ["v", "correlation_id", "state", "attempts", "last_event", "last_attempt_at", "first_delivered_at", "expires_at", "authored_at", "origin", "witness"],
   "additionalProperties": false,
   "properties": {
-    "v":              { "const": 1 },
-    "correlation_id": { "type": "string", "minLength": 1 },
-    "state":          { "enum": ["pending", "delivered", "failed", "expired"],
-                        "description": "pending = absence pre-expiry; delivered/failed = witnessed terminal; expired = absence post-expiry (view-computed). Silence is pending, never success." },
-    "authored_at":    { "type": "integer", "description": "epoch-ms, origin (N10 authored timeline)." },
-    "witnessed_at":   { "type": ["integer", "null"],
-                        "description": "epoch-ms for delivered/failed; null for pending/expired (no witness). Effects order by this per host (N10)." },
-    "authority":      { "type": "string", "minLength": 1,
-                        "description": "The origin authority for pending/expired; the witnessing authority for delivered/failed. In a union, the origin/authority column disambiguates." },
-    "reason":         { "type": "string", "description": "OPTIONAL; present for failed." }
+    "v":                  { "const": 1 },
+    "correlation_id":     { "type": "string", "minLength": 1 },
+    "state":              { "enum": ["pending", "delivered", "failed", "expired"],
+                            "description": "The coarse 4-state view (UNCHANGED, R8b guard 2). delivered = a delivered event exists; expired = no delivery past expires_at; failed = latest event is delivery-failed, pre-expiry; pending = otherwise. Silence is pending, never success. Precedence RATIFIED (R10)." },
+    "attempts":           { "type": "integer", "minimum": 0,
+                            "description": "Count of `attempted` events for this id." },
+    "last_event":         { "enum": ["accepted", "attempted", "queued", "delivered", "delivery-failed", null],
+                            "description": "The event MAX by (witnessed_at, witness) lexicographic (R11.2; full tie → later-in-input row) — detail beneath `state`. null iff no events exist (R11.1 paired-null with `witness`). Stable column." },
+    "last_attempt_at":    { "type": ["integer", "null"],
+                            "description": "epoch-ms, max witnessed_at over `attempted`; null if none. Stable column." },
+    "first_delivered_at": { "type": ["integer", "null"],
+                            "description": "epoch-ms, min witnessed_at over `delivered`; null if none. Stable column." },
+    "expires_at":         { "type": ["integer", "null"],
+                            "description": "epoch-ms from the joined envelope; null when the envelope is out of scope (orphan-event summary). Stable column." },
+    "authored_at":        { "type": "integer", "description": "epoch-ms origin timeline (envelope if in scope, else the first event). N10." },
+    "origin":             { "type": "string", "minLength": 1,
+                            "description": "The origin host id: the envelope's `origin` if in scope, else copied from the (first) event's `origin` (every event carries it — R11; no nullable escape). In a union, disambiguates origin." },
+    "witness":            { "type": ["string", "null"],
+                            "description": "The witness of the `last_event` pick; null iff no events exist (R11.1 paired-null with `last_event`). Stable column." }
   }
 }
 ```
 
-Key order on the wire: `v, correlation_id, state, authored_at, witnessed_at,
-authority, reason`. `witnessed_at` is present as `null` for pending/expired (a
-stable column for the DuckDB projection); `reason` is omitted when absent.
+Key order on the wire: `v, correlation_id, state, attempts, last_event,
+last_attempt_at, first_delivered_at, expires_at, authored_at, origin, witness`.
+The nullable columns (`last_event`, `last_attempt_at`, `first_delivered_at`,
+`expires_at`, `witness`) are present as `null` when absent — **stable columns**
+for the DuckDB projection, never skipped.
+
+### 3b · The raw event record (`--events`)
+
+`qd dispositions --events` emits the §2 witnessed events verbatim — the same
+row schema, published and versioned with this contract (key order `v,
+correlation_id, event, witnessed_at, witness, origin, authored_at, reason`;
+`reason` present only on `delivery-failed`). This is the funnel history/analytics views
+project over; the DEFAULT summary (§3a) is the fold of exactly these rows.
 
 `--as-of` note (frame-side, §5.2 of TRANSITION): dispositions carry **no ledger
 ord** — they are the live overlay. Frame registers this table fresh each
@@ -211,7 +317,7 @@ format='newline_delimited')`). Do **NOT** use bare
 `read_json_auto('/dev/stdin')`: on a pipe it cannot sample to infer the schema
 and collapses the whole stream into a single `json` column (a
 `Binder Error: … column not found`). Verified on brano (duckdb 1.5.x). This is
-the join the up-projection runs to correlate `authority`/`witnessed_at` back to
+the join the up-projection runs to correlate `witness`/`witnessed_at` back to
 the ledger, so the consumer form is load-bearing.
 
 ---
@@ -298,15 +404,29 @@ treated as absence-of-rows).
 
 | Rule | Source |
 |---|---|
-| pending = absence of terminal (pre-expiry); never a stored row | §2, contract §4 "silence is pending" |
-| expired = absence past envelope's own expires_at; view-computed | §2, TRANSITION §2, contract §4 |
-| delivered/failed = witnessed terminal, stored, witnessed_at stamped | §2, N10, Amendment 1 |
+| `dispositions.jsonl` = append-only log of typed witnessed EVENTS, never state records; witnessed order == append order | §2, R8/R8a/R8b |
+| five event types (accepted/attempted/queued/delivered/delivery-failed), past tense, own row schema; type set open (new facts = new types, not outcome values) | §2, R8a/R8b |
+| only witnessed moments get events; no speculative/planned rows; no `outcome` field | §2, R8b guard 1 |
+| `reason` REQUIRED on delivery-failed, FORBIDDEN on every other type (per-event-type validation) | §2, R8a |
+| state is a VIEW, always; nothing stores it (summary derives it, §3a) | §3, R8 |
+| idempotence + delivered-view key on a `delivered` EVENT existing, never "any terminal"; "first terminal wins" is DEAD | §3a, R8 (the bug fix) |
+| summary `state` precedence delivered→expired→failed→pending (RATIFIED, isolated `derive_state`) | §3a, R10 |
+| `failed` is NOT absorbing: failed → pending → failed → … across retries; `delivered` is the only absorbing state; alert views predicate on undelivered-past-N / attempts ≥ K, never "reached failed once" | §3a note 1, R10 delta 2 |
+| summary carries `last_event` for detail; the 4-state enum stays UNCHANGED | §3a, R8b guard 2 |
+| zero-events summary: `last_event` (and `witness`) are `null` — never a fabricated `accepted`; {last_event, witness} paired-null iff no events | §3a, R11.1 |
+| `last_event`/`witness` pick = MAX by `(witnessed_at, witness)` lexicographic; full tie → later-in-input row (file order IS witnessed order within one witness) | §3a note 2, R11.2 |
+| event rows carry `origin` (copied from the envelope at witness time; all witnesses copy the same field, unions agree); event rows carry NO `expires_at` | §2, R11 |
+| pending = no delivery pre-expiry, view-computed; never a row | §2/§3a, contract §4 "silence is pending" |
+| expired = no delivery past envelope's own expires_at; view-computed; orphan-event (no envelope) is never expired | §2/§3a, TRANSITION §2, contract §4 |
+| multi-witness: delivered-exists anywhere wins (no tie-break); attempt histories union harmlessly | §3a, R8 |
+| `qd dispositions` DEFAULT = summary; `--events` = the raw event funnel (both published/versioned) | §3, R8b |
 | correlation_id minted once at origin; verbatim; idempotency key | §1, TRANSITION identity crux, contract §4 |
-| inbound mode: idempotent on id, no local log append | §1/§2, Annex A THE ONE DOOR |
+| inbound mode: idempotent on id (delivered-exists), no local log append | §1/§2, Annex A THE ONE DOOR |
 | no `posted` state | contract Annex A (ruled 2026-08-08) |
-| no second-order "delivered" event; disposition = single copy of truth | N12, contract §4 |
+| no second-order "delivered" event; the `delivered` event IS the single copy of truth | N12, contract §4 |
 | single writer qd for log + dispositions; mirrors mover-written | Amendment 1/3 |
-| emitted record = stateless caller-windowed projection, no cursors | N2, contract §4 bulk form |
+| emitted records = stateless caller-windowed projection, no cursors | N2, contract §4 bulk form |
+| field NAMING RULED: `origin` (origin host id, §1 envelope + §2 event + §3a summary) / `witness` (witnessing host id, §2/§3a); `correlation_id` keeps its name; `ls.json` §4 `host` UNCHANGED (a different, already-landed surface) | R9 |
 | `ls.json` mover-written; `qd ls` is READ-ONLY (defines + reads mirrors) | §4, TRANSITION §3 |
 | `qd ls` staleness always surfaced (`now − witnessed_at`) | §4, TRANSITION §3 "dead pipeline visible" |
 | `--all` = local (uncap + tombstones) + every peer mirror; no-`remote/` = byte-identical | §4, build-lead reconciliation |

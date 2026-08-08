@@ -1,15 +1,19 @@
-//! Byte-exact wire GOLDEN for the disposition-record schema (qd–qf transition W1).
+//! Byte-exact wire GOLDEN for the disposition-record schema (qd–qf transition
+//! v1, R8–R11 — the typed-event log + folded summary, ruled names
+//! origin/witness).
 //!
 //! These strings are pinned against `dispatch/doc/formats/dispatch-transport-
-//! formats.md` §§1–3: key ORDER, `witnessed_at:null` present for pending/expired,
-//! `reason` omitted when absent. If a line here changes, the format contract
-//! changed — update the doc in lockstep. Byte-exactness is by construction here
-//! (fixed-shape serde-derive structs, fields in declaration order); no
-//! serde_json `preserve_order` feature is involved.
+//! formats.md` §§1–3: key ORDER, `reason` present ONLY on `delivery-failed`,
+//! the nullable summary columns (`last_event`, `last_attempt_at`,
+//! `first_delivered_at`, `expires_at`, `witness`) emitted as `null` when
+//! absent. If a line here changes, the format contract changed — update the doc
+//! in lockstep. Byte-exactness is by construction here (fixed-shape
+//! serde-derive structs, fields in declaration order); no serde_json
+//! `preserve_order` feature.
 
 use quorum_dispositions::{
-    parse_dispositions, parse_log, project, Disposition, EmittedRecord, Envelope, RecordState,
-    StoredState,
+    has_delivered, parse_dispositions, parse_log, project_summary, DispositionEvent, Envelope,
+    EventKind, SummaryRecord, SummaryState,
 };
 
 // ------------------------------- goldens -------------------------------
@@ -22,118 +26,164 @@ fn envelope_wire_golden() {
         authored_at: 1_781_241_500_000,
         expires_at: 1_781_284_700_000,
         target: "alpha@brano".to_string(),
-        authority: "brano".to_string(),
+        origin: "brano".to_string(),
         body: "hello world".to_string(),
     };
     assert_eq!(
         e.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","authority":"brano","body":"hello world"}"#
+        r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","body":"hello world"}"#
+    );
+}
+
+// ---- the five event types (reason ONLY on delivery-failed) ----
+// Inbound story values: envelope originated on mira, witnessed on brano —
+// witness ≠ origin so a swapped-field emission cannot pass the golden.
+
+#[test]
+fn event_accepted_wire_golden() {
+    let ev = DispositionEvent::accepted(
+        "01ABC".into(),
+        1_781_241_500_000,
+        "brano".into(),
+        "mira".into(),
+        1_781_241_499_000,
+    );
+    assert_eq!(
+        ev.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01ABC","event":"accepted","witnessed_at":1781241500000,"witness":"brano","origin":"mira","authored_at":1781241499000}"#
     );
 }
 
 #[test]
-fn disposition_delivered_wire_golden() {
-    // delivered, no reason → reason key omitted.
-    let d = Disposition {
+fn event_attempted_wire_golden() {
+    let ev = DispositionEvent::attempted(
+        "01ABC".into(),
+        1_781_241_500_000,
+        "brano".into(),
+        "mira".into(),
+        1_781_241_499_000,
+    );
+    assert_eq!(
+        ev.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01ABC","event":"attempted","witnessed_at":1781241500000,"witness":"brano","origin":"mira","authored_at":1781241499000}"#
+    );
+}
+
+#[test]
+fn event_queued_wire_golden() {
+    let ev = DispositionEvent::queued(
+        "01ABC".into(),
+        1_781_241_500_000,
+        "brano".into(),
+        "mira".into(),
+        1_781_241_499_000,
+    );
+    assert_eq!(
+        ev.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01ABC","event":"queued","witnessed_at":1781241500000,"witness":"brano","origin":"mira","authored_at":1781241499000}"#
+    );
+}
+
+#[test]
+fn event_delivered_wire_golden() {
+    // delivered → NO reason key.
+    let ev = DispositionEvent::delivered(
+        "01ABC".into(),
+        1_781_241_500_500,
+        "brano".into(),
+        "mira".into(),
+        1_781_241_499_000,
+    );
+    assert_eq!(
+        ev.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01ABC","event":"delivered","witnessed_at":1781241500500,"witness":"brano","origin":"mira","authored_at":1781241499000}"#
+    );
+}
+
+#[test]
+fn event_delivery_failed_wire_golden() {
+    // delivery-failed → reason present, LAST; event key is kebab-case.
+    let ev = DispositionEvent::delivery_failed(
+        "01DEF".into(),
+        1_781_241_600_000,
+        "brano".into(),
+        "mira".into(),
+        1_781_241_499_000,
+        "wake".into(),
+    );
+    assert_eq!(
+        ev.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01DEF","event":"delivery-failed","witnessed_at":1781241600000,"witness":"brano","origin":"mira","authored_at":1781241499000,"reason":"wake"}"#
+    );
+}
+
+// ---- the emitted summary record ----
+
+#[test]
+fn summary_delivered_wire_golden() {
+    // A folded fail→retry→succeed summary. Key order pinned by R11:
+    // attempts BEFORE last_event; origin then witness last.
+    let s = SummaryRecord {
         v: 1,
         correlation_id: "01ABC".to_string(),
-        state: StoredState::Delivered,
-        authored_at: 1_781_241_500_000,
-        witnessed_at: 1_781_241_500_500,
-        authority: "brano".to_string(),
-        reason: None,
+        state: SummaryState::Delivered,
+        attempts: 2,
+        last_event: Some(EventKind::Delivered),
+        last_attempt_at: Some(1_781_241_500_200),
+        first_delivered_at: Some(1_781_241_500_500),
+        expires_at: Some(1_781_284_700_000),
+        authored_at: 1_781_241_499_000,
+        origin: "brano".to_string(),
+        witness: Some("mira".to_string()),
     };
     assert_eq!(
-        d.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01ABC","state":"delivered","authored_at":1781241500000,"witnessed_at":1781241500500,"authority":"brano"}"#
+        s.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01ABC","state":"delivered","attempts":2,"last_event":"delivered","last_attempt_at":1781241500200,"first_delivered_at":1781241500500,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"brano","witness":"mira"}"#
     );
 }
 
 #[test]
-fn disposition_failed_wire_golden() {
-    // failed, with reason → reason key present, last.
-    let d = Disposition {
-        v: 1,
-        correlation_id: "01DEF".to_string(),
-        state: StoredState::Failed,
-        authored_at: 1_781_241_500_000,
-        witnessed_at: 1_781_241_600_000,
-        authority: "brano".to_string(),
-        reason: Some("wake".to_string()),
-    };
-    assert_eq!(
-        d.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01DEF","state":"failed","authored_at":1781241500000,"witnessed_at":1781241600000,"authority":"brano","reason":"wake"}"#
-    );
-}
-
-#[test]
-fn emitted_pending_wire_golden() {
-    // pending → witnessed_at:null present (stable column), reason omitted.
-    let r = EmittedRecord {
-        v: 1,
-        correlation_id: "01ABC".to_string(),
-        state: RecordState::Pending,
-        authored_at: 1_781_241_500_000,
-        witnessed_at: None,
-        authority: "brano".to_string(),
-        reason: None,
-    };
-    assert_eq!(
-        r.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01ABC","state":"pending","authored_at":1781241500000,"witnessed_at":null,"authority":"brano"}"#
-    );
-}
-
-#[test]
-fn emitted_delivered_wire_golden() {
-    let r = EmittedRecord {
-        v: 1,
-        correlation_id: "01ABC".to_string(),
-        state: RecordState::Delivered,
-        authored_at: 1_781_241_500_000,
-        witnessed_at: Some(1_781_241_500_500),
-        authority: "brano".to_string(),
-        reason: None,
-    };
-    assert_eq!(
-        r.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01ABC","state":"delivered","authored_at":1781241500000,"witnessed_at":1781241500500,"authority":"brano"}"#
-    );
-}
-
-#[test]
-fn emitted_failed_wire_golden() {
-    let r = EmittedRecord {
-        v: 1,
-        correlation_id: "01DEF".to_string(),
-        state: RecordState::Failed,
-        authored_at: 1_781_241_500_000,
-        witnessed_at: Some(1_781_241_600_000),
-        authority: "brano".to_string(),
-        reason: Some("wake".to_string()),
-    };
-    assert_eq!(
-        r.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01DEF","state":"failed","authored_at":1781241500000,"witnessed_at":1781241600000,"authority":"brano","reason":"wake"}"#
-    );
-}
-
-#[test]
-fn emitted_expired_wire_golden() {
-    // expired → witnessed_at:null present, reason omitted.
-    let r = EmittedRecord {
+fn summary_zero_events_pending_nulls_wire_golden() {
+    // Zero events → {last_event, witness} null TOGETHER (R11.1 paired-null; no
+    // fabricated `accepted`), plus the null analytics columns — all STABLE
+    // columns, never skipped.
+    let s = SummaryRecord {
         v: 1,
         correlation_id: "01GHI".to_string(),
-        state: RecordState::Expired,
-        authored_at: 1_781_241_500_000,
-        witnessed_at: None,
-        authority: "brano".to_string(),
-        reason: None,
+        state: SummaryState::Pending,
+        attempts: 0,
+        last_event: None,
+        last_attempt_at: None,
+        first_delivered_at: None,
+        expires_at: Some(1_781_284_700_000),
+        authored_at: 1_781_241_499_000,
+        origin: "brano".to_string(),
+        witness: None,
     };
     assert_eq!(
-        r.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01GHI","state":"expired","authored_at":1781241500000,"witnessed_at":null,"authority":"brano"}"#
+        s.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01GHI","state":"pending","attempts":0,"last_event":null,"last_attempt_at":null,"first_delivered_at":null,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"brano","witness":null}"#
+    );
+}
+
+#[test]
+fn summary_failed_wire_golden() {
+    let s = SummaryRecord {
+        v: 1,
+        correlation_id: "01DEF".to_string(),
+        state: SummaryState::Failed,
+        attempts: 1,
+        last_event: Some(EventKind::DeliveryFailed),
+        last_attempt_at: Some(1_781_241_600_000),
+        first_delivered_at: None,
+        expires_at: Some(1_781_284_700_000),
+        authored_at: 1_781_241_499_000,
+        origin: "brano".to_string(),
+        witness: Some("brano".to_string()),
+    };
+    assert_eq!(
+        s.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01DEF","state":"failed","attempts":1,"last_event":"delivery-failed","last_attempt_at":1781241600000,"first_delivered_at":null,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"brano","witness":"brano"}"#
     );
 }
 
@@ -147,77 +197,102 @@ fn round_trip_through_parsers() {
         authored_at: 10,
         expires_at: 20,
         target: "t".to_string(),
-        authority: "a".to_string(),
+        origin: "o".to_string(),
         body: "b".to_string(),
     };
-    let d = Disposition {
-        v: 1,
-        correlation_id: "rt".to_string(),
-        state: StoredState::Failed,
-        authored_at: 10,
-        witnessed_at: 15,
-        authority: "a".to_string(),
-        reason: Some("wake".to_string()),
-    };
+    let ev = DispositionEvent::delivery_failed("rt".into(), 15, "w".into(), "o".into(), 10, "wake".into());
     let log_bytes = format!("{}\n", e.to_jsonl_line());
-    let disp_bytes = format!("{}\n", d.to_jsonl_line());
+    let disp_bytes = format!("{}\n", ev.to_jsonl_line());
     let er = parse_log(log_bytes.as_bytes());
     let dr = parse_dispositions(disp_bytes.as_bytes());
     assert_eq!(er.records, vec![e]);
-    assert_eq!(dr.records, vec![d]);
+    assert_eq!(dr.records, vec![ev]);
     assert_eq!(er.corrupt_interior, 0);
     assert_eq!(dr.corrupt_interior, 0);
 }
 
-// ---------------------------- projection matrix ----------------------------
+#[test]
+fn event_row_missing_origin_is_corrupt_on_parse() {
+    // R11: `origin` is REQUIRED on every event row (serde required field) — a
+    // pre-R11 row without it no longer parses.
+    let no_origin =
+        r#"{"v":1,"correlation_id":"x","event":"queued","witnessed_at":5,"witness":"h","authored_at":0}"#;
+    let good = DispositionEvent::queued("x".into(), 6, "h".into(), "o".into(), 0).to_jsonl_line();
+    let buf = format!("{}\n{}\n", no_origin, good);
+    let r = parse_dispositions(buf.as_bytes());
+    assert_eq!(r.records.len(), 1, "only the origin-carrying row survives");
+    assert_eq!(r.corrupt_interior, 1, "missing `origin` is corrupt");
+}
+
+// -------- the fail→retry→succeed fold, end-to-end through project_summary -----
 
 #[test]
-fn projection_matrix_states_and_witnessed_nullness() {
-    let envs = vec![
-        // a: delivered
-        Envelope { v: 1, correlation_id: "a".into(), authored_at: 1, expires_at: 1000, target: "t".into(), authority: "origin".into(), body: "b".into() },
-        // b: failed(reason)
-        Envelope { v: 1, correlation_id: "b".into(), authored_at: 2, expires_at: 1000, target: "t".into(), authority: "origin".into(), body: "b".into() },
-        // c: no disp, pre-expiry → pending
-        Envelope { v: 1, correlation_id: "c".into(), authored_at: 3, expires_at: 1000, target: "t".into(), authority: "origin".into(), body: "b".into() },
-        // d: no disp, post-expiry → expired
-        Envelope { v: 1, correlation_id: "d".into(), authored_at: 4, expires_at: 10, target: "t".into(), authority: "origin".into(), body: "b".into() },
+fn fail_then_retry_then_succeed_folds_to_delivered() {
+    let (t1, t2, t3) = (100, 200, 300);
+    let events = vec![
+        DispositionEvent::attempted("a".into(), t1, "h".into(), "origin".into(), 10),
+        DispositionEvent::delivery_failed("a".into(), t1, "h".into(), "origin".into(), 10, "wake".into()),
+        DispositionEvent::attempted("a".into(), t2, "h".into(), "origin".into(), 10),
+        DispositionEvent::queued("a".into(), t2, "h".into(), "origin".into(), 10),
+        DispositionEvent::delivered("a".into(), t3, "h".into(), "origin".into(), 10),
     ];
-    let disps = vec![
-        Disposition { v: 1, correlation_id: "a".into(), state: StoredState::Delivered, authored_at: 1, witnessed_at: 50, authority: "wit".into(), reason: None },
-        Disposition { v: 1, correlation_id: "b".into(), state: StoredState::Failed, authored_at: 2, witnessed_at: 60, authority: "wit".into(), reason: Some("wake".into()) },
-        // orphan: terminal with no envelope in scope
-        Disposition { v: 1, correlation_id: "orphan".into(), state: StoredState::Delivered, authored_at: 7, witnessed_at: 70, authority: "wit".into(), reason: None },
+    let envs = vec![Envelope {
+        v: 1,
+        correlation_id: "a".into(),
+        authored_at: 10,
+        expires_at: 100_000,
+        target: "t".into(),
+        origin: "origin".into(),
+        body: "b".into(),
+    }];
+    let out = project_summary(&envs, &events, 400);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].state, SummaryState::Delivered);
+    assert_eq!(out[0].attempts, 2);
+    assert_eq!(out[0].last_event, Some(EventKind::Delivered));
+    assert_eq!(out[0].witness.as_deref(), Some("h"));
+    assert_eq!(out[0].first_delivered_at, Some(t3));
+    assert_eq!(out[0].last_attempt_at, Some(t2));
+    assert!(has_delivered(&events, "a"));
+
+    // and the emitted summary shows the null discipline for a zero-events
+    // sibling: {last_event, witness} null TOGETHER (R11.1) + null analytics.
+    let pending_env = Envelope {
+        v: 1,
+        correlation_id: "p".into(),
+        authored_at: 5,
+        expires_at: 100_000,
+        target: "t".into(),
+        origin: "origin".into(),
+        body: "b".into(),
+    };
+    let p = project_summary(&[pending_env], &[], 400);
+    assert!(p[0].to_jsonl_line().contains(r#""last_event":null"#));
+    assert!(p[0].to_jsonl_line().contains(r#""witness":null"#));
+    assert!(p[0].to_jsonl_line().contains(r#""last_attempt_at":null"#));
+    assert!(p[0].to_jsonl_line().contains(r#""first_delivered_at":null"#));
+    assert!(!out[0].to_jsonl_line().contains("null"), "the delivered summary has no nulls");
+}
+
+// -------- R11.2 tie-break, end-to-end through project_summary -----
+
+#[test]
+fn same_instant_funnel_wire_shows_delivered_last_event() {
+    // The §6 funnel compressed into ONE instant, one witness: the file-last
+    // row (delivered) is the last_event pick — the tie-break's own
+    // discriminating scenario (a strict-`>` fold would emit "attempted").
+    let t = 1_781_241_500_000;
+    let events = vec![
+        DispositionEvent::attempted("z".into(), t, "h".into(), "origin".into(), 10),
+        DispositionEvent::delivery_failed("z".into(), t, "h".into(), "origin".into(), 10, "wake".into()),
+        DispositionEvent::attempted("z".into(), t, "h".into(), "origin".into(), 10),
+        DispositionEvent::queued("z".into(), t, "h".into(), "origin".into(), 10),
+        DispositionEvent::delivered("z".into(), t, "h".into(), "origin".into(), 10),
     ];
-    let now = 100; // a/b terminal; c pending (100<1000); d expired (100>=10)
-    let out = project(&envs, &disps, now);
-
-    // Order: envelopes (a,b,c,d) then orphans (orphan).
-    let ids: Vec<&str> = out.iter().map(|r| r.correlation_id.as_str()).collect();
-    assert_eq!(ids, vec!["a", "b", "c", "d", "orphan"]);
-
-    // a delivered, witnessed_at Some.
-    assert_eq!(out[0].state, RecordState::Delivered);
-    assert_eq!(out[0].witnessed_at, Some(50));
-    assert_eq!(out[0].reason, None);
-    // b failed with reason, witnessed_at Some.
-    assert_eq!(out[1].state, RecordState::Failed);
-    assert_eq!(out[1].witnessed_at, Some(60));
-    assert_eq!(out[1].reason.as_deref(), Some("wake"));
-    // c pending, witnessed_at null, origin authority.
-    assert_eq!(out[2].state, RecordState::Pending);
-    assert_eq!(out[2].witnessed_at, None);
-    assert_eq!(out[2].authority, "origin");
-    // d expired, witnessed_at null.
-    assert_eq!(out[3].state, RecordState::Expired);
-    assert_eq!(out[3].witnessed_at, None);
-    // orphan → terminal emitted from disposition alone.
-    assert_eq!(out[4].state, RecordState::Delivered);
-    assert_eq!(out[4].witnessed_at, Some(70));
-    assert_eq!(out[4].authored_at, 7, "orphan authored_at from disposition");
-
-    // Also confirm the emitted null/omit wire shape end-to-end for pending & failed.
-    assert!(out[2].to_jsonl_line().contains(r#""witnessed_at":null"#));
-    assert!(!out[0].to_jsonl_line().contains("reason"));
-    assert!(out[1].to_jsonl_line().contains(r#""reason":"wake""#));
+    let out = project_summary(&[], &events, t + 1);
+    assert_eq!(out[0].state, SummaryState::Delivered);
+    assert_eq!(out[0].last_event, Some(EventKind::Delivered));
+    let line = out[0].to_jsonl_line();
+    assert!(line.contains(r#""state":"delivered""#));
+    assert!(line.contains(r#""last_event":"delivered""#));
 }

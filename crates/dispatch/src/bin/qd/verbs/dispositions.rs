@@ -1,19 +1,28 @@
-//! `qd dispositions [<correlation_id>] [--window <spec>] [--host <h> | --all]
-//! [--archive]` — the qd–qf transition W5 READ verb.
+//! `qd dispositions [<correlation_id>] [--events] [--window <spec>]
+//! [--host <h> | --all] [--archive]` — the qd–qf transition READ verb.
 //!
-//! This is a thin CLI over the W2 store's projection query
-//! ([`dispatch::dispositions::query`]): it resolves the read [`Scope`] from the
-//! flags, reads `now_ms` from the injected [`RealClock`], calls `query`, applies
-//! the optional caller-supplied `--window` lower bound, and emits the result as
-//! **JSONL on stdout** — one [`EmittedRecord::to_jsonl_line`] per line (format
-//! doc §3, the one shape frame projects over via DuckDB). No envelope, no pretty
-//! mode, no human surface: JSONL is the contract.
+//! Two output modes, both **JSONL on stdout** (no envelope, no pretty mode, no
+//! human surface — JSONL is the contract, the shape frame projects over via
+//! DuckDB):
+//!
+//! - **§3a DEFAULT (summary)**: one [`dispatch::dispositions::SummaryRecord`]
+//!   `to_jsonl_line` per `correlation_id` in scope, via the store's
+//!   [`query_summary`] — the folded per-id view: the coarse 4-state `state`
+//!   plus `last_event`/`witness` and the analytics fields. The state
+//!   precedence is RATIFIED (R10): delivered > expired > failed > pending —
+//!   a delivered event existing is the only absorbing state.
+//! - **§3b `--events`**: the RAW witnessed-event rows (the funnel) instead —
+//!   one [`dispatch::dispositions::DispositionEvent`] `to_jsonl_line` per row
+//!   via [`read_events`], file/union order preserved, no fold, no state. The
+//!   same scope/archive/point-query flags apply.
 //!
 //! ## `--window` is STATELESS + caller-windowed (N2)
 //!
 //! qd stores NO read-state and NO cursor, ever. `--window <dur>` is purely a
-//! lower bound the CALLER brings each invocation: keep only records whose
-//! `authored_at >= now_ms - dur_ms`. Absent ⇒ no window (every record in scope).
+//! lower bound the CALLER brings each invocation: keep only rows whose
+//! `authored_at >= now_ms - dur_ms`. BOTH row types carry `authored_at` (the
+//! envelope's ORIGIN timeline, copied onto every event row) — so ONE rule
+//! filters both modes identically. Absent ⇒ no window (every row in scope).
 //! The duration grammar is shared with `qd send --expires`
 //! ([`dispatch::origin_send::parse_expires`]): a bare integer = seconds, else
 //! `<int>{s|m|h|d}`. A bad form is a SYNC arg refusal (exit
@@ -39,7 +48,7 @@
 
 use clap::ArgMatches;
 
-use dispatch::dispositions::{query, Scope};
+use dispatch::dispositions::{query_summary, read_events, Scope};
 use dispatch::effects::{Clock, Env, RealClock, RealEnv};
 use dispatch::origin_send::Refusal;
 use dispatch::paths::QdPaths;
@@ -140,22 +149,41 @@ pub fn run(m: &ArgMatches) -> i32 {
         Err(r) => return emit_refusal(&r),
     };
 
-    let records = match query(&paths, &scope, archive, now_ms, only.as_deref()) {
-        Ok(rs) => rs,
-        Err(e) => {
-            eprintln!("qd dispositions: failed reading disposition store: {e}");
-            return 1;
-        }
-    };
-
     // Build the whole JSONL payload in memory first (so qd is never the source of
     // a mid-document truncation on a broken pipe — same discipline as ls.rs), one
-    // record per line, filtered by the caller's window.
+    // row per line, filtered by the caller's window. `authored_at` is the ONE
+    // window rule for both modes (the envelope's origin timeline — every event
+    // row carries it too).
     let mut buf = String::new();
-    for rec in &records {
-        if passes_window(rec.authored_at, lower_bound) {
-            buf.push_str(&rec.to_jsonl_line());
-            buf.push('\n');
+    if m.get_flag("events") {
+        // §3b — the raw witnessed-event rows (the funnel), file/union order.
+        let rows = match read_events(&paths, &scope, archive, only.as_deref()) {
+            Ok(rs) => rs,
+            Err(e) => {
+                eprintln!("qd dispositions: failed reading disposition store: {e}");
+                return 1;
+            }
+        };
+        for ev in &rows {
+            if passes_window(ev.authored_at, lower_bound) {
+                buf.push_str(&ev.to_jsonl_line());
+                buf.push('\n');
+            }
+        }
+    } else {
+        // §3a — the DEFAULT folded per-id summary.
+        let records = match query_summary(&paths, &scope, archive, now_ms, only.as_deref()) {
+            Ok(rs) => rs,
+            Err(e) => {
+                eprintln!("qd dispositions: failed reading disposition store: {e}");
+                return 1;
+            }
+        };
+        for rec in &records {
+            if passes_window(rec.authored_at, lower_bound) {
+                buf.push_str(&rec.to_jsonl_line());
+                buf.push('\n');
+            }
         }
     }
     emit_or_pipe_exit(&buf);
@@ -227,6 +255,37 @@ mod tests {
             .unwrap();
         let r = select_scope(&m).unwrap_err();
         assert_eq!(r.class, "scope");
+    }
+
+    // ---- --events (§3b raw-event mode) --------------------------------------
+
+    #[test]
+    fn events_flag_defaults_off() {
+        // No flag ⇒ the §3a summary default.
+        let m = parse(&[]).unwrap();
+        assert!(!m.get_flag("events"));
+    }
+
+    #[test]
+    fn events_flag_parses_on() {
+        let m = parse(&["--events"]).unwrap();
+        assert!(m.get_flag("events"));
+    }
+
+    #[test]
+    fn events_flag_composes_with_every_other_flag() {
+        // --events conflicts with NOTHING: the same scope/archive/window/point-
+        // query flags apply to the raw-event read.
+        let m = parse(&["Q6FUNNEL", "--events", "--all", "--archive", "--window", "30m"]).unwrap();
+        assert!(m.get_flag("events"));
+        assert!(m.get_flag("all"));
+        assert!(m.get_flag("archive"));
+        assert_eq!(m.get_one::<String>("correlation_id").unwrap(), "Q6FUNNEL");
+        assert_eq!(m.get_one::<String>("window").unwrap(), "30m");
+
+        let m = parse(&["--events", "--host", "peerbox"]).unwrap();
+        assert!(m.get_flag("events"));
+        assert_eq!(select_scope(&m).unwrap(), Scope::Host("peerbox".into()));
     }
 
     // ---- window_lower_bound + passes_window ---------------------------------

@@ -1,19 +1,21 @@
 //! Origin-mode `qd send` durability helpers (qd–qf transition W3).
 //!
 //! The PURE, seamed core of write-then-deliver: mint the correlation-id ULID,
-//! build the [`Envelope`] before delivery, build the terminal [`Disposition`]
-//! after the attempt, parse `--expires`, and the reusable [`Refusal`] type
-//! (contract §6 — the `{class,reason}` failure family W4's inbound door + W6's
-//! named-ambiguous path build on). The IMPURE fs half lives in
-//! [`crate::dispositions`] (the flock append writers); the bin wiring that calls
-//! both lives in `bin/qd/verbs/send_unified.rs`.
+//! build the [`Envelope`] before delivery, parse `--expires`, and the reusable
+//! [`Refusal`] type (contract §6 — the `{class,reason}` failure family W4's
+//! inbound door + W6's named-ambiguous path build on). The witnessed
+//! disposition EVENTS are authored at the call sites via the leaf crate's typed
+//! constructors (`DispositionEvent::attempted` etc. — schema-per-event-type at
+//! the authoring seam, R8a), so there is no event builder here. The IMPURE fs
+//! half lives in [`crate::dispositions`] (the flock append writers); the bin
+//! wiring that calls both lives in `bin/qd/verbs/send_unified.rs`.
 //!
 //! Everything here is a pure function of its inputs (a ULID takes the injected
 //! [`Clock`] + a random source; nothing reads the real home / clock directly),
 //! so it is unit-testable off the default floor and reusable across the inbound
 //! (W4) and ambiguity (W6) doors.
 
-use crate::dispositions::{Disposition, Envelope, StoredState};
+use crate::dispositions::Envelope;
 use crate::effects::Clock;
 
 // ===========================================================================
@@ -155,20 +157,26 @@ pub fn parse_expires(raw: &str) -> Result<i64, String> {
 }
 
 // ===========================================================================
-// envelope / disposition builders (write-then-deliver)
+// envelope builder (write-then-deliver)
 // ===========================================================================
 
 /// Build the origin-mode [`Envelope`] to append BEFORE delivery (write-then-
 /// deliver, format doc §1). `target` is the RAW address string the caller gave
-/// (operational record); `body` is the message verbatim; `authority` is
-/// [`crate::dispositions::local_authority`]. `expires_at = authored_at +
-/// expires_ms` (saturating, so a huge `--expires` can never wrap negative).
+/// (operational record); `body` is the message verbatim; `origin` is the origin
+/// host id ([`crate::dispositions::local_host`] — this qd originates, so it is
+/// the origin). `expires_at = authored_at + expires_ms` (saturating, so a huge
+/// `--expires` can never wrap negative).
+///
+/// There is deliberately NO disposition-event builder here: the witnessed
+/// events (`attempted`/`queued`/`delivered`/…) are authored at the call sites
+/// via the leaf crate's typed constructors, which enforce the per-event-type
+/// `reason` invariant at the authoring seam (R8a).
 pub fn build_envelope(
     correlation_id: String,
     authored_at: i64,
     expires_ms: i64,
     target: String,
-    authority: String,
+    origin: String,
     body: String,
 ) -> Envelope {
     Envelope {
@@ -177,35 +185,8 @@ pub fn build_envelope(
         authored_at,
         expires_at: authored_at.saturating_add(expires_ms),
         target,
-        authority,
+        origin,
         body,
-    }
-}
-
-/// Build the terminal [`Disposition`] to append AFTER the delivery attempt
-/// (format doc §2). Only ever a WITNESSED terminal: `delivered` (the send's own
-/// success) or `failed` (a definitive non-delivery, carrying `reason` — e.g.
-/// `"wake"` for an unwakeable target). `pending`/`expired` are DERIVED (absence)
-/// and are never built here.
-///
-/// `authored_at` is copied from the envelope (self-contained terminal, §2);
-/// `witnessed_at` is the moment qd witnessed the outcome (now).
-pub fn build_disposition(
-    correlation_id: String,
-    state: StoredState,
-    authored_at: i64,
-    witnessed_at: i64,
-    authority: String,
-    reason: Option<String>,
-) -> Disposition {
-    Disposition {
-        v: 1,
-        correlation_id,
-        state,
-        authored_at,
-        witnessed_at,
-        authority,
-        reason,
     }
 }
 
@@ -397,7 +378,7 @@ mod tests {
         assert!(parse_expires(&format!("{}d", i64::MAX)).is_err());
     }
 
-    // ---- envelope / disposition builders -----------------------------------
+    // ---- envelope builder ---------------------------------------------------
 
     #[test]
     fn build_envelope_stamps_expiry_and_carries_raw_fields() {
@@ -414,38 +395,14 @@ mod tests {
         assert_eq!(e.authored_at, 1000);
         assert_eq!(e.expires_at, 1000 + DEFAULT_EXPIRES_MS);
         assert_eq!(e.target, "alpha@brano", "raw caller address, verbatim");
-        assert_eq!(e.authority, "brano");
+        assert_eq!(e.origin, "brano");
         assert_eq!(e.body, "hello world", "body verbatim");
     }
 
     #[test]
     fn build_envelope_expiry_saturates_not_wraps() {
-        let e = build_envelope("id".into(), i64::MAX - 5, DEFAULT_EXPIRES_MS, "t".into(), "a".into(), "b".into());
+        let e = build_envelope("id".into(), i64::MAX - 5, DEFAULT_EXPIRES_MS, "t".into(), "o".into(), "b".into());
         assert_eq!(e.expires_at, i64::MAX, "saturating add, never negative");
-    }
-
-    #[test]
-    fn build_disposition_delivered_has_no_reason() {
-        let d = build_disposition("id".into(), StoredState::Delivered, 1000, 2000, "brano".into(), None);
-        assert_eq!(d.v, 1);
-        assert_eq!(d.state, StoredState::Delivered);
-        assert_eq!(d.authored_at, 1000, "copied from the envelope");
-        assert_eq!(d.witnessed_at, 2000);
-        assert_eq!(d.reason, None, "delivered carries no reason");
-    }
-
-    #[test]
-    fn build_disposition_failed_wake_carries_reason() {
-        let d = build_disposition(
-            "id".into(),
-            StoredState::Failed,
-            1000,
-            2000,
-            "brano".into(),
-            Some("wake".into()),
-        );
-        assert_eq!(d.state, StoredState::Failed);
-        assert_eq!(d.reason.as_deref(), Some("wake"), "failed{{wake}} contract state");
     }
 
     // ---- Refusal ------------------------------------------------------------

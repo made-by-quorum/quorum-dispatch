@@ -1,23 +1,30 @@
 //! The IMPURE IO layer over the pure [`quorum_dispositions`] leaf crate (qd–qf
-//! transition W2).
+//! transition W2, reworked to the R8 event model).
 //!
 //! The leaf crate owns the wire shapes, the byte-exact serializers, the torn-
-//! tail parsers, and the pure left-join [`project`]. This module is the fs half:
-//! the append writers ([`append_envelope`] / [`append_disposition`]), the torn-
+//! tail parsers, and the pure fold [`project_summary`]. This module is the fs
+//! half: the append writers ([`append_envelope`] / [`append_event`]), the torn-
 //! tolerant scoped readers ([`read_scoped`]), the projection query surface
-//! ([`query`], what the W5 `qd dispositions` verb calls), the inbound-mode
-//! idempotency probe ([`has_terminal`]), and the v1 [`local_authority`] resolver.
+//! ([`query_summary`], the `qd dispositions` DEFAULT) and the raw event read
+//! ([`read_events`], the `--events` mode), the inbound-mode idempotency probe
+//! ([`has_delivered_event`]), and the v1 [`local_host`] resolver.
+//!
+//! `dispositions.jsonl` is an **append-only log of typed witnessed EVENTS**
+//! ([`DispositionEvent`], R8/R8a/R8b) — never state records. State is a VIEW
+//! ([`SummaryRecord`], folded by the leaf's [`project_summary`]); idempotence
+//! keys on a `delivered` event EXISTING ([`has_delivered_event`]), never on
+//! "any terminal".
 //!
 //! # House seams (mirrors [`crate::events`] / [`crate::jsonl`])
 //!
 //! - Filesystem access is std fs against injected **root paths** — this module
 //!   takes a resolved [`QdPaths`] and reads/writes the paths it hands out
 //!   ([`QdPaths::log_path`] etc.). NOTHING here resolves the real home or reads
-//!   `QD_HOME`/hostname directly (lesson L9a): [`local_authority`] takes the
+//!   `QD_HOME`/hostname directly (lesson L9a): [`local_host`] takes the
 //!   injected [`Env`] seam; every path is `QdPaths`-derived.
 //! - Errors surface as [`io::Result`] — the append writers do NOT swallow errors.
 //!   The CALLER decides fatality (W3 hard-fails a failed log append; best-effort-
-//!   warns a failed disposition append). Readers are best-effort (a missing file
+//!   warns a failed event append). Readers are best-effort (a missing file
 //!   is an empty read, never an error) matching [`crate::events::read_merged`].
 //!
 //! # Single-writer law + the flock guard (format doc "common framing")
@@ -46,8 +53,8 @@ use crate::effects::Env;
 use crate::paths::QdPaths;
 
 pub use quorum_dispositions::{
-    parse_dispositions, parse_log, project, project_one, Disposition, EmittedRecord, Envelope,
-    ReadResult, RecordState, StoredState,
+    has_delivered, parse_dispositions, parse_log, project_one, project_summary,
+    DispositionEvent, Envelope, EventKind, ReadResult, SummaryRecord, SummaryState,
 };
 
 // ===========================================================================
@@ -120,11 +127,13 @@ pub fn append_envelope(paths: &QdPaths, env: &Envelope) -> io::Result<()> {
     append_line(&paths.log_path(), &env.to_jsonl_line())
 }
 
-/// Append `disp.to_jsonl_line() + "\n"` to `paths.dispositions_path()` (format
-/// doc §2), same durability contract as [`append_envelope`]. The CALLER decides
-/// fatality (W3 best-effort-warns a failed disposition append).
-pub fn append_disposition(paths: &QdPaths, disp: &Disposition) -> io::Result<()> {
-    append_line(&paths.dispositions_path(), &disp.to_jsonl_line())
+/// Append `event.to_jsonl_line() + "\n"` to `paths.dispositions_path()` (format
+/// doc §2 — one typed witnessed EVENT row, R8), same durability contract as
+/// [`append_envelope`]. The CALLER decides fatality (the stamp points
+/// best-effort-warn a failed event append — a lost event row never changes a
+/// send's exit).
+pub fn append_event(paths: &QdPaths, event: &DispositionEvent) -> io::Result<()> {
+    append_line(&paths.dispositions_path(), &event.to_jsonl_line())
 }
 
 /// The shared append core: create the parent dir, take the exclusive append
@@ -164,9 +173,10 @@ pub fn read_local_log(paths: &QdPaths) -> ReadResult<Envelope> {
     parse_log(&read_bytes_or_empty(&paths.log_path()))
 }
 
-/// Read `paths.dispositions_path()` into [`Disposition`] rows (torn-tail
-/// tolerant via [`parse_dispositions`]). MISSING ⇒ empty [`ReadResult`].
-pub fn read_local_dispositions(paths: &QdPaths) -> ReadResult<Disposition> {
+/// Read `paths.dispositions_path()` into [`DispositionEvent`] rows (torn-tail
+/// tolerant via [`parse_dispositions`], which also enforces the per-event-type
+/// `reason` invariant). MISSING ⇒ empty [`ReadResult`].
+pub fn read_local_events(paths: &QdPaths) -> ReadResult<DispositionEvent> {
     parse_dispositions(&read_bytes_or_empty(&paths.dispositions_path()))
 }
 
@@ -177,8 +187,9 @@ fn read_bytes_or_empty(path: &Path) -> Vec<u8> {
     std::fs::read(path).unwrap_or_default()
 }
 
-/// The read SCOPE for [`read_scoped`] / [`query`] (TRANSITION §: `--host`/`--all`
-/// union in the remote replicas; the `authority` column disambiguates origin).
+/// The read SCOPE for [`read_scoped`] / [`query_summary`] / [`read_events`]
+/// (TRANSITION §: `--host`/`--all` union in the remote replicas; the
+/// `origin`/`witness` columns disambiguate whose row a unioned line is).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
     /// Local hot files only (`log.jsonl` + `dispositions.jsonl`). Default scope.
@@ -189,12 +200,13 @@ pub enum Scope {
     All,
 }
 
-/// Read the envelopes + dispositions in `scope`, torn-tail tolerant per file,
-/// concatenated (dedup is [`project`]'s job — NOT the reader's).
+/// Read the envelopes + disposition EVENTS in `scope`, torn-tail tolerant per
+/// file, concatenated (dedup is [`project_summary`]'s job — NOT the reader's).
 ///
 /// - [`Scope::Local`]  = local `log.jsonl` + `dispositions.jsonl`.
 /// - [`Scope::Host`]   = local UNION `remote/<h>/{log,dispositions}.jsonl` (the
-///   spec: `--host` unions IN the remote replica; `authority` disambiguates).
+///   spec: `--host` unions IN the remote replica; `origin`/`witness`
+///   disambiguate).
 /// - [`Scope::All`]    = local UNION every `remote/<host>/` (enumerate the
 ///   subdirs of [`QdPaths::remote_dir`]); a MISSING `remote/` ⇒ just local.
 /// - `archive = true` additionally unions the LOCAL archive tier
@@ -210,16 +222,16 @@ pub fn read_scoped(
     paths: &QdPaths,
     scope: &Scope,
     archive: bool,
-) -> io::Result<(Vec<Envelope>, Vec<Disposition>)> {
+) -> io::Result<(Vec<Envelope>, Vec<DispositionEvent>)> {
     let mut envelopes: Vec<Envelope> = Vec::new();
-    let mut dispositions: Vec<Disposition> = Vec::new();
+    let mut events: Vec<DispositionEvent> = Vec::new();
 
     // Local hot tier (always in scope).
     accumulate(
         &paths.log_path(),
         &paths.dispositions_path(),
         &mut envelopes,
-        &mut dispositions,
+        &mut events,
     );
 
     // Local archive tier (LOCAL only — remote has no archive siblings).
@@ -228,7 +240,7 @@ pub fn read_scoped(
             &paths.log_archive_path(),
             &paths.dispositions_archive_path(),
             &mut envelopes,
-            &mut dispositions,
+            &mut events,
         );
     }
 
@@ -240,7 +252,7 @@ pub fn read_scoped(
                 &paths.remote_log_path(h),
                 &paths.remote_dispositions_path(h),
                 &mut envelopes,
-                &mut dispositions,
+                &mut events,
             );
         }
         Scope::All => {
@@ -249,13 +261,13 @@ pub fn read_scoped(
                     &paths.remote_log_path(&host),
                     &paths.remote_dispositions_path(&host),
                     &mut envelopes,
-                    &mut dispositions,
+                    &mut events,
                 );
             }
         }
     }
 
-    Ok((envelopes, dispositions))
+    Ok((envelopes, events))
 }
 
 /// Read one (log, dispositions) file pair, parse torn-tolerant, and append the
@@ -266,7 +278,7 @@ fn accumulate(
     log_path: &Path,
     disp_path: &Path,
     envelopes: &mut Vec<Envelope>,
-    dispositions: &mut Vec<Disposition>,
+    events: &mut Vec<DispositionEvent>,
 ) {
     let log = parse_log(&read_bytes_or_empty(log_path));
     if log.corrupt_interior > 0 {
@@ -286,7 +298,7 @@ fn accumulate(
             disp.corrupt_interior
         );
     }
-    dispositions.extend(disp.records);
+    events.extend(disp.records);
 }
 
 /// Enumerate the host subdirs under [`QdPaths::remote_dir`] for [`Scope::All`].
@@ -310,66 +322,92 @@ fn remote_hosts(paths: &QdPaths) -> io::Result<Vec<String>> {
             }
         }
     }
-    // Deterministic order for a stable projection scan (project dedups, but a
-    // stable input order keeps output order reproducible).
+    // Deterministic order for a stable projection scan (project_summary dedups,
+    // but a stable input order keeps output order reproducible).
     hosts.sort();
     Ok(hosts)
 }
 
 // ===========================================================================
-// Projection query surface (what the W5 verb calls)
+// Query surfaces (what the `qd dispositions` verb calls)
 // ===========================================================================
 
-/// THE read surface for `qd dispositions` (W5): read the records in `scope`
-/// (+ `archive`), then project them into the emitted 4-state records at
-/// `now_ms`. If `only` is `Some(id)`, filter to that one `correlation_id`
-/// ([`project_one`] semantics — at most one record per id).
+/// THE default read surface for `qd dispositions` (§3a): read the records in
+/// `scope` (+ `archive`), then fold them into the published per-id
+/// [`SummaryRecord`] rows at `now_ms` via the leaf's [`project_summary`]. If
+/// `only` is `Some(id)`, filter to that one `correlation_id` ([`project_one`]
+/// semantics — at most one record per id).
 ///
-/// This is the exact join the format doc §3 publishes: envelopes ⟕ dispositions,
-/// `pending`/`expired` derived from ABSENCE relative to the envelope's own
-/// `expires_at` at `now_ms`. `now_ms` is the caller's clock reading (the verb
-/// passes an injected [`crate::effects::Clock`]) — this fn stays pure over it.
-pub fn query(
+/// This is the exact view the format doc §3 publishes: envelopes ∪ events →
+/// one summary per id, `pending`/`expired` derived from ABSENCE relative to the
+/// envelope's own `expires_at` at `now_ms`, the coarse state ruled by the
+/// RATIFIED R10 precedence (delivered > expired > failed > pending). `now_ms`
+/// is the caller's clock reading (the verb passes an injected
+/// [`crate::effects::Clock`]) — this fn stays pure over it.
+pub fn query_summary(
     paths: &QdPaths,
     scope: &Scope,
     archive: bool,
     now_ms: i64,
     only: Option<&str>,
-) -> io::Result<Vec<EmittedRecord>> {
-    let (envelopes, dispositions) = read_scoped(paths, scope, archive)?;
+) -> io::Result<Vec<SummaryRecord>> {
+    let (envelopes, events) = read_scoped(paths, scope, archive)?;
     let records = match only {
-        Some(id) => project_one(&envelopes, &dispositions, now_ms, id)
+        Some(id) => project_one(&envelopes, &events, now_ms, id)
             .into_iter()
             .collect(),
-        None => project(&envelopes, &dispositions, now_ms),
+        None => project_summary(&envelopes, &events, now_ms),
     };
     Ok(records)
+}
+
+/// The RAW event read for `qd dispositions --events` (§3b): the
+/// [`DispositionEvent`] rows in `scope` (+ `archive`), in file/union order —
+/// the witnessed funnel itself, no fold, no state. If `only` is `Some(id)`,
+/// keep only that `correlation_id`'s rows (still in order).
+pub fn read_events(
+    paths: &QdPaths,
+    scope: &Scope,
+    archive: bool,
+    only: Option<&str>,
+) -> io::Result<Vec<DispositionEvent>> {
+    let (_envelopes, mut events) = read_scoped(paths, scope, archive)?;
+    if let Some(id) = only {
+        events.retain(|e| e.correlation_id == id);
+    }
+    Ok(events)
 }
 
 // ===========================================================================
 // Idempotency helper (W4 inbound mode)
 // ===========================================================================
 
-/// True iff the LOCAL `dispositions.jsonl` already carries a terminal row for
-/// `correlation_id` (any terminal — `delivered` OR `failed`). Inbound mode (W4)
-/// uses this as the idempotency probe: a terminal present ⇒ no-op success (the
-/// envelope was already witnessed; "first terminal wins", format doc §2).
+/// True iff the LOCAL `dispositions.jsonl` already carries a `delivered` EVENT
+/// for `correlation_id` (the leaf's [`has_delivered`] over
+/// [`read_local_events`]). Inbound mode (W4) uses this as the idempotency
+/// probe: a delivered event present ⇒ no-op success (the prose already landed;
+/// delivery is irreversible, §2).
+///
+/// Idempotence keys on a delivered event EXISTING (the R8 bug fix) — a
+/// `delivery-failed` row does NOT block a retry: a failed attempt is history,
+/// not a verdict, and the next presentation of the same envelope attempts
+/// delivery again.
 ///
 /// Local-only by design: idempotency keys on THIS qd's witnessed facts (a peer's
 /// mirror is not my authority). Torn-tolerant read; a missing file ⇒ `false`.
-pub fn has_terminal(paths: &QdPaths, correlation_id: &str) -> io::Result<bool> {
-    let disp = read_local_dispositions(paths);
-    Ok(disp
-        .records
-        .iter()
-        .any(|d| d.correlation_id == correlation_id))
+pub fn has_delivered_event(paths: &QdPaths, correlation_id: &str) -> io::Result<bool> {
+    let events = read_local_events(paths);
+    Ok(has_delivered(&events.records, correlation_id))
 }
 
 // ===========================================================================
-// Local authority resolver (v1 placeholder — host-identity deferred)
+// Local host resolver (v1 placeholder — host-identity deferred)
 // ===========================================================================
 
-/// The host id stamped into an envelope's / disposition's `authority` column.
+/// The host id for THIS qd. The value stamps an envelope's / event's `origin`
+/// when this qd ORIGINATES a message, and an event's `witness` when this qd
+/// WITNESSES a moment (the R9/N10 split: {origin, authored_at} = the origin
+/// timeline, {witness, witnessed_at} = the witness timeline).
 ///
 /// **v1 placeholder (host-identity is DEFERRED).** Resolution order:
 ///   1. `QD_HOST` env override (via the injected [`Env`] seam) if set + nonempty;
@@ -378,12 +416,12 @@ pub fn has_terminal(paths: &QdPaths, correlation_id: &str) -> io::Result<bool> {
 /// There is intentionally NO OS-hostname read here: the crate has no hostname
 /// seam, and reading the real machine identity outside the injected seam would
 /// violate L9a (the same discipline that forbids raw `QD_HOME`/HOME reads). On a
-/// single machine `authority` need only disambiguate ORIGIN when a peer's log is
+/// single machine the host id need only disambiguate rows when a peer's log is
 /// unioned from `remote/<host>/`; `"local"` suffices until `host-identity.md`
 /// lands and defines the real host id (which will replace this fn's fallback).
 /// `QD_HOST` is honored now so a multi-host test/dev setup can distinguish
-/// authorities without waiting for that work.
-pub fn local_authority(env: &dyn Env) -> String {
+/// hosts without waiting for that work.
+pub fn local_host(env: &dyn Env) -> String {
     env.var("QD_HOST")
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "local".to_string())
@@ -413,21 +451,28 @@ mod tests {
             authored_at: authored,
             expires_at: expires,
             target: "alpha@brano".to_string(),
-            authority: "brano".to_string(),
+            origin: "brano".to_string(),
             body: "hello".to_string(),
         }
     }
 
-    fn disp(id: &str, state: StoredState, witnessed: i64, reason: Option<&str>) -> Disposition {
-        Disposition {
-            v: 1,
-            correlation_id: id.to_string(),
-            state,
-            authored_at: 100,
-            witnessed_at: witnessed,
-            authority: "brano".to_string(),
-            reason: reason.map(str::to_string),
-        }
+    fn attempted(id: &str, witnessed: i64) -> DispositionEvent {
+        DispositionEvent::attempted(id.to_string(), witnessed, "brano".into(), "brano".into(), 100)
+    }
+
+    fn delivered(id: &str, witnessed: i64) -> DispositionEvent {
+        DispositionEvent::delivered(id.to_string(), witnessed, "brano".into(), "brano".into(), 100)
+    }
+
+    fn failed(id: &str, witnessed: i64, reason: &str) -> DispositionEvent {
+        DispositionEvent::delivery_failed(
+            id.to_string(),
+            witnessed,
+            "brano".into(),
+            "brano".into(),
+            100,
+            reason.to_string(),
+        )
     }
 
     // ---- append then read round-trips --------------------------------------
@@ -443,13 +488,34 @@ mod tests {
     }
 
     #[test]
-    fn append_then_read_disposition_round_trip() {
+    fn append_then_read_event_round_trip() {
         let (_tmp, paths) = jailed_paths();
-        let d = disp("01ABC", StoredState::Failed, 500, Some("wake"));
-        append_disposition(&paths, &d).unwrap();
-        let r = read_local_dispositions(&paths);
+        let ev = failed("01ABC", 500, "wake");
+        append_event(&paths, &ev).unwrap();
+        let r = read_local_events(&paths);
         assert_eq!(r.corrupt_interior, 0);
-        assert_eq!(r.records, vec![d]);
+        assert_eq!(r.records, vec![ev]);
+    }
+
+    #[test]
+    fn append_events_preserve_file_order() {
+        // The funnel is an ORDERED log — append order == file order == read order.
+        let (_tmp, paths) = jailed_paths();
+        append_event(&paths, &attempted("a", 1)).unwrap();
+        append_event(&paths, &failed("a", 2, "delivery")).unwrap();
+        append_event(&paths, &attempted("a", 3)).unwrap();
+        append_event(&paths, &delivered("a", 4)).unwrap();
+        let r = read_local_events(&paths);
+        let kinds: Vec<EventKind> = r.records.iter().map(|e| e.event).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                EventKind::Attempted,
+                EventKind::DeliveryFailed,
+                EventKind::Attempted,
+                EventKind::Delivered
+            ]
+        );
     }
 
     #[test]
@@ -468,10 +534,10 @@ mod tests {
     fn missing_files_read_empty_not_error() {
         let (_tmp, paths) = jailed_paths();
         assert!(read_local_log(&paths).records.is_empty());
-        assert!(read_local_dispositions(&paths).records.is_empty());
+        assert!(read_local_events(&paths).records.is_empty());
         // read_scoped over a bare root: empty, no error.
-        let (envs, disps) = read_scoped(&paths, &Scope::Local, false).unwrap();
-        assert!(envs.is_empty() && disps.is_empty());
+        let (envs, events) = read_scoped(&paths, &Scope::Local, false).unwrap();
+        assert!(envs.is_empty() && events.is_empty());
     }
 
     #[test]
@@ -521,7 +587,7 @@ mod tests {
                         authored_at: 1,
                         expires_at: 2,
                         target: "t".to_string(),
-                        authority: "a".to_string(),
+                        origin: "o".to_string(),
                         body: big.clone(),
                     };
                     append_envelope(&paths, &e).unwrap();
@@ -556,12 +622,12 @@ mod tests {
     // ---- read_scoped unions -------------------------------------------------
 
     /// Seed a `remote/<host>/` fixture (log + dispositions) by writing raw bytes.
-    fn seed_remote(paths: &QdPaths, host: &str, envs: &[Envelope], disps: &[Disposition]) {
+    fn seed_remote(paths: &QdPaths, host: &str, envs: &[Envelope], events: &[DispositionEvent]) {
         let dir = paths.remote_dir().join(host);
         std::fs::create_dir_all(&dir).unwrap();
         let log: String = envs.iter().map(|e| format!("{}\n", e.to_jsonl_line())).collect();
         std::fs::write(paths.remote_log_path(host), log).unwrap();
-        let dp: String = disps.iter().map(|d| format!("{}\n", d.to_jsonl_line())).collect();
+        let dp: String = events.iter().map(|d| format!("{}\n", d.to_jsonl_line())).collect();
         std::fs::write(paths.remote_dispositions_path(host), dp).unwrap();
     }
 
@@ -573,7 +639,7 @@ mod tests {
             &paths,
             "peerbox",
             &[env("remote1", 2, 1000)],
-            &[disp("remote1", StoredState::Delivered, 3, None)],
+            &[delivered("remote1", 3)],
         );
 
         // Local: remote NOT included.
@@ -582,11 +648,11 @@ mod tests {
         assert_eq!(ids, vec!["local1"], "Local scope excludes remote");
 
         // Host(peerbox): local UNION the peer.
-        let (envs, disps) = read_scoped(&paths, &Scope::Host("peerbox".into()), false).unwrap();
+        let (envs, events) = read_scoped(&paths, &Scope::Host("peerbox".into()), false).unwrap();
         let mut ids: Vec<&str> = envs.iter().map(|e| e.correlation_id.as_str()).collect();
         ids.sort();
         assert_eq!(ids, vec!["local1", "remote1"], "Host unions in the peer");
-        assert_eq!(disps.len(), 1, "peer disposition unioned in");
+        assert_eq!(events.len(), 1, "peer event unioned in");
 
         // All: local UNION every remote host.
         let (envs, _) = read_scoped(&paths, &Scope::All, false).unwrap();
@@ -651,88 +717,184 @@ mod tests {
         assert_eq!(ids, vec!["good"], "good record survives torn+corrupt siblings");
     }
 
-    // ---- query end-to-end ---------------------------------------------------
+    // ---- query_summary end-to-end -------------------------------------------
 
     #[test]
-    fn query_projects_delivered_pending_and_filters() {
+    fn query_summary_projects_delivered_pending_and_filters() {
         let (_tmp, paths) = jailed_paths();
-        // envelope "d" delivered; envelope "p" pending pre-expiry.
+        // envelope "d" attempted + delivered; envelope "p" pending pre-expiry.
         append_envelope(&paths, &env("d", 10, 1000)).unwrap();
         append_envelope(&paths, &env("p", 10, 1000)).unwrap();
-        append_disposition(&paths, &disp("d", StoredState::Delivered, 500, None)).unwrap();
+        append_event(&paths, &attempted("d", 400)).unwrap();
+        append_event(&paths, &delivered("d", 500)).unwrap();
 
         // now < expires for "p".
-        let all = query(&paths, &Scope::Local, false, 42, None).unwrap();
+        let all = query_summary(&paths, &Scope::Local, false, 42, None).unwrap();
         let by_id = |id: &str| all.iter().find(|r| r.correlation_id == id).cloned();
-        assert_eq!(by_id("d").unwrap().state, RecordState::Delivered);
-        assert_eq!(by_id("d").unwrap().witnessed_at, Some(500));
-        assert_eq!(by_id("p").unwrap().state, RecordState::Pending);
-        assert_eq!(by_id("p").unwrap().witnessed_at, None);
+        let d = by_id("d").unwrap();
+        assert_eq!(d.state, SummaryState::Delivered);
+        assert_eq!(d.attempts, 1);
+        assert_eq!(d.last_event, Some(EventKind::Delivered));
+        assert_eq!(d.witness.as_deref(), Some("brano"));
+        assert_eq!(d.first_delivered_at, Some(500));
+        let p = by_id("p").unwrap();
+        assert_eq!(p.state, SummaryState::Pending);
+        // R11.1 paired-null: no events ⇒ last_event and witness null TOGETHER.
+        assert_eq!(p.last_event, None);
+        assert_eq!(p.witness, None);
+        assert_eq!(p.attempts, 0);
 
         // only=Some filters to that id (project_one semantics).
-        let one = query(&paths, &Scope::Local, false, 42, Some("d")).unwrap();
+        let one = query_summary(&paths, &Scope::Local, false, 42, Some("d")).unwrap();
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].correlation_id, "d");
-        assert_eq!(one[0].state, RecordState::Delivered);
+        assert_eq!(one[0].state, SummaryState::Delivered);
 
         // A miss yields an empty vec (not an error).
-        let none = query(&paths, &Scope::Local, false, 42, Some("nope")).unwrap();
+        let none = query_summary(&paths, &Scope::Local, false, 42, Some("nope")).unwrap();
         assert!(none.is_empty());
     }
 
     #[test]
-    fn query_pre_expiry_pending_then_expired_post_expiry() {
+    fn query_summary_pre_expiry_pending_then_expired_post_expiry() {
         let (_tmp, paths) = jailed_paths();
         append_envelope(&paths, &env("e", 10, 1000)).unwrap();
         // now < expires → pending.
-        let pending = query(&paths, &Scope::Local, false, 999, Some("e")).unwrap();
-        assert_eq!(pending[0].state, RecordState::Pending);
+        let pending = query_summary(&paths, &Scope::Local, false, 999, Some("e")).unwrap();
+        assert_eq!(pending[0].state, SummaryState::Pending);
         // now >= expires → expired (view-computed, not stored).
-        let expired = query(&paths, &Scope::Local, false, 1000, Some("e")).unwrap();
-        assert_eq!(expired[0].state, RecordState::Expired);
-        assert_eq!(expired[0].witnessed_at, None);
+        let expired = query_summary(&paths, &Scope::Local, false, 1000, Some("e")).unwrap();
+        assert_eq!(expired[0].state, SummaryState::Expired);
+        assert_eq!(expired[0].last_event, None);
+        assert_eq!(expired[0].witness, None);
     }
 
-    // ---- has_terminal -------------------------------------------------------
-
     #[test]
-    fn has_terminal_true_when_terminal_present_false_otherwise() {
+    fn query_summary_folds_fail_then_retry_to_delivered() {
+        // The store-level echo of the §6 funnel: a delivery-failed row followed by
+        // a successful retry folds to Delivered, attempts=2 — never failed forever.
         let (_tmp, paths) = jailed_paths();
-        assert!(!has_terminal(&paths, "x").unwrap(), "no file ⇒ false");
-        append_disposition(&paths, &disp("x", StoredState::Delivered, 5, None)).unwrap();
-        assert!(has_terminal(&paths, "x").unwrap(), "terminal present ⇒ true");
-        assert!(!has_terminal(&paths, "y").unwrap(), "other id ⇒ false");
+        append_envelope(&paths, &env("f", 10, 1_000_000)).unwrap();
+        append_event(&paths, &attempted("f", 100)).unwrap();
+        append_event(&paths, &failed("f", 100, "delivery")).unwrap();
+        append_event(&paths, &attempted("f", 200)).unwrap();
+        append_event(&paths, &delivered("f", 300)).unwrap();
+        let s = query_summary(&paths, &Scope::Local, false, 400, Some("f"))
+            .unwrap()
+            .remove(0);
+        assert_eq!(s.state, SummaryState::Delivered, "delivered event exists");
+        assert_eq!(s.attempts, 2);
+        assert_eq!(s.last_event, Some(EventKind::Delivered));
+        assert_eq!(s.first_delivered_at, Some(300));
+        assert_eq!(s.last_attempt_at, Some(200));
     }
 
+    // ---- read_events (the raw --events surface) ------------------------------
+
     #[test]
-    fn has_terminal_matches_failed_terminal_too() {
+    fn read_events_preserves_order_and_filters_to_only() {
         let (_tmp, paths) = jailed_paths();
-        append_disposition(&paths, &disp("f", StoredState::Failed, 5, Some("wake"))).unwrap();
-        assert!(has_terminal(&paths, "f").unwrap(), "failed is a terminal");
+        append_event(&paths, &attempted("a", 1)).unwrap();
+        append_event(&paths, &attempted("b", 2)).unwrap();
+        append_event(&paths, &failed("a", 3, "delivery")).unwrap();
+        append_event(&paths, &delivered("a", 4)).unwrap();
+
+        // No filter: every row, file order.
+        let all = read_events(&paths, &Scope::Local, false, None).unwrap();
+        let got: Vec<(String, EventKind)> = all
+            .iter()
+            .map(|e| (e.correlation_id.clone(), e.event))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("a".to_string(), EventKind::Attempted),
+                ("b".to_string(), EventKind::Attempted),
+                ("a".to_string(), EventKind::DeliveryFailed),
+                ("a".to_string(), EventKind::Delivered),
+            ],
+            "raw rows in file order"
+        );
+
+        // only=Some(id): that id's rows, still in file order.
+        let a_only = read_events(&paths, &Scope::Local, false, Some("a")).unwrap();
+        let kinds: Vec<EventKind> = a_only.iter().map(|e| e.event).collect();
+        assert_eq!(
+            kinds,
+            vec![EventKind::Attempted, EventKind::DeliveryFailed, EventKind::Delivered]
+        );
+        assert!(a_only.iter().all(|e| e.correlation_id == "a"));
+
+        // A miss is empty, not an error.
+        assert!(read_events(&paths, &Scope::Local, false, Some("zz")).unwrap().is_empty());
     }
 
-    // ---- local_authority ----------------------------------------------------
+    #[test]
+    fn read_events_unions_remote_scope() {
+        let (_tmp, paths) = jailed_paths();
+        append_event(&paths, &attempted("local-id", 1)).unwrap();
+        seed_remote(&paths, "peerbox", &[], &[delivered("remote-id", 2)]);
+        let all = read_events(&paths, &Scope::All, false, None).unwrap();
+        let mut ids: Vec<&str> = all.iter().map(|e| e.correlation_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["local-id", "remote-id"]);
+    }
+
+    // ---- has_delivered_event -------------------------------------------------
 
     #[test]
-    fn local_authority_qd_host_override_wins() {
+    fn has_delivered_event_true_only_when_a_delivered_event_exists() {
+        let (_tmp, paths) = jailed_paths();
+        assert!(!has_delivered_event(&paths, "x").unwrap(), "no file ⇒ false");
+        append_event(&paths, &attempted("x", 4)).unwrap();
+        assert!(
+            !has_delivered_event(&paths, "x").unwrap(),
+            "attempted alone is not delivered"
+        );
+        append_event(&paths, &delivered("x", 5)).unwrap();
+        assert!(has_delivered_event(&paths, "x").unwrap(), "delivered event ⇒ true");
+        assert!(!has_delivered_event(&paths, "y").unwrap(), "other id ⇒ false");
+    }
+
+    #[test]
+    fn has_delivered_event_failed_row_does_not_block_a_retry() {
+        // THE discriminator (the R8 bug fix): a delivery-failed row present ⇒
+        // has_delivered_event == false — the idempotency probe must NOT treat a
+        // failure as terminal, so a retry of the same envelope is not blocked.
+        // (The old has_terminal treated ANY row as terminal — that model is dead.)
+        let (_tmp, paths) = jailed_paths();
+        append_event(&paths, &failed("f", 5, "wake")).unwrap();
+        assert!(
+            !has_delivered_event(&paths, "f").unwrap(),
+            "a delivery-failed row must not block the retry"
+        );
+        // The retry then delivers — NOW it is idempotent-terminal.
+        append_event(&paths, &delivered("f", 6)).unwrap();
+        assert!(has_delivered_event(&paths, "f").unwrap());
+    }
+
+    // ---- local_host ----------------------------------------------------------
+
+    #[test]
+    fn local_host_qd_host_override_wins() {
         let mut e = MapEnv::default();
         e.vars.insert("QD_HOST".to_string(), "brano".to_string());
-        assert_eq!(local_authority(&e), "brano");
+        assert_eq!(local_host(&e), "brano");
     }
 
     #[test]
-    fn local_authority_falls_back_to_local() {
+    fn local_host_falls_back_to_local() {
         // No QD_HOST → the "local" v1 placeholder.
         let e = MapEnv::default();
-        assert_eq!(local_authority(&e), "local");
+        assert_eq!(local_host(&e), "local");
     }
 
     #[test]
-    fn local_authority_empty_qd_host_falls_back() {
+    fn local_host_empty_qd_host_falls_back() {
         // QD_HOST="" is treated as unset (nonempty filter).
         let mut e = MapEnv::default();
         e.vars.insert("QD_HOST".to_string(), String::new());
-        assert_eq!(local_authority(&e), "local");
+        assert_eq!(local_host(&e), "local");
     }
 
     // ---- lock path shape ----------------------------------------------------

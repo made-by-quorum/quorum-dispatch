@@ -569,14 +569,20 @@ fn cmd_whoami() -> Command {
 }
 
 // --- 12b. dispositions [<correlation_id>] — qd–qf transition W5 (read verb) ---
-// A stateless, caller-windowed JSONL projection over log.jsonl ⟕
-// dispositions.jsonl (format doc §3), for piping into DuckDB. New surface (not a
-// TS port), so clap auto-generates its --help.
+// A stateless, caller-windowed JSONL view over log.jsonl ∪ dispositions.jsonl
+// (format doc §3), for piping into DuckDB: the folded per-id summary by default
+// (§3a), or the raw witnessed-event funnel with --events (§3b). New surface
+// (not a TS port), so clap auto-generates its --help.
 fn cmd_dispositions() -> Command {
     Command::new("dispositions")
-        .about("Emit the disposition record for each correlation in scope as JSONL (for DuckDB)")
+        .about("Emit the per-correlation disposition summary as JSONL (default; --events emits the raw witnessed-event rows)")
         // Optional positional point query: just this correlation_id.
         .arg(Arg::new("correlation_id").value_name("correlation_id").required(false))
+        // §3b: the raw event rows (the funnel) instead of the folded summary.
+        .arg(long_flag(
+            "events",
+            "Emit the raw witnessed-event rows (the funnel) instead of the per-id summary",
+        ))
         // Caller-windowed lower bound on authored_at: keep records authored within
         // the last <dur>. Same grammar as `qd send --expires` (bare int = seconds,
         // else <int>{s|m|h|d}). STATELESS — qd stores no read cursor (N2).
