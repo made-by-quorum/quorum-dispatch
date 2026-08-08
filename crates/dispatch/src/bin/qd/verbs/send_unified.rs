@@ -9,9 +9,11 @@ use clap::ArgMatches;
 
 use dispatch::effects::{Env, RealEnv};
 use dispatch::idstore::IdMap;
+use dispatch::launch::RenderMode;
 use dispatch::model::{Session, SessionStatus};
+use dispatch::origin_send::Refusal;
 
-use super::{common, send, send_relay};
+use super::{common, lifecycle, resume, send, send_relay};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UnifiedCarrier {
@@ -25,23 +27,42 @@ enum UnifiedCarrier {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SendRefusal {
     Bare,
-    Cold,
-    Stopped,
     NoLiveReceivePath,
     UnknownProvider(String),
 }
 
+/// A target's lifecycle liveness, from its one resolved registry/join snapshot.
+/// A NOT-live target (`Cold`/`Killed`) is no longer a send refusal (qd–qf W3b:
+/// "stopped is not a refusal class") — it is a WAKE trigger: the unified send
+/// path revives it via [`wake_to_deliverable`] and delivers into the refreshed
+/// row. Only a LIVE target reaches [`select_carrier`].
+fn is_live(session: &Session) -> bool {
+    matches!(
+        session.status,
+        SessionStatus::Idle | SessionStatus::Busy | SessionStatus::Shell
+    )
+}
+
 /// Pure pre-attempt selector. There is intentionally no probing or discovery
-/// here: relay presence, mux linkage, provider, and lifecycle state all come
-/// from the one resolved registry/join snapshot.
+/// here: relay presence, mux linkage, and provider all come from the one resolved
+/// registry/join snapshot.
+///
+/// qd–qf W3b: lifecycle liveness is NO LONGER gated here — the Cold/Stopped
+/// refusal arms are RETIRED. The unified send path wakes a not-live target
+/// ([`wake_to_deliverable`]) BEFORE it calls this, so `select_carrier` only ever
+/// runs on a live (or freshly-revived) row. The remaining `NoLiveReceivePath`
+/// arms are the transport-shape refusals (a live claude with neither relay nor a
+/// joined mux pane; a pane-hosted codex with no live pane) — a genuinely-bare
+/// receive surface, distinct from a stopped session. As a defense-in-depth floor
+/// (a caller that reaches this on a not-live row) a non-live status also yields
+/// `NoLiveReceivePath` rather than routing into a carrier that cannot receive.
 fn select_carrier(session: &Session) -> Result<UnifiedCarrier, SendRefusal> {
     if session.session_id.is_empty() {
         return Err(SendRefusal::Bare);
     }
-    match session.status {
-        SessionStatus::Cold => return Err(SendRefusal::Cold),
-        SessionStatus::Killed => return Err(SendRefusal::Stopped),
-        SessionStatus::Idle | SessionStatus::Busy | SessionStatus::Shell => {}
+    if !is_live(session) {
+        // Floor only — the unified path wakes a not-live target before selecting.
+        return Err(SendRefusal::NoLiveReceivePath);
     }
 
     match session.provider.as_str() {
@@ -83,6 +104,109 @@ fn select_carrier(session: &Session) -> Result<UnifiedCarrier, SendRefusal> {
             None => Err(SendRefusal::NoLiveReceivePath),
         },
         other => Err(SendRefusal::UnknownProvider(other.to_string())),
+    }
+}
+
+/// qd–qf W3b — the WAKE seam. A NOT-live target is revived into a deliverable
+/// (live) row; on success the refreshed [`Session`] (new pid/endpoint, SAME
+/// session id) is handed back so the caller re-runs carrier selection + delivery
+/// against it. A wake that cannot succeed is a [`Refusal::failed`]`("wake", …)` —
+/// the contract's `failed{wake}` (exit 12). Seamed as a trait so the
+/// [`wake_then_deliver`] durability wiring is unit-testable with a mock that
+/// returns Ok(refreshed) / Err(failed{wake}) without standing up a live revive.
+trait Waker {
+    fn wake(&self, session: &Session, render: RenderMode) -> Result<Session, Refusal>;
+}
+
+/// The production [`Waker`]: dispatch to the matching REUSED revive machinery by
+/// provider + hosting. Nothing here re-implements a revive — it calls the SAME
+/// fns `qd resume` / `qd attach` run:
+///   - claude-code MuxPane  → [`resume::revive_claude`] (`fresh=false`, detached),
+///   - codex MuxPane        → [`lifecycle::revive_codex_tui`] (verb `"send"`),
+///   - codex / acp/* / pi daemon → the matching `run_*_resume` (they print their
+///     own "resumed …" line and return an exit code; a nonzero is a wake failure).
+///
+/// On success the row is re-resolved by its STABLE `session_id` (never a name /
+/// prefix — the revive rewrote the registry row under the same id). A revive that
+/// cannot succeed, an unknown/​un-wakeable provider, or a row that vanishes after a
+/// "successful" revive all map to `failed{wake}`.
+struct RealWaker;
+
+impl Waker for RealWaker {
+    fn wake(&self, session: &Session, render: RenderMode) -> Result<Session, Refusal> {
+        use dispatch::provider::{row_hosting, Hosting};
+
+        let label = session
+            .name
+            .clone()
+            .unwrap_or_else(|| session.session_id.clone());
+        let provider = session.provider.as_str();
+        let hosting = row_hosting(provider, session.hosting.as_deref());
+
+        // Re-resolve the refreshed row by the STABLE session id after a revive that
+        // reported success (new pid/endpoint, same id). A vanished row is itself a
+        // wake failure — the revive claimed success but left nothing to deliver to.
+        let refreshed = |session_id: &str| -> Result<Session, Refusal> {
+            common::resolve_session_uncapped(session_id).map_err(|_| {
+                Refusal::failed(
+                    "wake",
+                    format!("revived \"{label}\" but its session row vanished before delivery"),
+                )
+            })
+        };
+
+        match (provider, hosting) {
+            // claude-code pane — the shared cold→drivable claude revive (fresh=false
+            // ⇒ resume the EXISTING session id, not a new one). Detached +
+            // ready-gated; errors-only print. Ok(_) ⇒ re-resolve; Err ⇒ failed{wake}.
+            ("claude-code", _) => match resume::revive_claude(session, None, render, false) {
+                Ok(_) => refreshed(&session.session_id),
+                Err(_) => Err(Refusal::failed(
+                    "wake",
+                    format!("could not revive claude session \"{label}\""),
+                )),
+            },
+            // codex, pane-hosted (--interactive) — the codex twin of revive_claude.
+            ("codex", Some(Hosting::MuxPane)) => {
+                match lifecycle::revive_codex_tui(session, render, "send") {
+                    Ok(_) => refreshed(&session.session_id),
+                    Err(_) => Err(Refusal::failed(
+                        "wake",
+                        format!("could not revive codex session \"{label}\""),
+                    )),
+                }
+            }
+            // codex daemon — the app-server revive (`thread/resume`). It prints its
+            // own success line; exit 0 ⇒ re-resolve, nonzero ⇒ failed{wake}.
+            ("codex", _) => match resume::run_codex_resume(session) {
+                0 => refreshed(&session.session_id),
+                _ => Err(Refusal::failed(
+                    "wake",
+                    format!("could not revive codex daemon session \"{label}\""),
+                )),
+            },
+            // acp/* daemon — the resident adapter revive (`session/load`).
+            (p, _) if p.starts_with("acp/") => match resume::run_acp_resume(session) {
+                0 => refreshed(&session.session_id),
+                _ => Err(Refusal::failed(
+                    "wake",
+                    format!("could not revive acp session \"{label}\""),
+                )),
+            },
+            // pi daemon — the resident revive (`--load-session <id>`).
+            ("pi", _) => match resume::run_pi_resume(session) {
+                0 => refreshed(&session.session_id),
+                _ => Err(Refusal::failed(
+                    "wake",
+                    format!("could not revive pi session \"{label}\""),
+                )),
+            },
+            // No headless wake route for this provider/hosting.
+            _ => Err(Refusal::failed(
+                "wake",
+                format!("provider \"{provider}\" cannot be woken headlessly"),
+            )),
+        }
     }
 }
 
@@ -185,12 +309,6 @@ fn report_refusal(query: &str, session: &Session, refusal: SendRefusal) -> i32 {
         SendRefusal::Bare => eprintln!(
             "qd send: found \"{label}\", but it has no bound session identity and is not receivable."
         ),
-        SendRefusal::Cold => eprintln!(
-            "qd send: found \"{label}\", but it is cold and not receivable — resume it first."
-        ),
-        SendRefusal::Stopped => eprintln!(
-            "qd send: found \"{label}\", but it is stopped and not receivable — resume it first."
-        ),
         SendRefusal::NoLiveReceivePath => eprintln!(
             "qd send: found \"{label}\", but it has no live receive path — not sendable."
         ),
@@ -242,9 +360,12 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
         .emit();
     }
 
-    if let Err(code) = common::reject_if_tombstoned(query, &target) {
-        return code;
-    }
+    // qd–qf W3b: a stopped/tombstoned target is NO LONGER rejected here — "stopped
+    // is not a refusal class". It is a WAKE trigger, handled inside the durability
+    // boundary below (log the envelope FIRST, then wake, then deliver). Only a
+    // TRULY BARE session (no bound identity) stays an immediate sync refusal — a
+    // bare row has nothing to wake and nothing to receive, so we refuse before
+    // logging any envelope (unchanged).
     if target.session_id.is_empty() {
         return report_refusal(query, &target, SendRefusal::Bare);
     }
@@ -265,7 +386,7 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
     // Refresh only by the resolved full session id. This closes ordinary
     // resolve-to-attempt state changes (death, relay loss/appearance, mux loss)
     // without ever allowing a replacement name/prefix match to redirect the
-    // message. Selection below uses this current observable snapshot.
+    // message. The wake/selection below uses this current observable snapshot.
     let current = match common::resolve_session_uncapped(&target.session_id) {
         Ok(session) if session.session_id == target.session_id => session,
         Ok(_) => {
@@ -277,21 +398,53 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
             return 1;
         }
     };
-    if let Err(code) = common::reject_if_tombstoned(query, &current) {
-        return code;
+
+    // qd–qf W3b: the LIVE vs NOT-live split. A LIVE target takes the byte-identical
+    // W3a path — select the carrier FIRST (a transport-shape refusal is an
+    // immediate exit-1 with NO envelope logged, exactly as today), then
+    // write-then-deliver. A NOT-live target is no longer refused: it is
+    // resume-and-deliver — log the envelope FIRST, WAKE it, then select + deliver
+    // into the refreshed row (a wake that cannot succeed is a `failed{wake}`
+    // stamped against the logged envelope, exit 12).
+    if is_live(&current) {
+        let carrier = match select_carrier(&current) {
+            Ok(carrier) => carrier,
+            Err(refusal) => return report_refusal(query, &current, refusal),
+        };
+        // qd–qf W3 part A: WRITE-THEN-DELIVER. Log the envelope BEFORE delivery
+        // (hard-fail if the append errors), deliver via the existing unified
+        // carrier, then stamp the witnessed terminal (best-effort).
+        deliver_with_durability(
+            &env,
+            &paths,
+            &RealUnifiedBackend,
+            carrier,
+            &current,
+            query,
+            message,
+            expires_ms,
+        )
+    } else {
+        // Render mode for the wake (a not-live target is revived into a fresh
+        // pane). The `send` verb has NO `--alt-screen`/`--inline` flags, so this is
+        // FLAG-LESS: `render-default` config > the inline default (never
+        // `m.get_flag`, which would panic on the flag-less `send` subcommand).
+        let render = dispatch::launch::resolve_render_mode(
+            None,
+            dispatch::launch::render_default_from_config(&env).as_deref(),
+        );
+        wake_then_deliver(
+            &env,
+            &paths,
+            &RealUnifiedBackend,
+            &RealWaker,
+            render,
+            &current,
+            query,
+            message,
+            expires_ms,
+        )
     }
-
-    let carrier = match select_carrier(&current) {
-        Ok(carrier) => carrier,
-        Err(refusal) => return report_refusal(query, &current, refusal),
-    };
-
-    // qd–qf W3 part A: WRITE-THEN-DELIVER. Mint the envelope, append it to
-    // `log.jsonl` BEFORE delivery (HARD FAIL if that append errors — we never
-    // deliver without the durable envelope), deliver via the existing unified
-    // carrier, then stamp the witnessed terminal into `dispositions.jsonl`
-    // (best-effort — a lost disposition row must never flip the send's own exit).
-    deliver_with_durability(&env, &paths, &RealUnifiedBackend, carrier, &current, query, message, expires_ms)
 }
 
 /// qd–qf W3 part A — the write-then-deliver + disposition-stamp wrapper around
@@ -353,8 +506,8 @@ fn deliver_with_durability(
     let code = dispatch_selected(backend, carrier, session, message);
 
     // Stamp the witnessed terminal AFTER the attempt. exit 0 ⇒ delivered; a
-    // definitive failure ⇒ failed{delivery}. (There is no unwakeable-target path
-    // here yet — resume-and-deliver / failed{wake} is W3 part B, deferred.)
+    // definitive failure ⇒ failed{delivery}. (This is the LIVE path — a not-live
+    // target's resume-and-deliver / failed{wake} lives in `wake_then_deliver`.)
     let (state, reason) = if code == 0 {
         (StoredState::Delivered, None)
     } else {
@@ -376,9 +529,125 @@ fn deliver_with_durability(
     code
 }
 
+/// qd–qf W3b — the RESUME-AND-DELIVER path for a NOT-live target. "Stopped is not
+/// a refusal class": the envelope is LOGGED FIRST (write-then-deliver — hard-fail
+/// if the append errors), THEN the target is WOKEN, THEN delivered into the
+/// refreshed row.
+///
+/// Ordering (contract §4, format doc §1/§2), all inside the durability boundary:
+///   1. LOG the envelope (fatal-on-error — no durable record ⇒ do not proceed);
+///   2. WAKE via the [`Waker`] seam. On `Err(failed{wake})` the wake could not
+///      succeed → stamp a `failed{wake}` disposition against the logged envelope,
+///      print the refusal, and return [`EXIT_REFUSED`] (12). Nothing was delivered.
+///   3. On `Ok(refreshed)` re-select the carrier for the refreshed (now live) row.
+///      A revive that reported success but left an unroutable row is itself a wake
+///      failure → the SAME `failed{wake}` stamp + exit 12 (never a silent no-op).
+///   4. DELIVER via the carrier, then STAMP `delivered`/`failed{delivery}` — the
+///      identical terminal wiring the live path uses.
+///
+/// Seamed (deps injected — `backend`/`waker`/`env`/`paths`) so the log → wake →
+/// select → deliver → stamp shape is proven with mocks (no live carrier/revive).
+#[allow(clippy::too_many_arguments)]
+fn wake_then_deliver(
+    env: &dyn Env,
+    paths: &dispatch::paths::QdPaths,
+    backend: &dyn UnifiedBackend,
+    waker: &dyn Waker,
+    render: RenderMode,
+    session: &Session,
+    raw_target: &str,
+    message: &str,
+    expires_ms: i64,
+) -> i32 {
+    use dispatch::dispositions::{self, StoredState};
+    use dispatch::effects::{Clock, RealClock};
+    use dispatch::origin_send::{build_disposition, build_envelope, mint_correlation_id};
+
+    // Same transport-file resolution + minting as the live path (from_home_env
+    // honors QD_HOME, matching the store + the W5 reader).
+    let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
+    let clock = RealClock;
+    let authored_at = clock.now_ms();
+    let correlation_id = mint_correlation_id(&clock);
+    let authority = dispositions::local_authority(env);
+
+    // (1) LOG FIRST — even a wake that later fails leaves the durable envelope, so
+    // a `failed{wake}` disposition has an envelope to join on (write-then-deliver).
+    let envelope = build_envelope(
+        correlation_id.clone(),
+        authored_at,
+        expires_ms,
+        raw_target.to_string(),
+        authority.clone(),
+        message.to_string(),
+    );
+    if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
+        eprintln!(
+            "qd send: could not durably record the message before delivery ({e}) — not sent."
+        );
+        return 1;
+    }
+
+    // A `failed{wake}` terminal: stamp it against the logged envelope (best-effort
+    // — a lost disposition must not change the exit), print the refusal, exit 12.
+    let stamp_failed_wake = |refusal: Refusal| -> i32 {
+        let disp = build_disposition(
+            correlation_id.clone(),
+            StoredState::Failed,
+            authored_at,
+            clock.now_ms(),
+            authority.clone(),
+            Some(refusal.class.clone()),
+        );
+        if let Err(e) = dispositions::append_disposition(&tpaths, &disp) {
+            eprintln!("WARNING: could not record the wake-failure disposition (non-fatal): {e}");
+        }
+        refusal.emit()
+    };
+
+    // (2) WAKE. (3) On success, re-select the carrier for the refreshed row — an
+    // unroutable refreshed row is a wake that did not produce a deliverable target.
+    let (refreshed, carrier) = match waker.wake(session, render) {
+        Ok(refreshed) => match select_carrier(&refreshed) {
+            Ok(carrier) => (refreshed, carrier),
+            Err(_) => {
+                let label = refreshed
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| refreshed.session_id.clone());
+                return stamp_failed_wake(Refusal::failed(
+                    "wake",
+                    format!("revived \"{label}\" but it has no live receive path"),
+                ));
+            }
+        },
+        Err(refusal) => return stamp_failed_wake(refusal),
+    };
+
+    // (4) DELIVER into the refreshed row + STAMP the witnessed terminal.
+    let code = dispatch_selected(backend, carrier, &refreshed, message);
+    let (state, reason) = if code == 0 {
+        (StoredState::Delivered, None)
+    } else {
+        (StoredState::Failed, Some("delivery".to_string()))
+    };
+    let disp = build_disposition(
+        correlation_id,
+        state,
+        authored_at,
+        clock.now_ms(),
+        authority,
+        reason,
+    );
+    if let Err(e) = dispositions::append_disposition(&tpaths, &disp) {
+        eprintln!("WARNING: could not record the delivery disposition (non-fatal): {e}");
+    }
+    code
+}
+
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use dispatch::model::SessionBranch;
 
@@ -473,17 +742,22 @@ mod tests {
     }
 
     #[test]
-    fn pane_hosted_codex_still_obeys_the_lifecycle_refusals() {
-        // Hosting selects the CARRIER; it does not exempt a row from the
-        // cold/stopped gates that run before carrier selection.
-        for (status, expected) in [
-            (SessionStatus::Cold, SendRefusal::Cold),
-            (SessionStatus::Killed, SendRefusal::Stopped),
-        ] {
+    fn pane_hosted_codex_not_live_is_a_wake_trigger_not_a_carrier_refusal() {
+        // qd–qf W3b: Cold/Killed are NO LONGER lifecycle REFUSALS — they are WAKE
+        // triggers (`is_live` == false), so the unified path revives the row before
+        // selecting a carrier. `select_carrier` is only ever reached on a live row;
+        // its non-live floor is the generic `NoLiveReceivePath` (never a Cold /
+        // Stopped-specific refusal — those variants are retired).
+        for status in [SessionStatus::Cold, SessionStatus::Killed] {
             let mut s = session("codex");
             s.hosting = Some("mux-pane".into());
             s.status = status;
-            assert_eq!(select_carrier(&s), Err(expected));
+            assert!(!is_live(&s), "{status:?} is a wake trigger, not live");
+            assert_eq!(
+                select_carrier(&s),
+                Err(SendRefusal::NoLiveReceivePath),
+                "select_carrier's non-live floor is NoLiveReceivePath, not a Cold/Stopped refusal"
+            );
         }
     }
 
@@ -522,31 +796,40 @@ mod tests {
     }
 
     #[test]
-    fn bare_cold_stopped_unknown_and_unavailable_are_refused() {
+    fn bare_unknown_and_unavailable_are_refused_but_not_live_is_a_wake_trigger() {
+        // Bare (no bound identity) stays an immediate refusal.
         let mut target = session("claude-code");
         target.session_id.clear();
         assert_eq!(select_carrier(&target), Err(SendRefusal::Bare));
 
+        // qd–qf W3b: Cold/Killed are NO LONGER carrier refusals — `is_live` is
+        // false (a wake trigger), and `select_carrier`'s non-live floor is the
+        // generic NoLiveReceivePath (the Cold/Stopped variants are retired).
         target = session("claude-code");
         target.status = SessionStatus::Cold;
-        assert_eq!(select_carrier(&target), Err(SendRefusal::Cold));
+        assert!(!is_live(&target));
+        assert_eq!(select_carrier(&target), Err(SendRefusal::NoLiveReceivePath));
 
         target.status = SessionStatus::Killed;
-        assert_eq!(select_carrier(&target), Err(SendRefusal::Stopped));
+        assert!(!is_live(&target));
+        assert_eq!(select_carrier(&target), Err(SendRefusal::NoLiveReceivePath));
 
+        // An unknown provider on a LIVE row is still an unknown-provider refusal.
         target = session("mystery");
+        assert!(is_live(&target));
         assert_eq!(
             select_carrier(&target),
             Err(SendRefusal::UnknownProvider("mystery".into()))
         );
 
+        // A LIVE claude with neither relay nor a joined mux pane has a genuinely
+        // bare receive surface — NoLiveReceivePath (a transport-shape refusal,
+        // distinct from a stopped session).
         target = session("claude-code");
         target.zmx_name = None;
         target.socket_dir = None;
-        assert_eq!(
-            select_carrier(&target),
-            Err(SendRefusal::NoLiveReceivePath)
-        );
+        assert!(is_live(&target));
+        assert_eq!(select_carrier(&target), Err(SendRefusal::NoLiveReceivePath));
     }
 
     #[test]
@@ -771,6 +1054,187 @@ mod tests {
         let log = dispatch::dispositions::read_local_log(&tpaths);
         let e = &log.records[0];
         assert_eq!(e.expires_at, e.authored_at + thirty_min_ms, "--expires window honored");
+    }
+
+    // === qd–qf W3b: resume-and-deliver + failed{wake} ========================
+    //
+    // These exercise the `wake_then_deliver` seam with a MOCK Waker (no live
+    // revive): a NOT-live target logs the envelope FIRST, then wakes, then either
+    // delivers into the refreshed row (delivered stamp) or, on an unwakeable
+    // target, stamps `failed{wake}` and exits 12. The store readers parse the
+    // actual files the seam wrote. Separately, `RealWaker::wake`'s provider→route
+    // mapping is pinned (the unknown-provider `failed{wake}` is unit-checkable
+    // without a revive; the revive-backed arms are covered by the live bin test).
+
+    /// A live (Idle) claude row a successful wake "refreshes" into — carries a mux
+    /// pane so `select_carrier` routes it to the PTY carrier.
+    fn live_refreshed() -> Session {
+        let mut s = session("claude-code");
+        s.status = SessionStatus::Idle; // live ⇒ select_carrier succeeds
+        s
+    }
+
+    /// A mock [`Waker`]: returns a pre-set outcome and records that it was asked to
+    /// wake (so a test can assert the wake was actually attempted).
+    struct MockWaker {
+        outcome: RefCell<Option<Result<Session, Refusal>>>,
+        woke: Cell<bool>,
+    }
+    impl MockWaker {
+        fn ok(refreshed: Session) -> Self {
+            MockWaker {
+                outcome: RefCell::new(Some(Ok(refreshed))),
+                woke: Cell::new(false),
+            }
+        }
+        fn err(refusal: Refusal) -> Self {
+            MockWaker {
+                outcome: RefCell::new(Some(Err(refusal))),
+                woke: Cell::new(false),
+            }
+        }
+    }
+    impl Waker for MockWaker {
+        fn wake(&self, _session: &Session, _render: RenderMode) -> Result<Session, Refusal> {
+            self.woke.set(true);
+            self.outcome.borrow_mut().take().expect("wake called once")
+        }
+    }
+
+    #[test]
+    fn wake_then_deliver_logs_envelope_wakes_then_delivers_into_refreshed_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend::default(); // 0 ⇒ delivered
+        let refreshed = live_refreshed();
+        let waker = MockWaker::ok(refreshed.clone());
+
+        let mut cold = session("claude-code");
+        cold.status = SessionStatus::Cold; // the NOT-live target that triggers a wake
+
+        let code = wake_then_deliver(
+            &env,
+            &paths,
+            &backend,
+            &waker,
+            RenderMode::Inline,
+            &cold,
+            "worker@brano",
+            "hello body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+        );
+        assert_eq!(code, 0, "woken + delivered ⇒ exit 0");
+        assert!(waker.woke.get(), "a not-live target must actually be woken");
+        // The carrier was called ONCE against the REFRESHED row's identity.
+        let calls = backend.calls.borrow();
+        assert_eq!(calls.len(), 1, "delivered into the refreshed row exactly once");
+        assert_eq!(calls[0].1, refreshed.session_id);
+
+        // Envelope logged FIRST (write-then-deliver), disposition = delivered.
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let log = dispatch::dispositions::read_local_log(&tpaths);
+        assert_eq!(log.records.len(), 1, "envelope logged before the wake");
+        assert_eq!(log.records[0].target, "worker@brano");
+        let disps = dispatch::dispositions::read_local_dispositions(&tpaths);
+        assert_eq!(disps.records.len(), 1);
+        assert_eq!(disps.records[0].state, dispatch::dispositions::StoredState::Delivered);
+        assert_eq!(disps.records[0].reason, None);
+        assert_eq!(disps.records[0].correlation_id, log.records[0].correlation_id);
+    }
+
+    #[test]
+    fn wake_then_deliver_unwakeable_target_stamps_failed_wake_exit_12() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend::default();
+        let waker = MockWaker::err(Refusal::failed("wake", "could not revive claude session \"wk\""));
+
+        let mut killed = session("claude-code");
+        killed.status = SessionStatus::Killed; // a tombstoned target
+
+        let code = wake_then_deliver(
+            &env,
+            &paths,
+            &backend,
+            &waker,
+            RenderMode::Inline,
+            &killed,
+            "wk",
+            "body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+        );
+        assert_eq!(code, dispatch::origin_send::EXIT_REFUSED, "failed{{wake}} ⇒ exit 12");
+        assert!(waker.woke.get(), "the wake was attempted");
+        // The carrier was NEVER called — nothing was delivered.
+        assert_eq!(backend.calls.borrow().len(), 0, "no delivery on a wake failure");
+
+        // The envelope was still logged FIRST, and a failed{wake} disposition joins
+        // it (reason = the wake class), so an operator can read back the outcome.
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let log = dispatch::dispositions::read_local_log(&tpaths);
+        assert_eq!(log.records.len(), 1, "envelope logged even though the wake failed");
+        let disps = dispatch::dispositions::read_local_dispositions(&tpaths);
+        assert_eq!(disps.records.len(), 1, "a failed{{wake}} terminal was stamped");
+        assert_eq!(disps.records[0].state, dispatch::dispositions::StoredState::Failed);
+        assert_eq!(disps.records[0].reason.as_deref(), Some("wake"), "failed{{wake}} reason");
+        assert_eq!(disps.records[0].correlation_id, log.records[0].correlation_id);
+    }
+
+    #[test]
+    fn wake_then_deliver_refreshed_but_unroutable_is_also_failed_wake() {
+        // A revive that reports success but yields a row with no live receive path
+        // (live but relay-less and mux-less) is a wake that did not produce a
+        // deliverable target → failed{wake}, not a silent no-op / delivered.
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend::default();
+        let mut unroutable = live_refreshed();
+        unroutable.zmx_name = None;
+        unroutable.socket_dir = None; // live claude, no relay, no mux ⇒ NoLiveReceivePath
+        let waker = MockWaker::ok(unroutable);
+
+        let mut cold = session("claude-code");
+        cold.status = SessionStatus::Cold;
+
+        let code = wake_then_deliver(
+            &env,
+            &paths,
+            &backend,
+            &waker,
+            RenderMode::Inline,
+            &cold,
+            "wk",
+            "body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+        );
+        assert_eq!(code, dispatch::origin_send::EXIT_REFUSED);
+        assert_eq!(backend.calls.borrow().len(), 0, "unroutable ⇒ no delivery");
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let disps = dispatch::dispositions::read_local_dispositions(&tpaths);
+        assert_eq!(disps.records.len(), 1);
+        assert_eq!(disps.records[0].state, dispatch::dispositions::StoredState::Failed);
+        assert_eq!(disps.records[0].reason.as_deref(), Some("wake"));
+    }
+
+    #[test]
+    fn real_waker_unknown_provider_is_failed_wake() {
+        // The provider→route table's default arm: a provider with no headless wake
+        // route yields failed{wake} (no revive attempted). This is the one RealWaker
+        // arm reachable off the default floor — the revive-backed arms need a live
+        // registry/mux and are covered by the live bin test.
+        let mut mystery = session("mystery");
+        mystery.status = SessionStatus::Cold;
+        let r = RealWaker.wake(&mystery, RenderMode::Inline).unwrap_err();
+        assert_eq!(r.family, dispatch::origin_send::Family::Failed);
+        assert_eq!(r.class, "wake");
+        assert!(
+            r.reason.contains("cannot be woken headlessly"),
+            "unknown provider ⇒ headless-wake refusal, got: {}",
+            r.reason
+        );
     }
 
     // QS-2 structural guard: `run_claude_relay_unified` in send_relay.rs MUST

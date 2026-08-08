@@ -587,7 +587,13 @@ pub fn revive_claude(
 /// glue: resolve the row's CURRENT pid/endpoint (endpoint is NOT on the
 /// `Session`/`--json` surface — re-read by pid), build the production seams, call
 /// [`dispatch::resume_daemon::resume_codex`], map the outcome to an agent-facing message.
-fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
+///
+/// `pub(crate)` (behavior UNCHANGED) so the unified-send wake path
+/// (`send_unified::wake_to_deliverable`, qd–qf W3b) can revive a stopped
+/// daemon-hosted codex target before delivering — the same revive `qd resume`
+/// runs, reused verbatim (it prints its own "resumed …" line and returns an exit
+/// code the wake helper reads).
+pub(crate) fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
     use dispatch::create_daemon::{real_alloc_port, real_cmdline_probe, RealDaemonSpawner};
     use dispatch::provider::codex::{AppServerRpc, RpcError, WsAppServer};
     use dispatch::resume_daemon::{resume_codex, ResumeOutcome, ResumeParams, ReviveDeps};
@@ -689,7 +695,10 @@ fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
 /// our-pi-daemon cmdline) is a clean no-op — the load-bearing double-spawn guard, since a
 /// fresh `create_pi_session` would claim the (now-free) name and spawn a DUPLICATE
 /// resident. The resident OUTLIVES this verb (residence holds again).
-fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
+///
+/// `pub(crate)` (behavior UNCHANGED) — reused by `send_unified::wake_to_deliverable`
+/// (qd–qf W3b) to revive a stopped pi target before delivering.
+pub(crate) fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
     use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
     use dispatch::effects::Clock;
     use dispatch::provider::pi::daemon::{
@@ -855,7 +864,10 @@ fn carry_forward_structured_send_issued(
 ///     the SAME sessionId, then rewrite the row (NEW pid + NEW endpoint, SAME sessionId)
 ///     and consume the prior tombstone. A later `send`/`wait` round-trips on the SAME
 ///     sessionId; the CC JSONL continues (Component-0-proven faithful).
-fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
+///
+/// `pub(crate)` (behavior UNCHANGED) — reused by `send_unified::wake_to_deliverable`
+/// (qd–qf W3b) to revive a stopped acp/* target before delivering.
+pub(crate) fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
     use dispatch::acp_residence::{build_adapter_argv, connect_ready};
     use dispatch::create_daemon::{real_alloc_port, real_cmdline_probe, DaemonSpawner, RealDaemonSpawner};
     use dispatch::effects::Clock;
