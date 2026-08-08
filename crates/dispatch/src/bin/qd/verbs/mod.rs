@@ -14,6 +14,7 @@ mod kill;
 mod lifecycle;
 mod ls;
 mod mark;
+mod mirror;
 mod ping;
 mod reconcile;
 mod recover;

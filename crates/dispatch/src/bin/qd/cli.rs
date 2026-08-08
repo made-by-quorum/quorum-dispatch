@@ -90,6 +90,21 @@ fn cmd_ls() -> Command {
             long_flag("live", "Live sessions only (idle/busy/shell), uncapped")
                 .conflicts_with("all"),
         )
+        // qd–qf W7 — FLEET MIRROR read (READ-ONLY). `--host <h>` reads exactly
+        // one peer's `remote/<h>/ls.json` snapshot, ALWAYS annotated with the
+        // mirror's staleness (`now − witnessed_at`); an absent mirror ⇒
+        // refused{no-fleet-state} exit 12 (consistent with `qd send --host`).
+        // Conflicts with `--all` (a single host vs the whole fleet — one host
+        // scope per query, the same render-flag precedent as --live/--all); the
+        // verb ALSO checks the conflict so a programmatic caller cannot bypass it.
+        .arg(
+            long_val(
+                "host",
+                "host",
+                "Read one peer host's session mirror (fleet)",
+            )
+            .conflicts_with("all"),
+        )
         .arg(long_flag(
             "json",
             "Output as JSON (best for scripting/piping)",

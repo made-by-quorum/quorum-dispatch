@@ -206,6 +206,84 @@ evaluation and must **not** apply `--as-of` time-travel to it.
 
 ---
 
+## 4 · `ls.json` — a host's session snapshot (published for peers, mirror-read)
+
+A **whole-document JSON** snapshot of a host's `qd ls --json` rows, wrapped with
+the host id + the instant the snapshot was taken. `ls.json` is how the fleet
+answers "what sessions does host *h* have?" without a live cross-host call: the
+mover writes each host's snapshot into every peer's `remote/<host>/ls.json`, and
+`qd ls --host <h>` / `qd ls --all` READ those replicas, **always** surfacing the
+mirror's **staleness** (`now − witnessed_at`) so a dead replication pipeline is
+visible at the surface you look at.
+
+Unlike §1–§3 this is a **single JSON document**, not JSONL (it mirrors the
+`qd ls --json` array shape, which is itself one pretty-printed array). It is
+NOT part of the disposition-record contract frame projects over; it is an
+operational fleet-visibility surface.
+
+**Writer / reader split (READ-ONLY for `qd ls`):** `remote/<host>/ls.json` is
+**mover-written** (out of scope here), exactly like `remote/<host>/log.jsonl` and
+`remote/<host>/dispositions.jsonl`. The mover runs `qd ls --json`, wraps the rows
+with `host` + `witnessed_at`, and writes the result to peers'
+`remote/<myhost>/ls.json`. **`qd ls` does NOT write its own `ls.json`** — the
+`ls.json` (own snapshot, published) row in the file table above is the mover's
+output, produced by *reading* `qd ls --json`, not by `qd ls` itself. W7
+implements only the DEFINE-and-READ half.
+
+### Document schema
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "qd ls.json session snapshot (v1)",
+  "type": "object",
+  "required": ["v", "host", "witnessed_at", "sessions"],
+  "additionalProperties": false,
+  "properties": {
+    "v":            { "const": 1 },
+    "host":         { "type": "string", "minLength": 1,
+                      "description": "The host id this snapshot describes (the peer's local_authority). Disambiguates origin when the file is read from remote/<host>/." },
+    "witnessed_at": { "type": "integer",
+                      "description": "epoch-ms, when the snapshot was TAKEN (the mover's `qd ls --json` run time). Staleness = now − witnessed_at; an old value is a stalled/dead replication pipeline, made visible at every read." },
+    "sessions":     { "type": "array",
+                      "items": { "type": "object" },
+                      "description": "The host's `qd ls --json` rows, verbatim (the same per-session object shape `qd ls --json` emits: name/sessionId/qdId/status/pid/provider/…). Carried opaquely — a peer's row-schema evolution never breaks the reader." }
+  }
+}
+```
+
+`v` / `host` are validated on read; a missing/`v != 1` / non-object / torn file
+⇒ a **named refusal**, never a panic (the whole-document sibling of the JSONL
+torn-tail rule: a mirror we cannot trust is refused with a reason, never silently
+treated as absence-of-rows).
+
+### How `qd ls` READS it (staleness always surfaced)
+
+- **`qd ls --host <h>`** reads `remote/<h>/ls.json`.
+  - ABSENT ⇒ `refused{no-fleet-state}` exit 12 (the single-machine contract,
+    consistent with `qd send --host`: a host-qualified read with no fleet state
+    for that host refuses with a named reason; bare/local is unaffected).
+  - Torn / `v != 1` ⇒ `refused{torn-mirror}` exit 12.
+  - Else prints the peer's rows, **always** annotated with the mirror's staleness.
+    - Human: a header — `host <h> — mirror age 5m12s (witnessed <ISO-8601>)`.
+    - `--json`: each row carries `host`, `mirror_witnessed_at` (epoch-ms), and
+      `mirror_age_ms` (`now − witnessed_at`), so a DuckDB view can see a dead
+      pipeline.
+  - `--host` conflicts with `--all` (one host scope per query).
+- **`qd ls --all`** keeps its existing LOCAL meaning (uncap the row limit +
+  include cold tombstones) EXACTLY, then ADDITIVELY unions every peer's
+  `remote/<host>/ls.json`, each peer's rows annotated with host + staleness. On a
+  single machine with **no `remote/`**, the union is a no-op ⇒ `--all` is
+  **byte-identical** to today. (Across peers `--all` is best-effort: a torn/absent
+  per-host mirror is skipped with a stderr warning; `--host <h>` is the strict
+  single-host read that refuses on a bad mirror.)
+- **`qd ls --json`** is always computed fresh and piped into DuckDB (never
+  cached); the local rows keep their existing shape (a superset — `host` /
+  `mirror_*` columns are absent for local rows), so existing consumers are
+  unbroken.
+
+---
+
 ## Derivation & invariant cross-reference
 
 | Rule | Source |
@@ -219,3 +297,7 @@ evaluation and must **not** apply `--as-of` time-travel to it.
 | no second-order "delivered" event; disposition = single copy of truth | N12, contract §4 |
 | single writer qd for log + dispositions; mirrors mover-written | Amendment 1/3 |
 | emitted record = stateless caller-windowed projection, no cursors | N2, contract §4 bulk form |
+| `ls.json` mover-written; `qd ls` is READ-ONLY (defines + reads mirrors) | §4, TRANSITION §3 |
+| `qd ls` staleness always surfaced (`now − witnessed_at`) | §4, TRANSITION §3 "dead pipeline visible" |
+| `--all` = local (uncap + tombstones) + every peer mirror; no-`remote/` = byte-identical | §4, build-lead reconciliation |
+| host-qualified `ls` with no mirror ⇒ refused{no-fleet-state} exit 12 | §4, consistent w/ `qd send --host` |

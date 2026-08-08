@@ -91,8 +91,20 @@ pub fn run(m: &ArgMatches) -> i32 {
     let table = m.get_flag("table");
     let short = m.get_flag("short");
     let prefix = m.get_one::<String>("prefix").cloned();
+    // qd–qf W7: `--host <h>` reads a peer's mirror instead of local sessions.
+    let host = m.get_one::<String>("host").cloned();
     // index.ts:48 — `opts.limit ? parseInt(opts.limit, 10) : undefined`.
     let limit = common::parse_limit(m.get_one::<String>("limit"));
+
+    // qd–qf W7 — HOST-QUALIFIED read: `--host <h>` is a distinct READ-ONLY path
+    // (a peer's `remote/<h>/ls.json` mirror), never local resolution. It emits
+    // JSON when `--json`/agent-auto, else the human mirror view; both ALWAYS carry
+    // the mirror's staleness. `--host` + `--all` is rejected (clap conflicts, plus
+    // a checked refusal here so a programmatic caller can't bypass the parser).
+    if let Some(h) = host {
+        return run_host(&h, all, resolve_emit_json(json, table));
+    }
+
     run_inner(
         all,
         live,
@@ -101,6 +113,215 @@ pub fn run(m: &ArgMatches) -> i32 {
         prefix,
         limit,
     )
+}
+
+/// qd–qf W7 — resolve `QdPaths` for the fleet-mirror reads the SAME way `qd send`'s
+/// W6 host path does: QD_HOME-honoring (`from_home_env`), since `remote/<host>/`
+/// lives under `dispatch_root` = qd_home. `None` when HOME is unset (the mirror
+/// union then degrades to a no-op — an `ls` with no HOME already errored upstream).
+fn mirror_paths() -> Option<dispatch::paths::QdPaths> {
+    use dispatch::effects::Env;
+    let env = dispatch::effects::RealEnv;
+    let home = env.var("HOME").filter(|h| !h.is_empty())?;
+    Some(dispatch::paths::QdPaths::from_home_env(
+        std::path::Path::new(&home),
+        &env,
+    ))
+}
+
+/// qd–qf W7 — `--all` FLEET UNION (JSON): append every peer mirror's rows to the
+/// already-built LOCAL `rows`, each annotated with `host` + `mirror_witnessed_at` +
+/// `mirror_age_ms`. No `remote/` (single machine) ⇒ no peers ⇒ no-op (the caller's
+/// `--all` bytes are unchanged). A torn/absent per-host mirror is best-effort
+/// SKIPPED with a stderr warning (the strict single-host read is `--host`).
+fn append_mirror_union_json(rows: &mut Vec<serde_json::Value>) {
+    use dispatch::effects::Clock;
+    let Some(paths) = mirror_paths() else { return };
+    let now = dispatch::effects::RealClock.now_ms();
+    for host in super::mirror::peer_hosts(&paths) {
+        match super::mirror::read_mirror(&paths, &host) {
+            super::mirror::MirrorRead::Ok(m) => {
+                let age = m.age_ms(now);
+                for row in m.sessions {
+                    rows.push(super::mirror::annotate_row(
+                        row,
+                        &m.host,
+                        m.witnessed_at,
+                        age,
+                    ));
+                }
+            }
+            // Absent mid-rotation (dir without file) or torn: skip this peer, warn.
+            other => {
+                if let Err(refusal) = other.into_refusal() {
+                    eprintln!("qd ls --all: skipping {}", refusal.reason);
+                }
+            }
+        }
+    }
+}
+
+/// qd–qf W7 — `--all` FLEET UNION (human): for each peer, a staleness header +
+/// that peer's rows in the DEFAULT human table, appended AFTER the local table.
+/// No `remote/` ⇒ "" (the local human output is byte-identical to today's --all).
+/// A torn/absent per-host mirror is best-effort SKIPPED with a stderr warning.
+fn render_mirror_union_human() -> String {
+    use dispatch::effects::Clock;
+    let Some(paths) = mirror_paths() else {
+        return String::new();
+    };
+    let now = dispatch::effects::RealClock.now_ms();
+    let mut out = String::new();
+    for host in super::mirror::peer_hosts(&paths) {
+        match super::mirror::read_mirror(&paths, &host) {
+            super::mirror::MirrorRead::Ok(m) => {
+                let age = m.age_ms(now);
+                out.push('\n');
+                out.push_str(&super::mirror::staleness_header(
+                    &m.host,
+                    m.witnessed_at,
+                    age,
+                ));
+                out.push('\n');
+                out.push_str(&mirror_human_table(&m.sessions, now));
+            }
+            other => {
+                if let Err(refusal) = other.into_refusal() {
+                    eprintln!("qd ls --all: skipping {}", refusal.reason);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// qd–qf W7 — `qd ls --host <h>`: READ one peer's session mirror
+/// (`remote/<h>/ls.json`) and print its rows ALWAYS annotated with the mirror's
+/// staleness (`now − witnessed_at`). READ-ONLY — no local resolution, no writes.
+///
+/// - `--host` + `--all` is a contradiction (a single host vs the whole fleet):
+///   clap rejects it at parse, and this checked refusal (`refused{conflict}`
+///   exit 12) closes the programmatic path too.
+/// - An ABSENT mirror ⇒ `refused{no-fleet-state}` exit 12 — the single-machine
+///   contract, worded to match `qd send --host` (a host-qualified read with no
+///   fleet state for that host refuses with a named reason; bare/local is
+///   unaffected). A torn / `v != 1` mirror ⇒ `refused{torn-mirror}` (never a
+///   panic).
+/// - `--json`: each row carries `host` + `mirror_witnessed_at` + `mirror_age_ms`
+///   so a DuckDB projection sees a dead pipeline. Human: a `host h — mirror age …`
+///   header precedes the peer's rows.
+fn run_host(host: &str, all: bool, emit_json: bool) -> i32 {
+    use dispatch::effects::{Clock, Env};
+
+    // Defense in depth: clap already forbids `--host --all`, but a checked refusal
+    // means the two-scope contradiction is named even if the parser is bypassed.
+    if all {
+        return dispatch::origin_send::Refusal::refused(
+            "conflict",
+            "--host reads ONE peer's mirror; --all unions the whole fleet — pick one",
+        )
+        .emit();
+    }
+
+    // Resolve the remote dir the SAME way `qd send`'s W6 host path does:
+    // QD_HOME-honoring (`from_home_env`), since `remote/<host>/` lives under
+    // `dispatch_root` = qd_home. HOME unset ⇒ the shared HOME error + exit 1.
+    let env = dispatch::effects::RealEnv;
+    let Some(home) = env.var("HOME").filter(|h| !h.is_empty()) else {
+        eprintln!("qd: HOME is not set — cannot resolve the session mirror dir.");
+        return 1;
+    };
+    let paths = dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), &env);
+
+    let mirror = match super::mirror::read_mirror(&paths, host).into_refusal() {
+        Ok(m) => m,
+        Err(refusal) => return refusal.emit(),
+    };
+    let now = dispatch::effects::RealClock.now_ms();
+    let age = mirror.age_ms(now);
+
+    if emit_json {
+        // Each peer row annotated with host + staleness columns (DuckDB-friendly).
+        let rows: Vec<serde_json::Value> = mirror
+            .sessions
+            .into_iter()
+            .map(|row| super::mirror::annotate_row(row, &mirror.host, mirror.witnessed_at, age))
+            .collect();
+        let value = serde_json::Value::Array(rows);
+        emit_or_pipe_exit(&format!("{}\n", render::to_pretty(&value)));
+        return 0;
+    }
+
+    // Human: the staleness header FIRST (a dead pipeline is visible at the surface
+    // you look at), then the peer's rows rebuilt into the human table.
+    let mut out = String::new();
+    out.push_str(&super::mirror::staleness_header(
+        &mirror.host,
+        mirror.witnessed_at,
+        age,
+    ));
+    out.push('\n');
+    out.push_str(&mirror_human_table(&mirror.sessions, now));
+    emit_or_pipe_exit(&out);
+    0
+}
+
+/// Render a peer mirror's rows (opaque `--json` session objects) into the DEFAULT
+/// human `qd ls` table. The rows are the peer's own `qd ls --json` output, so we
+/// re-hydrate the load-bearing display columns (name / stable-id prefix / provider
+/// / status / lastActive / tokens) into a [`Session`] and reuse the SAME
+/// `render_table_human_at` the local path uses — the mirror view is visually
+/// consistent with local `ls`. Fields absent on a peer row degrade to the local
+/// path's own defaults (no name → "-", no id → "---"). Never panics on a
+/// missing/oddly-typed field (a peer's row schema is not ours to trust).
+fn mirror_human_table(rows: &[serde_json::Value], now: i64) -> String {
+    let sessions: Vec<Session> = rows.iter().map(session_from_mirror_row).collect();
+    render_table_human_at_with_management(&sessions, now, &[], &[])
+}
+
+/// Re-hydrate a [`Session`] from a peer's `ls --json` row for the human table. Only
+/// the display columns are read; everything else is inert. `qdId` becomes the
+/// stable id, but since the mirror table lists ONLY this peer's rows the
+/// shortest-unique-prefix computation runs over them alone (same as a local list).
+fn session_from_mirror_row(row: &serde_json::Value) -> Session {
+    use dispatch::model::{SessionBranch, SessionStatus};
+    let s = |k: &str| row.get(k).and_then(|v| v.as_str()).map(String::from);
+    let status = match row.get("status").and_then(|v| v.as_str()) {
+        Some("busy") => SessionStatus::Busy,
+        Some("shell") => SessionStatus::Shell,
+        Some("killed") => SessionStatus::Killed,
+        Some("cold") => SessionStatus::Cold,
+        // idle, unmanaged, live/stopped/dead-endpoint (acp), or anything unknown →
+        // Idle's neutral rendering (the mirror is a snapshot, not a live probe).
+        _ => SessionStatus::Idle,
+    };
+    Session {
+        name: s("name"),
+        user_named: None,
+        session_id: s("sessionId").unwrap_or_default(),
+        code: None,
+        qd_id: s("qdId"),
+        pid: row.get("pid").and_then(|v| v.as_i64()),
+        status,
+        zmx_name: None,
+        zmx_clients: None,
+        socket_dir: None,
+        relay_port: None,
+        turns: row.get("turns").and_then(|v| v.as_u64()).unwrap_or(0),
+        tokens: row.get("tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+        cwd: s("cwd"),
+        last_active_ms: None,
+        version: None,
+        started_at_ms: None,
+        git_branch: None,
+        jsonl_path: None,
+        last_turns: None,
+        provider: s("provider").unwrap_or_else(|| "claude-code".to_string()),
+        entrypoint: None,
+        lineage: None,
+        hosting: None,
+        which_branch: SessionBranch::LiveRegistry,
+    }
 }
 
 /// WP-B7 PIECE 1 — resolve whether `qd ls` emits the JSON machine surface vs. the
@@ -277,7 +498,11 @@ fn run_inner(
             .map(|h| dispatch::paths::QdPaths::from_home(std::path::Path::new(&h)).sessions_dir);
         sessions
             .iter()
-            .map(|s| sessions_dir.as_deref().and_then(|sd| acp_human_status(s, sd)))
+            .map(|s| {
+                sessions_dir
+                    .as_deref()
+                    .and_then(|sd| acp_human_status(s, sd))
+            })
             .collect()
     };
 
@@ -378,6 +603,18 @@ fn run_inner(
                 rows.push(render::bare_proc_to_value(b));
             }
         }
+        // qd–qf W7 — `--all` FLEET UNION (JSON): after the (unchanged) LOCAL rows,
+        // append every peer mirror's rows, each annotated with host + staleness so
+        // a DuckDB view sees a dead pipeline. On a single machine with NO `remote/`
+        // this is a no-op (peer_hosts is empty) ⇒ byte-identical to today's --all.
+        // A torn/absent per-host mirror is SKIPPED here (a warning to stderr) rather
+        // than failing the whole fleet dump — `--all` is best-effort across peers;
+        // `--host <h>` is the strict single-host read that refuses on a bad mirror.
+        if all {
+            if let Some(rows) = value.as_array_mut() {
+                append_mirror_union_json(rows);
+            }
+        }
         // `{}\n` reproduces `println!` byte-for-byte; emit_or_pipe_exit replaces
         // the panic-on-broken-pipe with a clean exit-141 (item 20).
         emit_or_pipe_exit(&format!("{}\n", render::to_pretty(&value)));
@@ -409,6 +646,10 @@ fn run_inner(
         // non-claude processes — show them rather than a bare "No sessions found."
         let mut out = String::from("No sessions found.\n");
         out.push_str(&render_bare_section(&bare_procs));
+        // qd–qf W7: an empty LOCAL list under --all still shows the fleet mirrors.
+        if all {
+            out.push_str(&render_mirror_union_human());
+        }
         emit_or_pipe_exit(&out);
     } else {
         // (L) Item 3: the acp rows ride the PRIMARY-SOURCED Status override (computed
@@ -418,6 +659,13 @@ fn run_inner(
         // existing row stays byte-identical.
         let mut out = render_table_human_with(&sessions, &acp_status_overrides, &management);
         out.push_str(&render_bare_section(&bare_procs));
+        // qd–qf W7 — `--all` FLEET UNION (human): a per-host staleness header +
+        // that peer's rows, appended AFTER the local table (the same additive shape
+        // as the bare-proc section — it never touches the local table's widths, so
+        // local `ls` output is byte-identical). No `remote/` ⇒ "" ⇒ unchanged.
+        if all {
+            out.push_str(&render_mirror_union_human());
+        }
         emit_or_pipe_exit(&out);
     }
 
@@ -555,12 +803,17 @@ fn acp_status_classify(pid_alive: bool, identity_ok: bool) -> (&'static str, Ses
 /// identity over the re-read `--listen <endpoint>`. Pure `/proc` reads — degrades cleanly
 /// (a dead/stopped acp row reads "stopped"/"dead-endpoint"; ls NEVER touches the endpoint
 /// so it cannot crash on a dead one).
-fn acp_human_status(s: &Session, sessions_dir: &std::path::Path) -> Option<(String, SessionStatus)> {
+fn acp_human_status(
+    s: &Session,
+    sessions_dir: &std::path::Path,
+) -> Option<(String, SessionStatus)> {
     if !s.provider.starts_with("acp/") {
         return None;
     }
     let pid = s.pid.filter(|&p| p != 0);
-    let pid_alive = pid.map(|p| dispatch::effects::is_pid_alive(p as i32)).unwrap_or(false);
+    let pid_alive = pid
+        .map(|p| dispatch::effects::is_pid_alive(p as i32))
+        .unwrap_or(false);
     // Endpoint is NOT on the Session surface — re-read it off the registry row by pid.
     let endpoint = pid
         .and_then(|p| dispatch::registry::read_entry(sessions_dir, p))
@@ -619,7 +872,15 @@ fn render_table_human_at_with_management(
     // Tokens stays the last (right-aligned) column. The existing columns' cell
     // CONTENT is byte-identical; this only adds a new column.
     let headers: Vec<&str> = if include_management {
-        vec!["Name", "Id", "Prov", "Status", "Mode", "Last active", "Tokens"]
+        vec![
+            "Name",
+            "Id",
+            "Prov",
+            "Status",
+            "Mode",
+            "Last active",
+            "Tokens",
+        ]
     } else {
         vec!["Name", "Id", "Prov", "Status", "Last active", "Tokens"]
     };
@@ -1093,12 +1354,24 @@ mod tests {
     #[test]
     fn acp_status_classify_is_three_way() {
         // pid not alive → stopped (red/killed), regardless of identity.
-        assert_eq!(super::acp_status_classify(false, true), ("stopped", SessionStatus::Killed));
-        assert_eq!(super::acp_status_classify(false, false), ("stopped", SessionStatus::Killed));
+        assert_eq!(
+            super::acp_status_classify(false, true),
+            ("stopped", SessionStatus::Killed)
+        );
+        assert_eq!(
+            super::acp_status_classify(false, false),
+            ("stopped", SessionStatus::Killed)
+        );
         // alive + our adapter for the recorded endpoint → live (cyan/idle).
-        assert_eq!(super::acp_status_classify(true, true), ("live", SessionStatus::Idle));
+        assert_eq!(
+            super::acp_status_classify(true, true),
+            ("live", SessionStatus::Idle)
+        );
         // alive but identity-fail (reused pid) → dead-endpoint (dim/cold).
-        assert_eq!(super::acp_status_classify(true, false), ("dead-endpoint", SessionStatus::Cold));
+        assert_eq!(
+            super::acp_status_classify(true, false),
+            ("dead-endpoint", SessionStatus::Cold)
+        );
     }
 
     /// `acp_human_status`: a non-acp row → None (byte-identical stored path). An acp row
@@ -1140,16 +1413,32 @@ mod tests {
         // the acp override rides the EXISTING Status column and adds NO column of
         // its own; the header is the fixed set (lsview A2 added the Prov column,
         // present in the override AND non-override render alike).
-        assert_eq!(out.lines().next().unwrap().split_whitespace().collect::<Vec<_>>(), vec!["Name", "Id", "Prov", "Status", "Last", "active", "Tokens"]);
-        assert!(plain.contains("live"), "acp Status override rides the Status column: {plain:?}");
-        assert!(plain.contains("busy"), "the non-acp row keeps its stored status: {plain:?}");
+        assert_eq!(
+            out.lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            vec!["Name", "Id", "Prov", "Status", "Last", "active", "Tokens"]
+        );
+        assert!(
+            plain.contains("live"),
+            "acp Status override rides the Status column: {plain:?}"
+        );
+        assert!(
+            plain.contains("busy"),
+            "the non-acp row keeps its stored status: {plain:?}"
+        );
 
         // The NON-ACP row's rendered line is byte-identical whether or not overrides are
         // present (all-None == the stored path == the golden).
         let none_overrides: Vec<Option<(String, SessionStatus)>> = vec![None, None];
         let with_none = render_table_human_at_with(&rows, NOW_MS, &none_overrides);
         let plain_path = render_table_human_at(&rows, NOW_MS);
-        assert_eq!(with_none, plain_path, "all-None overrides == the stored-status render");
+        assert_eq!(
+            with_none, plain_path,
+            "all-None overrides == the stored-status render"
+        );
     }
 
     /// A representative set: a normal claude row, a codex-provider row, a killed
