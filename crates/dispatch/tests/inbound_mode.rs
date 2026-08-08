@@ -417,10 +417,13 @@ fn inbound_with_expires_flag_is_an_arg_refusal() {
     );
 }
 
-/// Origin mode is UNCHANGED when `--inbound-envelope` is ABSENT: an unknown-session
-/// origin send still reaches the resolver with its normal `No session matching`
-/// message (NOT a door refusal, NOT an inbound path). Regression guard that the
-/// mode split does not disturb origin mode.
+/// Origin mode still reaches the resolver when `--inbound-envelope` is ABSENT: an
+/// unknown-session origin send takes the ORIGIN path (not the inbound door). qd–qf
+/// W6 ALIGNED origin's ambiguity/unknown family to the shared Refusal — an unknown
+/// target is now `refused{unknown}` exit 12 (the SAME family the inbound door
+/// renders), replacing the old resolve_or_die exit-1 "No session matching". This
+/// stays a regression guard that the mode split routes origin to the resolver (the
+/// resolver-miss reason text is preserved inside the refusal).
 #[test]
 fn origin_mode_unchanged_when_inbound_absent() {
     let temp = tempfile::tempdir().unwrap();
@@ -434,13 +437,9 @@ fn origin_mode_unchanged_when_inbound_absent() {
         .expect("spawn qd");
     let code = out.status.code().unwrap_or(-1);
     let err = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(code, 1, "origin send to an unknown session → the normal resolve-miss exit 1 (stderr: {err})");
+    assert_eq!(code, 12, "origin send to an unknown session → W6 refused{{unknown}} exit 12 (stderr: {err})");
     assert!(
-        err.contains("No session matching \"ghost\""),
-        "origin mode reaches the resolver unchanged, got: {err}"
-    );
-    assert!(
-        !err.contains("refused{"),
-        "origin mode must NOT render a door refusal, got: {err}"
+        err.starts_with("qd send: refused{unknown}:") && err.contains("no session matching \"ghost\""),
+        "origin mode reaches the resolver (aligned refused{{unknown}}), got: {err}"
     );
 }

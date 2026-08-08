@@ -236,35 +236,40 @@ fn send_bad_expires_is_a_sync_refusal_exit_12() {
 }
 
 /// A well-formed `--expires` parses cleanly and does NOT disturb resolution: an
-/// unknown session still yields the normal `No session matching` + exit 1 (NOT a
-/// refused{expires}). Proves the flag is accepted and the value is consumed.
+/// unknown session still reaches the resolver. qd–qf W6: origin `send` now renders
+/// the resolver's outcomes through the SHARED Refusal (refused{unknown} exit 12),
+/// consistent with the W4 inbound door — NOT the old resolve_or_die exit 1 (that
+/// path is unchanged for the OTHER verbs: stop / send:pty / send:http / wait).
+/// This still proves the flag is accepted and the value is consumed (it is NOT a
+/// refused{expires}).
 #[test]
 fn send_good_expires_parses_then_resolves_normally() {
     let temp = tempfile::tempdir().unwrap();
     for good in ["12h", "30m", "45s", "1d", "90"] {
         let (code, _out, err) = run_qd(temp.path(), &["send", "--expires", good, "nope", "hi"]);
-        assert_eq!(code, 1, "valid --expires {good:?} + unknown session → the normal resolve-miss exit 1 (stderr: {err})");
+        assert_eq!(code, 12, "valid --expires {good:?} + unknown session → W6 refused{{unknown}} exit 12 (stderr: {err})");
         assert!(
-            err.contains("No session matching \"nope\""),
-            "valid --expires {good:?} must reach the resolver, got: {err}"
+            err.contains("refused{unknown}") && err.contains("no session matching \"nope\""),
+            "valid --expires {good:?} must reach the resolver (refused{{unknown}}), got: {err}"
         );
         assert!(
             !err.contains("refused{expires}"),
-            "a valid --expires {good:?} must NOT be refused, got: {err}"
+            "a valid --expires {good:?} must NOT be refused as a bad expiry, got: {err}"
         );
     }
 }
 
-/// The unified `qd send` default (no `--expires`) also resolves normally on an
-/// empty registry — the flag being absent is the 12h default, never an error.
+/// The unified `qd send` default (no `--expires`) also resolves on an empty
+/// registry — the flag being absent is the 12h default, never an error. qd–qf W6:
+/// an unknown target is refused{unknown} exit 12 (the aligned origin surface).
 #[test]
 fn send_default_expires_resolves_normally() {
     let temp = tempfile::tempdir().unwrap();
     let (code, _out, err) = run_qd(temp.path(), &["send", "ghost", "body"]);
-    assert_eq!(code, 1, "unknown session → exit 1 (stderr: {err})");
+    assert_eq!(code, 12, "unknown session → W6 refused{{unknown}} exit 12 (stderr: {err})");
     assert!(
-        err.contains("No session matching \"ghost\""),
-        "default-expires send reaches the resolver, got: {err}"
+        err.contains("refused{unknown}") && err.contains("no session matching \"ghost\""),
+        "default-expires send reaches the resolver (refused{{unknown}}), got: {err}"
     );
 }
 
@@ -439,4 +444,182 @@ fn send_cold_claude_wakes_via_real_revive_then_failed_wake() {
         disps.contains("\"state\":\"failed\"") && disps.contains("\"reason\":\"wake\""),
         "failed{{wake}} disposition written: {disps:?}"
     );
+}
+
+// ===========================================================================
+// qd–qf W6 — ADDRESSING: `name@host` sugar → `--host`, single-machine
+// host-qualified refusal (refused{no-fleet-state}), --host/@host precedence
+// (refused{host}), name@local ≡ bare, and origin ambiguity/unknown aligned to
+// the shared Refusal (refused{ambiguous} / refused{unknown}, exit 12, never
+// first-match). These drive the REAL binary against a jailed HOME. A foreign
+// host is set via QD_HOST so local_authority != the target host.
+// ===========================================================================
+
+/// Like `run_qd` but with a `QD_HOST` override, so `local_authority` (which reads
+/// QD_HOST) is a known value and a `--host`/`@host` for a DIFFERENT host is
+/// genuinely foreign (single-machine box, no `remote/<h>/`).
+fn run_qd_host(dir: &Path, qd_host: &str, args: &[&str]) -> (i32, String, String) {
+    let home = dir.join("home");
+    let zmx = dir.join("zmx");
+    std::fs::create_dir_all(home.join(".claude").join("sessions")).unwrap();
+    std::fs::create_dir_all(&zmx).unwrap();
+    common::assert_not_real_home(&home);
+    let out = Command::new(qd_bin())
+        .args(args)
+        .env_remove("QD_HOME")
+        .env("HOME", &home)
+        .env("ZMX_DIR", &zmx)
+        .env("QD_HOST", qd_host)
+        .output()
+        .expect("spawn qd");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// `qd send alpha@brano hi` where local_authority ("thisbox") != "brano" and there
+/// is no `remote/brano/` ⇒ the single-machine host-qualified refusal:
+/// refused{no-fleet-state} exit 12. Bare/local is unaffected (proven elsewhere).
+#[test]
+fn send_name_at_foreign_host_is_refused_no_fleet_state_exit_12() {
+    let temp = tempfile::tempdir().unwrap();
+    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "alpha@brano", "hi"]);
+    assert_eq!(code, 12, "host-qualified for a host with no fleet state → exit 12 (stderr: {err})");
+    assert!(
+        err.starts_with("qd send: refused{no-fleet-state}:"),
+        "expected the single-machine no-fleet-state refusal, got: {err}"
+    );
+    assert!(
+        err.contains("brano") && err.contains("no fleet state"),
+        "the refusal names the host + the absent-fleet-state reason, got: {err}"
+    );
+}
+
+/// `qd send --host brano alpha hi` (the flag form of the sugar) reaches the SAME
+/// refused{no-fleet-state} — the sugar and the flag desugar to one path.
+#[test]
+fn send_host_flag_foreign_is_refused_no_fleet_state_exit_12() {
+    let temp = tempfile::tempdir().unwrap();
+    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "brano", "alpha", "hi"]);
+    assert_eq!(code, 12, "--host foreign → exit 12 (stderr: {err})");
+    assert!(
+        err.starts_with("qd send: refused{no-fleet-state}:"),
+        "--host desugars to the same host-qualified path, got: {err}"
+    );
+    assert!(err.contains("brano"), "names the host, got: {err}");
+}
+
+/// `name@local` where local == local_authority ("thisbox") is treated as THIS host
+/// (≡ bare): it does NOT hit the no-fleet-state refusal — it falls through to LOCAL
+/// resolution and, on an empty registry, is refused{unknown} exit 12 (the aligned
+/// local-resolution miss), never refused{no-fleet-state}.
+#[test]
+fn send_name_at_local_authority_resolves_locally_like_bare() {
+    let temp = tempfile::tempdir().unwrap();
+    // Address host == QD_HOST ⇒ local. Empty registry ⇒ the local resolver misses.
+    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "ghost@thisbox", "hi"]);
+    assert_eq!(code, 12, "name@local → local resolution miss → refused{{unknown}} exit 12 (stderr: {err})");
+    assert!(
+        err.starts_with("qd send: refused{unknown}:"),
+        "name@local is LOCAL (not host-qualified) → the local resolver miss, got: {err}"
+    );
+    assert!(
+        !err.contains("no-fleet-state"),
+        "name@local must NOT hit the host-qualified refusal, got: {err}"
+    );
+    // The bare form of the same name is identical (local resolver miss).
+    let (code_b, _out_b, err_b) = run_qd_host(temp.path(), "thisbox", &["send", "ghost", "hi"]);
+    assert_eq!(code_b, 12, "bare ghost → refused{{unknown}} exit 12 (stderr: {err_b})");
+    assert!(err_b.starts_with("qd send: refused{unknown}:"), "bare local miss, got: {err_b}");
+}
+
+/// `--host` AND a DIFFERENT `@host` in the address ⇒ a sync refused{host} (the two
+/// host qualifiers disagree), BEFORE any resolution. When they AGREE it is fine
+/// (proven via the agreeing pair reaching the same no-fleet-state refusal).
+#[test]
+fn send_host_flag_and_address_host_disagree_is_refused_host_exit_12() {
+    let temp = tempfile::tempdir().unwrap();
+    // @brano vs --host zonk ⇒ disagreement.
+    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "zonk", "alpha@brano", "hi"]);
+    assert_eq!(code, 12, "disagreeing host qualifiers → refused{{host}} exit 12 (stderr: {err})");
+    assert!(
+        err.starts_with("qd send: refused{host}:"),
+        "expected the sync refused{{host}} for disagreement, got: {err}"
+    );
+    assert!(
+        err.contains("brano") && err.contains("zonk"),
+        "the refusal names BOTH qualifiers, got: {err}"
+    );
+
+    // AGREEING qualifiers (--host brano == @brano) pass the reconciliation gate and
+    // reach the host-qualified path → refused{no-fleet-state}, NOT refused{host}.
+    let (code_ok, _out_ok, err_ok) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "brano", "alpha@brano", "hi"]);
+    assert_eq!(code_ok, 12, "agreeing qualifiers still host-qualified → exit 12 (stderr: {err_ok})");
+    assert!(
+        err_ok.starts_with("qd send: refused{no-fleet-state}:"),
+        "agreeing --host/@host is NOT a host disagreement, got: {err_ok}"
+    );
+}
+
+/// A stable_id resolves EXACTLY and never trips the address parser (ids carry no
+/// `@`). On an empty registry an unknown id is a local resolver miss
+/// (refused{unknown}), NOT a host refusal — proving the id path is host-None/local.
+#[test]
+fn send_stable_id_shaped_query_is_local_not_host_qualified() {
+    let temp = tempfile::tempdir().unwrap();
+    // An 8-char id-shaped query (no '@') ⇒ addr_host None ⇒ local resolution.
+    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "ab3kx9mq", "hi"]);
+    assert_eq!(code, 12, "unknown id-shaped query → local miss refused{{unknown}} (stderr: {err})");
+    assert!(
+        err.starts_with("qd send: refused{unknown}:") && !err.contains("no-fleet-state"),
+        "an id-shaped (no-@) query is local, got: {err}"
+    );
+}
+
+/// Origin ambiguity is ALIGNED to the shared Refusal: two GENUINELY-LIVE sessions
+/// sharing one name ⇒ `qd send <name> hi` is refused{ambiguous} exit 12 — never
+/// first-match. Both rows carry THIS test process's live pid so the resolver's
+/// pid-aware liveness sees both as alive (two dead-pid rows would collapse to
+/// unknown). This is the origin twin of the inbound ambiguity door.
+#[test]
+fn send_origin_ambiguous_name_is_refused_ambiguous_exit_12() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let sessions = home.join(".claude").join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::create_dir_all(temp.path().join("zmx")).unwrap();
+    common::assert_not_real_home(&home);
+    let live_pid = std::process::id() as i64; // the test runner — definitely alive.
+    // Two DISTINCT sessionIds, SAME name, both idle + live-pid ⇒ Resolution::Many.
+    for (fname, sid) in [("a.json", "ambi-A"), ("b.json", "ambi-B")] {
+        std::fs::write(
+            sessions.join(fname),
+            format!(
+                r#"{{"pid":{live_pid},"sessionId":"{sid}","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","name":"twin","version":"0.1.0","provider":"mystery"}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    let out = Command::new(qd_bin())
+        .args(["send", "twin", "hi"])
+        .env_remove("QD_HOME")
+        .env("HOME", &home)
+        .env("ZMX_DIR", temp.path().join("zmx"))
+        .output()
+        .expect("spawn qd");
+    let code = out.status.code().unwrap_or(-1);
+    let err = String::from_utf8_lossy(&out.stderr);
+    let root = home.join(".quorum").join("dispatch");
+    let log = std::fs::read_to_string(root.join("log.jsonl")).unwrap_or_default();
+    assert_eq!(code, 12, "ambiguous origin target → refused{{ambiguous}} exit 12 (stderr: {err})");
+    assert!(
+        err.starts_with("qd send: refused{ambiguous}:"),
+        "expected refused{{ambiguous}} (never first-match), got: {err}"
+    );
+    assert!(err.contains("matches 2 sessions"), "names the collision, got: {err}");
+    // A pre-resolution ambiguity refusal logs NOTHING (no envelope, no first-match).
+    assert!(log.is_empty(), "an ambiguity refusal must not log/deliver, got: {log:?}");
 }

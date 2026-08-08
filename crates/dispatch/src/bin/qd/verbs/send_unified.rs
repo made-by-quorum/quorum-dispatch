@@ -348,6 +348,16 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
             )
             .emit();
         }
+        // qd–qf W6: `--host` is origin-mode addressing only. An inbound envelope
+        // carries its own raw `target` (with any `name@host` sugar inside it), so a
+        // separate `--host` here is a contradiction the door names.
+        if m.get_one::<String>("host").is_some() {
+            return Refusal::refused(
+                "args",
+                "--host is origin-mode only; an inbound envelope carries its own target address",
+            )
+            .emit();
+        }
         return run_inbound(&RealEnv, &RealUnifiedBackend, &RealWaker, path);
     }
 
@@ -375,19 +385,49 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
         None => dispatch::origin_send::DEFAULT_EXPIRES_MS,
     };
 
-    // Resolve the caller's handle exactly once. All later refresh/revalidation
+    let env = RealEnv;
+
+    // qd–qf W6 — ADDRESSING. Desugar `name@host` and reconcile it with `--host`
+    // (both are addressing forms; the sugar desugars to the flag). Precedence
+    // (SYNC, before any resolution / side effect):
+    //   - the address's @host and --host, if BOTH present, MUST agree ⇒ else a sync
+    //     `refused{host}` ("address says @X but --host says Y");
+    //   - the effective host = --host ∨ @host ∨ None (bare = this host / local).
+    let (name, addr_host) = parse_address(query);
+    let flag_host = m.get_one::<String>("host").map(String::as_str);
+    let effective_host = match (addr_host, flag_host) {
+        (Some(a), Some(f)) if a != f => {
+            return dispatch::origin_send::Refusal::refused(
+                "host",
+                format!(
+                    "address \"{query}\" says @{a} but --host says {f} — the host qualifiers disagree"
+                ),
+            )
+            .emit();
+        }
+        // Agree, or exactly one present, or neither: --host wins where present
+        // (identical to @host when both are given), else @host, else local.
+        (_, Some(f)) => Some(f),
+        (Some(a), None) => Some(a),
+        (None, None) => None,
+    };
+
+    // Resolve the caller's handle exactly once, through the SHARED W6 resolver
+    // (host-aware: local resolution for bare/@local, the single-machine
+    // no-fleet-state refusal for a foreign host). All later refresh/revalidation
     // uses this row's immutable provider session id, never the caller's possibly
-    // ambiguous name or prefix.
-    let target = match common::resolve_session_uncapped(query) {
+    // ambiguous name/prefix or host qualifier. Origin now renders the resolver's
+    // outcomes through the shared Refusal (refused{unknown}/refused{ambiguous},
+    // exit 12) — consistent with the W4 inbound door.
+    let target = match resolve_target(name, effective_host, &env) {
         Ok(session) => session,
-        Err(code) => return code,
+        Err(refusal) => return refusal.emit(),
     };
 
     // Verb-entry self-send fence: QD_SESSION_ID is resolved through the same
     // idstore chain whoami owns. It runs before lifecycle/carrier selection, and
     // is not reported as a carrier failure. qd–qf W3 part D: the self-send sync
     // refusal renders through the shared Refusal {class,reason} type.
-    let env = RealEnv;
     let self_session_id = match resolve_self_session_id(&env) {
         Ok(value) => value,
         Err(code) => return code,
@@ -492,20 +532,84 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
 // qd–qf W4 — INBOUND MODE ("THE ONE DOOR")
 // ===========================================================================
 
-/// Resolve `target` to exactly one session for the INBOUND door, rendering the
-/// resolver's outcomes through [`Refusal`] (the door's `{class,reason}` family,
-/// exit 12) instead of the origin-mode `resolve_or_die` prints (which exit 1).
+/// qd–qf W6 — split a raw address into `(name, host)` on the LAST `@`.
 ///
-/// Same liveness-aware resolution the acting verbs use (`resolve_session_with_liveness`
-/// against the FULL, uncapped session universe with the SAME pid-aware predicate
-/// as `resolve_or_die`) — we do NOT first-match: `None` ⇒ `refused{unknown}`,
-/// `Many` ⇒ `refused{ambiguous}`, `One` ⇒ the target. The gather / list-build
-/// failure (HOME unset etc.) surfaces as its own printed exit code, wrapped so the
-/// door returns an exit not a panic.
-fn resolve_inbound_target(target: &str) -> Result<Session, Refusal> {
+/// `name@host` is SUGAR over `--host` (TRANSITION §3 / §7 Q2 RULED): the address
+/// `"alpha@brano"` ⇒ `("alpha", Some("brano"))`; a bare `"alpha"` (or a stable_id,
+/// which never contains `@`) ⇒ `("alpha", None)`. We split on the LAST `@` because
+/// neither names nor stable_ids contain `@`; an address is at most one `name@host`
+/// pair, and a stray leading `@` in the name half is caught downstream as an empty
+/// name. `"@host"` ⇒ `("", Some("host"))` (empty name — the caller refuses);
+/// `"name@"` ⇒ `("name", Some(""))` (empty host — the caller refuses).
+fn parse_address(raw: &str) -> (&str, Option<&str>) {
+    match raw.rsplit_once('@') {
+        Some((name, host)) => (name, Some(host)),
+        None => (raw, None),
+    }
+}
+
+/// qd–qf W6 — the SHARED target resolver for BOTH origin and inbound `qd send`.
+/// Generalizes the former `resolve_inbound_target`: `name` is the bare handle
+/// (name | stable_id | prefix | …), `host` is the OPTIONAL host qualifier (from a
+/// `name@host` sugar OR the `--host` flag). Renders the resolver's outcomes
+/// through [`Refusal`] (the `{class,reason}` family, exit 12) — never a first-match.
+///
+/// Host dispatch (TRANSITION §3 + provider-contract §2/Annex A):
+///   - **host is None, OR host == [`local_authority`]** ⇒ LOCAL resolution: the
+///     uncapped gather + `resolve_session_with_liveness` with the SAME pid-aware
+///     predicate the acting verbs use. `One` ⇒ Ok; `None` ⇒ `refused{unknown}`;
+///     `Many` ⇒ `refused{ambiguous}` (never guess). A gather/list-build failure
+///     (HOME unset etc.) surfaces as its own printed exit code, wrapped so the door
+///     returns an exit not a panic.
+///   - **host is Some(h), h != local** ⇒ HOST-QUALIFIED. On this single-machine box
+///     (no `remote/<h>/` populated) ⇒ `refused{no-fleet-state}` (fail-closed): a
+///     host-qualified address with no fleet state for that host refuses with a named
+///     reason, bare/local is unaffected.
+///
+///     BOUNDARY (out of scope this pass): if `remote/<h>/ls.json` EXISTS, resolving
+///     within that host's namespace is FLEET behavior driven by out-of-scope movers
+///     — this pass does NOT build cross-host delivery, so a present-but-remote
+///     target is NOT handled here. We implement only the absent-fleet-state refusal,
+///     which is the single-machine contract.
+fn resolve_target(name: &str, host: Option<&str>, env: &dyn Env) -> Result<Session, Refusal> {
     use dispatch::effects::is_pid_alive;
     use dispatch::join::JoinOpts;
     use dispatch::resolve::{is_live_status, resolve_session_with_liveness, Resolution};
+
+    // Host dispatch: a Some(host) that is NOT this host is host-qualified. An empty
+    // host ("name@") is a malformed address — refuse loudly rather than silently
+    // treating it as local.
+    if let Some(h) = host {
+        if h.is_empty() {
+            return Err(Refusal::refused(
+                "host",
+                format!("address \"{name}@\" has an empty host — drop the trailing @ for a local send"),
+            ));
+        }
+        let local = dispatch::dispositions::local_authority(env);
+        if h != local {
+            // Single-machine contract (provider-contract §2 Amendment / Annex A):
+            // absent fleet state ⇒ a host-qualified address refuses fail-closed.
+            // `remote/<h>/` being absent IS the absent-fleet-state condition; we do
+            // not attempt cross-host resolution in this pass (see BOUNDARY above).
+            return Err(Refusal::refused(
+                "no-fleet-state",
+                format!(
+                    "host-qualified address for host \"{h}\" but no fleet state for it on this host"
+                ),
+            ));
+        }
+        // else: h == local ⇒ fall through to LOCAL resolution (name@local ≡ bare).
+    }
+
+    // An empty name ("@host", or a bare "") never resolves to a session — refuse
+    // loudly instead of gathering and returning an opaque `unknown`.
+    if name.is_empty() {
+        return Err(Refusal::refused(
+            "address",
+            "address has an empty name — nothing to resolve".to_string(),
+        ));
+    }
 
     // The SAME uncapped gather the sealed resolver runs (include_all +
     // include_tombstoned, no preview, no cap) — a capped resolution stays
@@ -521,7 +625,7 @@ fn resolve_inbound_target(target: &str) -> Result<Session, Refusal> {
         // the door a machine-readable refusal too; the printed cause stays visible.
         Refusal::refused(
             "unknown",
-            format!("could not resolve inbound target \"{target}\" (session store unavailable)"),
+            format!("could not resolve target \"{name}\" (session store unavailable)"),
         )
     })?;
 
@@ -536,15 +640,15 @@ fn resolve_inbound_target(target: &str) -> Result<Session, Refusal> {
             }
     };
 
-    match resolve_session_with_liveness(target, &sessions, is_alive) {
+    match resolve_session_with_liveness(name, &sessions, is_alive) {
         Resolution::One(s) => Ok(s.clone()),
         Resolution::None => Err(Refusal::refused(
             "unknown",
-            format!("no session matching \"{target}\""),
+            format!("no session matching \"{name}\""),
         )),
         Resolution::Many(v) => Err(Refusal::refused(
             "ambiguous",
-            format!("\"{target}\" matches {} sessions — refusing to guess", v.len()),
+            format!("\"{name}\" matches {} sessions — refusing to guess", v.len()),
         )),
     }
 }
@@ -562,8 +666,10 @@ fn resolve_inbound_target(target: &str) -> Result<Session, Refusal> {
 ///      field ⇒ `refused{malformed}`.
 ///   3. PAST-EXPIRY: `expires_at < now` ⇒ `expired{past-expiry}` (REFUSED at the
 ///      door, never stamped `expired` — `expired` is a DERIVED view state, §2/§3).
-///   4. RESOLVE the envelope's `target` (via [`resolve_inbound_target`]): unknown
-///      ⇒ `refused{unknown}`, ambiguous ⇒ `refused{ambiguous}` (never first-match).
+///   4. RESOLVE the envelope's `target` (desugar `name@host`, then [`resolve_target`]):
+///      unknown ⇒ `refused{unknown}`, ambiguous ⇒ `refused{ambiguous}` (never
+///      first-match); a host-qualified address ⇒ the single-machine no-fleet-state
+///      refusal.
 ///   5. IDEMPOTENCY: a terminal already present for `correlation_id`
 ///      ([`has_terminal`]) ⇒ NO-OP SUCCESS (deliver nothing, stamp nothing, exit
 ///      0). "First terminal wins" (§2).
@@ -632,14 +738,19 @@ fn run_inbound(
     }
 
     // (4) RESOLVE the ENVELOPE's target (mis-addressed / ambiguous ⇒ named refusal).
-    let target = match resolve_inbound_target(&envelope.target) {
+    // qd–qf W6: desugar the envelope's `target` `name@host` too — an inbound
+    // envelope carries a raw address string, so a host qualifier in it routes the
+    // SAME shared resolver (host-qualified ⇒ the single-machine no-fleet-state
+    // refusal; `@local`/bare ⇒ local resolution).
+    let (in_name, in_host) = parse_address(&envelope.target);
+    let target = match resolve_target(in_name, in_host, env) {
         Ok(s) => s,
         Err(refusal) => return refusal.emit(),
     };
 
     // The transport files honor QD_HOME (from_home_env), matching the store + the
-    // W5 reader. HOME/paths already succeeded inside `resolve_inbound_target`'s
-    // gather, so a failure here is only a fresh HOME-unset race — surface it.
+    // W5 reader. HOME/paths already succeeded inside `resolve_target`'s gather, so
+    // a failure here is only a fresh HOME-unset race — surface it.
     let paths = match common::paths_from_home(env) {
         Ok(p) => p,
         Err(code) => return code,
@@ -1026,6 +1137,98 @@ mod tests {
             hosting: None,
             which_branch: SessionBranch::LiveRegistry,
         }
+    }
+
+    // === qd–qf W6 — ADDRESSING: parse_address + resolve_target host dispatch ===
+    //
+    // `name@host` is sugar over `--host`; `parse_address` splits on the LAST `@`.
+    // `resolve_target`'s host branch is unit-checkable up to (not through) the
+    // real-store gather: the empty-host, empty-name, and foreign-host arms all
+    // short-circuit to a Refusal BEFORE `all_sessions()`, so no live registry is
+    // needed. The LOCAL-resolution arms (bare / @local → One/None/Many) read the
+    // real environment via `all_sessions`, so they are proven by the built-binary
+    // integration tests (verbs_a4 / inbound_mode), not here.
+
+    #[test]
+    fn parse_address_splits_on_the_last_at() {
+        // Bare handle (name | stable_id — neither contains '@') ⇒ no host.
+        assert_eq!(parse_address("alpha"), ("alpha", None));
+        assert_eq!(parse_address("ab3kx9mq"), ("ab3kx9mq", None));
+        // name@host ⇒ (name, Some(host)).
+        assert_eq!(parse_address("alpha@brano"), ("alpha", Some("brano")));
+        // Split on the LAST '@' (defensive — real names/ids carry no '@', but the
+        // rule is well-defined if one somehow appears).
+        assert_eq!(parse_address("a@b@brano"), ("a@b", Some("brano")));
+        // Degenerate forms are PARSED here (the refusal is resolve_target's job):
+        assert_eq!(parse_address("@host"), ("", Some("host")), "empty name half");
+        assert_eq!(parse_address("name@"), ("name", Some("")), "empty host half");
+        assert_eq!(parse_address("@"), ("", Some("")), "both halves empty");
+        assert_eq!(parse_address(""), ("", None), "empty input, no '@'");
+    }
+
+    /// The env whose local authority is `host` (QD_HOST override; empty/absent ⇒
+    /// "local" per `dispositions::local_authority`).
+    fn env_host(host: &str) -> dispatch::effects::MapEnv {
+        let mut e = dispatch::effects::MapEnv::default();
+        e.vars.insert("QD_HOST".into(), host.into());
+        e
+    }
+
+    #[test]
+    fn resolve_target_empty_host_is_refused_host() {
+        // "name@" ⇒ empty host qualifier ⇒ a sync refused{host} (never silently
+        // treated as local). Short-circuits before any gather.
+        let env = env_host("brano");
+        let r = resolve_target("name", Some(""), &env).unwrap_err();
+        assert_eq!(r.family, dispatch::origin_send::Family::Refused);
+        assert_eq!(r.class, "host");
+    }
+
+    #[test]
+    fn resolve_target_empty_name_is_refused_address() {
+        // "@host" ⇒ empty name ⇒ refused{address} (nothing to resolve). Here the
+        // host equals local so we pass the host gate and hit the empty-name gate.
+        let env = env_host("brano");
+        let r = resolve_target("", Some("brano"), &env).unwrap_err();
+        assert_eq!(r.family, dispatch::origin_send::Family::Refused);
+        assert_eq!(r.class, "address");
+    }
+
+    #[test]
+    fn resolve_target_foreign_host_is_refused_no_fleet_state() {
+        // A host-qualified address for a host that is NOT this host, on a
+        // single-machine box (no remote/<h>/) ⇒ fail-closed refused{no-fleet-state}.
+        // local_authority = "brano" (QD_HOST), target host "elsewhere" ≠ local.
+        let env = env_host("brano");
+        let r = resolve_target("alpha", Some("elsewhere"), &env).unwrap_err();
+        assert_eq!(r.family, dispatch::origin_send::Family::Refused);
+        assert_eq!(r.class, "no-fleet-state");
+        assert!(
+            r.reason.contains("elsewhere") && r.reason.contains("no fleet state"),
+            "the refusal names the host + the absent-fleet-state reason, got: {}",
+            r.reason
+        );
+    }
+
+    #[test]
+    fn resolve_target_default_local_authority_is_local() {
+        // With QD_HOST unset, local_authority == "local", so `@local` is treated as
+        // this host — it must NOT hit the no-fleet-state refusal (it falls through
+        // to local resolution). We can't drive the real gather here, so assert the
+        // COMPLEMENT: `@local` does not produce a host-class refusal. A DIFFERENT
+        // host on the same default env DOES refuse (control).
+        let env = dispatch::effects::MapEnv::default(); // QD_HOST unset ⇒ "local"
+        // Foreign host still refuses (proves the gate is active under the default).
+        let foreign = resolve_target("alpha", Some("brano"), &env).unwrap_err();
+        assert_eq!(foreign.class, "no-fleet-state");
+        // "@local" for an EMPTY name passes the host gate (local match) and hits the
+        // empty-name gate instead of no-fleet-state — proof the local branch is
+        // taken, without needing the live store.
+        let local_empty = resolve_target("", Some("local"), &env).unwrap_err();
+        assert_eq!(
+            local_empty.class, "address",
+            "@local is local: it passes the host gate (would go to the store), not no-fleet-state"
+        );
     }
 
     // === codex-interactive: a codex row's carrier follows its HOSTING ===

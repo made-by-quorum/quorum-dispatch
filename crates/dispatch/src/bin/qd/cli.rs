@@ -430,6 +430,17 @@ fn cmd_send() -> Command {
             "dur",
             "How long this send stays deliverable before it expires (e.g. 12h, 30m, 45s, 1d; bare integer = seconds; default 12h)",
         ))
+        // qd–qf W6 — ADDRESSING: `--host <host>` is the flag form of the `name@host`
+        // sugar (TRANSITION §3 / §7 Q2 RULED — the sugar desugars to this flag; both
+        // exist). The effective host = --host ∨ the address's @host ∨ None(local);
+        // if BOTH are present and DIFFER it is a sync `refused{host}`. Bare = this
+        // host. A host-qualified address for a host with no fleet state on this box
+        // is a named refusal (single-machine contract). ORIGIN mode only.
+        .arg(long_val(
+            "host",
+            "host",
+            "Host qualifier for the target (the flag form of name@host; the effective host is --host or the address's @host, which must agree). Bare = this host.",
+        ))
         // qd–qf W4 — INBOUND mode ("THE ONE DOOR"): admit a peer's already-minted
         // envelope (JSON) at the door. `<path>` is a file, or `-` for stdin. When
         // present, the `<session>`/`<message>` positionals are NOT used (the
