@@ -115,7 +115,7 @@ future witnessed facts arrive as NEW types, never as new outcome values.
 
 | `event`            | witnessed moment | `reason` |
 |---|---|---|
-| `accepted`         | inbound envelope presented and accepted through the door (inbound mode) | forbidden |
+| `accepted`         | inbound envelope **ADMITTED FOR DELIVERY** through the door — validated ∧ not already delivered, **not merely presented** (inbound mode; R12) | forbidden |
 | `attempted`        | a delivery attempt STARTED (each retry = a fresh `attempted`) | forbidden |
 | `queued`           | the attempt placed the message into the target's delivery queue / awaiting idle or wake (a witnessed moment, possibly minutes before landing — busy or waking session) | forbidden |
 | `delivered`        | the prose LANDED in the session — existence of this row IS the irreversible delivered fact | forbidden |
@@ -126,6 +126,19 @@ witnesses the thing HAPPEN, never a speculative/planned state. "Will retry at X"
 stays view-computed (`next_attempt` is policy, §3 / R8b guard 1); there is no
 `pending`/`expired` row here (both are *absence*-derived at the query surface,
 §3), and no `outcome` field anywhere.
+
+**Post-admission pre-flight refusals leave a lone `accepted` (R12).** A refusal
+BEFORE admission stamps nothing. A refusal AFTER admission but BEFORE any
+attempt starts (e.g. carrier selection finds no live receive path) exits refused
+leaving the `accepted` row ALONE — no `attempted` is fabricated for an attempt
+that never started, and no `delivery-failed` (the contract's families hold:
+refused = never left, pre-flight sync; failed = attempted and definitively did
+not arrive). The "accepted ⇒ a disposition is owed" obligation is met by the
+pending → expired ABSENCE path. **Repeated `accepted` rows with no interleaved
+`attempted` are the signature of a post-admission pre-flight refusal**; the
+refusal class rides the presenting caller's stderr, never the funnel. (If this
+path ever proves frequent in the field, the open type set admits a `refused`
+event TYPE by a future ruling — new rows, no schema break.)
 
 **Per-event-type `reason` invariant** (schema-per-event-type, tighter than any
 shared enum — R8a): `reason` is REQUIRED on `delivery-failed` (the failure
@@ -407,6 +420,7 @@ treated as absence-of-rows).
 | `dispositions.jsonl` = append-only log of typed witnessed EVENTS, never state records; witnessed order == append order | §2, R8/R8a/R8b |
 | five event types (accepted/attempted/queued/delivered/delivery-failed), past tense, own row schema; type set open (new facts = new types, not outcome values) | §2, R8a/R8b |
 | only witnessed moments get events; no speculative/planned rows; no `outcome` field | §2, R8b guard 1 |
+| `accepted` = ADMITTED FOR DELIVERY (validated ∧ not already delivered), not merely presented; a post-admission pre-flight refusal leaves a lone `accepted` (no fabricated `attempted`), summary pending → expired by absence | §2, R12 |
 | `reason` REQUIRED on delivery-failed, FORBIDDEN on every other type (per-event-type validation) | §2, R8a |
 | state is a VIEW, always; nothing stores it (summary derives it, §3a) | §3, R8 |
 | idempotence + delivered-view key on a `delivered` EVENT existing, never "any terminal"; "first terminal wins" is DEAD | §3a, R8 (the bug fix) |

@@ -598,3 +598,72 @@ fn origin_mode_unchanged_when_inbound_absent() {
         "origin mode reaches the resolver (aligned refused{{unknown}}), got: {err}"
     );
 }
+
+// ===========================================================================
+// R12 — the admitted-then-carrier-refused edge (post-admission pre-flight).
+// ===========================================================================
+
+/// R12 (ruled): an ADMITTED live-target envelope whose CARRIER SELECTION then
+/// refuses is a POST-ADMISSION PRE-FLIGHT REFUSAL — refusal exit with EXACTLY
+/// ONE `accepted` row and NO `attempted` (a `delivery-failed` here would
+/// fabricate an attempt that never started — R11.1's sin at the next seam
+/// over). The contract's "accepted ⇒ the engine owes a disposition" is met by
+/// the pending → expired ABSENCE path; the summary reads `pending`. Repeated
+/// accepted-with-no-attempted rows are this edge's signature; the refusal
+/// class rides the presenting caller's stderr, never the funnel.
+#[test]
+fn inbound_admitted_then_carrier_refusal_lone_accepted_summary_pending() {
+    let temp = tempfile::tempdir().unwrap();
+    let j = jail(temp.path());
+    // A LIVE claude-code row (this test's pid, status idle) with NO relay port
+    // and NO mux linkage: it resolves and is live, so the door ADMITS it — but
+    // carrier selection then finds no live receive path (pre-flight, sync).
+    let live_pid = std::process::id() as i64;
+    write_row(&j, live_pid, "carrierless-live", "barepane", "claude-code", "idle");
+
+    let cid = "01R12CARRIERREFUSALAAAAAAA";
+    let env = envelope_json(cid, "barepane", "hello", now_ms() + 3_600_000);
+    let path = envelope_file(&j, "r12.json", &env);
+    let (code, _out, err, log, disps) = run_inbound(&j, &path, &[], None);
+
+    assert_eq!(code, 1, "carrier refusal exit (stderr: {err})");
+    assert!(
+        err.contains("no live receive path"),
+        "the refusal class rides the caller's stderr, not the funnel: {err}"
+    );
+    assert!(log.is_empty(), "inbound never logs an envelope");
+
+    let rows = parse_event_rows(&disps);
+    assert_eq!(rows.len(), 1, "EXACTLY ONE row — accepted, nothing else: {disps:?}");
+    assert_eq!(rows[0]["event"], "accepted", "{disps:?}");
+    assert_eq!(rows[0]["correlation_id"], cid);
+    assert_eq!(rows[0]["witness"], "local", "witness = this host");
+    assert_eq!(rows[0]["origin"], "peerhost", "origin = the envelope's origin");
+
+    // The summary VIEW over the lone accepted row: `pending` (admitted, no
+    // attempt started; dies by absence at expiry). The peer's envelope is not
+    // in MY log (inbound never logs) and no mirror is seeded, so this is an
+    // orphan-event summary: expires_at null, origin from the event's copy.
+    let out = Command::new(qd_bin())
+        .args(["dispositions", cid])
+        .env("HOME", &j.home)
+        .env_remove("QD_HOME")
+        .env_remove("QD_HOST")
+        .env("ZMX_DIR", &j.zmx)
+        .output()
+        .expect("spawn qd dispositions");
+    assert_eq!(out.status.code(), Some(0), "summary read succeeds");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let summary: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("one summary row for {cid}, got {stdout:?} ({e})"));
+    assert_eq!(summary["state"], "pending", "{stdout}");
+    assert_eq!(summary["attempts"], 0, "{stdout}");
+    assert_eq!(summary["last_event"], "accepted", "{stdout}");
+    assert_eq!(summary["witness"], "local", "{stdout}");
+    assert_eq!(summary["origin"], "peerhost", "{stdout}");
+    assert_eq!(
+        summary["expires_at"],
+        serde_json::Value::Null,
+        "orphan-event summary — envelope out of scope: {stdout}"
+    );
+}

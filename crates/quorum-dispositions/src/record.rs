@@ -63,7 +63,8 @@ pub struct Envelope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EventKind {
-    /// Inbound envelope presented and accepted through the door (inbound mode).
+    /// Inbound envelope ADMITTED FOR DELIVERY through the door — validated and
+    /// not already delivered, not merely presented (inbound mode; R12).
     Accepted,
     /// A delivery attempt STARTED. Each retry is a fresh `attempted` event.
     Attempted,
@@ -204,7 +205,8 @@ impl Envelope {
 }
 
 impl DispositionEvent {
-    /// An `accepted` event (inbound envelope through the door). `reason: None`.
+    /// An `accepted` event (inbound envelope ADMITTED FOR DELIVERY — validated
+    /// and not already delivered, R12). `reason: None`.
     pub fn accepted(
         correlation_id: String,
         witnessed_at: i64,
