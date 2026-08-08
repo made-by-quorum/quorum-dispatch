@@ -7,6 +7,7 @@ mod adopt;
 mod bootstrap;
 mod common;
 mod attach;
+mod dispositions;
 mod gc;
 mod init;
 mod kill;
@@ -56,6 +57,10 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         Some(("send:http", m)) => send::run_send_http(m),
         Some(("relay", _)) => stubs::run_relay_moved(),
         Some(("whoami", m)) => whoami::run(m),
+        // qd–qf transition W5: the stateless, caller-windowed disposition READ
+        // verb — JSONL projection over log.jsonl ⟕ dispositions.jsonl (format
+        // doc §3) for piping into DuckDB.
+        Some(("dispositions", m)) => dispositions::run(m),
         Some(("wait", m)) => wait::run_wait(m),
         Some(("live", m)) => lifecycle::run_live(m),
         Some(("info", m)) => lifecycle::run_info(m),

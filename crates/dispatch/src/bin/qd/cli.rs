@@ -62,6 +62,7 @@ fn subcommands() -> Vec<Command> {
         cmd_send_http(),
         cmd_relay(),
         cmd_whoami(),
+        cmd_dispositions(),
         cmd_wait(),
         cmd_live(),
         cmd_info(),
@@ -500,6 +501,44 @@ fn cmd_whoami() -> Command {
         .about("Print the current session's name and ID")
         .override_help(help::WHOAMI)
         .arg(long_flag("json", "Output as JSON"))
+}
+
+// --- 12b. dispositions [<correlation_id>] — qd–qf transition W5 (read verb) ---
+// A stateless, caller-windowed JSONL projection over log.jsonl ⟕
+// dispositions.jsonl (format doc §3), for piping into DuckDB. New surface (not a
+// TS port), so clap auto-generates its --help.
+fn cmd_dispositions() -> Command {
+    Command::new("dispositions")
+        .about("Emit the disposition record for each correlation in scope as JSONL (for DuckDB)")
+        // Optional positional point query: just this correlation_id.
+        .arg(Arg::new("correlation_id").value_name("correlation_id").required(false))
+        // Caller-windowed lower bound on authored_at: keep records authored within
+        // the last <dur>. Same grammar as `qd send --expires` (bare int = seconds,
+        // else <int>{s|m|h|d}). STATELESS — qd stores no read cursor (N2).
+        .arg(long_val(
+            "window",
+            "dur",
+            "Only records authored within the last <dur> (e.g. 12h, 30m, 45s, 1d; bare integer = seconds). Stateless/caller-windowed — qd stores no cursor",
+        ))
+        // Scope: --host unions one peer's remote replica; --all unions every peer.
+        // Mutually exclusive (one scope per query).
+        .arg(
+            long_val(
+                "host",
+                "host",
+                "Union in one peer's replicated dispositions (remote/<host>/)",
+            )
+            .conflicts_with("all"),
+        )
+        .arg(long_flag(
+            "all",
+            "Union in every peer's replicated dispositions (remote/*/)",
+        ))
+        // Additionally union the local archive tier (*.archive.jsonl).
+        .arg(long_flag(
+            "archive",
+            "Also read the local archive tier (log.archive.jsonl + dispositions.archive.jsonl)",
+        ))
 }
 
 // --- 13. wait <session>, commands/status.ts:214-217 ---
@@ -1319,6 +1358,7 @@ mod tests {
             "send:http",
             "relay",
             "whoami",
+            "dispositions",
             "wait",
             "live",
             "info",
@@ -1340,9 +1380,10 @@ mod tests {
         // `backup` was retired by persist-relocation — transcript persistence now
         // lives in frame as `qf persist`, in-crate, no cross-binary hop); the
         // delivery/receipt contract (D1) added `delivery:recover`, the
-        // dead-dangling recovery verb; config + survey are dispatched pre-clap
-        // (hand-parsed).
-        assert_eq!(names.len(), 27);
+        // dead-dangling recovery verb; the qd–qf transition W5 added
+        // `dispositions`, the stateless JSONL read verb; config + survey are
+        // dispatched pre-clap (hand-parsed).
+        assert_eq!(names.len(), 28);
     }
 
     #[test]
