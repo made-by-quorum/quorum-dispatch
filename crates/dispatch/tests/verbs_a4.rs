@@ -391,6 +391,106 @@ fn send_tombstoned_target_wakes_and_is_not_rejected() {
     );
 }
 
+// ===========================================================================
+// qd–qf W3c: caller-supplied `--correlation-id` (the frame↔qd origin seam,
+// provider-contract §4). Frame's ledger event id rides through the flag as the
+// envelope's correlation_id; qd mints its own ULID only for BARE sends. Driven
+// through the REAL binary to a deterministic terminal: an UNWAKEABLE
+// (unknown-provider cold) row fails{wake} FAST, and because write-then-deliver
+// logs the envelope FIRST + stamps the failed{wake} disposition, BOTH the
+// log.jsonl envelope AND the dispositions.jsonl terminal are observable and must
+// carry the SUPPLIED id (not a minted ULID). The empty-id + inbound-conflict
+// refusals are sync (no state) and are asserted via run_qd.
+// ===========================================================================
+
+/// `qd send --correlation-id FRAME-EVT-123 <target> <body>` — the supplied id
+/// becomes the envelope's correlation_id AND the terminal disposition's, keyed on
+/// the same id (never a minted ULID). Uses an unwakeable cold row so the path
+/// drives to a deterministic failed{wake} terminal hermetically (no live fleet).
+#[test]
+fn send_correlation_id_rides_into_envelope_and_disposition() {
+    let temp = tempfile::tempdir().unwrap();
+    let row = r#"{"pid":90110,"sessionId":"mystery-cid-1","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"cold","name":"cidwk","version":"0.1.0","provider":"mystery"}"#;
+    let (code, _out, err, log, disps) = run_send_with_row(
+        temp.path(),
+        90110,
+        false,
+        row,
+        &["send", "--correlation-id", "FRAME-EVT-123", "cidwk", "hi"],
+    );
+    // Drives to the failed{wake} terminal (unwakeable), exit 12 — the point here is
+    // the id, not the outcome; a terminal is stamped either way.
+    assert_eq!(code, 12, "unwakeable target still reaches a terminal (stderr: {err})");
+    // The SUPPLIED id is in the log envelope AND the disposition — NOT a ULID.
+    assert!(
+        log.contains("\"correlation_id\":\"FRAME-EVT-123\""),
+        "the log envelope must carry the caller-supplied id, got log.jsonl: {log:?}"
+    );
+    assert!(
+        disps.contains("\"correlation_id\":\"FRAME-EVT-123\""),
+        "the disposition must key on the SAME supplied id, got dispositions.jsonl: {disps:?}"
+    );
+}
+
+/// Absent `--correlation-id` ⇒ qd mints a 26-char ULID (unchanged bare-send
+/// default). Same unwakeable row; assert the logged id is NOT the sentinel and is
+/// ULID-shaped (26 Crockford chars).
+#[test]
+fn send_without_correlation_id_mints_a_ulid() {
+    let temp = tempfile::tempdir().unwrap();
+    let row = r#"{"pid":90111,"sessionId":"mystery-cid-2","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"cold","name":"mintwk","version":"0.1.0","provider":"mystery"}"#;
+    let (code, _out, _err, log, _disps) =
+        run_send_with_row(temp.path(), 90111, false, row, &["send", "mintwk", "hi"]);
+    assert_eq!(code, 12);
+    // Pull the correlation_id out of the envelope line and check it is a 26-char
+    // ULID (Crockford base32), never the W3c sentinel.
+    let cid = log
+        .split("\"correlation_id\":\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .unwrap_or("");
+    assert_eq!(cid.len(), 26, "a minted ULID is 26 chars, got {cid:?} from {log:?}");
+    assert!(
+        cid.bytes().all(|b| b"0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(&b)),
+        "minted id is Crockford base32, got {cid:?}"
+    );
+}
+
+/// `--correlation-id ""` (empty) is a SYNC refusal before any resolution / side
+/// effect: refused{correlation-id} exit 12, and nothing is logged. An empty id is
+/// no id.
+#[test]
+fn send_empty_correlation_id_is_a_sync_refusal() {
+    let temp = tempfile::tempdir().unwrap();
+    let (code, _out, err) = run_qd(temp.path(), &["send", "--correlation-id", "", "wk", "hi"]);
+    assert_eq!(code, 12, "empty --correlation-id → sync refusal exit 12 (stderr: {err})");
+    assert!(
+        err.starts_with("qd send: refused{correlation-id}:"),
+        "expected the refused{{correlation-id}} render, got: {err}"
+    );
+}
+
+/// `--correlation-id` + `--inbound-envelope` is a contradiction (an inbound
+/// envelope carries its own origin-minted id) ⇒ a sync refused{args} exit 12 —
+/// the same posture as `--expires` + inbound.
+#[test]
+fn send_correlation_id_with_inbound_envelope_is_refused_args() {
+    let temp = tempfile::tempdir().unwrap();
+    let (code, _out, err) = run_qd(
+        temp.path(),
+        &["send", "--inbound-envelope", "/tmp/env.json", "--correlation-id", "X"],
+    );
+    assert_eq!(code, 12, "correlation-id + inbound → refused{{args}} exit 12 (stderr: {err})");
+    assert!(
+        err.starts_with("qd send: refused{args}:"),
+        "expected refused{{args}} for the mode conflict, got: {err}"
+    );
+    assert!(
+        err.contains("correlation-id"),
+        "the refusal names the offending flag, got: {err}"
+    );
+}
+
 /// LIVE-target-unchanged (regression guard): a live IDLE claude row with no relay
 /// and (in this empty-zmx jail) no joined mux pane still refuses IMMEDIATELY with
 /// the transport-shape "no live receive path" message and exit 1 — NO wake, NO

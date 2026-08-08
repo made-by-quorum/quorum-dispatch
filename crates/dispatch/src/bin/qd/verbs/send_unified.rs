@@ -358,6 +358,17 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
             )
             .emit();
         }
+        // qd–qf W3c: `--correlation-id` is origin-mode only. An inbound envelope
+        // already carries its own origin-minted `correlation_id`; a separate supplied
+        // id here would contradict (and the door keys idempotency on the envelope's
+        // id, not this flag). Same posture as `--expires` + inbound.
+        if m.get_one::<String>("correlation-id").is_some() {
+            return Refusal::refused(
+                "args",
+                "--correlation-id is origin-mode only; an inbound envelope carries its own correlation_id",
+            )
+            .emit();
+        }
         return run_inbound(&RealEnv, &RealUnifiedBackend, &RealWaker, path);
     }
 
@@ -383,6 +394,23 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
             Err(reason) => return dispatch::origin_send::Refusal::refused("expires", reason).emit(),
         },
         None => dispatch::origin_send::DEFAULT_EXPIRES_MS,
+    };
+
+    // qd–qf W3c (provider-contract §4): the OPTIONAL caller-supplied correlation_id.
+    // Present ⇒ this id becomes the envelope's `correlation_id` (frame's ledger event
+    // id rides through the one door), so the log envelope AND the stamped disposition
+    // key on it; absent ⇒ qd mints its own ULID (the BARE-send default). Empty is a
+    // SYNC refusal here (before any resolution / side effect) — an empty id is no id.
+    let supplied_correlation_id = match m.get_one::<String>("correlation-id") {
+        Some(id) if id.is_empty() => {
+            return dispatch::origin_send::Refusal::refused(
+                "correlation-id",
+                "--correlation-id is empty; pass the caller's non-empty id or omit it to mint one",
+            )
+            .emit();
+        }
+        Some(id) => Some(id.clone()),
+        None => None,
     };
 
     let env = RealEnv;
@@ -504,6 +532,7 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
             query,
             message,
             expires_ms,
+            supplied_correlation_id,
         )
     } else {
         // Render mode for the wake (a not-live target is revived into a fresh
@@ -524,6 +553,7 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
             query,
             message,
             expires_ms,
+            supplied_correlation_id,
         )
     }
 }
@@ -889,6 +919,7 @@ fn deliver_with_durability(
     raw_target: &str,
     message: &str,
     expires_ms: i64,
+    supplied_correlation_id: Option<String>,
 ) -> i32 {
     use dispatch::dispositions;
     use dispatch::effects::{Clock, RealClock};
@@ -901,7 +932,12 @@ fn deliver_with_durability(
 
     let clock = RealClock;
     let authored_at = clock.now_ms();
-    let correlation_id = mint_correlation_id(&clock);
+    // qd–qf W3c (provider-contract §4): frame's ledger event id rides as the
+    // correlation_id when it originates; qd mints its own ULID only for BARE sends.
+    // The SAME id flows into BOTH the log envelope (below) and the stamped
+    // disposition (via deliver_then_stamp) — they must key on one id. The empty-id
+    // sync refusal was already applied at the verb entry (run_send_unified).
+    let correlation_id = supplied_correlation_id.unwrap_or_else(|| mint_correlation_id(&clock));
     let authority = dispositions::local_authority(env);
 
     // Mint + LOG FIRST (write-then-deliver). `target` is the RAW address the
@@ -1020,6 +1056,7 @@ fn wake_then_deliver(
     raw_target: &str,
     message: &str,
     expires_ms: i64,
+    supplied_correlation_id: Option<String>,
 ) -> i32 {
     use dispatch::dispositions::{self, StoredState};
     use dispatch::effects::{Clock, RealClock};
@@ -1030,7 +1067,11 @@ fn wake_then_deliver(
     let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
     let clock = RealClock;
     let authored_at = clock.now_ms();
-    let correlation_id = mint_correlation_id(&clock);
+    // qd–qf W3c: the supplied id (frame's origin event id) also threads the
+    // resume-and-deliver path — it shares the SAME origin envelope, so the logged
+    // envelope AND the failed{wake}/delivered disposition key on it. Absent ⇒ mint
+    // (the BARE-send default). Empty was already refused at the verb entry.
+    let correlation_id = supplied_correlation_id.unwrap_or_else(|| mint_correlation_id(&clock));
     let authority = dispositions::local_authority(env);
 
     // (1) LOG FIRST — even a wake that later fails leaves the durable envelope, so
@@ -1514,6 +1555,7 @@ mod tests {
             "worker@brano", // the RAW caller address
             "hello body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            None, // no caller-supplied id ⇒ qd mints a ULID
         );
         assert_eq!(code, 0, "delivered ⇒ exit 0 (backend's result)");
 
@@ -1563,6 +1605,7 @@ mod tests {
             "worker",
             "body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            None,
         );
         assert_eq!(code, 1, "carrier failure exit is preserved");
 
@@ -1597,11 +1640,133 @@ mod tests {
             "worker",
             "body",
             thirty_min_ms,
+            None,
         );
         let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
         let log = dispatch::dispositions::read_local_log(&tpaths);
         let e = &log.records[0];
         assert_eq!(e.expires_at, e.authored_at + thirty_min_ms, "--expires window honored");
+    }
+
+    // === qd–qf W3c: caller-supplied correlation_id (the frame↔qd origin seam) ===
+    //
+    // provider-contract §4: `submit(address, body, correlation_id)` is
+    // CALLER-SUPPLIED — frame's ledger event id rides through as the envelope's
+    // correlation_id when frame originates; qd mints its own ULID only for BARE
+    // sends. These pin the supplied-vs-mint branch in `deliver_with_durability` at
+    // the seam: a supplied id lands in BOTH the log envelope AND the stamped
+    // disposition (they must key on the same id); absent ⇒ a fresh 26-char ULID.
+
+    /// A caller-supplied id (frame's event id) becomes the envelope's
+    /// correlation_id AND the disposition's — NOT a minted ULID. This is the
+    /// round-trip proof the frame↔qd origin seam requires.
+    #[test]
+    fn durability_uses_the_supplied_correlation_id_in_envelope_and_disposition() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend::default(); // 0 ⇒ delivered
+        let target = session("claude-code");
+
+        let code = deliver_with_durability(
+            &env,
+            &paths,
+            &backend,
+            UnifiedCarrier::MuxPty,
+            &target,
+            "worker",
+            "hello body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            Some("FRAME-EVT-123".to_string()), // frame's ledger event id
+        );
+        assert_eq!(code, 0);
+
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let log = dispatch::dispositions::read_local_log(&tpaths);
+        assert_eq!(log.records.len(), 1);
+        assert_eq!(
+            log.records[0].correlation_id, "FRAME-EVT-123",
+            "the log envelope carries the caller-supplied id verbatim (no mint)"
+        );
+        let disps = dispatch::dispositions::read_local_dispositions(&tpaths);
+        assert_eq!(disps.records.len(), 1);
+        assert_eq!(
+            disps.records[0].correlation_id, "FRAME-EVT-123",
+            "the disposition keys on the SAME supplied id as the envelope"
+        );
+        // Not a minted ULID (26 Crockford chars): the supplied id is 13 chars.
+        assert_ne!(log.records[0].correlation_id.len(), 26);
+    }
+
+    /// Absent supplied id ⇒ qd mints its own 26-char ULID (the BARE-send default,
+    /// unchanged). Envelope + disposition still share it.
+    #[test]
+    fn durability_mints_a_ulid_when_no_id_is_supplied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend::default();
+        let target = session("claude-code");
+
+        deliver_with_durability(
+            &env,
+            &paths,
+            &backend,
+            UnifiedCarrier::MuxPty,
+            &target,
+            "worker",
+            "body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            None, // bare send ⇒ mint
+        );
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let log = dispatch::dispositions::read_local_log(&tpaths);
+        assert_eq!(log.records.len(), 1);
+        assert_eq!(
+            log.records[0].correlation_id.len(),
+            26,
+            "no supplied id ⇒ a minted 26-char ULID"
+        );
+        let disps = dispatch::dispositions::read_local_dispositions(&tpaths);
+        assert_eq!(
+            disps.records[0].correlation_id, log.records[0].correlation_id,
+            "disposition joins the minted id"
+        );
+    }
+
+    /// The supplied id also threads the RESUME-AND-DELIVER path (a not-live target
+    /// woken then delivered) — it shares the same origin envelope, so the logged
+    /// envelope AND the delivered disposition key on it.
+    #[test]
+    fn wake_then_deliver_uses_the_supplied_correlation_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend::default();
+        let refreshed = live_refreshed();
+        let waker = MockWaker::ok(refreshed);
+
+        let mut cold = session("claude-code");
+        cold.status = SessionStatus::Cold;
+
+        let code = wake_then_deliver(
+            &env,
+            &paths,
+            &backend,
+            &waker,
+            RenderMode::Inline,
+            &cold,
+            "worker",
+            "body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            Some("FRAME-EVT-WAKE".to_string()),
+        );
+        assert_eq!(code, 0);
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let log = dispatch::dispositions::read_local_log(&tpaths);
+        assert_eq!(log.records[0].correlation_id, "FRAME-EVT-WAKE");
+        let disps = dispatch::dispositions::read_local_dispositions(&tpaths);
+        assert_eq!(disps.records[0].correlation_id, "FRAME-EVT-WAKE");
     }
 
     // === qd–qf W3b: resume-and-deliver + failed{wake} ========================
@@ -1671,6 +1836,7 @@ mod tests {
             "worker@brano",
             "hello body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            None, // no caller-supplied id ⇒ qd mints a ULID
         );
         assert_eq!(code, 0, "woken + delivered ⇒ exit 0");
         assert!(waker.woke.get(), "a not-live target must actually be woken");
@@ -1712,6 +1878,7 @@ mod tests {
             "wk",
             "body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            None,
         );
         assert_eq!(code, dispatch::origin_send::EXIT_REFUSED, "failed{{wake}} ⇒ exit 12");
         assert!(waker.woke.get(), "the wake was attempted");
@@ -1757,6 +1924,7 @@ mod tests {
             "wk",
             "body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            None,
         );
         assert_eq!(code, dispatch::origin_send::EXIT_REFUSED);
         assert_eq!(backend.calls.borrow().len(), 0, "unroutable ⇒ no delivery");

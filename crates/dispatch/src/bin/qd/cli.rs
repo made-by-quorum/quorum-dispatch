@@ -467,6 +467,20 @@ fn cmd_send() -> Command {
             "path",
             "INBOUND mode: admit a peer's already-minted envelope (JSON) from <path>, or `-` for stdin. Mutually exclusive with <target> <message>.",
         ))
+        // qd–qf W3c (provider-contract §4): the caller-supplied correlation_id. When
+        // frame ORIGINATES a send its ledger event id rides through this flag as the
+        // envelope's `correlation_id` (the frame↔qd origin seam); the log envelope
+        // AND the stamped disposition then key on that same id. Absent ⇒ qd mints its
+        // own ULID (the BARE-send default, unchanged). ORIGIN mode only — an inbound
+        // envelope already carries its own origin-minted id, so `--correlation-id` +
+        // `--inbound-envelope` is a sync refused{args} (like `--expires` + inbound).
+        // Declared BEFORE the message positional so it binds as an option, not
+        // swallowed as payload.
+        .arg(long_val(
+            "correlation-id",
+            "id",
+            "ORIGIN mode: use this caller-supplied id as the envelope's correlation_id (frame passes its ledger event id here). Default: qd mints a ULID.",
+        ))
         // A caller's message is opaque payload, including values such as
         // `--literal`; unified send has no transport options to reinterpret it.
         .arg(Arg::new("message").value_name("message").allow_hyphen_values(true))
