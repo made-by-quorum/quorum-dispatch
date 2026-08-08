@@ -109,6 +109,10 @@ pub struct PiCreateDeps<'a> {
     pub spawner: &'a dyn DaemonSpawner,
     /// now-ms clock for the row stamps.
     pub now_ms: &'a dyn Fn() -> i64,
+    /// The idstore path — where [`PiCreateParams::qd_session_id`] is bound to pi's
+    /// birth-id after readiness (parity with the ACP arm's `bind()`; lifecycle.rs
+    /// ~1544). `RealClock` stamps the bind line.
+    pub ids_path: PathBuf,
 }
 
 /// Params for one pi create.
@@ -117,6 +121,17 @@ pub struct PiCreateParams {
     pub cwd: PathBuf,
     /// Resume: re-attach a prior session id (the resident boots in load mode).
     pub load_session: Option<String>,
+    /// The stable qdId to inject as `QD_SESSION_ID` into the resident's env
+    /// (WS-A.2 parity with the ACP/codex arms). The verb layer mints it BEFORE
+    /// this call — `mint_unbound` on create, `mint_or_get`(the row's birth-id) on
+    /// resume — so there is exactly ONE mint per session. `None` (units that don't
+    /// exercise identity) spawns with no `QD_SESSION_ID` overlay.
+    ///
+    /// INVARIANT: a pi resident must self-identify as ITS OWN session, never the
+    /// commissioner's — the shared `RealDaemonSpawner` scrubs any inherited
+    /// `QD_SESSION_ID`/`CLAUDE_CODE_SESSION_ID`, and this overlay re-injects only
+    /// this session's id (env_remove-then-env ordering; see create_daemon.rs).
+    pub qd_session_id: Option<String>,
 }
 
 /// Success outcome.
@@ -148,9 +163,14 @@ pub fn create_pi_session(
     // resident/row exists — the create-race guard the standard's concurrency clause
     // motivates (incarnation-CAS guards STATUS writes, NOT the create claim; C-CHAOS
     // exercises crash+PID-reuse + create-races). Held by an RAII guard through the
-    // retry loop + row write, released on EVERY exit path. idstore is deliberately
-    // SKIPPED: pi's session_id from get_state IS its durable identity (written to the
-    // row, used for --session resume) — the codex stable-id layer has no pi equivalent.
+    // retry loop + row write, released on EVERY exit path. WS-A.2 identity parity:
+    // the ORIGINAL pi lead SKIPPED idstore (pi's get_state birth-id was its only
+    // identity) — that left the resident inheriting the COMMISSIONER's QD_SESSION_ID
+    // through the detached spawn's env subtree (the leaked-identity self-send /
+    // misattribution bug). Fixed like the ACP/codex arms: the verb layer
+    // `mint_unbound`s a stable id BEFORE this call, we inject it as `QD_SESSION_ID`
+    // into the resident's env (below) and `bind` it to pi's birth-id after readiness,
+    // so a pi agent's bash-tool subprocesses self-identify as THIS session.
     let payload = claim_payload(deps, &params.name);
     let is_alive = |pid: i64| crate::effects::is_pid_alive(pid as i32);
     let proc_start = |pid: i64| crate::effects::proc_start_ms(pid as i32);
@@ -209,11 +229,24 @@ pub fn create_pi_session(
             params.load_session.as_deref(),
         );
         let log_path = deps.log_dir.join(format!("pi-{}.log", params.name));
+        // Identity injection (WS-A.2, parity with the ACP/codex arms): overlay the
+        // pre-minted stable `QD_SESSION_ID` so the resident — and pi's child, and
+        // that child's bash-tool subprocesses — self-identify as THIS session, not
+        // the commissioner whose env the detached spawn would otherwise inherit
+        // (the leaked-identity self-send/misattribution bug). The resident reads its
+        // config off argv, not env; this ONE pair is identity, not config. The
+        // shared spawner scrubs any inherited identity before applying this overlay.
+        let spawn_env: Vec<(String, String)> = params
+            .qd_session_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|id| vec![("QD_SESSION_ID".to_string(), id.to_string())])
+            .unwrap_or_default();
         // Spawn DETACHED with process_group(0) (RealDaemonSpawner) — the resident is
         // the pgid leader; the pi child + grandchildren inherit the group (item 3).
         let spawned: SpawnedDaemon = match deps.spawner.spawn_detached(
             &argv,
-            &[], // the resident reads its config off argv, not env
+            &spawn_env,
             &params.cwd,
             &log_path,
         ) {
@@ -243,6 +276,24 @@ pub fn create_pi_session(
                 continue;
             }
         };
+
+        // Bind the pre-minted stable id to pi's birth-id (parity with the ACP arm,
+        // lifecycle.rs ~1544). The `by_session[birth_id] = qdId` mapping the lazy
+        // `ls` mint would otherwise create is written HERE instead — so the single
+        // pre-spawn mint is the ONLY mint (`mint_or_get` at ls time finds it and
+        // appends nothing). On RESUME the birth-id already maps to this same id, so
+        // `bind` is idempotent (`AlreadyBoundSameId` — nothing appended). Best-effort:
+        // a bind failure leaves the session live but its id unbound (resolve_to_uuid
+        // would miss), matching the ACP arm's non-fatal treatment.
+        if let Some(qd_id) = params.qd_session_id.as_deref().filter(|s| !s.is_empty()) {
+            match crate::idstore::bind(&deps.ids_path, qd_id, &session_id, &crate::effects::RealClock)
+            {
+                Ok(_) => {}
+                Err(e) => eprintln!(
+                    "qd start: could not bind stable id {qd_id} to pi session {session_id}: {e}"
+                ),
+            }
+        }
 
         // Write the registry row (provider="pi", endpoint, pid, birth-id).
         let now = (deps.now_ms)();
@@ -394,5 +445,99 @@ mod tests {
         // A gone pid (None cmdline) → also a no-op.
         let gone = |_pid: i64| None;
         teardown_pi_daemon(999_999, Some("ws://127.0.0.1:9000"), &gone);
+    }
+
+    // === WS-A.2 identity injection (the pi-provider env-leak fix) ===============
+
+    /// A [`DaemonSpawner`] that RECORDS the env overlay it is handed and then FAILS
+    /// the spawn — so `create_pi_session` re-rolls the retry ladder WITHOUT ever
+    /// reaching the (real, networked) readiness poll, while we still capture exactly
+    /// what identity would have ridden into the resident's env. (The FakeSpawner
+    /// idiom from create_daemon.rs, pared to the env-capture we need here.)
+    #[derive(Default)]
+    struct RecordingSpawner {
+        envs: std::sync::Mutex<Vec<Vec<(String, String)>>>,
+    }
+    impl DaemonSpawner for RecordingSpawner {
+        fn spawn_detached(
+            &self,
+            _argv: &[String],
+            env: &[(String, String)],
+            _cwd: &std::path::Path,
+            _log_path: &std::path::Path,
+        ) -> std::io::Result<SpawnedDaemon> {
+            self.envs.lock().unwrap().push(env.to_vec());
+            // Fail so the loop re-rolls (SpawnFailed → continue) rather than calling
+            // connect_ready — there is no real resident to connect to in a unit test.
+            Err(std::io::Error::other("recording spawner: no real spawn"))
+        }
+        fn kill(&self, _pid: i64) {}
+    }
+
+    fn recording_deps<'a>(
+        dir: &std::path::Path,
+        spawner: &'a dyn DaemonSpawner,
+        now_ms: &'a dyn Fn() -> i64,
+    ) -> PiCreateDeps<'a> {
+        PiCreateDeps {
+            exe: PathBuf::from("/proc/self/exe"),
+            pi_bin: None,
+            session_dir: None,
+            sessions_dir: dir.join("sessions"),
+            claims_dir: dir.join("claims"),
+            log_dir: dir.join("log"),
+            spawner,
+            now_ms,
+            ids_path: dir.join("ids.jsonl"),
+        }
+    }
+
+    #[test]
+    fn pi_create_injects_the_minted_qd_session_id_into_the_spawn_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawner = RecordingSpawner::default();
+        let now = || 1_700_000_000_000i64;
+        let deps = recording_deps(dir.path(), &spawner, &now);
+        let params = PiCreateParams {
+            name: "pi-envfix-unit".into(),
+            cwd: dir.path().to_path_buf(),
+            load_session: None,
+            qd_session_id: Some("piabc234".into()),
+        };
+        let res = create_pi_session(&deps, &params);
+        assert!(res.is_err(), "the recording spawner never becomes ready");
+        let envs = spawner.envs.lock().unwrap();
+        assert!(!envs.is_empty(), "the spawner was invoked");
+        assert!(
+            envs[0]
+                .iter()
+                .any(|(k, v)| k == "QD_SESSION_ID" && v == "piabc234"),
+            "the pi create spawn env carries the pre-minted QD_SESSION_ID: {:?}",
+            envs[0]
+        );
+    }
+
+    #[test]
+    fn pi_create_with_no_qd_id_injects_no_identity_overlay() {
+        // The unit/no-identity case: `None` ⇒ the resident spawns with an EMPTY env
+        // overlay (it reads its config off argv), NOT a stray/blank QD_SESSION_ID.
+        let dir = tempfile::tempdir().unwrap();
+        let spawner = RecordingSpawner::default();
+        let now = || 1_700_000_000_000i64;
+        let deps = recording_deps(dir.path(), &spawner, &now);
+        let params = PiCreateParams {
+            name: "pi-envfix-unit-none".into(),
+            cwd: dir.path().to_path_buf(),
+            load_session: None,
+            qd_session_id: None,
+        };
+        let _ = create_pi_session(&deps, &params);
+        let envs = spawner.envs.lock().unwrap();
+        assert!(!envs.is_empty(), "the spawner was invoked");
+        assert!(
+            envs[0].iter().all(|(k, _)| k != "QD_SESSION_ID"),
+            "no qd_session_id ⇒ no identity overlay: {:?}",
+            envs[0]
+        );
     }
 }

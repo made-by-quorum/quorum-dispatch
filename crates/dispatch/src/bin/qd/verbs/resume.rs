@@ -767,6 +767,24 @@ fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
             .unwrap_or_else(|| ".".to_string()),
     );
 
+    // WS-A.2 identity parity on RESUME (mirrors resume_daemon.rs ~647/802): pi's
+    // durable id is KNOWN here (session.session_id, the birth-id preserved across
+    // load mode), so `mint_or_get` keys it directly — returning the id minted at
+    // create (the SAME id across every resume; lazy-mints for a pre-stable-id
+    // session). Injected as `QD_SESSION_ID` so the resumed resident self-identifies
+    // rather than inheriting the commissioner's env. `bind` inside create_pi_session
+    // is then idempotent (birth-id already maps to this id). Fail-closed on a mint
+    // error (nothing respawned).
+    let ids_path = dispatch::idstore::ids_path(&paths.state_dir);
+    let qd_session_id =
+        match dispatch::idstore::mint_or_get(&ids_path, &session.session_id, Some(&name), &clock) {
+            Ok(id) => Some(id),
+            Err(e) => {
+                eprintln!("qd resume: \"{name}\": could not resolve stable id: {e}");
+                return 1;
+            }
+        };
+
     let deps = PiCreateDeps {
         exe,
         pi_bin: env.var("QD_PI_BIN").filter(|s| !s.is_empty()),
@@ -776,11 +794,13 @@ fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
         log_dir: home.join(".quorum").join("dispatch").join("log"),
         spawner: &spawner,
         now_ms: &now_ms,
+        ids_path,
     };
     let params = PiCreateParams {
         name: name.clone(),
         cwd,
         load_session: Some(session.session_id.clone()),
+        qd_session_id,
     };
     match create_pi_session(&deps, &params) {
         Ok(out) => {

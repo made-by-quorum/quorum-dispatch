@@ -862,6 +862,19 @@ impl DaemonSpawner for RealDaemonSpawner {
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_err))
             .current_dir(cwd);
+        // IDENTITY INVARIANT (WS-A.2): a detached daemon NEVER inherits the
+        // commissioner's session identity through the process subtree — identity is
+        // explicit-injection ONLY. `std::process::Command` inherits the caller's FULL
+        // env, so a daemon spawned from inside a qd session would otherwise carry the
+        // commissioner's QD_SESSION_ID/CLAUDE_CODE_SESSION_ID (the leaked-identity
+        // self-send / misattribution bug). Scrub them BEFORE the overlay: a provider
+        // that intentionally injects its own id (ACP/codex/pi pass QD_SESSION_ID)
+        // re-adds it in the loop below — Rust's env-map semantics make a later
+        // `.env(k, v)` override the `env_remove`, so the injected value survives while
+        // an un-injected inherited var stays gone.
+        cmd.env_remove("QD_SESSION_ID");
+        cmd.env_remove("CLAUDE_CODE_SESSION_ID");
+        cmd.env_remove("CLAUDECODE");
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -1066,6 +1079,78 @@ mod tests {
         fn kill(&self, pid: i64) {
             self.kills.borrow_mut().push(pid);
         }
+    }
+
+    /// WS-A.2 (pi-provider env-leak fix): prove the REAL spawner's identity scrub +
+    /// override ordering in ONE live spawn. A detached daemon must NOT inherit the
+    /// commissioner's QD_SESSION_ID/CLAUDE_CODE_SESSION_ID/CLAUDECODE, yet a
+    /// provider's INTENTIONAL `QD_SESSION_ID` overlay must survive: `env_remove` then
+    /// `.env(k, v)` ⇒ the injected value wins; `env_remove` with no re-inject ⇒ the
+    /// inherited var is gone. Env mutation is serialized behind a lock and the prior
+    /// values are restored (the registry.rs QD_DEBUG test idiom).
+    #[test]
+    fn spawn_detached_scrubs_inherited_identity_but_keeps_injected_overlay() {
+        use std::sync::Mutex;
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let keys = ["QD_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDECODE"];
+        let saved: Vec<(&str, Option<String>)> =
+            keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+
+        // Simulate the commissioner's identity leaking through the process subtree.
+        std::env::set_var("QD_SESSION_ID", "commissioner-id");
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", "commissioner-cc-uuid");
+        std::env::set_var("CLAUDECODE", "1");
+
+        let dir = TempDir::new().unwrap();
+        let log_path = dir.path().join("scrub.log");
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf 'QD=[%s]\\nCC=[%s]\\nCD=[%s]\\n' \
+             \"$QD_SESSION_ID\" \"$CLAUDE_CODE_SESSION_ID\" \"$CLAUDECODE\""
+                .to_string(),
+        ];
+        // The provider re-injects ONLY its own QD_SESSION_ID (the pi/acp/codex overlay).
+        let overlay = vec![("QD_SESSION_ID".to_string(), "injected-daemon-id".to_string())];
+
+        RealDaemonSpawner
+            .spawn_detached(&argv, &overlay, dir.path(), &log_path)
+            .expect("spawn the printenv probe");
+
+        // Detached child (own process group) → poll the log until it has all 3 lines.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let out = loop {
+            let s = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if s.lines().count() >= 3 || std::time::Instant::now() >= deadline {
+                break s;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+
+        // Restore the environment BEFORE asserting (a failed assert must not leak vars).
+        for (k, v) in &saved {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
+
+        // env_remove THEN env(k, v) → the injected overlay value wins.
+        assert!(
+            out.contains("QD=[injected-daemon-id]"),
+            "the injected QD_SESSION_ID overlay survives the scrub: {out:?}"
+        );
+        // env_remove with NO re-inject → the inherited identity is scrubbed to absent.
+        assert!(
+            out.contains("CC=[]"),
+            "inherited CLAUDE_CODE_SESSION_ID was scrubbed: {out:?}"
+        );
+        assert!(
+            out.contains("CD=[]"),
+            "inherited CLAUDECODE was scrubbed: {out:?}"
+        );
     }
 
     /// codex --version sniff EXACT (the pinned binary; re-pinned 0.143.0-alpha.14

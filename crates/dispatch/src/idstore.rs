@@ -786,6 +786,46 @@ mod tests {
         assert_eq!(same, id);
     }
 
+    /// WS-A.2 (pi-provider env-leak fix): the pi create identity flow must be a
+    /// SINGLE mint. The verb layer `mint_unbound`s pre-spawn; `create_pi_session`
+    /// `bind`s the birth-id after readiness; a later `qd ls` backfill
+    /// (`mint_or_get(birth_id)`) must then find the bound id and append NOTHING —
+    /// exactly one mint + one bind, ever (no double-mint). Resolution round-trips.
+    #[test]
+    fn pi_create_flow_is_a_single_mint_and_the_ls_backfill_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = store(&dir);
+        let clock = FixedClock(TS);
+        // Pre-spawn: mint the stable id the resident's QD_SESSION_ID carries.
+        let mut g = || "piabc234".to_string();
+        let id = mint_unbound_with(&path, Some("pi-wk"), &clock, &mut g).unwrap();
+        // After readiness: bind pi's get_state birth-id to that pre-minted id.
+        let birth = "pi-birth-uuid-1";
+        assert_eq!(bind(&path, &id, birth, &clock).unwrap(), BindOutcome::Bound);
+        // The lazy `qd ls` backfill keys on the birth-id → returns the SAME id, no append.
+        let backfill = mint_or_get(&path, birth, Some("pi-wk"), &clock).unwrap();
+        assert_eq!(backfill, id, "ls backfill reuses the pre-minted id");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            2,
+            "exactly one mint + one bind — the backfill appended nothing"
+        );
+        // whoami / attribution resolve the id back to pi's birth-id.
+        assert_eq!(resolve_to_uuid(&fold(&path), &id), Some(birth.to_string()));
+        // RESUME re-injects the SAME id (mint_or_get finds it) → bind is idempotent.
+        assert_eq!(mint_or_get(&path, birth, Some("pi-wk"), &clock).unwrap(), id);
+        assert_eq!(
+            bind(&path, &id, birth, &clock).unwrap(),
+            BindOutcome::AlreadyBoundSameId,
+            "resume's bind is a no-op (birth-id already maps to this id)"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            2,
+            "resume added no mint and no bind line"
+        );
+    }
+
     #[test]
     fn bind_first_wins_per_session_returns_existing_id() {
         // The bind-vs-existing-binding race: the session UUID already has an

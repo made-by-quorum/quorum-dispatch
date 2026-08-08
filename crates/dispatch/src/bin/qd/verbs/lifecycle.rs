@@ -1940,6 +1940,21 @@ fn run_new_pi_daemon(
         .map(|p| p.join("claims"))
         .unwrap_or_else(|| home.join(".claude").join("claims"));
 
+    // WS-A.2 identity parity (mirrors the ACP arm, ~line 1505): mint an UNBOUND
+    // stable id BEFORE the spawn so the resident carries THIS session's
+    // `QD_SESSION_ID` — not the commissioner's, which the detached spawn would
+    // otherwise leak through the inherited env. pi's provider UUID (the get_state
+    // birth-id) is not known until after readiness, so `bind()` attaches it inside
+    // `create_pi_session`. Fail-closed: nothing spawns if the mint fails.
+    let ids_path = dispatch::idstore::ids_path(&paths.state_dir);
+    let qd_session_id = match dispatch::idstore::mint_unbound(&ids_path, Some(name), &clock) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("qd start: could not mint stable id for pi session: {e}");
+            return 1;
+        }
+    };
+
     let deps = PiCreateDeps {
         exe,
         // The pinned pi binary (NOT on PATH) + pi's own session storage, off the env SEAM.
@@ -1950,11 +1965,13 @@ fn run_new_pi_daemon(
         log_dir: home.join(".quorum").join("dispatch").join("log"),
         spawner: &spawner,
         now_ms: &now_ms,
+        ids_path,
     };
     let params = PiCreateParams {
         name: name.to_string(),
         cwd: cwd.to_path_buf(),
         load_session: None,
+        qd_session_id: Some(qd_session_id),
     };
     match create_pi_session(&deps, &params) {
         Ok(out) => {
