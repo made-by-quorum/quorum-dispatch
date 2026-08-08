@@ -41,6 +41,13 @@ pub struct QdPaths {
     /// (bootstrap.ts:88-96). Holds `marks.jsonl` (ADD-3). QD_HOME comes through
     /// the injected `Env` seam (L9a), never raw `std::env`.
     pub state_dir: PathBuf,
+    /// The resolved qd data root = `qdHome` (the PARENT of `state_dir`; today
+    /// `state_dir = <dispatch_root>/state`). This is the home of the qd–qf
+    /// transport files (`log.jsonl` / `dispositions.jsonl` / `ls.json` /
+    /// `remote/<host>/*`) which live directly under `qd_home`, NOT under
+    /// `state/` (dispatch-transport-formats.md "common framing"). Same QD_HOME
+    /// resolution as `state_dir`, through the injected `Env` seam (L9a).
+    pub dispatch_root: PathBuf,
 }
 
 impl QdPaths {
@@ -66,7 +73,7 @@ impl QdPaths {
     }
 
     /// Shared constructor: the `.claude` dirs derive from `home`; `state_dir`
-    /// derives from the already-resolved `qd_home`.
+    /// and `dispatch_root` derive from the already-resolved `qd_home`.
     fn build(home: &Path, qd_home: PathBuf) -> Self {
         let claude = home.join(".claude");
         QdPaths {
@@ -78,7 +85,60 @@ impl QdPaths {
             // DISTINCT from relay_dir (which is `.claude/relay`). P-C2.
             inbox_dir: claude.join("channels").join("relay").join("inbox"),
             state_dir: qd_home.join("state"),
+            // The qd data root itself (parent of state_dir): the qd–qf transport
+            // files live directly here, not under state/.
+            dispatch_root: qd_home,
         }
+    }
+
+    // ---- qd–qf transport paths (directly under `dispatch_root` = qd_home,
+    // NOT under state/; see dispatch-transport-formats.md "common framing"). ----
+
+    /// `<root>/log.jsonl` — qd's event source (envelopes qd originated, §1).
+    pub fn log_path(&self) -> PathBuf {
+        self.dispatch_root.join("log.jsonl")
+    }
+
+    /// `<root>/dispositions.jsonl` — witnessed terminal facts, stored (§2).
+    pub fn dispositions_path(&self) -> PathBuf {
+        self.dispatch_root.join("dispositions.jsonl")
+    }
+
+    /// `<root>/log.archive.jsonl` — the log archive tier (v2 tiering; born
+    /// absent, additive).
+    pub fn log_archive_path(&self) -> PathBuf {
+        self.dispatch_root.join("log.archive.jsonl")
+    }
+
+    /// `<root>/dispositions.archive.jsonl` — the dispositions archive tier (v2).
+    pub fn dispositions_archive_path(&self) -> PathBuf {
+        self.dispatch_root.join("dispositions.archive.jsonl")
+    }
+
+    /// `<root>/ls.json` — own session snapshot, published for peers.
+    pub fn ls_path(&self) -> PathBuf {
+        self.dispatch_root.join("ls.json")
+    }
+
+    /// `<root>/remote` — the directory of peers' mover-written replicas.
+    pub fn remote_dir(&self) -> PathBuf {
+        self.dispatch_root.join("remote")
+    }
+
+    /// `<root>/remote/<host>/log.jsonl` — a peer's replicated log (mover-written).
+    pub fn remote_log_path(&self, host: &str) -> PathBuf {
+        self.remote_dir().join(host).join("log.jsonl")
+    }
+
+    /// `<root>/remote/<host>/dispositions.jsonl` — a peer's replicated
+    /// dispositions (mover-written).
+    pub fn remote_dispositions_path(&self, host: &str) -> PathBuf {
+        self.remote_dir().join(host).join("dispositions.jsonl")
+    }
+
+    /// `<root>/remote/<host>/ls.json` — a peer's session snapshot (mover-written).
+    pub fn remote_ls_path(&self, host: &str) -> PathBuf {
+        self.remote_dir().join(host).join("ls.json")
     }
 }
 
@@ -100,6 +160,36 @@ mod tests {
         );
         // QD_HOME unset default: <home>/.quorum/dispatch/state.
         assert_eq!(p.state_dir, Path::new("/jail/home/.quorum/dispatch/state"));
+        // dispatch_root = qd_home = parent of state_dir (default).
+        assert_eq!(p.dispatch_root, Path::new("/jail/home/.quorum/dispatch"));
+        // qd–qf transport files live directly under dispatch_root, NOT state/.
+        assert_eq!(p.log_path(), Path::new("/jail/home/.quorum/dispatch/log.jsonl"));
+        assert_eq!(
+            p.dispositions_path(),
+            Path::new("/jail/home/.quorum/dispatch/dispositions.jsonl")
+        );
+        assert_eq!(
+            p.log_archive_path(),
+            Path::new("/jail/home/.quorum/dispatch/log.archive.jsonl")
+        );
+        assert_eq!(
+            p.dispositions_archive_path(),
+            Path::new("/jail/home/.quorum/dispatch/dispositions.archive.jsonl")
+        );
+        assert_eq!(p.ls_path(), Path::new("/jail/home/.quorum/dispatch/ls.json"));
+        assert_eq!(p.remote_dir(), Path::new("/jail/home/.quorum/dispatch/remote"));
+        assert_eq!(
+            p.remote_log_path("peerbox"),
+            Path::new("/jail/home/.quorum/dispatch/remote/peerbox/log.jsonl")
+        );
+        assert_eq!(
+            p.remote_dispositions_path("peerbox"),
+            Path::new("/jail/home/.quorum/dispatch/remote/peerbox/dispositions.jsonl")
+        );
+        assert_eq!(
+            p.remote_ls_path("peerbox"),
+            Path::new("/jail/home/.quorum/dispatch/remote/peerbox/ls.json")
+        );
     }
 
     #[test]
@@ -120,6 +210,37 @@ mod tests {
         assert_eq!(p.state_dir, Path::new("/elsewhere/qddata/state"));
         // The .claude dirs remain HOME-derived (NOT under QD_HOME).
         assert_eq!(p.sessions_dir, Path::new("/jail/home/.claude/sessions"));
+        // dispatch_root + ALL transport files root at <QD_HOME>, NOT
+        // <home>/.quorum/dispatch. This is the L9a discipline: the override
+        // fully relocates the qd data root.
+        assert_eq!(p.dispatch_root, Path::new("/elsewhere/qddata"));
+        assert_eq!(p.log_path(), Path::new("/elsewhere/qddata/log.jsonl"));
+        assert_eq!(
+            p.dispositions_path(),
+            Path::new("/elsewhere/qddata/dispositions.jsonl")
+        );
+        assert_eq!(
+            p.log_archive_path(),
+            Path::new("/elsewhere/qddata/log.archive.jsonl")
+        );
+        assert_eq!(
+            p.dispositions_archive_path(),
+            Path::new("/elsewhere/qddata/dispositions.archive.jsonl")
+        );
+        assert_eq!(p.ls_path(), Path::new("/elsewhere/qddata/ls.json"));
+        assert_eq!(p.remote_dir(), Path::new("/elsewhere/qddata/remote"));
+        assert_eq!(
+            p.remote_log_path("peerbox"),
+            Path::new("/elsewhere/qddata/remote/peerbox/log.jsonl")
+        );
+        assert_eq!(
+            p.remote_dispositions_path("peerbox"),
+            Path::new("/elsewhere/qddata/remote/peerbox/dispositions.jsonl")
+        );
+        assert_eq!(
+            p.remote_ls_path("peerbox"),
+            Path::new("/elsewhere/qddata/remote/peerbox/ls.json")
+        );
     }
 
     #[test]

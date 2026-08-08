@@ -1,0 +1,31 @@
+[package]
+# The versioned DISPOSITION-RECORD schema crate (qd–qf transition W1). A
+# compile-time LEAF crate: it owns the Rust reflections of the three
+# dispatch-transport wire shapes — the `log.jsonl` `Envelope`, the stored
+# `dispositions.jsonl` `Disposition`, and the PUBLISHED emitted disposition
+# record (`qd dispositions` output) — plus the torn-tail-tolerant JSONL parsers
+# and the pure left-join `project` that computes the emitted 4-state record from
+# an envelope stream ⟕ a disposition stream. NO dependency on `dispatch` or
+# `qrmux`: frame projects over the emitted record and qd emits it, so both sides
+# share one versioned schema without a dependency cycle. The wire is byte-exact
+# by CONSTRUCTION from fixed-shape serde-derive structs (fields in declaration
+# order) — unlike quorum-delivery-events' hand-built dynamic Map, this crate
+# needs NO serde_json `preserve_order` feature (that feature only reorders
+# `Value`/`Map`, never struct fields).
+name = "quorum-dispositions"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Versioned disposition-record schema (qd–qf transition v1): Envelope/Disposition/EmittedRecord wire reflections + torn-tail JSONL parsers + pure left-join projection. Leaf crate (no dispatch/qrmux deps, serde/serde_json only)."
+
+[lib]
+name = "quorum_dispositions"
+
+[dependencies]
+# serde-derive for the fixed-shape wire structs; byte-exactness comes from
+# field DECLARATION order (see lib.rs module doc), NOT from serde_json's
+# preserve_order (which only affects Value/Map, never struct-field emission).
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
