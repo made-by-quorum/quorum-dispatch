@@ -409,6 +409,16 @@ fn cmd_send() -> Command {
         .about("Send a message to a session (delivery path selected automatically)")
         .override_help(help::SEND)
         .arg(positional("session"))
+        // qd–qf W3: the write-then-deliver expiry policy travels with the message
+        // (format doc §1 `expires_at`). Absent ⇒ the 12h default; a value is
+        // `<int>` (bare = seconds) or `<int>{s|m|h|d}`. A bad form is a SYNC arg
+        // refusal (see origin_send::parse_expires). Declared BEFORE the message
+        // positional so `--expires` binds as an option, not swallowed as payload.
+        .arg(long_val(
+            "expires",
+            "dur",
+            "How long this send stays deliverable before it expires (e.g. 12h, 30m, 45s, 1d; bare integer = seconds; default 12h)",
+        ))
         // A caller's message is opaque payload, including values such as
         // `--literal`; unified send has no transport options to reinterpret it.
         .arg(positional("message").allow_hyphen_values(true))

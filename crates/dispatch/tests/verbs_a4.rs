@@ -201,3 +201,69 @@ fn wait_idle_session_reports_idle_exit_0() {
         "expected '<label> is idle', got: {stdout}"
     );
 }
+
+// ===========================================================================
+// qd–qf W3: unified `qd send` origin-mode surface (write-then-deliver +
+// --expires + the Refusal {class,reason} type). These drive the REAL binary
+// through cheap, hermetic paths (a malformed --expires SYNC refusal; a valid
+// --expires that still resolves normally) — the success write-then-deliver +
+// disposition wiring is proven at the unit level (send_unified.rs
+// `deliver_with_durability` seam tests) since a full live carrier is heavy.
+// ===========================================================================
+
+/// A malformed `--expires` is a SYNC refusal rendered through the shared Refusal
+/// type: `qd send: refused{expires}: …` on stderr + the distinct exit code 12.
+/// It refuses BEFORE any resolution, so an unknown session is irrelevant.
+#[test]
+fn send_bad_expires_is_a_sync_refusal_exit_12() {
+    // NOTE: leading-`-` values (e.g. "-5m") are caught by clap as an unknown
+    // option BEFORE our parser sees them (a clap parse error, exit 1) — not a
+    // refused{expires}. `parse_expires`'s own unit tests cover the "-5m" reject at
+    // the function level; here we assert the forms that actually reach our parser.
+    let temp = tempfile::tempdir().unwrap();
+    for bad in ["12x", "1.5h", "h", "abc", "12h30m"] {
+        let (code, _out, err) = run_qd(temp.path(), &["send", "--expires", bad, "wk", "hello"]);
+        assert_eq!(code, 12, "malformed --expires {bad:?} → exit 12 (stderr: {err})");
+        assert!(
+            err.contains("refused{expires}"),
+            "expected the refused{{expires}} render for {bad:?}, got: {err}"
+        );
+        assert!(
+            err.starts_with("qd send: refused{expires}:"),
+            "machine-stable prefix for {bad:?}, got: {err}"
+        );
+    }
+}
+
+/// A well-formed `--expires` parses cleanly and does NOT disturb resolution: an
+/// unknown session still yields the normal `No session matching` + exit 1 (NOT a
+/// refused{expires}). Proves the flag is accepted and the value is consumed.
+#[test]
+fn send_good_expires_parses_then_resolves_normally() {
+    let temp = tempfile::tempdir().unwrap();
+    for good in ["12h", "30m", "45s", "1d", "90"] {
+        let (code, _out, err) = run_qd(temp.path(), &["send", "--expires", good, "nope", "hi"]);
+        assert_eq!(code, 1, "valid --expires {good:?} + unknown session → the normal resolve-miss exit 1 (stderr: {err})");
+        assert!(
+            err.contains("No session matching \"nope\""),
+            "valid --expires {good:?} must reach the resolver, got: {err}"
+        );
+        assert!(
+            !err.contains("refused{expires}"),
+            "a valid --expires {good:?} must NOT be refused, got: {err}"
+        );
+    }
+}
+
+/// The unified `qd send` default (no `--expires`) also resolves normally on an
+/// empty registry — the flag being absent is the 12h default, never an error.
+#[test]
+fn send_default_expires_resolves_normally() {
+    let temp = tempfile::tempdir().unwrap();
+    let (code, _out, err) = run_qd(temp.path(), &["send", "ghost", "body"]);
+    assert_eq!(code, 1, "unknown session → exit 1 (stderr: {err})");
+    assert!(
+        err.contains("No session matching \"ghost\""),
+        "default-expires send reaches the resolver, got: {err}"
+    );
+}

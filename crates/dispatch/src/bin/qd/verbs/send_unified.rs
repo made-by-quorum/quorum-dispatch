@@ -205,6 +205,17 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
     let message = m.get_one::<String>("message").expect("required by clap");
 
+    // qd–qf W3 part C: resolve the write-then-deliver expiry window UP FRONT so a
+    // malformed `--expires` is a SYNC refusal (before any resolution / side
+    // effect), routed through the shared Refusal type (part D). Absent ⇒ 12h.
+    let expires_ms = match m.get_one::<String>("expires") {
+        Some(raw) => match dispatch::origin_send::parse_expires(raw) {
+            Ok(ms) => ms,
+            Err(reason) => return dispatch::origin_send::Refusal::refused("expires", reason).emit(),
+        },
+        None => dispatch::origin_send::DEFAULT_EXPIRES_MS,
+    };
+
     // Resolve the caller's handle exactly once. All later refresh/revalidation
     // uses this row's immutable provider session id, never the caller's possibly
     // ambiguous name or prefix.
@@ -215,7 +226,8 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
 
     // Verb-entry self-send fence: QD_SESSION_ID is resolved through the same
     // idstore chain whoami owns. It runs before lifecycle/carrier selection, and
-    // is not reported as a carrier failure.
+    // is not reported as a carrier failure. qd–qf W3 part D: the self-send sync
+    // refusal renders through the shared Refusal {class,reason} type.
     let env = RealEnv;
     let self_session_id = match resolve_self_session_id(&env) {
         Ok(value) => value,
@@ -223,10 +235,11 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
     };
     if self_session_id.as_deref() == Some(target.session_id.as_str()) {
         let label = target.name.as_deref().unwrap_or(query);
-        eprintln!(
-            "qd send: refusing self-send to \"{label}\" — QD_SESSION_ID resolves to the target session."
-        );
-        return 1;
+        return dispatch::origin_send::Refusal::refused(
+            "self-send",
+            format!("\"{label}\" — QD_SESSION_ID resolves to the target session"),
+        )
+        .emit();
     }
 
     if let Err(code) = common::reject_if_tombstoned(query, &target) {
@@ -272,7 +285,95 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
         Ok(carrier) => carrier,
         Err(refusal) => return report_refusal(query, &current, refusal),
     };
-    dispatch_selected(&RealUnifiedBackend, carrier, &current, message)
+
+    // qd–qf W3 part A: WRITE-THEN-DELIVER. Mint the envelope, append it to
+    // `log.jsonl` BEFORE delivery (HARD FAIL if that append errors — we never
+    // deliver without the durable envelope), deliver via the existing unified
+    // carrier, then stamp the witnessed terminal into `dispositions.jsonl`
+    // (best-effort — a lost disposition row must never flip the send's own exit).
+    deliver_with_durability(&env, &paths, &RealUnifiedBackend, carrier, &current, query, message, expires_ms)
+}
+
+/// qd–qf W3 part A — the write-then-deliver + disposition-stamp wrapper around
+/// the existing unified carrier dispatch. Kept as a seamed helper (deps injected)
+/// so the log-append / terminal-stamp shape is exercised without standing up a
+/// full live carrier: the `backend` is any [`UnifiedBackend`], `env`/`paths` are
+/// the resolved seams.
+///
+/// Ordering (format doc §1/§2): LOG the envelope, THEN deliver, THEN stamp. The
+/// envelope append is fatal-on-error (no durable record ⇒ do not deliver); the
+/// disposition append is best-effort (the delivery already happened). A
+/// synchronous local attempt that completes is `delivered` (exit 0) or `failed`
+/// (nonzero); `pending`/`expired` are DERIVED (absence) and never stamped here.
+#[allow(clippy::too_many_arguments)]
+fn deliver_with_durability(
+    env: &dyn Env,
+    paths: &dispatch::paths::QdPaths,
+    backend: &dyn UnifiedBackend,
+    carrier: UnifiedCarrier,
+    session: &Session,
+    raw_target: &str,
+    message: &str,
+    expires_ms: i64,
+) -> i32 {
+    use dispatch::dispositions::{self, StoredState};
+    use dispatch::effects::{Clock, RealClock};
+    use dispatch::origin_send::{build_disposition, build_envelope, mint_correlation_id};
+
+    // The transport files honor QD_HOME (from_home_env), matching the store's own
+    // resolution + the W5 reader — NOT the plain from_home `paths` (which is the
+    // `.claude`-layout registry root). Both derive from the same resolved home.
+    let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
+
+    let clock = RealClock;
+    let authored_at = clock.now_ms();
+    let correlation_id = mint_correlation_id(&clock);
+    let authority = dispositions::local_authority(env);
+
+    // Mint + LOG FIRST (write-then-deliver). `target` is the RAW address the
+    // caller gave (operational record); `body` is the message verbatim.
+    let envelope = build_envelope(
+        correlation_id.clone(),
+        authored_at,
+        expires_ms,
+        raw_target.to_string(),
+        authority.clone(),
+        message.to_string(),
+    );
+    if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
+        // HARD FAIL: no durable envelope ⇒ we must not proceed to deliver. Nothing
+        // was sent; the caller gets a clear error + a nonzero exit (generic class).
+        eprintln!(
+            "qd send: could not durably record the message before delivery ({e}) — not sent."
+        );
+        return 1;
+    }
+
+    // Deliver via the existing unified carrier (unchanged behavior/exit).
+    let code = dispatch_selected(backend, carrier, session, message);
+
+    // Stamp the witnessed terminal AFTER the attempt. exit 0 ⇒ delivered; a
+    // definitive failure ⇒ failed{delivery}. (There is no unwakeable-target path
+    // here yet — resume-and-deliver / failed{wake} is W3 part B, deferred.)
+    let (state, reason) = if code == 0 {
+        (StoredState::Delivered, None)
+    } else {
+        (StoredState::Failed, Some("delivery".to_string()))
+    };
+    let disp = build_disposition(
+        correlation_id,
+        state,
+        authored_at,
+        clock.now_ms(),
+        authority,
+        reason,
+    );
+    if let Err(e) = dispositions::append_disposition(&tpaths, &disp) {
+        // BEST-EFFORT: the delivery already happened; a lost disposition row must
+        // NOT change the send's exit. Warn only (events.rs telemetry posture).
+        eprintln!("WARNING: could not record the delivery disposition (non-fatal): {e}");
+    }
+    code
 }
 
 #[cfg(test)]
@@ -545,6 +646,131 @@ mod tests {
             assert_eq!(calls[0].1, target.session_id);
             assert_eq!(calls[0].2.as_bytes(), message.as_bytes());
         }
+    }
+
+    // === qd–qf W3 part A: write-then-deliver + disposition stamping =========
+    //
+    // These exercise the `deliver_with_durability` seam directly with a jailed
+    // QdPaths + a ProbeBackend, so the log-append / terminal-stamp wiring is
+    // proven without standing up a full live carrier. The store readers
+    // (dispatch::dispositions) parse the actual files the seam wrote.
+
+    use dispatch::effects::MapEnv;
+
+    /// A MapEnv whose HOME points into `home` (QD_HOME unset ⇒ transport files
+    /// land under `home/.quorum/dispatch`, exactly where the seam writes them).
+    fn jail_env(home: &std::path::Path) -> MapEnv {
+        let mut e = MapEnv::default();
+        e.vars.insert("HOME".into(), home.to_string_lossy().into_owned());
+        // QD_HOST unset ⇒ authority = "local" (the v1 placeholder).
+        e
+    }
+
+    #[test]
+    fn durability_logs_envelope_before_delivery_then_stamps_delivered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend::default(); // returns 0 ⇒ delivered
+        let target = session("claude-code");
+
+        let code = deliver_with_durability(
+            &env,
+            &paths,
+            &backend,
+            UnifiedCarrier::MuxPty,
+            &target,
+            "worker@brano", // the RAW caller address
+            "hello body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+        );
+        assert_eq!(code, 0, "delivered ⇒ exit 0 (backend's result)");
+
+        // The carrier was actually called (delivery happened).
+        assert_eq!(backend.calls.borrow().len(), 1);
+
+        // The transport files honor QD_HOME resolution; read them back.
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let log = dispatch::dispositions::read_local_log(&tpaths);
+        assert_eq!(log.records.len(), 1, "exactly one envelope logged");
+        let env_row = &log.records[0];
+        assert_eq!(env_row.target, "worker@brano", "raw address recorded");
+        assert_eq!(env_row.body, "hello body", "body verbatim");
+        assert_eq!(env_row.authority, "local", "v1 authority placeholder");
+        assert_eq!(
+            env_row.expires_at,
+            env_row.authored_at + dispatch::origin_send::DEFAULT_EXPIRES_MS
+        );
+
+        let disps = dispatch::dispositions::read_local_dispositions(&tpaths);
+        assert_eq!(disps.records.len(), 1, "exactly one terminal stamped");
+        let d = &disps.records[0];
+        assert_eq!(
+            d.correlation_id, env_row.correlation_id,
+            "disposition joins the envelope on correlation_id"
+        );
+        assert_eq!(d.state, dispatch::dispositions::StoredState::Delivered);
+        assert_eq!(d.reason, None, "delivered carries no reason");
+        assert_eq!(d.authored_at, env_row.authored_at, "authored_at copied from envelope");
+        assert!(d.witnessed_at >= d.authored_at, "witnessed at/after authored");
+    }
+
+    #[test]
+    fn durability_stamps_failed_delivery_when_carrier_returns_nonzero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend { result: 1, ..Default::default() }; // definitive fail
+        let target = session("claude-code");
+
+        let code = deliver_with_durability(
+            &env,
+            &paths,
+            &backend,
+            UnifiedCarrier::MuxPty,
+            &target,
+            "worker",
+            "body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+        );
+        assert_eq!(code, 1, "carrier failure exit is preserved");
+
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        // Envelope still logged (write-then-deliver logs BEFORE the attempt).
+        let log = dispatch::dispositions::read_local_log(&tpaths);
+        assert_eq!(log.records.len(), 1);
+        let disps = dispatch::dispositions::read_local_dispositions(&tpaths);
+        assert_eq!(disps.records.len(), 1);
+        let d = &disps.records[0];
+        assert_eq!(d.state, dispatch::dispositions::StoredState::Failed);
+        assert_eq!(d.reason.as_deref(), Some("delivery"), "failed carries a class reason");
+        assert_eq!(d.correlation_id, log.records[0].correlation_id);
+    }
+
+    #[test]
+    fn durability_custom_expires_is_reflected_in_the_envelope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let backend = ProbeBackend::default();
+        let target = session("claude-code");
+
+        // 30m in ms (what parse_expires("30m") yields).
+        let thirty_min_ms = 30 * 60_000;
+        deliver_with_durability(
+            &env,
+            &paths,
+            &backend,
+            UnifiedCarrier::MuxPty,
+            &target,
+            "worker",
+            "body",
+            thirty_min_ms,
+        );
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let log = dispatch::dispositions::read_local_log(&tpaths);
+        let e = &log.records[0];
+        assert_eq!(e.expires_at, e.authored_at + thirty_min_ms, "--expires window honored");
     }
 
     // QS-2 structural guard: `run_claude_relay_unified` in send_relay.rs MUST

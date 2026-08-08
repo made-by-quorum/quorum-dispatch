@@ -48,6 +48,7 @@ pub mod model;
 pub mod mux;
 pub mod mux_selector;
 pub mod observe;
+pub mod origin_send;
 pub mod paths;
 pub mod ping;
 pub mod preflight;
