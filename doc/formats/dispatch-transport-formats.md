@@ -301,3 +301,15 @@ treated as absence-of-rows).
 | `qd ls` staleness always surfaced (`now − witnessed_at`) | §4, TRANSITION §3 "dead pipeline visible" |
 | `--all` = local (uncap + tombstones) + every peer mirror; no-`remote/` = byte-identical | §4, build-lead reconciliation |
 | host-qualified `ls` with no mirror ⇒ refused{no-fleet-state} exit 12 | §4, consistent w/ `qd send --host` |
+| resume-and-deliver: stopped ≠ refusal class; wake in the attempt; failed{wake} on unwakeable | TRANSITION §3, contract §4 P0 ruling |
+| inbound door: malformed / mis-addressed / past-expiry / ambiguous ⇒ named refusals (past-expiry refused, never stamped `expired`) | §3, Annex A THE ONE DOOR |
+
+**Conformance (v1).** The §6 acceptance bar for this transport surface is
+demonstrated end-to-end by `dispatch/crates/dispatch/tests/acceptance.rs` — the
+log→disposition→`qd dispositions`→DuckDB-join round-trip (via `read_ndjson_auto`),
+inbound-mode idempotence, and the named door refusals. Per the W8 assessment,
+`acceptance.rs` *is* the conformance cell for the disposition surface in v1 (the
+existing per-provider conformance battery covers the older per-session
+`events.jsonl` transport, keyed by `send_id`/`content_sha256`, not this
+`correlation_id`-keyed surface). A dedicated lane-agnostic "D8 DispositionContract"
+dimension on the tier grid is a v2 option.
