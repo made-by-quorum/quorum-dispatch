@@ -25,6 +25,7 @@ pub mod conformance;
 pub mod control_sock;
 pub mod create;
 pub mod create_daemon;
+pub mod dispositions;
 pub mod effects;
 pub mod embedded_mux;
 pub mod events;

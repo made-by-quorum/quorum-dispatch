@@ -68,6 +68,14 @@ qrmux = { path = "../qrmux" }
 # (json-insertion-order → serde_json/preserve_order ON) keep dispatch's own
 # emission byte-exact — the leaf crate's serializer depends on it.
 quorum-delivery-events = { path = "../quorum-delivery-events" }
+# The versioned DISPOSITION-RECORD schema LEAF crate (qd–qf transition W1): the
+# `Envelope`/`Disposition`/`EmittedRecord` wire reflections + torn-tail JSONL
+# parsers + the pure left-join `project`. `dispatch::dispositions` (the W2 IMPURE
+# IO layer) builds the append writers / scoped readers / query surface OVER this
+# crate and re-exports its types. Byte-exact by construction (fixed-shape
+# serde-derive structs, field-declaration order) — needs NO `preserve_order`
+# feature, so a plain path dependency edge adds no serde_json feature surface.
+quorum-dispositions = { path = "../quorum-dispositions" }
 # The pure submit-discipline LEAF crate (submit-extract): the acceptance-keyed
 # verify-then-CR + chunked two-write PTY delivery core + the content-verified-CR
 # composer predicate. Extracted here so `qrmux` (attended-UX M1 fire engine) can
