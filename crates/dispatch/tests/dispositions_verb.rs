@@ -642,6 +642,39 @@ fn host_and_all_conflict_is_rejected() {
     assert_ne!(code, 0, "--host + --all must not succeed (stderr: {err})");
 }
 
+/// audit #4 (end-to-end): `--host` values that would traverse out of the store
+/// root or read an absolute dir are refused by the REAL binary — `refused{host}`,
+/// exit 12 (the shared refusal code) — before any `remote/<host>/` path is built.
+/// Nothing is read from outside the store.
+#[test]
+fn host_path_traversal_is_refused_exit_12() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = jail_home(temp.path());
+    // Seed a valid local record so a bypass would otherwise have something to emit.
+    let root = dispatch_root(&home);
+    write_lines(&root.join("log.jsonl"), &[&log_row("LOCAL", 1_700_000_000_000, 8_000_000_000_000)]);
+
+    for bad in ["../../etc", "/etc/passwd", "..", "foo/bar", "/"] {
+        let (code, stdout, err) = run_dispositions(&home, &["--host", bad]);
+        assert_eq!(code, 12, "--host {bad:?} → refused exit 12 (stderr: {err})");
+        assert!(
+            err.starts_with("qd send: refused{host}:") && err.contains("invalid --host"),
+            "--host {bad:?} → refused{{host}}, got: {err}"
+        );
+        assert!(stdout.trim().is_empty(), "--host {bad:?} emits nothing (no traversal read): {stdout:?}");
+    }
+    // Control: a legit host is exit 0 — NOT a refusal. `--host` is local UNION the
+    // peer, so the absent peerbox contributes nothing but the local record still
+    // shows (proving a valid host reads normally, unlike the refused traversals).
+    let (code, stdout, err) = run_dispositions(&home, &["--host", "peerbox"]);
+    assert_eq!(code, 0, "a valid host is exit 0 (stderr: {err})");
+    let ids: Vec<String> = parse_records(&stdout)
+        .iter()
+        .map(|r| r["correlation_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, vec!["LOCAL"], "valid host reads normally (local record present, absent peer empty)");
+}
+
 #[test]
 fn empty_store_is_empty_output_exit_0() {
     let temp = tempfile::tempdir().unwrap();

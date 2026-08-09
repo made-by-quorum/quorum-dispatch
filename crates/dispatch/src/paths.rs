@@ -142,6 +142,37 @@ impl QdPaths {
     }
 }
 
+/// Whether `host` is a safe bare hostname to interpolate into a `remote/<host>/`
+/// path (audit #4 — path-traversal defense). A caller-supplied `--host` value
+/// flows into [`QdPaths::remote_log_path`] / `remote_dispositions_path` /
+/// `remote_ls_path`, which plain-`join` it under `remote/`. Without this check a
+/// hostile value escapes the store root:
+///   - `..` (or a segment containing it) walks UP out of `remote/`;
+///   - an ABSOLUTE value (`/etc`, or a leading `/`) makes `Path::join` DISCARD the
+///     base entirely and read that absolute dir;
+///   - an embedded `/` addresses a nested/sibling path, not one host dir;
+///   - empty is not a host.
+/// A real host id is a single opaque segment (the v1 placeholder is `"local"`;
+/// future host-identity ids are still single segments). We therefore require a
+/// NON-EMPTY value with NO path separators and NO `..` component — the minimal
+/// rule that confines every `remote/<host>/` read to one direct child of
+/// `remote/`. Callers reject an invalid host with a named refusal; the store also
+/// re-checks at the read seam (defense in depth) so no path is ever joined from
+/// an unvalidated host.
+pub fn is_valid_hostname(host: &str) -> bool {
+    !host.is_empty()
+        // No path separators (forward slash on unix; also reject backslash
+        // defensively) — a host is ONE segment, never a nested path.
+        && !host.contains('/')
+        && !host.contains('\\')
+        // No `..` component (walks up out of remote/). Reject the bare `..` and
+        // any `.`-only segment; a legitimate host id never needs them.
+        && host != ".."
+        && host != "."
+        // NUL is never valid in a path component.
+        && !host.contains('\0')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +281,47 @@ mod tests {
         env.vars.insert("QD_HOME".to_string(), String::new());
         let p = QdPaths::from_home_env(Path::new("/jail/home"), &env);
         assert_eq!(p.state_dir, Path::new("/jail/home/.quorum/dispatch/state"));
+    }
+
+    // ---- audit #4: --host path-traversal validation -------------------------
+
+    #[test]
+    fn is_valid_hostname_accepts_real_host_ids() {
+        // A real host id is a single opaque segment.
+        for ok in ["local", "peerbox", "brano", "host-1", "HOST_2", "a.b.c", "01ABCXYZ"] {
+            assert!(is_valid_hostname(ok), "{ok:?} is a valid bare hostname");
+        }
+    }
+
+    #[test]
+    fn is_valid_hostname_rejects_traversal_and_absolute() {
+        // The audit #4 attack values — each escapes `remote/<host>/` if joined.
+        for bad in [
+            "",              // not a host
+            "..",            // walks up out of remote/
+            ".",             // degenerate self-segment
+            "../../etc",     // classic traversal
+            "a/../../b",     // traversal via an embedded segment
+            "/etc",          // ABSOLUTE → Path::join discards the base
+            "/",             // absolute root
+            "foo/bar",       // nested/sibling path, not one host dir
+            "peer/..",       // trailing traversal
+            "a\\b",          // backslash separator (defensive)
+            "has\0nul",      // NUL in a path component
+        ] {
+            assert!(!is_valid_hostname(bad), "{bad:?} must be rejected (traversal/absolute)");
+        }
+    }
+
+    #[test]
+    fn a_valid_host_stays_confined_under_remote() {
+        // Belt-and-suspenders: a VALID host joins to a direct child of remote/.
+        let p = QdPaths::from_home(Path::new("/jail/home"));
+        let remote = p.remote_dir();
+        for h in ["local", "peerbox"] {
+            assert!(is_valid_hostname(h));
+            assert_eq!(p.remote_log_path(h).parent().unwrap(), remote.join(h));
+            assert!(p.remote_log_path(h).starts_with(&remote), "confined under remote/");
+        }
     }
 }

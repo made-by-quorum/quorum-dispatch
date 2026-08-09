@@ -223,6 +223,17 @@ fn run_host(host: &str, all: bool, emit_json: bool) -> i32 {
         .emit();
     }
 
+    // audit #4: `--host` is interpolated into `remote/<host>/ls.json`; a traversal
+    // / absolute value would escape the store root. Reject an invalid host before
+    // any path is built (same guard the `qd dispositions --host` door applies).
+    if !dispatch::paths::is_valid_hostname(host) {
+        return dispatch::origin_send::Refusal::refused(
+            "host",
+            format!("invalid --host {host:?} — a host is one bare name (no '/', no '..', not absolute)"),
+        )
+        .emit();
+    }
+
     // Resolve the remote dir the SAME way `qd send`'s W6 host path does:
     // QD_HOME-honoring (`from_home_env`), since `remote/<host>/` lives under
     // `dispatch_root` = qd_home. HOME unset ⇒ the shared HOME error + exit 1.

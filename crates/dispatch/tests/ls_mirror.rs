@@ -219,6 +219,25 @@ fn host_absent_mirror_is_refused_no_fleet_state_exit_12() {
     assert_eq!(out, "", "no rows on stdout when refused");
 }
 
+/// audit #4: `qd ls --host <h>` interpolates `h` into `remote/<h>/ls.json`; a
+/// traversal / absolute value would escape the store root. The real binary
+/// refuses it (`refused{host}`, exit 12) BEFORE building any path — never a
+/// no-fleet-state read of an out-of-tree dir.
+#[test]
+fn host_path_traversal_is_refused_exit_12() {
+    let t = tempfile::tempdir().unwrap();
+    let j = jail(t.path());
+    for bad in ["../../etc", "/etc", "..", "foo/bar", "/"] {
+        let (code, out, err) = j.run(&["ls", "--host", bad, "--json"]);
+        assert_eq!(code, 12, "ls --host {bad:?} → refused exit 12 (stdout: {out}, stderr: {err})");
+        assert!(
+            err.starts_with("qd send: refused{host}:") && err.contains("invalid --host"),
+            "ls --host {bad:?} → refused{{host}} (not no-fleet-state), got: {err}"
+        );
+        assert_eq!(out, "", "no rows on stdout — no traversal read");
+    }
+}
+
 /// A malformed / `v != 1` mirror ⇒ a NAMED refusal (`refused{torn-mirror}`),
 /// exit 12, never a panic.
 #[test]

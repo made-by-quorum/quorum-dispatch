@@ -105,7 +105,19 @@ fn select_scope(m: &ArgMatches) -> Result<Scope, Refusal> {
             "scope",
             "--host and --all are mutually exclusive",
         )),
-        (Some(h), false) => Ok(Scope::Host(h)),
+        (Some(h), false) => {
+            // audit #4: `--host` is interpolated into a `remote/<host>/` path; a
+            // traversal / absolute value would escape the store root. Reject it
+            // here with a named refusal (the store re-checks at the read seam too,
+            // defense in depth).
+            if !dispatch::paths::is_valid_hostname(&h) {
+                return Err(Refusal::refused(
+                    "host",
+                    format!("invalid --host {h:?} — a host is one bare name (no '/', no '..', not absolute)"),
+                ));
+            }
+            Ok(Scope::Host(h))
+        }
         (None, true) => Ok(Scope::All),
         (None, false) => Ok(Scope::Local),
     }
@@ -262,6 +274,21 @@ mod tests {
 
     #[test]
     fn scope_host_flag() {
+        let m = parse(&["--host", "peerbox"]).unwrap();
+        assert_eq!(select_scope(&m).unwrap(), Scope::Host("peerbox".into()));
+    }
+
+    #[test]
+    fn scope_host_rejects_path_traversal_and_absolute() {
+        // audit #4: a `--host` that would escape `remote/<host>/` is refused
+        // (class `host`) BEFORE it can reach a path join.
+        for bad in ["../../etc", "/etc/passwd", "..", "foo/bar", "a/../../b", "/"] {
+            let m = parse(&["--host", bad]).unwrap();
+            let r = select_scope(&m).unwrap_err();
+            assert_eq!(r.class, "host", "{bad:?} → refused{{host}}");
+            assert!(r.stderr_line().contains("invalid --host"), "{bad:?}: {}", r.stderr_line());
+        }
+        // A legit single-segment host still resolves.
         let m = parse(&["--host", "peerbox"]).unwrap();
         assert_eq!(select_scope(&m).unwrap(), Scope::Host("peerbox".into()));
     }

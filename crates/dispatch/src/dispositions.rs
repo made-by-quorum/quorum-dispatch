@@ -372,6 +372,18 @@ pub fn read_scoped(
     match scope {
         Scope::Local => {}
         Scope::Host(h) => {
+            // audit #4 DEFENSE-IN-DEPTH: `h` is interpolated into a
+            // `remote/<h>/` path. The verb layer already rejects an invalid
+            // `--host`, but re-check at this read seam so the store NEVER joins a
+            // path from an unvalidated host — a traversal / absolute value would
+            // escape the store root. Fail closed (refuse the read) rather than
+            // silently reading an out-of-tree directory.
+            if !crate::paths::is_valid_hostname(h) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid host {h:?} for a remote read (path-traversal guard)"),
+                ));
+            }
             accumulate(
                 &paths.remote_log_path(h),
                 &paths.remote_dispositions_path(h),
@@ -902,6 +914,21 @@ mod tests {
         let mut ids: Vec<&str> = envs.iter().map(|e| e.correlation_id.as_str()).collect();
         ids.sort();
         assert_eq!(ids, vec!["local1", "remote1"], "All unions every peer");
+    }
+
+    #[test]
+    fn read_scoped_host_defense_in_depth_refuses_a_traversal_host() {
+        // audit #4 DEFENSE-IN-DEPTH: even if a traversal `Scope::Host` reaches the
+        // store directly (bypassing the verb's select_scope guard), read_scoped
+        // refuses (InvalidInput) rather than joining an out-of-tree path.
+        let (_tmp, paths) = jailed_paths();
+        for bad in ["../../etc", "/etc", "..", "a/b"] {
+            let err = read_scoped(&paths, &Scope::Host(bad.to_string()), false).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?} refused at the read seam");
+        }
+        // A valid host still reads (empty here, but no error).
+        let (envs, events) = read_scoped(&paths, &Scope::Host("peerbox".into()), false).unwrap();
+        assert!(envs.is_empty() && events.is_empty(), "a valid absent host is an empty read");
     }
 
     #[test]
