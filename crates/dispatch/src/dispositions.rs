@@ -115,6 +115,92 @@ fn lock_path_for(target: &Path) -> std::path::PathBuf {
 }
 
 // ===========================================================================
+// Per-correlation_id CLAIM LOCK (R15 — spans check→deliver→stamp)
+// ===========================================================================
+
+/// RAII per-`correlation_id` claim lock (R15). Held across the whole
+/// check→deliver→stamp critical section of ONE send so concurrent presentations
+/// of the SAME id SERIALIZE: the winner reads the ledger, delivers, and stamps
+/// its `delivered` (with `body_digest`); the loser then acquires the lock, re-
+/// reads the now-updated ledger, and resolves against the winner's fact (no-op on
+/// an identical body, `refused{body-mismatch}` on a different one). This closes
+/// the check-then-act double-delivery race (security audit #1) AND serializes the
+/// R15 body-consistency check. `Drop` releases the advisory lock (also on process
+/// death — a crashed holder never wedges a peer).
+///
+/// # Lock ORDERING (deadlock-freedom)
+///
+/// The claim lock is the OUTERMOST lock: callers acquire it BEFORE any
+/// dispositions/log [`AppendLock`] (the stamp inside the critical section takes
+/// the append-lock — that is fine, claim is strictly outer). NEVER acquire an
+/// append-lock and then a claim-lock; consistent ordering keeps the two lock
+/// classes deadlock-free. The lock is PER-`correlation_id`, so only same-id
+/// presentations serialize — different ids stay fully concurrent — and the hold
+/// is bounded by the delivery's own timeout (incl. the wake).
+///
+/// # Claim-file lifecycle (v1)
+///
+/// One tiny empty lock file accumulates per id ever sent, under a `claims/`
+/// subdir (kept out of the dispositions dir root so it never clutters the
+/// transport files). Accumulation is accepted for v1 (the store is born empty and
+/// the files are 0 bytes); a periodic `claims/` gc sweep is a documented
+/// FOLLOW-UP. We deliberately do NOT unlink a claim file — unlinking under flock
+/// is racy (a waiter may already hold the fd for that path), so the safe policy is
+/// leave-in-place + sweep-later.
+pub struct ClaimLock {
+    _file: std::fs::File,
+}
+
+/// The claim-lock sidecar path for `correlation_id`:
+/// `<dispatch_root>/claims/<hex-sha256(cid)>.lock`. The cid is HASHED into the
+/// filename (not used raw) so an arbitrary caller-supplied `--correlation-id`
+/// (frame's ledger event id — any bytes) can never traverse the path, exceed the
+/// filename length limit, or collide with a transport file; the hash is a
+/// fixed-width, path-safe, collision-resistant function of the id. The files live
+/// under a `claims/` subdir so they never clutter the dispositions dir root.
+fn claim_lock_path(paths: &QdPaths, correlation_id: &str) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(correlation_id.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for byte in hash {
+        use std::fmt::Write;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    paths.dispatch_root.join("claims").join(format!("{hex}.lock"))
+}
+
+/// Acquire the exclusive per-`correlation_id` claim lock (BLOCKING `LOCK_EX`),
+/// creating the `claims/` subdir + the sidecar lock file if absent. Blocking (not
+/// `LOCK_NB`) is deliberate: a second concurrent presentation of the same id must
+/// SERIALIZE behind the first, not fail — the whole point is that they resolve in
+/// order against one another's stamped facts. Mode-0600, `O_CLOEXEC` (so a send
+/// that wraps a spawn — a wake — can never leak the lock into a child). A `flock`
+/// error surfaces as `io::Error`; the caller then fails closed rather than
+/// proceeding unserialized. MUST be acquired OUTERMOST — before any append-lock
+/// (see [`ClaimLock`] lock-ordering).
+pub fn acquire_claim(paths: &QdPaths, correlation_id: &str) -> io::Result<ClaimLock> {
+    let lock_path = claim_lock_path(paths, correlation_id);
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC)
+        .open(&lock_path)?;
+    // SAFETY: flock on a valid owned fd. LOCK_EX blocks until the lock is ours;
+    // an OS-released lock on a dead holder means this cannot wedge on a peer's
+    // crash. The fd stays open for the guard's lifetime.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(ClaimLock { _file: file })
+}
+
+// ===========================================================================
 // Append writers (write-then-deliver durability)
 // ===========================================================================
 
@@ -418,6 +504,51 @@ pub fn has_delivered_event(paths: &QdPaths, correlation_id: &str) -> io::Result<
     Ok(has_delivered(&events.records, correlation_id))
 }
 
+/// The LOCAL `log.jsonl` envelope this qd ORIGINATED for `correlation_id`, or
+/// `None` if the id is not in its own log (R15 origin-mode no-double-append). The
+/// origin door reads this back under the claim lock: a duplicate origin submit
+/// (same `--correlation-id` resubmitted) must NOT double-append the envelope —
+/// the caller is retrying the SAME authored act. If more than one envelope row
+/// somehow shares the id (origin appends once per id, so this is a corruption or
+/// a pre-R15 double-append), the FIRST in file order wins — the original act of
+/// authorship. Torn-tolerant read; a missing file ⇒ `None`. Local-only (my log is
+/// for envelopes I originated; a peer's envelope lives in the mirror).
+///
+/// COST (v1, noted not optimized): this scans the whole `log.jsonl` — O(log size)
+/// per origin send. Fine for the born-empty transition store; an index is a
+/// FOLLOW-UP if the log ever grows large.
+pub fn logged_envelope(paths: &QdPaths, correlation_id: &str) -> Option<Envelope> {
+    read_local_log(paths)
+        .records
+        .into_iter()
+        .find(|e| e.correlation_id == correlation_id)
+}
+
+/// The `body_digest` recorded on the LOCAL `delivered` event for
+/// `correlation_id`, or `None` if this qd has no delivered event for it (R15).
+/// The door uses this under the claim lock to detect a same-id/different-body
+/// presentation: a delivered event present with a DIFFERENT digest than the
+/// presented body is `refused{body-mismatch}`.
+///
+/// Local-only (same authority rule as [`has_delivered_event`]). If more than one
+/// delivered event somehow exists for the id (delivery is irreversible, so the
+/// door never stamps a second — but a corrupt/hand-edited file could), the FIRST
+/// in file order wins: it is the authoritative landed fact, and any later one is
+/// exactly the tampering this check exists to surface. Torn-tolerant read; a
+/// missing file ⇒ `None`.
+pub fn recorded_delivered_digest(
+    paths: &QdPaths,
+    correlation_id: &str,
+) -> io::Result<Option<String>> {
+    let events = read_local_events(paths);
+    Ok(events
+        .records
+        .iter()
+        .find(|e| e.kind() == EventKind::Delivered && e.correlation_id() == correlation_id)
+        .and_then(|e| e.body_digest())
+        .map(|d| d.to_string()))
+}
+
 // ===========================================================================
 // Local host resolver (v1 placeholder — host-identity deferred)
 // ===========================================================================
@@ -480,7 +611,9 @@ mod tests {
     }
 
     fn delivered(id: &str, created_at: i64) -> DispositionEvent {
-        DispositionEvent::delivered(id.to_string(), created_at)
+        // A stable per-id test digest (R15). Real deliveries carry the sha-256 of
+        // the body; here a fixed token per id suffices for the store tests.
+        DispositionEvent::delivered(id.to_string(), created_at, format!("digest-of-{id}"))
     }
 
     fn failed(id: &str, created_at: i64, class: &str) -> DispositionEvent {
@@ -960,6 +1093,119 @@ mod tests {
         // The retry then delivers — NOW it is idempotent-terminal.
         append_event(&paths, &delivered("f", 6)).unwrap();
         assert!(has_delivered_event(&paths, "f").unwrap());
+    }
+
+    // ---- recorded_delivered_digest (R15) ------------------------------------
+
+    #[test]
+    fn recorded_delivered_digest_returns_the_delivered_events_digest() {
+        let (_tmp, paths) = jailed_paths();
+        // No file ⇒ None. Attempted-only ⇒ None (no delivered event).
+        assert_eq!(recorded_delivered_digest(&paths, "x").unwrap(), None);
+        append_event(&paths, &attempted("x", 1)).unwrap();
+        assert_eq!(
+            recorded_delivered_digest(&paths, "x").unwrap(),
+            None,
+            "attempted alone binds no body"
+        );
+        // A delivered event ⇒ its digest (the test helper stamps `digest-of-<id>`).
+        append_event(&paths, &delivered("x", 2)).unwrap();
+        assert_eq!(
+            recorded_delivered_digest(&paths, "x").unwrap().as_deref(),
+            Some("digest-of-x")
+        );
+        // A different id is independent.
+        assert_eq!(recorded_delivered_digest(&paths, "y").unwrap(), None);
+    }
+
+    #[test]
+    fn recorded_delivered_digest_first_delivered_wins_on_a_tampered_file() {
+        // If a corrupt/hand-edited file somehow carries TWO delivered rows for one
+        // id (the door never stamps a second), the FIRST — the authoritative
+        // landed fact — wins; a later differing one is exactly the tampering the
+        // R15 check exists to surface, not to silently adopt.
+        let (_tmp, paths) = jailed_paths();
+        append_event(
+            &paths,
+            &DispositionEvent::delivered("dup".into(), 1, "first-digest".into()),
+        )
+        .unwrap();
+        append_event(
+            &paths,
+            &DispositionEvent::delivered("dup".into(), 2, "second-digest".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            recorded_delivered_digest(&paths, "dup").unwrap().as_deref(),
+            Some("first-digest"),
+            "the first delivered row is authoritative"
+        );
+    }
+
+    // ---- claim lock (R15) ----------------------------------------------------
+
+    #[test]
+    fn claim_lock_path_is_a_hashed_sidecar_under_the_claims_subdir() {
+        let (_tmp, paths) = jailed_paths();
+        let claims_dir = paths.dispatch_root.join("claims");
+        let p = claim_lock_path(&paths, "01ABC");
+        assert_eq!(p.parent().unwrap(), claims_dir, "lock files live under claims/");
+        let name = p.file_name().unwrap().to_string_lossy();
+        assert!(name.ends_with(".lock") && name.len() == 64 + ".lock".len(), "got {name}");
+        // The cid is HASHED (64 hex chars) — a path-unsafe cid can never traverse.
+        let evil = claim_lock_path(&paths, "../../etc/passwd");
+        assert_eq!(evil.parent().unwrap(), claims_dir, "a slashy cid stays confined to claims/");
+        assert_eq!(
+            evil.file_name().unwrap().to_string_lossy().len(),
+            64 + ".lock".len(),
+            "a slashy cid hashes to a fixed-width safe filename"
+        );
+        // Distinct ids ⇒ distinct lock files; the same id ⇒ the same file.
+        assert_ne!(claim_lock_path(&paths, "a"), claim_lock_path(&paths, "b"));
+        assert_eq!(claim_lock_path(&paths, "same"), claim_lock_path(&paths, "same"));
+    }
+
+    #[test]
+    fn claim_lock_serializes_same_id_holders() {
+        // Two threads contend for the SAME id's claim lock; the second BLOCKS until
+        // the first drops. We prove serialization by having the holder hold briefly
+        // and asserting the two critical sections never overlap.
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let (tmp, paths) = jailed_paths();
+        std::fs::create_dir_all(&paths.dispatch_root).unwrap();
+        let paths = Arc::new(paths);
+        let in_section = Arc::new(AtomicBool::new(false));
+        let overlaps = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let paths = Arc::clone(&paths);
+            let in_section = Arc::clone(&in_section);
+            let overlaps = Arc::clone(&overlaps);
+            handles.push(std::thread::spawn(move || {
+                let _lock = acquire_claim(&paths, "contended-id").unwrap();
+                // Entering the critical section: if anyone else is already in it,
+                // the lock failed to serialize.
+                if in_section.swap(true, Ordering::SeqCst) {
+                    overlaps.fetch_add(1, Ordering::SeqCst);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                in_section.store(false, Ordering::SeqCst);
+                // `_lock` drops here → the next waiter proceeds.
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(
+            overlaps.load(Ordering::SeqCst),
+            0,
+            "the per-id claim lock serialized every holder (no overlap)"
+        );
+        // A DIFFERENT id's lock is independent (does not block) — acquire both.
+        let _a = acquire_claim(&paths, "id-a").unwrap();
+        let _b = acquire_claim(&paths, "id-b").unwrap();
+        drop(tmp);
     }
 
     // ---- local_host ----------------------------------------------------------

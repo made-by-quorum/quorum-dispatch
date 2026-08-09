@@ -159,15 +159,21 @@ fn log_row(id: &str, authored: i64, expires: i64) -> String {
     )
 }
 
-/// A normalized plain EVENT row (format doc §2 key order, R14.2:
-/// `v, correlation_id, event, created_at`). `kind` ∈ attempted|queued|delivered
-/// (the three variants with no `class` tail). `authored` is accepted for call-site
-/// compatibility but is NOT a field on a normalized event row — the origin
-/// timeline lives on the envelope now (events join by correlation_id).
+/// A normalized EVENT row (format doc §2 key order, R14.2/R15). `kind` ∈
+/// attempted|queued|delivered. attempted/queued carry no tail; `delivered`
+/// carries a REQUIRED `body_digest` tail (R15). `authored` is accepted for
+/// call-site compatibility but is NOT a field on a normalized event row.
 fn ev_row(id: &str, kind: &str, created_at: i64, _authored: i64) -> String {
-    format!(
-        r#"{{"v":1,"correlation_id":"{id}","event":"{kind}","created_at":{created_at}}}"#
-    )
+    if kind == "delivered" {
+        // R15: delivered rows carry a body_digest (a fixed test token here).
+        format!(
+            r#"{{"v":1,"correlation_id":"{id}","event":"delivered","created_at":{created_at},"body_digest":"seeddigest"}}"#
+        )
+    } else {
+        format!(
+            r#"{{"v":1,"correlation_id":"{id}","event":"{kind}","created_at":{created_at}}}"#
+        )
+    }
 }
 
 /// A `delivery-failed` EVENT row — one of the two variants that carry the

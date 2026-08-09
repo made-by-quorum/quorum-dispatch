@@ -15,8 +15,36 @@
 //! so it is unit-testable off the default floor and reusable across the inbound
 //! (W4) and ambiguity (W6) doors.
 
+use sha2::{Digest, Sha256};
+
 use crate::dispositions::Envelope;
 use crate::effects::Clock;
+
+// ===========================================================================
+// body_digest (R15, Contract Amendment 6)
+// ===========================================================================
+
+/// The R15 integrity digest of an envelope's body: the lowercase-hex SHA-256 of
+/// the PARSED `body` STRING (its UTF-8 bytes), NOT the file bytes. Hashing the
+/// parsed string — the exact `String` serde produced from the envelope's `body`
+/// field — means the transport's known trailing-newline trimming (and any
+/// whitespace framing around the JSON line) can NEVER fabricate a mismatch on a
+/// legitimate retry: two presentations of the same envelope carry the same body
+/// string and hash identically. The `delivered` event stores this hex string
+/// (the leaf stays pure — the crypto lives here); the door compares a presented
+/// body's digest against the one already bound to the id to detect a
+/// same-id/different-body presentation (`refused{body-mismatch}`).
+pub fn body_digest(body: &str) -> String {
+    let hash = Sha256::digest(body.as_bytes());
+    // Lowercase hex, 64 chars — the conventional sha-256 rendering.
+    let mut out = String::with_capacity(64);
+    for byte in hash {
+        use std::fmt::Write;
+        // Infallible write into a String.
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
 
 // ===========================================================================
 // correlation-id ULID

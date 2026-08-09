@@ -8,15 +8,17 @@
 //! - [`Envelope`]         — a `log.jsonl` row (§1: an envelope qd ORIGINATED).
 //!   UNCHANGED by R14 — the single normalized HOME of `origin`/`authored_at`.
 //! - [`DispositionEvent`] — a `dispositions.jsonl` row: ONE typed EVENT, as a
-//!   DISCRIMINATED UNION (§2, R8/R8a/R8b + R14.5). The file is an append-only
-//!   log of recorded moments, never state records. The five [`EventKind`] types
-//!   are `attempted` / `queued` / `delivered` / `delivery-failed` / `refused`;
-//!   `delivery-failed` and `refused` each carry a REQUIRED machine `class`, the
-//!   other three carry only the common fields (`v`, `correlation_id`,
-//!   `created_at`) — the per-variant field exists ONLY on its variant BY
-//!   CONSTRUCTION (R14.5, the type system replaces the old runtime forbidden
-//!   check). Event rows are FULLY NORMALIZED (R14.2, invariant N13): no
-//!   `witness`, no copied `origin`, no copied `authored_at`.
+//!   DISCRIMINATED UNION (§2, R8/R8a/R8b + R14.5 + R15). The file is an
+//!   append-only log of recorded moments, never state records. The five
+//!   [`EventKind`] types are `attempted` / `queued` / `delivered` /
+//!   `delivery-failed` / `refused`; `delivery-failed` and `refused` each carry a
+//!   REQUIRED machine `class`, `delivered` carries a REQUIRED `body_digest` (hex
+//!   sha-256 of the parsed body — R15, Contract Amendment 6), and `attempted` /
+//!   `queued` carry only the common fields (`v`, `correlation_id`, `created_at`)
+//!   — each per-variant tail exists ONLY on its variant BY CONSTRUCTION (R14.5,
+//!   the type system replaces the old runtime forbidden check). Event rows are
+//!   FULLY NORMALIZED (R14.2, invariant N13): no `witness`, no copied `origin`,
+//!   no copied `authored_at`.
 //! - [`SummaryRecord`]    — the PUBLISHED `qd dispositions` DEFAULT output row
 //!   (§3): one per `correlation_id`, carrying the coarse 4-state
 //!   [`SummaryState`] (`pending`/`delivered`/`failed`/`expired`, UNCHANGED per
@@ -60,12 +62,13 @@
 //! fixed schema.
 //!
 //! [`DispositionEvent`] is a DISCRIMINATED UNION whose wire order must be
-//! `{v, correlation_id, event, created_at, [class]}` — `v` FIRST (version-marker
-//! convention), `event` THIRD (matching the envelope). serde's internally tagged
-//! enum (`#[serde(tag = "event")]`) puts the tag FIRST, which is the wrong order,
-//! so the crate hand-writes `Serialize`/`Deserialize` for it: `Serialize` emits
-//! the fixed head then the per-variant `class` tail (last, omitted on the plain
-//! variants); `Deserialize` reads keys order-independently but rejects a
+//! `{v, correlation_id, event, created_at, [class | body_digest]}` — `v` FIRST
+//! (version-marker convention), `event` THIRD (matching the envelope). serde's
+//! internally tagged enum (`#[serde(tag = "event")]`) puts the tag FIRST, which
+//! is the wrong order, so the crate hand-writes `Serialize`/`Deserialize` for it:
+//! `Serialize` emits the fixed head then the single per-variant tail last
+//! (`body_digest` on delivered, `class` on delivery-failed/refused, omitted on
+//! attempted/queued); `Deserialize` reads keys order-independently but rejects a
 //! duplicate key, an unknown/foreign field, a missing common field, and a
 //! per-variant tail that is missing where required or present where forbidden —
 //! the discriminated-union shape, enforced on read. This is the same

@@ -823,22 +823,55 @@ fn run_inbound(
         }
     };
 
-    // (5) IDEMPOTENCY — a `delivered` event already present for this id ⇒ NO-OP
-    // SUCCESS (deliver nothing, stamp nothing — not even a fresh `accepted` —
-    // exit 0). Delivery is irreversible; idempotence keys on the delivered event
-    // EXISTING (R8) — a `delivery-failed` row does NOT block this retry.
-    // Local-only by design (this qd's witnessed facts are its own authority). A
-    // read error is NOT treated as "absent" (that would risk a double delivery)
-    // — surface it as a generic failure rather than silently re-delivering.
-    match dispositions::has_delivered_event(&tpaths, &envelope.correlation_id) {
-        Ok(true) => {
+    // (5) CLAIM LOCK + IDEMPOTENCY/INTEGRITY (R15). Acquire the per-correlation_id
+    // claim lock and HOLD it across check→deliver→stamp (the `_claim` guard lives
+    // to the end of this fn): concurrent presentations of the SAME id SERIALIZE,
+    // so the winner delivers+stamps and the loser then re-reads and resolves
+    // against the winner's fact (closes the check-then-act double-delivery race,
+    // security audit #1). A lock error fails CLOSED (never proceed unserialized).
+    let _claim = match dispositions::acquire_claim(&tpaths, &envelope.correlation_id) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("qd send: could not acquire the delivery claim for {} ({e}) — not admitted.", envelope.correlation_id);
+            return 1;
+        }
+    };
+
+    // The R15 integrity digest of the PRESENTED body (hex sha-256 of the parsed
+    // body string — trailing-newline-trim safe).
+    let presented_digest = dispatch::origin_send::body_digest(&envelope.body);
+
+    // Under the lock: read the digest bound to this id by an existing `delivered`
+    // event. A `delivered` event present ⇒ the prose already landed (irreversible,
+    // R8 idempotence — a `delivery-failed` row does NOT block a retry). R15 then
+    // compares bodies: SAME body ⇒ no-op success (idempotent apply); DIFFERENT
+    // body ⇒ `refused{body-mismatch}` (the id binds exactly one body — a
+    // different-body presentation is by construction a violation; stamp the
+    // refused row per R14.3 + refuse). A read error is NOT treated as "absent"
+    // (that would risk a double delivery) — surface it.
+    match dispositions::recorded_delivered_digest(&tpaths, &envelope.correlation_id) {
+        Ok(Some(recorded)) if recorded == presented_digest => {
             eprintln!(
                 "qd send: {} already delivered — no-op",
                 envelope.correlation_id
             );
             return 0;
         }
-        Ok(false) => {}
+        Ok(Some(_)) => {
+            // Same id, DIFFERENT body — someone else's content landed under this
+            // id (buggy origin, corrupt mover, or attacker). Refuse loudly.
+            return stamp_refused(
+                Refusal::refused(
+                    "body-mismatch",
+                    format!(
+                        "{} was already delivered with a different body — refusing to deliver a conflicting body under the same id",
+                        envelope.correlation_id
+                    ),
+                ),
+                "body-mismatch",
+            );
+        }
+        Ok(None) => {}
         Err(e) => {
             eprintln!(
                 "qd send: could not read the disposition ledger for idempotency ({e}) — not admitted."
@@ -1014,6 +1047,73 @@ fn deliver_with_durability(
     // normalized HOME of origin, R14.2). Event rows no longer carry origin/witness.
     let origin = dispositions::local_host(env);
 
+    // R15 CLAIM LOCK — held across check→(log)→deliver→stamp (the `_claim` guard
+    // lives to the end of this fn). Serializes concurrent same-id origin submits
+    // and the body-consistency check. Fail CLOSED on a lock error.
+    let _claim = match dispositions::acquire_claim(&tpaths, &correlation_id) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("qd send: could not acquire the delivery claim for {correlation_id} ({e}) — not sent.");
+            return 1;
+        }
+    };
+
+    // R15 ORIGIN no-double-append: if this id is ALREADY in my own log, the caller
+    // is re-submitting the SAME authored act. Compare bodies (hex sha-256 of the
+    // parsed body):
+    //   - DIFFERENT body ⇒ sync `refused{body-mismatch}`, ROW-LESS (R14a pin 3 —
+    //     origin-mode sync refusals stamp no funnel row); the id binds one body.
+    //   - SAME body + a `delivered` event exists ⇒ no-op success (idempotent).
+    //   - SAME body + NOT delivered ⇒ a legit caller retry: NO fresh envelope
+    //     append (do not double-append the log), a fresh `attempted`, then
+    //     redeliver into the outcome tail.
+    // Absent from the log ⇒ the normal write-then-deliver path (append below).
+    let presented_digest = dispatch::origin_send::body_digest(message);
+    if let Some(prior) = dispositions::logged_envelope(&tpaths, &correlation_id) {
+        if dispatch::origin_send::body_digest(&prior.body) != presented_digest {
+            // Sync refusal, ROW-LESS (origin mode, R14a pin 3): the id already
+            // binds a different body in my own log.
+            return dispatch::origin_send::Refusal::refused(
+                "body-mismatch",
+                format!(
+                    "{correlation_id} is already in the log with a different body — refusing to re-submit a conflicting body under the same id"
+                ),
+            )
+            .emit();
+        }
+        // Same body already logged: a delivered event ⇒ no-op; else caller retry.
+        match dispositions::recorded_delivered_digest(&tpaths, &correlation_id) {
+            Ok(Some(_)) => {
+                eprintln!("qd send: {correlation_id} already delivered — no-op");
+                return 0;
+            }
+            Ok(None) => {
+                // Legit caller retry: do NOT append the envelope again; stamp a
+                // fresh `attempted` and redeliver via the shared outcome tail.
+                stamp_event(
+                    &tpaths,
+                    &dispatch::dispositions::DispositionEvent::attempted(
+                        correlation_id.clone(),
+                        clock.now_ms(),
+                    ),
+                );
+                return deliver_then_stamp(
+                    &tpaths,
+                    backend,
+                    carrier,
+                    session,
+                    message,
+                    &correlation_id,
+                    &clock,
+                );
+            }
+            Err(e) => {
+                eprintln!("qd send: could not read the disposition ledger for {correlation_id} ({e}) — not sent.");
+                return 1;
+            }
+        }
+    }
+
     // Mint + LOG FIRST (write-then-deliver). `target` is the RAW address the
     // caller gave (operational record); `body` is the message verbatim.
     let envelope = build_envelope(
@@ -1082,10 +1182,15 @@ fn stamp_event(
 ///   - definitive nonzero ⇒ `delivery-failed{delivery}`.
 ///
 /// R14.2: event rows are FULLY NORMALIZED — the outcome row carries ONLY
-/// `{v, correlation_id, event, created_at}` (+ `class` on the failed variant).
-/// `created_at` = when THIS host recorded the outcome (observation time, R14.1);
-/// there is NO `witness`/`origin`/`authored_at` on the row (they live on the
-/// envelope and join by `correlation_id`). Used by the origin live path, the
+/// `{v, correlation_id, event, created_at}` (+ `class` on the failed variant,
+/// `body_digest` on delivered — R15). `created_at` = when THIS host recorded the
+/// outcome (observation time, R14.1); there is NO `witness`/`origin`/`authored_at`
+/// on the row (they live on the envelope and join by `correlation_id`).
+///
+/// R15: on success the `delivered` row binds `body_digest(message)` — the hex
+/// sha-256 of the body that ACTUALLY landed (the exact `message` string handed to
+/// the carrier). This is the integrity binding the door reads back to refuse a
+/// later same-id/different-body presentation. Used by the origin live path, the
 /// origin resume-and-deliver path, AND W4 inbound — so the three cannot drift.
 fn deliver_then_stamp(
     tpaths: &dispatch::paths::QdPaths,
@@ -1101,7 +1206,11 @@ fn deliver_then_stamp(
     let code = dispatch_selected(backend, carrier, session, message);
 
     let event = if code == 0 {
-        DispositionEvent::delivered(correlation_id.to_string(), clock.now_ms())
+        DispositionEvent::delivered(
+            correlation_id.to_string(),
+            clock.now_ms(),
+            dispatch::origin_send::body_digest(message),
+        )
     } else {
         DispositionEvent::delivery_failed(
             correlation_id.to_string(),
@@ -1169,9 +1278,52 @@ fn wake_then_deliver(
     // normalized HOME of origin, R14.2). Event rows no longer carry origin/witness.
     let origin = dispositions::local_host(env);
 
+    // R15 CLAIM LOCK — held across check→(log)→wake→deliver→stamp. Serializes
+    // concurrent same-id submits + the body-consistency check. Fail CLOSED.
+    let _claim = match dispositions::acquire_claim(&tpaths, &correlation_id) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("qd send: could not acquire the delivery claim for {correlation_id} ({e}) — not sent.");
+            return 1;
+        }
+    };
+
+    // R15 ORIGIN no-double-append (same rule as the live path): if this id is
+    // ALREADY in my log, the caller is re-submitting the SAME authored act.
+    //   - DIFFERENT body ⇒ sync `refused{body-mismatch}`, ROW-LESS (R14a pin 3).
+    //   - SAME body + delivered exists ⇒ no-op success.
+    //   - SAME body + not delivered ⇒ legit caller retry: do NOT re-append the
+    //     envelope; fall through with `skip_append` and re-run the wake+deliver.
+    let presented_digest = dispatch::origin_send::body_digest(message);
+    let mut skip_append = false;
+    if let Some(prior) = dispositions::logged_envelope(&tpaths, &correlation_id) {
+        if dispatch::origin_send::body_digest(&prior.body) != presented_digest {
+            return dispatch::origin_send::Refusal::refused(
+                "body-mismatch",
+                format!(
+                    "{correlation_id} is already in the log with a different body — refusing to re-submit a conflicting body under the same id"
+                ),
+            )
+            .emit();
+        }
+        match dispositions::recorded_delivered_digest(&tpaths, &correlation_id) {
+            Ok(Some(_)) => {
+                eprintln!("qd send: {correlation_id} already delivered — no-op");
+                return 0;
+            }
+            // Same body, not delivered: a legit retry ⇒ redeliver, no re-append.
+            Ok(None) => skip_append = true,
+            Err(e) => {
+                eprintln!("qd send: could not read the disposition ledger for {correlation_id} ({e}) — not sent.");
+                return 1;
+            }
+        }
+    }
+
     // (1) LOG FIRST — even a wake that later fails leaves the durable envelope, so
     // a `delivery-failed{wake}` event has an envelope to join on
-    // (write-then-deliver).
+    // (write-then-deliver). A caller-retry (`skip_append`) reuses the envelope
+    // already in the log — never a double-append.
     let envelope = build_envelope(
         correlation_id.clone(),
         authored_at,
@@ -1180,11 +1332,13 @@ fn wake_then_deliver(
         origin.clone(),
         message.to_string(),
     );
-    if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
-        eprintln!(
-            "qd send: could not durably record the message before delivery ({e}) — not sent."
-        );
-        return 1;
+    if !skip_append {
+        if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
+            eprintln!(
+                "qd send: could not durably record the message before delivery ({e}) — not sent."
+            );
+            return 1;
+        }
     }
 
     // The delivery attempt STARTS here: stamp `attempted`, then `queued` — the
@@ -2016,8 +2170,10 @@ mod tests {
             "the full funnel in file order; class only on delivery-failed"
         );
 
-        // log.jsonl: TWO envelopes for the id — each origin invocation logs
-        // first (write-then-deliver); the projection dedups envelopes first-wins.
+        // log.jsonl: ONE envelope for the id (R15 no-double-append). The first
+        // origin invocation logs it; the retry (SAME id + SAME body, not yet
+        // delivered) is a caller retry that REUSES the logged envelope rather than
+        // appending a second — the R15 duplicate-submit rule.
         let log = read_local_log(&tpaths);
         let envelopes: Vec<_> = log
             .records
@@ -2026,8 +2182,8 @@ mod tests {
             .collect();
         assert_eq!(
             envelopes.len(),
-            2,
-            "each origin invocation logs its envelope before delivering"
+            1,
+            "R15: the retry reuses the logged envelope — no double-append"
         );
 
         // The projection over the files at a PRE-expiry now: the funnel folds to

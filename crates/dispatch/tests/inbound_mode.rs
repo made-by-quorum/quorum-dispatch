@@ -160,13 +160,16 @@ fn seed_dispositions(j: &Jail, lines: &[&str]) {
     std::fs::write(root.join("dispositions.jsonl"), body).unwrap();
 }
 
-/// A seeded `delivered` EVENT row — normalized (R14.2): `{v, correlation_id,
-/// event, created_at}`. The `authored` param is accepted for call-site
-/// compatibility but is NOT a field on a normalized event row (the origin
-/// timeline lives on the envelope; events join by correlation_id).
-fn seeded_delivered(cid: &str, created_at: i64, _authored: i64) -> String {
+/// A seeded `delivered` EVENT row — normalized (R14.2/R15): `{v, correlation_id,
+/// event, created_at, body_digest}`. The `body_digest` is the REAL R15 digest of
+/// `body` (hex sha-256 of the parsed body string, via `origin_send::body_digest`)
+/// so that a replay of the SAME-body envelope no-ops (rather than being refused
+/// `body-mismatch`). The `authored` param is accepted for call-site compatibility
+/// but is NOT a field on a normalized event row.
+fn seeded_delivered(cid: &str, created_at: i64, _authored: i64, body: &str) -> String {
+    let digest = dispatch::origin_send::body_digest(body);
     format!(
-        r#"{{"v":1,"correlation_id":"{cid}","event":"delivered","created_at":{created_at}}}"#
+        r#"{{"v":1,"correlation_id":"{cid}","event":"delivered","created_at":{created_at},"body_digest":"{digest}"}}"#
     )
 }
 
@@ -218,8 +221,9 @@ fn inbound_already_delivered_envelope_noops_with_no_new_rows() {
     let path = envelope_file(&j, "env.json", &env);
 
     // Seed the delivered fact (the retry's success, as a prior invocation would
-    // have stamped it).
-    let delivered_row = seeded_delivered(cid, now_ms(), authored);
+    // have stamped it) — with the REAL body_digest of the envelope's body, so the
+    // replay of the same body no-ops (R15) rather than refusing body-mismatch.
+    let delivered_row = seeded_delivered(cid, now_ms(), authored, "hello from a peer");
     seed_dispositions(&j, &[&delivered_row]);
     let before = std::fs::read_to_string(dispatch_root(&j.home).join("dispositions.jsonl")).unwrap();
 

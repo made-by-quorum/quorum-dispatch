@@ -121,13 +121,32 @@ fn log_row(id: &str, authored: i64, expires: i64) -> String {
     )
 }
 
-/// A normalized plain EVENT row (format doc §2 key order, R14.2: `v,
-/// correlation_id, event, created_at`). The `witness`/`origin`/`authored` params
-/// are accepted for call-site compatibility but are NOT fields on a normalized
-/// event row (they live on the envelope now; events join by correlation_id).
+/// A normalized EVENT row (format doc §2 key order, R14.2/R15). attempted/queued
+/// carry no tail; `delivered` carries a REQUIRED `body_digest` (R15). The
+/// `witness`/`origin`/`authored` params are accepted for call-site compatibility
+/// but are NOT fields on a normalized event row (they live on the envelope now;
+/// events join by correlation_id).
 fn ev_row(id: &str, kind: &str, created_at: i64, _witness: &str, _origin: &str, _authored: i64) -> String {
+    if kind == "delivered" {
+        format!(
+            r#"{{"v":1,"correlation_id":"{id}","event":"delivered","created_at":{created_at},"body_digest":"seeddigest"}}"#
+        )
+    } else {
+        format!(
+            r#"{{"v":1,"correlation_id":"{id}","event":"{kind}","created_at":{created_at}}}"#
+        )
+    }
+}
+
+/// A `delivered` EVENT row whose `body_digest` is the REAL R15 digest of `body`
+/// (the hex sha-256 of the parsed body string, via `origin_send::body_digest`).
+/// Idempotency tests that seed a prior delivery MUST bind the delivered event to
+/// the SAME digest the door computes for the replayed envelope's body, or the
+/// door would (correctly) refuse the replay as `body-mismatch` instead of no-op.
+fn ev_delivered_for_body(id: &str, created_at: i64, body: &str) -> String {
+    let digest = dispatch::origin_send::body_digest(body);
     format!(
-        r#"{{"v":1,"correlation_id":"{id}","event":"{kind}","created_at":{created_at}}}"#
+        r#"{{"v":1,"correlation_id":"{id}","event":"delivered","created_at":{created_at},"body_digest":"{digest}"}}"#
     )
 }
 
@@ -673,13 +692,15 @@ fn inbound_replay_after_delivered_event_is_a_noop_and_never_logs() {
         &root.join("dispositions.jsonl"),
         &[
             &ev_row(cid, "attempted", now_ms() + 1_000, "local", "peerhost", authored),
-            &ev_row(cid, "delivered", now_ms() + 2_000, "local", "peerhost", authored),
+            // R15: the delivered row binds the REAL digest of the envelope's body,
+            // so the replay of the SAME body no-ops (not body-mismatch).
+            &ev_delivered_for_body(cid, now_ms() + 2_000, "idempotent payload"),
         ],
     );
     let before_replay = std::fs::read_to_string(root.join("dispositions.jsonl")).unwrap();
 
-    // REPLAY of the SAME payload: the delivered event EXISTS ⇒ NO-OP SUCCESS.
-    // No re-delivery, NO new rows, log still empty.
+    // REPLAY of the SAME payload: the delivered event EXISTS with a MATCHING
+    // body_digest ⇒ NO-OP SUCCESS. No re-delivery, NO new rows, log still empty.
     let (code2, err2) = run_inbound(&j.home);
     assert_eq!(code2, 0, "replay after delivered → no-op SUCCESS exit 0 (stderr: {err2})");
     assert!(

@@ -200,7 +200,7 @@ mod tests {
             "{}\n{}\n{}\n{}\n{}\n{}\n",
             DispositionEvent::attempted("a".into(), 2).to_jsonl_line(),
             DispositionEvent::queued("a".into(), 3).to_jsonl_line(),
-            DispositionEvent::delivered("a".into(), 4).to_jsonl_line(),
+            DispositionEvent::delivered("a".into(), 4, "d".into()).to_jsonl_line(),
             DispositionEvent::delivery_failed("a".into(), 5, "wake".into()).to_jsonl_line(),
             DispositionEvent::refused("a".into(), 6, "ambiguous".into()).to_jsonl_line(),
             // a v:2 row → refused
@@ -230,7 +230,7 @@ mod tests {
         // build this) → corrupt, NOT returned.
         let no_class =
             r#"{"v":1,"correlation_id":"x","event":"delivery-failed","created_at":5}"#;
-        let good = DispositionEvent::delivered("x".into(), 4).to_jsonl_line();
+        let good = DispositionEvent::delivered("x".into(), 4, "d".into()).to_jsonl_line();
         let buf = format!("{}\n{}\n", no_class, good);
         let r = parse_dispositions(buf.as_bytes());
         assert_eq!(r.records.len(), 1, "only the valid delivered row survives");
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn refused_without_class_is_corrupt() {
         let no_class = r#"{"v":1,"correlation_id":"x","event":"refused","created_at":5}"#;
-        let good = DispositionEvent::delivered("x".into(), 4).to_jsonl_line();
+        let good = DispositionEvent::delivered("x".into(), 4, "d".into()).to_jsonl_line();
         let buf = format!("{}\n{}\n", no_class, good);
         let r = parse_dispositions(buf.as_bytes());
         assert_eq!(r.records.len(), 1, "only the valid delivered row survives");
@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn dispositions_torn_tail_tolerated() {
-        let good = DispositionEvent::delivered("a".into(), 4).to_jsonl_line();
+        let good = DispositionEvent::delivered("a".into(), 4, "d".into()).to_jsonl_line();
         let buf = format!("{}\n{{\"v\":1,\"correlation_i", good);
         let r = parse_dispositions(buf.as_bytes());
         assert_eq!(r.records.len(), 1);
@@ -297,7 +297,7 @@ mod tests {
         // missing it fails deserialization → corrupt, NOT returned.
         let no_created =
             r#"{"v":1,"correlation_id":"x","event":"delivered"}"#;
-        let good = DispositionEvent::delivered("x".into(), 4).to_jsonl_line();
+        let good = DispositionEvent::delivered("x".into(), 4, "d".into()).to_jsonl_line();
         let buf = format!("{}\n{}\n", no_created, good);
         let r = parse_dispositions(buf.as_bytes());
         assert_eq!(r.records.len(), 1, "only the created_at-carrying row survives");

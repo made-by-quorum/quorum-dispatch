@@ -15,12 +15,14 @@
 //! keys on a `delivered` event EXISTING (see [`crate::has_delivered`]), never
 //! "any terminal."
 //!
-//! # R14 — FULLY NORMALIZED event rows (N13)
+//! # R14 — FULLY NORMALIZED event rows (N13); R15 — the delivered body binding
 //!
 //! Event rows are `{v, correlation_id, event, created_at}` + a single per-variant
 //! tail: a required machine-readable `class` on `delivery-failed` AND `refused`
-//! (identical payload shape today — fine, R14.5; they may diverge later). The
-//! three plain variants (`attempted`/`queued`/`delivered`) carry no tail. There
+//! (identical payload shape today — fine, R14.5; they may diverge later), and a
+//! required `body_digest` on `delivered` (hex sha-256 of the parsed body — R15,
+//! Contract Amendment 6; the integrity binding of what content landed). The two
+//! plain variants (`attempted`/`queued`) carry no tail. There
 //! is NO `witness`, NO copied `origin`, NO copied `authored_at` on event rows —
 //! those were denormalization (R11.3 superseded by R14.2). Provenance is the
 //! CONTAINER the row lives in (a local file ⇒ this host, a mirror ⇒ the path's
@@ -98,7 +100,9 @@ pub enum EventKind {
     /// prose lands (busy session, waking session).
     Queued,
     /// The prose LANDED in the session. Existence of this event IS the
-    /// irreversible delivered fact. Carries no tail field.
+    /// irreversible delivered fact. Carries a REQUIRED `body_digest` (hex sha-256
+    /// of the parsed body — R15, the integrity binding of the delivery act).
+    /// Serializes as `"delivered"`.
     Delivered,
     /// The attempt definitively did not arrive. Carries a REQUIRED `class` (the
     /// machine-readable failure class; `failed{wake}` = `delivery-failed` class
@@ -112,17 +116,18 @@ pub enum EventKind {
 }
 
 /// A stored `dispositions.jsonl` row — one TYPED EVENT, as a DISCRIMINATED UNION
-/// (format doc §2, R8/R8a/R8b + R14.5). Never a state record: state is a view
-/// ([`SummaryRecord`]).
+/// (format doc §2, R8/R8a/R8b + R14.5 + R15). Never a state record: state is a
+/// view ([`SummaryRecord`]).
 ///
 /// FULLY NORMALIZED (R14.2, invariant N13). Every variant carries the common
 /// fields (`v`, `correlation_id`, `created_at`) plus its own tail:
 /// [`Self::DeliveryFailed`] and [`Self::Refused`] each carry a required machine
-/// `class`; the other three carry only the common fields. The per-variant fields
-/// exist ONLY on their variant BY CONSTRUCTION — the type system enforces what
-/// the old runtime forbidden-field check did (R14.5). Delivery-failed and
-/// refused have IDENTICAL payload shapes today; that is fine and they may
-/// diverge later (R14.5).
+/// `class`; [`Self::Delivered`] carries a required `body_digest` (R15, the
+/// integrity binding of the delivery act); [`Self::Attempted`] and
+/// [`Self::Queued`] carry only the common fields. Each per-variant tail exists
+/// ONLY on its variant BY CONSTRUCTION — the type system enforces what the old
+/// runtime forbidden-field check did (R14.5). Delivery-failed and refused have
+/// IDENTICAL payload shapes today; that is fine and they may diverge later.
 ///
 /// DROPPED vs the pre-R14 shape: `witness`, the copied `origin`, and the copied
 /// `authored_at` — those were denormalization (R11.3 superseded). Provenance is
@@ -130,8 +135,9 @@ pub enum EventKind {
 /// `correlation_id`. Event rows carry NO `expires_at` (ruled).
 ///
 /// Wire key order (byte-exact): `v, correlation_id, event, created_at` then the
-/// per-variant tail (`class` on delivery-failed / refused), omitted on the three
-/// plain variants. See the manual [`Serialize`]/[`Deserialize`] impls below —
+/// per-variant tail (`body_digest` on delivered, `class` on delivery-failed /
+/// refused), omitted on attempted/queued. See the manual
+/// [`Serialize`]/[`Deserialize`] impls below —
 /// serde's internally tagged enum would put the tag FIRST (wrong: we need `v`
 /// first, `event` third), so the impls emit the exact order by hand.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,8 +146,14 @@ pub enum DispositionEvent {
     Attempted { correlation_id: String, created_at: i64 },
     /// Placed in the target's queue / awaiting idle or wake.
     Queued { correlation_id: String, created_at: i64 },
-    /// The prose landed.
-    Delivered { correlation_id: String, created_at: i64 },
+    /// The prose landed. Carries a REQUIRED `body_digest` (hex sha-256 of the
+    /// envelope's PARSED `body` string — R15, Contract Amendment 6): the
+    /// integrity binding of the delivered ACT (what content landed here). The
+    /// leaf STORES the hex string only; the dispatch side computes it (the leaf
+    /// stays pure — no crypto dep). It is NOT a join-avoidance copy: its purpose
+    /// is exactly the case where the join target (mirror envelope) is absent or
+    /// untrusted, so the door can refuse a same-id/different-body presentation.
+    Delivered { correlation_id: String, created_at: i64, body_digest: String },
     /// The attempt definitively did not arrive; machine `class` REQUIRED.
     DeliveryFailed { correlation_id: String, created_at: i64, class: String },
     /// A parse-valid inbound / pre-flight refusal; refusal `class` REQUIRED.
@@ -238,9 +250,11 @@ impl DispositionEvent {
         DispositionEvent::Queued { correlation_id, created_at }
     }
 
-    /// A `delivered` event (the prose landed). No tail field.
-    pub fn delivered(correlation_id: String, created_at: i64) -> Self {
-        DispositionEvent::Delivered { correlation_id, created_at }
+    /// A `delivered` event (the prose landed). `body_digest` (the hex sha-256 of
+    /// the envelope's PARSED body string, computed by the dispatch side) is
+    /// REQUIRED and set here — the R15 integrity binding (Contract Amendment 6).
+    pub fn delivered(correlation_id: String, created_at: i64, body_digest: String) -> Self {
+        DispositionEvent::Delivered { correlation_id, created_at, body_digest }
     }
 
     /// A `delivery-failed` event. `class` (the machine failure class, e.g.
@@ -291,27 +305,43 @@ impl DispositionEvent {
         }
     }
 
+    /// The `body_digest` on a [`Self::Delivered`] event (R15 integrity binding),
+    /// `None` on every other variant. The door reads this back to compare a
+    /// presented body against the one already bound to the id.
+    pub fn body_digest(&self) -> Option<&str> {
+        match self {
+            DispositionEvent::Delivered { body_digest, .. } => Some(body_digest),
+            _ => None,
+        }
+    }
+
     /// The compact single-line JSON for this row (no trailing newline).
-    /// Byte-exact by construction; the per-variant `class` tail is emitted last,
-    /// omitted on the three plain variants.
+    /// Byte-exact by construction; the per-variant tail (`body_digest` on
+    /// delivered, `class` on delivery-failed / refused) is emitted last, omitted
+    /// on attempted/queued.
     pub fn to_jsonl_line(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
     }
 }
 
 // ---- Manual (de)serialization: pins `{v, correlation_id, event, created_at,
-// [class]}` byte order. serde's internally-tagged enum puts the tag FIRST, so we
-// emit the fixed head + per-variant `class` tail by hand (R14.5). ----
+// [class | body_digest]}` byte order. serde's internally-tagged enum puts the tag
+// FIRST, so we emit the fixed head + the per-variant tail by hand (R14.5). The
+// tail is `class` on delivery-failed / refused and `body_digest` on delivered
+// (R15); the three keys are mutually exclusive by construction. ----
 
 impl Serialize for DispositionEvent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        // Field count = 4 common + a `class` tail on delivery-failed / refused.
+        // Field count = 4 common + a single per-variant tail on delivered
+        // (body_digest) / delivery-failed (class) / refused (class).
         let tail = matches!(
             self,
-            DispositionEvent::DeliveryFailed { .. } | DispositionEvent::Refused { .. }
+            DispositionEvent::Delivered { .. }
+                | DispositionEvent::DeliveryFailed { .. }
+                | DispositionEvent::Refused { .. }
         );
         let mut s = serializer.serialize_struct("DispositionEvent", if tail { 5 } else { 4 })?;
         // Head, in the pinned order: v, correlation_id, event, created_at.
@@ -319,8 +349,12 @@ impl Serialize for DispositionEvent {
         s.serialize_field("correlation_id", self.correlation_id())?;
         s.serialize_field("event", &self.kind())?;
         s.serialize_field("created_at", &self.created_at())?;
-        // Per-variant `class` tail, last.
+        // Per-variant tail, last: `body_digest` on delivered, `class` on
+        // delivery-failed / refused; nothing on the two plain variants.
         match self {
+            DispositionEvent::Delivered { body_digest, .. } => {
+                s.serialize_field("body_digest", body_digest)?;
+            }
             DispositionEvent::DeliveryFailed { class, .. }
             | DispositionEvent::Refused { class, .. } => {
                 s.serialize_field("class", class)?;
@@ -354,6 +388,7 @@ impl<'de> Deserialize<'de> for DispositionEvent {
                 let mut event: Option<EventKind> = None;
                 let mut created_at: Option<i64> = None;
                 let mut class: Option<String> = None;
+                let mut body_digest: Option<String> = None;
 
                 // Accept keys in any order (JSON is unordered on the way in); the
                 // ORDER contract is an emission property, pinned in Serialize.
@@ -367,10 +402,11 @@ impl<'de> Deserialize<'de> for DispositionEvent {
                         "event" => set_once(&mut event, &mut map, "event")?,
                         "created_at" => set_once(&mut created_at, &mut map, "created_at")?,
                         "class" => set_once(&mut class, &mut map, "class")?,
+                        "body_digest" => set_once(&mut body_digest, &mut map, "body_digest")?,
                         other => {
                             return Err(de::Error::unknown_field(
                                 other,
-                                &["v", "correlation_id", "event", "created_at", "class"],
+                                &["v", "correlation_id", "event", "created_at", "class", "body_digest"],
                             ));
                         }
                     }
@@ -382,22 +418,50 @@ impl<'de> Deserialize<'de> for DispositionEvent {
                 let event = event.ok_or_else(|| de::Error::missing_field("event"))?;
                 let created_at = created_at.ok_or_else(|| de::Error::missing_field("created_at"))?;
 
-                // Per-variant `class` tail: REQUIRED on delivery-failed / refused,
-                // FORBIDDEN (foreign) on the three plain variants — the
-                // discriminated-union invariant.
+                // Per-variant tail, enforced (the discriminated-union invariant):
+                //   delivered       → REQUIRES `body_digest`, FORBIDS `class` (R15)
+                //   delivery-failed  → REQUIRES `class`, FORBIDS `body_digest`
+                //   refused          → REQUIRES `class`, FORBIDS `body_digest`
+                //   attempted/queued → FORBID both.
                 match event {
+                    EventKind::Delivered => {
+                        if class.is_some() {
+                            return Err(de::Error::custom(
+                                "a `delivered` event carries a foreign `class` field",
+                            ));
+                        }
+                        let body_digest =
+                            body_digest.ok_or_else(|| de::Error::missing_field("body_digest"))?;
+                        Ok(DispositionEvent::Delivered { correlation_id, created_at, body_digest })
+                    }
                     EventKind::DeliveryFailed => {
+                        if body_digest.is_some() {
+                            return Err(de::Error::custom(
+                                "a `delivery-failed` event carries a foreign `body_digest` field",
+                            ));
+                        }
                         let class = class.ok_or_else(|| de::Error::missing_field("class"))?;
                         Ok(DispositionEvent::DeliveryFailed { correlation_id, created_at, class })
                     }
                     EventKind::Refused => {
+                        if body_digest.is_some() {
+                            return Err(de::Error::custom(
+                                "a `refused` event carries a foreign `body_digest` field",
+                            ));
+                        }
                         let class = class.ok_or_else(|| de::Error::missing_field("class"))?;
                         Ok(DispositionEvent::Refused { correlation_id, created_at, class })
                     }
                     kind => {
+                        // attempted / queued: neither tail field is permitted.
                         if class.is_some() {
                             return Err(de::Error::custom(
-                                "a plain event (attempted/queued/delivered) carries a foreign `class` field",
+                                "a plain event (attempted/queued) carries a foreign `class` field",
+                            ));
+                        }
+                        if body_digest.is_some() {
+                            return Err(de::Error::custom(
+                                "a plain event (attempted/queued) carries a foreign `body_digest` field",
                             ));
                         }
                         Ok(match kind {
@@ -407,10 +471,7 @@ impl<'de> Deserialize<'de> for DispositionEvent {
                             EventKind::Queued => {
                                 DispositionEvent::Queued { correlation_id, created_at }
                             }
-                            EventKind::Delivered => {
-                                DispositionEvent::Delivered { correlation_id, created_at }
-                            }
-                            // DeliveryFailed / Refused handled above.
+                            // Delivered / DeliveryFailed / Refused handled above.
                             _ => unreachable!(),
                         })
                     }
@@ -487,11 +548,17 @@ mod tests {
 
     #[test]
     fn delivered_event_golden_line() {
-        // delivered → no tail key.
-        let ev = DispositionEvent::delivered("01ABC".to_string(), 1_781_241_500_500);
+        // delivered → body_digest tail present, last (R15). The digest is the hex
+        // sha-256 of the parsed body, computed by the dispatch side; the leaf just
+        // stores + emits the string.
+        let ev = DispositionEvent::delivered(
+            "01ABC".to_string(),
+            1_781_241_500_500,
+            "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e".to_string(),
+        );
         assert_eq!(
             ev.to_jsonl_line(),
-            r#"{"v":1,"correlation_id":"01ABC","event":"delivered","created_at":1781241500500}"#
+            r#"{"v":1,"correlation_id":"01ABC","event":"delivered","created_at":1781241500500,"body_digest":"a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e"}"#
         );
     }
 
@@ -610,7 +677,7 @@ mod tests {
         for ev in [
             DispositionEvent::attempted("a".to_string(), 2),
             DispositionEvent::queued("a".to_string(), 3),
-            DispositionEvent::delivered("a".to_string(), 4),
+            DispositionEvent::delivered("a".to_string(), 4, "deadbeef".to_string()),
             DispositionEvent::delivery_failed("a".to_string(), 5, "wake".to_string()),
             DispositionEvent::refused("a".to_string(), 6, "ambiguous".to_string()),
         ] {
@@ -664,9 +731,16 @@ mod tests {
         assert_eq!(att.kind(), EventKind::Attempted);
         assert_eq!(att.correlation_id(), "a");
         assert_eq!(att.created_at(), 1);
+        assert_eq!(att.body_digest(), None, "no body_digest on a plain variant");
+
+        let dv = DispositionEvent::delivered("a".into(), 4, "abc123".into());
+        assert_eq!(dv.kind(), EventKind::Delivered);
+        assert_eq!(dv.body_digest(), Some("abc123"), "delivered exposes its body_digest (R15)");
+        assert!(matches!(dv, DispositionEvent::Delivered { ref body_digest, .. } if body_digest == "abc123"));
 
         let df = DispositionEvent::delivery_failed("a".into(), 2, "wake".into());
         assert_eq!(df.kind(), EventKind::DeliveryFailed);
+        assert_eq!(df.body_digest(), None, "no body_digest on delivery-failed");
         assert!(matches!(df, DispositionEvent::DeliveryFailed { ref class, .. } if class == "wake"));
 
         let rf = DispositionEvent::refused("a".into(), 3, "ambiguous".into());
@@ -699,10 +773,12 @@ mod tests {
     // ------- discriminated-union deserialize invariants (mirror the parser) ---
 
     #[test]
-    fn deserialize_rejects_foreign_class_on_plain_variant() {
-        // A plain event (attempted/queued/delivered) carrying `class` is corrupt
-        // BY CONSTRUCTION (the discriminated union has no foreign fields).
-        for kind in ["attempted", "queued", "delivered"] {
+    fn deserialize_rejects_foreign_class_on_non_failure_variant() {
+        // attempted/queued carry NO tail; delivered carries `body_digest`, NOT
+        // `class`. A `class` on any of them is a foreign field ⇒ corrupt. For
+        // delivered we also give it a valid body_digest so the ONLY defect is the
+        // foreign class (proving `class` alone rejects it, not the missing digest).
+        for kind in ["attempted", "queued"] {
             let line = format!(
                 r#"{{"v":1,"correlation_id":"x","event":"{}","created_at":1,"class":"nope"}}"#,
                 kind
@@ -712,6 +788,11 @@ mod tests {
                 "{kind} with a foreign class must be rejected"
             );
         }
+        let delivered_with_class = r#"{"v":1,"correlation_id":"x","event":"delivered","created_at":1,"body_digest":"abc","class":"nope"}"#;
+        assert!(
+            serde_json::from_str::<DispositionEvent>(delivered_with_class).is_err(),
+            "a delivered row carrying `class` is corrupt even with a valid body_digest"
+        );
     }
 
     #[test]
@@ -722,10 +803,50 @@ mod tests {
         assert!(serde_json::from_str::<DispositionEvent>(refused_no_class).is_err());
     }
 
+    // ------- R15 body_digest discriminated-union invariants -------
+
+    #[test]
+    fn deserialize_requires_body_digest_on_delivered() {
+        // A `delivered` row WITHOUT body_digest is corrupt (R15: the tail is
+        // REQUIRED). A well-formed one round-trips.
+        let no_digest = r#"{"v":1,"correlation_id":"x","event":"delivered","created_at":1}"#;
+        assert!(
+            serde_json::from_str::<DispositionEvent>(no_digest).is_err(),
+            "delivered sans body_digest is corrupt"
+        );
+        let good = r#"{"v":1,"correlation_id":"x","event":"delivered","created_at":1,"body_digest":"abc"}"#;
+        let ev: DispositionEvent = serde_json::from_str(good).unwrap();
+        assert_eq!(ev.body_digest(), Some("abc"));
+    }
+
+    #[test]
+    fn deserialize_rejects_body_digest_on_non_delivered_variants() {
+        // `body_digest` is foreign to every variant except delivered. A row of any
+        // other kind carrying it is corrupt (even if its own required tail is
+        // present, for delivery-failed/refused).
+        for (kind, tail) in [
+            ("attempted", ""),
+            ("queued", ""),
+            ("delivery-failed", r#","class":"wake""#),
+            ("refused", r#","class":"ambiguous""#),
+        ] {
+            let line = format!(
+                r#"{{"v":1,"correlation_id":"x","event":"{}","created_at":1,"body_digest":"abc"{}}}"#,
+                kind, tail
+            );
+            assert!(
+                serde_json::from_str::<DispositionEvent>(&line).is_err(),
+                "{kind} carrying a foreign body_digest must be rejected"
+            );
+        }
+    }
+
     #[test]
     fn deserialize_rejects_unknown_field() {
-        // `reason` is RESERVED but UNUSED in v1 → an unknown field → corrupt.
-        let with_reason = r#"{"v":1,"correlation_id":"x","event":"delivered","created_at":1,"reason":"nope"}"#;
+        // `reason` is RESERVED but UNUSED in v1 → an unknown field → corrupt (the
+        // delivered row is otherwise well-formed with its body_digest, so the ONLY
+        // defect is the foreign `reason`).
+        let with_reason = r#"{"v":1,"correlation_id":"x","event":"delivered","created_at":1,"body_digest":"abc","reason":"nope"}"#;
         assert!(serde_json::from_str::<DispositionEvent>(with_reason).is_err());
     }
 }

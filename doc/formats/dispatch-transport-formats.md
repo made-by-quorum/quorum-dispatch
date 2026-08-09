@@ -138,9 +138,9 @@ values.
 |---|---|---|
 | `attempted`        | a delivery attempt was ADMITTED and STARTED (each retry = a fresh `attempted`; `attempted` marks admission-and-start — R14.3 retires the old `accepted`) | — |
 | `queued`           | the attempt placed the message into the target's delivery queue / awaiting idle or wake (a recorded moment, possibly minutes before landing — busy or waking session) | — |
-| `delivered`        | the prose LANDED in the session — existence of this row IS the irreversible delivered fact | — |
+| `delivered`        | the prose LANDED in the session — existence of this row IS the irreversible delivered fact; carries a **required `body_digest`** (R15 — the integrity binding of what content landed) | — (has `body_digest`) |
 | `delivery-failed`  | the attempt definitively did not arrive | **required** |
-| `refused`          | a parse-valid **inbound** door / pre-flight refusal — mis-addressed, past-expiry, ambiguous, no-live-receive-path; the refusal class rides IN the funnel now (not stderr-only). **PENDING-class in the fold, never `failed`** (refused = never left ≠ failed) | **required** |
+| `refused`          | a parse-valid **inbound** door / pre-flight refusal — mis-addressed, past-expiry, ambiguous, no-live-receive-path, body-mismatch (R15); the refusal class rides IN the funnel now (not stderr-only). **PENDING-class in the fold, never `failed`** (refused = never left ≠ failed) | **required** |
 
 **Guard — only recorded moments get events.** qd emits an event when it records
 the thing HAPPEN, never a speculative/planned state. "Will retry at X" stays
@@ -161,16 +161,35 @@ row-less — the interactive caller is present and the refusal rides its stderr,
 as does a MALFORMED envelope with no trustworthy `correlation_id` (nothing to
 key a row on); widening origin-mode refusals to rows is a future ruling.
 
-**Per-variant `class` invariant** (the discriminated union, tighter than any
-shared enum — R14.5): `class` is REQUIRED on `delivery-failed` AND `refused`
-(the machine-readable failure/refusal class, e.g. `"wake"` /
-`"no-live-receive-path"` — the contract §6 `{class}` family; `failed{wake}` =
-`delivery-failed` class `"wake"`) and FORBIDDEN on the three plain types. A
-`delivery-failed` or `refused` row without `class`, a plain type carrying
-`class`, or **any** row carrying a field foreign to its variant, is **corrupt**
-(counted, never returned — the reader enforces the union shape per type). A human
-detail field named `reason` is **RESERVED** (optional, any variant) but UNUSED
-in v1 — not emitted, and a row carrying it today is corrupt.
+**Per-variant tail invariant** (the discriminated union, tighter than any shared
+enum — R14.5, extended R15): `class` is REQUIRED on `delivery-failed` AND
+`refused` (the machine-readable failure/refusal class, e.g. `"wake"` /
+`"no-live-receive-path"` / `"body-mismatch"` — the contract §6 `{class}` family;
+`failed{wake}` = `delivery-failed` class `"wake"`) and FORBIDDEN elsewhere;
+`body_digest` is REQUIRED on `delivered` (R15) and FORBIDDEN elsewhere. So each
+type carries exactly one tail (`delivered`→`body_digest`,
+`delivery-failed`/`refused`→`class`, `attempted`/`queued`→none). A row missing
+its required tail, carrying a foreign tail (a plain type with `class`, a
+non-delivered type with `body_digest`, …), or carrying **any** field foreign to
+its variant, is **corrupt** (counted, never returned — the reader enforces the
+union shape per type). A human detail field named `reason` is **RESERVED**
+(optional, any variant) but UNUSED in v1 — not emitted, and a row carrying it
+today is corrupt.
+
+**R15 — the id binds ONE body (Contract Amendment 6).** `correlation_id` is minted
+once at origin by one append, so one id IS one act of authorship with one body; no
+legitimate flow produces same-id/different-body (a retry re-presents the IDENTICAL
+envelope; movers re-read the same row). The `delivered` event therefore binds a
+`body_digest` (hex sha-256 of the parsed body), and the door — under a
+per-`correlation_id` claim lock spanning check→deliver→stamp — refuses a
+conflicting presentation: **inbound** a same-id/different-body presentation stamps
+`refused{body-mismatch}` (funnel row, exit 12); **origin** a duplicate submit with
+the same body does NOT double-append the envelope (a caller retry redelivers), and
+a different body is a SYNC row-less `refused{body-mismatch}`. An identical-body
+replay is a no-op success either way. This is DETECTION, not prevention (an
+attacker who presents first still lands their body; the legit presentation then
+refuses `body-mismatch` — which IS the alarm); prevention needs envelope
+authenticity (signing / the host-identity tree), out of this pass.
 
 ### Row schema (one event — a discriminated union keyed on `event`)
 
@@ -190,21 +209,24 @@ in v1 — not emitted, and a row carrying it today is corrupt.
     "created_at":     { "type": "integer",
                         "description": "epoch-ms, when THIS host recorded the event (R14.1). Effects order — and the view's latest-event pick — key on this (N10 / Amendment 1). For OUTCOME events this is OBSERVATION time: a delivery that truly landed at 12:01 but was recorded at 12:02 is a `delivered` event `created_at` 12:02 — there is no retro-dating, and `created_at` is honest about what qd knew and when. (For qd-driven events — attempted/queued — record time and happen time coincide to within ms.)" },
     "class":          { "type": "string", "minLength": 1,
-                        "description": "The machine-readable failure/refusal class. REQUIRED on `delivery-failed` (e.g. \"wake\") and `refused` (e.g. \"no-live-receive-path\"); FORBIDDEN on the three plain types. Part of the {class} failure/refusal family (contract §6). Omitted from the wire when absent." }
+                        "description": "The machine-readable failure/refusal class. REQUIRED on `delivery-failed` (e.g. \"wake\") and `refused` (e.g. \"no-live-receive-path\", \"body-mismatch\"); FORBIDDEN on the other three types. Part of the {class} failure/refusal family (contract §6). Omitted from the wire when absent." },
+    "body_digest":    { "type": "string", "minLength": 1,
+                        "description": "R15 (Contract Amendment 6): the lowercase-hex SHA-256 of the envelope's PARSED `body` string (its UTF-8 bytes — NOT the file line bytes, so transport trailing-newline trimming can never fabricate a mismatch on a legit retry). REQUIRED on `delivered`, FORBIDDEN on the other four types. The integrity binding of the delivery act — what content landed at this host; the door refuses a same-id/different-body presentation as `refused{body-mismatch}`. Omitted from the wire when absent." }
   },
   "oneOf": [
-    { "properties": { "event": { "const": "attempted" } },       "required": ["v", "correlation_id", "event", "created_at"],          "not": { "required": ["class"] } },
-    { "properties": { "event": { "const": "queued" } },          "required": ["v", "correlation_id", "event", "created_at"],          "not": { "required": ["class"] } },
-    { "properties": { "event": { "const": "delivered" } },       "required": ["v", "correlation_id", "event", "created_at"],          "not": { "required": ["class"] } },
-    { "properties": { "event": { "const": "delivery-failed" } }, "required": ["v", "correlation_id", "event", "created_at", "class"] },
-    { "properties": { "event": { "const": "refused" } },         "required": ["v", "correlation_id", "event", "created_at", "class"] }
+    { "properties": { "event": { "const": "attempted" } },       "required": ["v", "correlation_id", "event", "created_at"],                 "not": { "anyOf": [ { "required": ["class"] }, { "required": ["body_digest"] } ] } },
+    { "properties": { "event": { "const": "queued" } },          "required": ["v", "correlation_id", "event", "created_at"],                 "not": { "anyOf": [ { "required": ["class"] }, { "required": ["body_digest"] } ] } },
+    { "properties": { "event": { "const": "delivered" } },       "required": ["v", "correlation_id", "event", "created_at", "body_digest"], "not": { "required": ["class"] } },
+    { "properties": { "event": { "const": "delivery-failed" } }, "required": ["v", "correlation_id", "event", "created_at", "class"],       "not": { "required": ["body_digest"] } },
+    { "properties": { "event": { "const": "refused" } },         "required": ["v", "correlation_id", "event", "created_at", "class"],       "not": { "required": ["body_digest"] } }
   ]
 }
 ```
 
 Key order on the wire: `v, correlation_id, event, created_at` then the
-per-variant tail (`class` on `delivery-failed` / `refused`; omitted entirely on
-the three plain types). `v` is first (version-marker convention); `event` is
+per-variant tail (`class` on `delivery-failed` / `refused`; `body_digest` on
+`delivered` — R15; omitted entirely on `attempted` / `queued`). `v` is first
+(version-marker convention); `event` is
 third (matching the §1 envelope).
 
 **Normalization note (N13, R14.2).** An event row carries ONLY its own facts —

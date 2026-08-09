@@ -1,16 +1,17 @@
 //! Byte-exact wire GOLDEN for the disposition-record schema (qd–qf transition
-//! v1, R8–R14 — the typed-event discriminated-union log + folded summary,
-//! FULLY NORMALIZED per R14).
+//! v1, R8–R15 — the typed-event discriminated-union log + folded summary,
+//! FULLY NORMALIZED per R14, with the R15 delivered `body_digest` binding).
 //!
 //! These strings are pinned against `dispatch/doc/formats/dispatch-transport-
-//! formats.md` §§1–3: key ORDER, `class` present ONLY on `delivery-failed` and
-//! `refused`, the nullable summary columns (`last_event`, `last_attempt_at`,
+//! formats.md` §§1–3: key ORDER, the per-variant tail (`class` ONLY on
+//! `delivery-failed`/`refused`, `body_digest` ONLY on `delivered` — R15), the
+//! nullable summary columns (`last_event`, `last_attempt_at`,
 //! `first_delivered_at`, `expires_at`, `authored_at`, `origin`) emitted as
 //! `null` when absent. If a line here changes, the format contract changed —
 //! update the doc in lockstep. Byte-exactness is by construction: the fixed-shape
 //! structs ride serde-derive declaration order; the [`DispositionEvent`]
 //! discriminated union rides a hand-written `Serialize` that pins
-//! `{v, correlation_id, event, created_at, [class]}`.
+//! `{v, correlation_id, event, created_at, [class | body_digest]}`.
 
 use quorum_dispositions::{
     has_delivered, parse_dispositions, parse_log, project_summary, DispositionEvent, Envelope,
@@ -59,11 +60,15 @@ fn event_queued_wire_golden() {
 
 #[test]
 fn event_delivered_wire_golden() {
-    // delivered → NO tail key.
-    let ev = DispositionEvent::delivered("01ABC".into(), 1_781_241_500_500);
+    // delivered → body_digest tail (R15), last on the wire.
+    let ev = DispositionEvent::delivered(
+        "01ABC".into(),
+        1_781_241_500_500,
+        "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e".into(),
+    );
     assert_eq!(
         ev.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01ABC","event":"delivered","created_at":1781241500500}"#
+        r#"{"v":1,"correlation_id":"01ABC","event":"delivered","created_at":1781241500500,"body_digest":"a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e"}"#
     );
 }
 
@@ -236,7 +241,7 @@ fn fail_then_retry_then_succeed_folds_to_delivered() {
         DispositionEvent::delivery_failed("a".into(), t1, "wake".into()),
         DispositionEvent::attempted("a".into(), t2),
         DispositionEvent::queued("a".into(), t2),
-        DispositionEvent::delivered("a".into(), t3),
+        DispositionEvent::delivered("a".into(), t3, "d".into()),
     ];
     let envs = vec![Envelope {
         v: 1,
@@ -286,7 +291,7 @@ fn fail_then_retry_then_succeed_folds_to_delivered() {
 fn orphan_event_summary_wire_shows_triple_null() {
     // A delivered event with no envelope in scope → origin, authored_at, AND
     // expires_at ALL null in the emitted line (the R14.2 honest-null change).
-    let events = vec![DispositionEvent::delivered("orph".into(), 700)];
+    let events = vec![DispositionEvent::delivered("orph".into(), 700, "d".into())];
     let out = project_summary(&[], &events, i64::MAX);
     assert_eq!(out.len(), 1);
     let line = out[0].to_jsonl_line();
@@ -333,7 +338,7 @@ fn same_instant_funnel_wire_shows_delivered_last_event() {
         DispositionEvent::delivery_failed("z".into(), t, "wake".into()),
         DispositionEvent::attempted("z".into(), t),
         DispositionEvent::queued("z".into(), t),
-        DispositionEvent::delivered("z".into(), t),
+        DispositionEvent::delivered("z".into(), t, "d".into()),
     ];
     let out = project_summary(&[], &events, t + 1);
     assert_eq!(out[0].state, SummaryState::Delivered);

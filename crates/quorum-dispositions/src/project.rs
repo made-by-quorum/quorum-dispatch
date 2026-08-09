@@ -265,7 +265,7 @@ mod tests {
             DispositionEvent::delivery_failed("a".into(), t1, "wake".into()),
             DispositionEvent::attempted("a".into(), t2),
             DispositionEvent::queued("a".into(), t2),
-            DispositionEvent::delivered("a".into(), t3),
+            DispositionEvent::delivered("a".into(), t3, "d".into()),
         ];
         let envs = [env("a", 10, 100_000)];
         let out = project_summary(&envs, &events, 400);
@@ -311,7 +311,7 @@ mod tests {
             DispositionEvent::delivery_failed("a".into(), t, "wake".into()),
             DispositionEvent::attempted("a".into(), t),
             DispositionEvent::queued("a".into(), t),
-            DispositionEvent::delivered("a".into(), t),
+            DispositionEvent::delivered("a".into(), t, "d".into()),
         ];
         let out = project_summary(&envs, &events, 600);
         assert_eq!(out[0].state, SummaryState::Delivered);
@@ -403,7 +403,7 @@ mod tests {
     fn has_delivered_true_and_false() {
         let events = vec![
             DispositionEvent::attempted("a".into(), 1),
-            DispositionEvent::delivered("a".into(), 2),
+            DispositionEvent::delivered("a".into(), 2, "d".into()),
             DispositionEvent::delivery_failed("b".into(), 3, "wake".into()),
         ];
         assert!(has_delivered(&events, "a"));
@@ -464,7 +464,7 @@ mod tests {
         // A delivered event whose envelope is not in scope → summary from the
         // event alone: origin, authored_at, AND expires_at ALL null (R14.2 honest
         // null); state derivable (delivered), but never Expired.
-        let events = [DispositionEvent::delivered("orphan".into(), 700)];
+        let events = [DispositionEvent::delivered("orphan".into(), 700, "d".into())];
         let out = project_summary(&[], &events, i64::MAX);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].correlation_id, "orphan");
@@ -488,9 +488,9 @@ mod tests {
     fn output_order_envelopes_then_orphan_events() {
         let envs = [env("e1", 1, 1000), env("e2", 2, 1000)];
         let events = [
-            DispositionEvent::delivered("e1".into(), 10),
+            DispositionEvent::delivered("e1".into(), 10, "d".into()),
             DispositionEvent::delivery_failed("orphanA".into(), 20, "x".into()),
-            DispositionEvent::delivered("orphanB".into(), 30),
+            DispositionEvent::delivered("orphanB".into(), 30, "d".into()),
         ];
         let out = project_summary(&envs, &events, 5);
         let ids: Vec<&str> = out.iter().map(|r| r.correlation_id.as_str()).collect();
@@ -506,7 +506,7 @@ mod tests {
         let envs = [env("a", 10, 1_000_000)];
         let events = [
             DispositionEvent::delivery_failed("a".into(), 800, "late".into()),
-            DispositionEvent::delivered("a".into(), 500),
+            DispositionEvent::delivered("a".into(), 500, "d".into()),
         ];
         let out = project_summary(&envs, &events, 100);
         assert_eq!(out[0].last_event, Some(EventKind::DeliveryFailed), "latest created_at");
