@@ -132,6 +132,33 @@ impl Jail {
         std::fs::write(sessions.join(format!("{pid}.json")), row).unwrap();
     }
 
+    /// A NAMED registry row with `status:idle` on disk but a DEAD pid (R19c pin):
+    /// spawn a child, capture its pid + wall-clock start, then KILL+REAP it so the
+    /// pid is no longer alive. The row on disk still says `idle` — exactly the
+    /// stale-status/dead-pid shape the WP-D gate must demote at the JSON emit
+    /// surface. Returns the (dead) pid. (Even in the rare event the OS reuses the
+    /// pid before `ls` runs, the reused process has a DIFFERENT start-time than the
+    /// recorded one → the classifier's recycled-pid protection still demotes it —
+    /// so the assertion is robust either way.)
+    fn write_dead_pid_live_row(&self, session_id: &str, name: &str, updated_ms: i64) -> i64 {
+        let mut child = Command::new("sleep").arg("600").spawn().expect("spawn");
+        let pid = child.id() as i64;
+        let start = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        // Kill + reap NOW → the recorded pid is dead by the time `ls` classifies it.
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let sessions = self.home.join(".claude").join("sessions");
+        std::fs::write(
+            sessions.join(format!("{pid}.json")),
+            registry_row(pid, start, session_id, name, updated_ms),
+        )
+        .unwrap();
+        pid
+    }
+
     /// A tombstoned (killed) registry row — `<pid>.json.tombstoned`. A tombstone is
     /// a DEAD session (joins as `Killed`, never live) so the liveness gate does not
     /// touch it — it keeps a synthetic pid + frozen start (no child needed).
@@ -589,5 +616,64 @@ fn ls_surface_auto_flips_agent_to_json_table_overrides() {
     assert!(
         serde_json::from_str::<serde_json::Value>(out.trim()).is_err(),
         "`--table --short` is text, NOT JSON: {out}"
+    );
+}
+
+/// R19c PIN — the `qd ls --json` EMIT SURFACE demotes a dead-pid local row.
+///
+/// A registry row whose on-disk `status` is `idle` but whose recorded pid is DEAD
+/// must surface as NOT-LIVE (`cold`) in the `--json` output — the WP-D liveness
+/// gate (`gated_ls_status_headless`, applied in `run_inner` over the sessions Vec
+/// BEFORE the emit) reaches the JSON surface, not just the human table.
+///
+/// This is the contract FRAME's new liveness fold depends on (qd–qf scope-1: frame
+/// consumes `qd ls --json` status instead of the retired mux/session-liveness log,
+/// and does NO pid probe of its own — a local kill(pid,0) is fleet-unsound over
+/// mirror rows, so the owning host must publish the truth). Existing coverage pins
+/// only the gate FUNCTION (unit) and the `--live` FILTER (cold-by-fixture); NONE
+/// asserted the `--json` emit demotes a dead-pid-but-idle-status row. A future
+/// `ls` refactor moving/removing that gate would silently break frame's crash
+/// detection with no red — this closes that gap.
+#[test]
+fn ls_json_emit_demotes_a_dead_pid_local_row_to_not_live() {
+    let t = tempfile::tempdir().unwrap();
+    let j = jail(t.path());
+    // A dead-pid row whose on-disk status is `idle`, plus a genuinely-live row as a
+    // control (proves the gate demotes the dead one WITHOUT demoting the live one).
+    let dead_pid = j.write_dead_pid_live_row("dead0000-aaaa-4aaa-8aaa-000000000001", "crashed", UPDATED_MS);
+    j.write_row(1, "live0000-aaaa-4aaa-8aaa-000000000002", "alive", UPDATED_MS);
+
+    // The on-disk row genuinely says `idle` — the demotion is the GATE, not the fixture.
+    let disk = std::fs::read_to_string(
+        j.home.join(".claude").join("sessions").join(format!("{dead_pid}.json")),
+    )
+    .unwrap();
+    assert!(disk.contains(r#""status":"idle""#), "the on-disk status is idle: {disk}");
+
+    // `--json` is the surface frame reads (engine::ls_rows shells `ls --all --json`).
+    // `--all` so a demoted-to-cold row is still LISTED (the default view would hide it).
+    let (code, out, err) = j.run(&["ls", "--all", "--json"]);
+    assert_eq!(code, 0, "ls --all --json exit 0 (stderr: {err})");
+    let r = rows(&out);
+    let by_name = |n: &str| r.iter().find(|row| row["name"].as_str() == Some(n)).cloned();
+
+    let crashed = by_name("crashed").unwrap_or_else(|| panic!("the crashed row is listed: {out}"));
+    let crashed_status = crashed["status"].as_str().unwrap_or("");
+    assert!(
+        !matches!(crashed_status, "idle" | "busy" | "shell"),
+        "R19c: a dead-pid local row must NOT emit a live status in --json — got {crashed_status:?} ({out})"
+    );
+    assert_eq!(
+        crashed_status, "cold",
+        "the dead-pid row is demoted to `cold` at the JSON emit surface: {out}"
+    );
+
+    // Control: the genuinely-alive row is untouched (still idle) — the gate is
+    // targeted, not a blanket cold-everything.
+    let alive = by_name("alive").unwrap_or_else(|| panic!("the alive row is listed: {out}"));
+    assert_eq!(
+        alive["status"].as_str().unwrap_or(""),
+        "idle",
+        "a genuinely-alive row keeps its live status: {out}"
     );
 }
