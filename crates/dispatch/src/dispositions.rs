@@ -9,11 +9,13 @@
 //! ([`read_events`], the `--events` mode), the inbound-mode idempotency probe
 //! ([`has_delivered_event`]), and the v1 [`local_host`] resolver.
 //!
-//! `dispositions.jsonl` is an **append-only log of typed witnessed EVENTS**
-//! ([`DispositionEvent`], R8/R8a/R8b) — never state records. State is a VIEW
-//! ([`SummaryRecord`], folded by the leaf's [`project_summary`]); idempotence
-//! keys on a `delivered` event EXISTING ([`has_delivered_event`]), never on
-//! "any terminal".
+//! `dispositions.jsonl` is an **append-only log of typed EVENTS**
+//! ([`DispositionEvent`], R8/R8a/R8b + R14) — never state records. Event rows
+//! are FULLY NORMALIZED (R14.2, invariant N13): `{v, correlation_id, event,
+//! created_at}` + a `class` tail on `delivery-failed`/`refused` — NO `witness`,
+//! NO copied `origin`, NO copied `authored_at`. State is a VIEW ([`SummaryRecord`],
+//! folded by the leaf's [`project_summary`]); idempotence keys on a `delivered`
+//! event EXISTING ([`has_delivered_event`]), never on "any terminal".
 //!
 //! # House seams (mirrors [`crate::events`] / [`crate::jsonl`])
 //!
@@ -128,7 +130,8 @@ pub fn append_envelope(paths: &QdPaths, env: &Envelope) -> io::Result<()> {
 }
 
 /// Append `event.to_jsonl_line() + "\n"` to `paths.dispositions_path()` (format
-/// doc §2 — one typed witnessed EVENT row, R8), same durability contract as
+/// doc §2 — one typed EVENT row, normalized `{v, correlation_id, event,
+/// created_at, [class]}`, R14.2), same durability contract as
 /// [`append_envelope`]. The CALLER decides fatality (the stamp points
 /// best-effort-warn a failed event append — a lost event row never changes a
 /// send's exit).
@@ -174,8 +177,9 @@ pub fn read_local_log(paths: &QdPaths) -> ReadResult<Envelope> {
 }
 
 /// Read `paths.dispositions_path()` into [`DispositionEvent`] rows (torn-tail
-/// tolerant via [`parse_dispositions`], which also enforces the per-event-type
-/// `reason` invariant). MISSING ⇒ empty [`ReadResult`].
+/// tolerant via [`parse_dispositions`], which also enforces the discriminated-
+/// union invariants — the required `class` tail on delivery-failed/refused, no
+/// foreign fields, R14.5). MISSING ⇒ empty [`ReadResult`].
 pub fn read_local_events(paths: &QdPaths) -> ReadResult<DispositionEvent> {
     parse_dispositions(&read_bytes_or_empty(&paths.dispositions_path()))
 }
@@ -188,8 +192,11 @@ fn read_bytes_or_empty(path: &Path) -> Vec<u8> {
 }
 
 /// The read SCOPE for [`read_scoped`] / [`query_summary`] / [`read_events`]
-/// (TRANSITION §: `--host`/`--all` union in the remote replicas; the
-/// `origin`/`witness` columns disambiguate whose row a unioned line is).
+/// (TRANSITION §: `--host`/`--all` union in the remote replicas). Provenance is
+/// the CONTAINER a row lives in (a local file ⇒ this host, `remote/<host>/` ⇒
+/// that host) — event rows carry NO `witness`/`origin` column (R14.2), so the
+/// union order itself must be deterministic (see [`read_scoped`]'s sorted-host
+/// concatenation, R14a pin 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
     /// Local hot files only (`log.jsonl` + `dispositions.jsonl`). Default scope.
@@ -205,13 +212,24 @@ pub enum Scope {
 ///
 /// - [`Scope::Local`]  = local `log.jsonl` + `dispositions.jsonl`.
 /// - [`Scope::Host`]   = local UNION `remote/<h>/{log,dispositions}.jsonl` (the
-///   spec: `--host` unions IN the remote replica; `origin`/`witness`
-///   disambiguate).
+///   spec: `--host` unions IN the remote replica).
 /// - [`Scope::All`]    = local UNION every `remote/<host>/` (enumerate the
 ///   subdirs of [`QdPaths::remote_dir`]); a MISSING `remote/` ⇒ just local.
 /// - `archive = true` additionally unions the LOCAL archive tier
 ///   (`log.archive.jsonl` + `dispositions.archive.jsonl`); remote has NO archive
 ///   siblings in the layout. Missing archive files ⇒ skipped.
+///
+/// # Cross-source determinism (R14.2 / R14a pin 2)
+///
+/// Event rows no longer carry a `source`/`witness` column (normalized away,
+/// R14.2), so the leaf fold is `(created_at, input-order)` — it relies on THIS
+/// layer to hand it a slice whose input-order encodes source order. So the
+/// concatenation is a FIXED, SORTED-HOST order: the local hot tier FIRST, then
+/// the local archive tier, then the remote hosts in SORTED order ([`remote_hosts`]
+/// sorts; [`Scope::Host`] is a single host). This makes the flat `Vec` — and thus
+/// the projection's same-`created_at` tie-break — INVARIANT under any filesystem
+/// scan / directory-enumeration order (the exact nondeterminism R11.2 pinned;
+/// proven by `read_scoped_cross_source_determinism` below).
 ///
 /// Torn-tail / interior corruption is tolerated per-file (leaf-crate parsers). A
 /// nonzero `corrupt_interior` on any file is logged as a best-effort warn (never
@@ -373,7 +391,7 @@ pub fn read_events(
 ) -> io::Result<Vec<DispositionEvent>> {
     let (_envelopes, mut events) = read_scoped(paths, scope, archive)?;
     if let Some(id) = only {
-        events.retain(|e| e.correlation_id == id);
+        events.retain(|e| e.correlation_id() == id);
     }
     Ok(events)
 }
@@ -404,10 +422,11 @@ pub fn has_delivered_event(paths: &QdPaths, correlation_id: &str) -> io::Result<
 // Local host resolver (v1 placeholder — host-identity deferred)
 // ===========================================================================
 
-/// The host id for THIS qd. The value stamps an envelope's / event's `origin`
-/// when this qd ORIGINATES a message, and an event's `witness` when this qd
-/// WITNESSES a moment (the R9/N10 split: {origin, authored_at} = the origin
-/// timeline, {witness, witnessed_at} = the witness timeline).
+/// The host id for THIS qd. The value stamps an [`Envelope`]'s `origin` when this
+/// qd ORIGINATES a message (the single normalized HOME of `origin`, R14.2). Event
+/// rows no longer carry `origin`/`witness` (normalized away, R14.2 — provenance
+/// is the container the row lives in), so this host id rides ONLY on the envelope
+/// now; the disposition events join to it by `correlation_id`.
 ///
 /// **v1 placeholder (host-identity is DEFERRED).** Resolution order:
 ///   1. `QD_HOST` env override (via the injected [`Env`] seam) if set + nonempty;
@@ -456,23 +475,20 @@ mod tests {
         }
     }
 
-    fn attempted(id: &str, witnessed: i64) -> DispositionEvent {
-        DispositionEvent::attempted(id.to_string(), witnessed, "brano".into(), "brano".into(), 100)
+    fn attempted(id: &str, created_at: i64) -> DispositionEvent {
+        DispositionEvent::attempted(id.to_string(), created_at)
     }
 
-    fn delivered(id: &str, witnessed: i64) -> DispositionEvent {
-        DispositionEvent::delivered(id.to_string(), witnessed, "brano".into(), "brano".into(), 100)
+    fn delivered(id: &str, created_at: i64) -> DispositionEvent {
+        DispositionEvent::delivered(id.to_string(), created_at)
     }
 
-    fn failed(id: &str, witnessed: i64, reason: &str) -> DispositionEvent {
-        DispositionEvent::delivery_failed(
-            id.to_string(),
-            witnessed,
-            "brano".into(),
-            "brano".into(),
-            100,
-            reason.to_string(),
-        )
+    fn failed(id: &str, created_at: i64, class: &str) -> DispositionEvent {
+        DispositionEvent::delivery_failed(id.to_string(), created_at, class.to_string())
+    }
+
+    fn refused(id: &str, created_at: i64, class: &str) -> DispositionEvent {
+        DispositionEvent::refused(id.to_string(), created_at, class.to_string())
     }
 
     // ---- append then read round-trips --------------------------------------
@@ -506,7 +522,7 @@ mod tests {
         append_event(&paths, &attempted("a", 3)).unwrap();
         append_event(&paths, &delivered("a", 4)).unwrap();
         let r = read_local_events(&paths);
-        let kinds: Vec<EventKind> = r.records.iter().map(|e| e.event).collect();
+        let kinds: Vec<EventKind> = r.records.iter().map(|e| e.kind()).collect();
         assert_eq!(
             kinds,
             vec![
@@ -679,6 +695,59 @@ mod tests {
         assert_eq!(ids, vec!["a1", "b1", "local1"]);
     }
 
+    // ---- R14a pin 2 — cross-source determinism (the relayered R11.2 test) ----
+
+    #[test]
+    fn read_scoped_cross_source_determinism() {
+        // R14.2 normalized events carry NO `source`/`witness` column, so the leaf
+        // fold is (created_at, input-order). Cross-source determinism is THIS
+        // layer's job: read_scoped concatenates the per-host event files in
+        // SORTED-HOST order (local first, then remote hosts sorted), so the flat
+        // Vec — and the projection's same-created_at tie-break — is INVARIANT under
+        // ANY filesystem/directory-enumeration order (the exact nondeterminism
+        // R11.2 pinned; now a store-layer concern, not the leaf's).
+        //
+        // Setup: TWO remote hosts each hold ONE event for the same id "shared" at
+        // the SAME created_at. hostA says delivery-failed, hostB says attempted. If
+        // the concatenation followed raw scan order, `last_event` on the tie could
+        // flip between runs. Because the order is sorted-host (hostA before hostB),
+        // hostB's `attempted` is always later-in-input and always wins the tie →
+        // last_event=Attempted, deterministically.
+        let (_tmp, paths) = jailed_paths();
+        let t = 500; // the SAME created_at on both hosts (the discriminating tie)
+        seed_remote(&paths, "hostA", &[], &[failed("shared", t, "wake")]);
+        seed_remote(&paths, "hostB", &[], &[attempted("shared", t)]);
+
+        // Read the union MANY times: the sorted-host concatenation is stable, so
+        // both the raw event order AND the folded summary are byte-for-byte equal
+        // across every read regardless of the underlying read_dir order.
+        let (_e0, ev0) = read_scoped(&paths, &Scope::All, false).unwrap();
+        let s0 = project_summary(&[], &ev0, 600);
+        for _ in 0..20 {
+            let (_e, ev) = read_scoped(&paths, &Scope::All, false).unwrap();
+            // The flat event Vec is identical (sorted-host concatenation) …
+            assert_eq!(ev, ev0, "read_scoped event order is invariant across reads");
+            // … and so is the projection over it.
+            assert_eq!(project_summary(&[], &ev, 600), s0, "summary is order-invariant");
+        }
+
+        // And the tie resolves to the SORTED-LAST host's event (hostB's attempted),
+        // proving the order is sorted-host, not scan order.
+        assert_eq!(ev0.len(), 2, "one event from each host");
+        assert_eq!(ev0[0].kind(), EventKind::DeliveryFailed, "hostA (sorted first)");
+        assert_eq!(ev0[1].kind(), EventKind::Attempted, "hostB (sorted last)");
+        assert_eq!(s0.len(), 1);
+        assert_eq!(
+            s0[0].last_event,
+            Some(EventKind::Attempted),
+            "the sorted-last host wins the equal-created_at tie, deterministically"
+        );
+        // An orphan-event summary (no envelope in scope) is triple-null (R14.2).
+        assert_eq!(s0[0].origin, None);
+        assert_eq!(s0[0].authored_at, None);
+        assert_eq!(s0[0].expires_at, None);
+    }
+
     #[test]
     fn archive_flag_unions_local_archive_tier() {
         let (_tmp, paths) = jailed_paths();
@@ -735,13 +804,16 @@ mod tests {
         assert_eq!(d.state, SummaryState::Delivered);
         assert_eq!(d.attempts, 1);
         assert_eq!(d.last_event, Some(EventKind::Delivered));
-        assert_eq!(d.witness.as_deref(), Some("brano"));
+        // R14.2: origin/authored_at come ONLY from the joined envelope now.
+        assert_eq!(d.origin.as_deref(), Some("brano"), "from the joined envelope");
+        assert_eq!(d.authored_at, Some(10), "from the joined envelope");
         assert_eq!(d.first_delivered_at, Some(500));
         let p = by_id("p").unwrap();
         assert_eq!(p.state, SummaryState::Pending);
-        // R11.1 paired-null: no events ⇒ last_event and witness null TOGETHER.
+        // R11.1: last_event null iff no events. origin/authored_at still come from
+        // the envelope (p has an envelope in scope).
         assert_eq!(p.last_event, None);
-        assert_eq!(p.witness, None);
+        assert_eq!(p.origin.as_deref(), Some("brano"), "envelope in scope");
         assert_eq!(p.attempts, 0);
 
         // only=Some filters to that id (project_one semantics).
@@ -766,7 +838,8 @@ mod tests {
         let expired = query_summary(&paths, &Scope::Local, false, 1000, Some("e")).unwrap();
         assert_eq!(expired[0].state, SummaryState::Expired);
         assert_eq!(expired[0].last_event, None);
-        assert_eq!(expired[0].witness, None);
+        // origin/authored_at still from the envelope (in scope), even when expired.
+        assert_eq!(expired[0].origin.as_deref(), Some("brano"));
     }
 
     #[test]
@@ -803,7 +876,7 @@ mod tests {
         let all = read_events(&paths, &Scope::Local, false, None).unwrap();
         let got: Vec<(String, EventKind)> = all
             .iter()
-            .map(|e| (e.correlation_id.clone(), e.event))
+            .map(|e| (e.correlation_id().to_string(), e.kind()))
             .collect();
         assert_eq!(
             got,
@@ -818,12 +891,12 @@ mod tests {
 
         // only=Some(id): that id's rows, still in file order.
         let a_only = read_events(&paths, &Scope::Local, false, Some("a")).unwrap();
-        let kinds: Vec<EventKind> = a_only.iter().map(|e| e.event).collect();
+        let kinds: Vec<EventKind> = a_only.iter().map(|e| e.kind()).collect();
         assert_eq!(
             kinds,
             vec![EventKind::Attempted, EventKind::DeliveryFailed, EventKind::Delivered]
         );
-        assert!(a_only.iter().all(|e| e.correlation_id == "a"));
+        assert!(a_only.iter().all(|e| e.correlation_id() == "a"));
 
         // A miss is empty, not an error.
         assert!(read_events(&paths, &Scope::Local, false, Some("zz")).unwrap().is_empty());
@@ -835,9 +908,25 @@ mod tests {
         append_event(&paths, &attempted("local-id", 1)).unwrap();
         seed_remote(&paths, "peerbox", &[], &[delivered("remote-id", 2)]);
         let all = read_events(&paths, &Scope::All, false, None).unwrap();
-        let mut ids: Vec<&str> = all.iter().map(|e| e.correlation_id.as_str()).collect();
+        let mut ids: Vec<&str> = all.iter().map(|e| e.correlation_id()).collect();
         ids.sort();
         assert_eq!(ids, vec!["local-id", "remote-id"]);
+    }
+
+    #[test]
+    fn query_summary_refused_row_is_pending_class() {
+        // R14.3: a `refused` event is PENDING-class (refused = never left ≠ failed)
+        // and is NOT an attempt. A refused-only id summarizes to pending with
+        // last_event=refused, attempts=0.
+        let (_tmp, paths) = jailed_paths();
+        append_envelope(&paths, &env("r", 10, 1_000_000)).unwrap();
+        append_event(&paths, &refused("r", 60, "no-live-receive-path")).unwrap();
+        let s = query_summary(&paths, &Scope::Local, false, 100, Some("r"))
+            .unwrap()
+            .remove(0);
+        assert_eq!(s.state, SummaryState::Pending, "refused ≠ failed, pending-class");
+        assert_eq!(s.last_event, Some(EventKind::Refused));
+        assert_eq!(s.attempts, 0, "refused is not an attempt");
     }
 
     // ---- has_delivered_event -------------------------------------------------

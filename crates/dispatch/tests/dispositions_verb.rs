@@ -9,16 +9,18 @@
 //!
 //! - DEFAULT (§3a): one per-id SUMMARY row folded over `log.jsonl` ∪
 //!   `dispositions.jsonl` — `v, correlation_id, state, attempts, last_event,
-//!   last_attempt_at, first_delivered_at, expires_at, authored_at, origin,
-//!   witness`. The nullable fields emit as JSON `null` (STABLE columns for the
-//!   DuckDB projection, never skipped); `{last_event, witness}` are null
-//!   together, exactly when no events exist (R11.1 paired-null).
-//! - `--events` (§3b): the RAW witnessed-event rows verbatim (the funnel), in
-//!   file/union order — `reason` present ONLY on `delivery-failed`.
+//!   last_attempt_at, first_delivered_at, expires_at, authored_at, origin`
+//!   (witness DROPPED, R14.2). The nullable fields emit as JSON `null` (STABLE
+//!   columns for the DuckDB projection, never skipped); `last_event` is null
+//!   exactly when no events exist (R11.1); `origin`/`authored_at`/`expires_at`
+//!   come from the JOINED envelope only, null for an orphan-event summary (R14.2).
+//! - `--events` (§3b): the RAW event rows verbatim (the funnel), in file/union
+//!   order — normalized `{v, correlation_id, event, created_at, [class]}`; the
+//!   machine `class` present ONLY on `delivery-failed`/`refused` (R14.2).
 //!
-//! Scope (`--host`), `--archive`, the point query, `--window` (bounds
-//! `authored_at` in BOTH modes), and the broken-pipe (exit 141) contract are
-//! exercised here.
+//! Scope (`--host`), `--archive`, the point query, `--window` (the summary bounds
+//! `authored_at`; `--events` bounds `created_at` — R14.2 split), and the
+//! broken-pipe (exit 141) contract are exercised here.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -78,10 +80,10 @@ fn run_dispositions(home: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// The 11 summary-record keys, in the documented §3a wire order. Every summary
-/// row must carry ALL of them — the nullable ones as JSON `null`, never skipped
-/// (stable columns for the DuckDB projection).
-const SUMMARY_KEYS: [&str; 11] = [
+/// The 10 summary-record keys, in the documented §3a wire order (witness DROPPED,
+/// R14.2). Every summary row must carry ALL of them — the nullable ones as JSON
+/// `null`, never skipped (stable columns for the DuckDB projection).
+const SUMMARY_KEYS: [&str; 10] = [
     "v",
     "correlation_id",
     "state",
@@ -92,7 +94,6 @@ const SUMMARY_KEYS: [&str; 11] = [
     "expires_at",
     "authored_at",
     "origin",
-    "witness",
 ];
 
 /// Parse every non-empty stdout line as a §3a SUMMARY record, asserting each
@@ -107,7 +108,13 @@ fn parse_records(stdout: &str) -> Vec<serde_json::Value> {
             assert_eq!(v["v"], 1, "every row carries v:1 ({l})");
             assert!(v["correlation_id"].is_string(), "correlation_id present ({l})");
             assert!(v["state"].is_string(), "state present ({l})");
-            assert!(v["origin"].is_string(), "origin present (REQUIRED, R11) ({l})");
+            // R14.2: origin comes from the JOINED envelope only — a stable column,
+            // string when the envelope is in scope, JSON null for an orphan-event
+            // summary. Presence (never skipped) is asserted by the SUMMARY_KEYS loop.
+            assert!(
+                v["origin"].is_string() || v["origin"].is_null(),
+                "origin is a stable column (string or null) ({l})"
+            );
             for key in SUMMARY_KEYS {
                 assert!(
                     v.get(key).is_some(),
@@ -131,10 +138,12 @@ fn parse_events(stdout: &str) -> Vec<serde_json::Value> {
             assert_eq!(v["v"], 1, "every event row carries v:1 ({l})");
             assert!(v["correlation_id"].is_string(), "correlation_id present ({l})");
             assert!(v["event"].is_string(), "event present ({l})");
-            assert!(v["witnessed_at"].is_i64(), "witnessed_at present ({l})");
-            assert!(v["witness"].is_string(), "witness present ({l})");
-            assert!(v["origin"].is_string(), "origin present ({l})");
-            assert!(v["authored_at"].is_i64(), "authored_at present ({l})");
+            // R14.2 normalized event: created_at is the only common timestamp; there
+            // is NO witnessed_at/witness/origin/authored_at on an event row.
+            assert!(v["created_at"].is_i64(), "created_at present ({l})");
+            assert!(v.get("witness").is_none(), "no witness on a normalized event ({l})");
+            assert!(v.get("origin").is_none(), "no origin on a normalized event ({l})");
+            assert!(v.get("authored_at").is_none(), "no authored_at on a normalized event ({l})");
             v
         })
         .collect()
@@ -150,20 +159,22 @@ fn log_row(id: &str, authored: i64, expires: i64) -> String {
     )
 }
 
-/// A reason-less witnessed EVENT row (format doc §2 key order:
-/// `v, correlation_id, event, witnessed_at, witness, origin, authored_at`).
-/// `kind` ∈ accepted|attempted|queued|delivered.
-fn ev_row(id: &str, kind: &str, witnessed: i64, authored: i64) -> String {
+/// A normalized plain EVENT row (format doc §2 key order, R14.2:
+/// `v, correlation_id, event, created_at`). `kind` ∈ attempted|queued|delivered
+/// (the three variants with no `class` tail). `authored` is accepted for call-site
+/// compatibility but is NOT a field on a normalized event row — the origin
+/// timeline lives on the envelope now (events join by correlation_id).
+fn ev_row(id: &str, kind: &str, created_at: i64, _authored: i64) -> String {
     format!(
-        r#"{{"v":1,"correlation_id":"{id}","event":"{kind}","witnessed_at":{witnessed},"witness":"brano","origin":"brano","authored_at":{authored}}}"#
+        r#"{{"v":1,"correlation_id":"{id}","event":"{kind}","created_at":{created_at}}}"#
     )
 }
 
-/// A `delivery-failed` EVENT row — the ONE type that carries `reason` (last on
-/// the wire, format doc §2).
-fn ev_failed_row(id: &str, witnessed: i64, authored: i64, reason: &str) -> String {
+/// A `delivery-failed` EVENT row — one of the two variants that carry the
+/// required machine `class` (last on the wire, format doc §2 / R14.2).
+fn ev_failed_row(id: &str, created_at: i64, _authored: i64, class: &str) -> String {
     format!(
-        r#"{{"v":1,"correlation_id":"{id}","event":"delivery-failed","witnessed_at":{witnessed},"witness":"brano","origin":"brano","authored_at":{authored},"reason":"{reason}"}}"#
+        r#"{{"v":1,"correlation_id":"{id}","event":"delivery-failed","created_at":{created_at},"class":"{class}"}}"#
     )
 }
 
@@ -212,14 +223,17 @@ fn all_local_projects_derived_states() {
     assert_eq!(d["last_event"], "delivered");
     assert_eq!(d["last_attempt_at"], 1_700_000_000_400i64);
     assert_eq!(d["first_delivered_at"], 1_700_000_000_500i64);
-    assert_eq!(d["witness"], "brano");
+    // R14.2: origin/authored_at come from the JOINED envelope (present here).
+    assert_eq!(d["origin"], "brano", "origin from the joined envelope");
+    assert_eq!(d["authored_at"], authored);
 
-    // R11.1 paired-null: no events ⇒ last_event AND witness null TOGETHER, and
-    // the other nullable analytics fields are JSON null (stable columns).
+    // R11.1: no events ⇒ last_event null, and the other nullable analytics fields
+    // are JSON null (stable columns). origin/authored_at still come from the
+    // envelope (in scope).
     let p = by_id("PEND");
     assert_eq!(p["state"], "pending");
     assert_eq!(p["last_event"], serde_json::Value::Null);
-    assert_eq!(p["witness"], serde_json::Value::Null);
+    assert_eq!(p["origin"], "brano", "origin from the envelope even with no events");
     assert_eq!(p["last_attempt_at"], serde_json::Value::Null);
     assert_eq!(p["first_delivered_at"], serde_json::Value::Null);
     assert_eq!(p["attempts"], 0);
@@ -227,7 +241,7 @@ fn all_local_projects_derived_states() {
     let x = by_id("EXPIR");
     assert_eq!(x["state"], "expired", "no delivered event past expires_at");
     assert_eq!(x["last_event"], serde_json::Value::Null);
-    assert_eq!(x["witness"], serde_json::Value::Null);
+    assert_eq!(x["origin"], "brano", "origin from the envelope");
 }
 
 /// THE R8 read-surface pair: a full seeded funnel folds (DEFAULT) to ONE
@@ -269,8 +283,8 @@ fn funnel_folds_to_delivered_summary_and_events_mode_replays_raw_rows() {
     assert_eq!(recs[0]["last_attempt_at"], 1_700_000_000_200i64);
     assert_eq!(recs[0]["first_delivered_at"], 1_700_000_000_300i64);
 
-    // --events mode: the 5 raw rows verbatim, FILE ORDER, reason ONLY on the
-    // delivery-failed row (omitted from the wire everywhere else).
+    // --events mode: the 5 raw rows verbatim, FILE ORDER, the machine `class` ONLY
+    // on the delivery-failed row (omitted from the wire on the plain variants).
     let (code, stdout, stderr) = run_dispositions(&home, &["--events"]);
     assert_eq!(code, 0, "--events exit 0 (stderr: {stderr})");
     let events = parse_events(&stdout);
@@ -283,11 +297,11 @@ fn funnel_folds_to_delivered_summary_and_events_mode_replays_raw_rows() {
     for (i, e) in events.iter().enumerate() {
         assert_eq!(e["correlation_id"], "FNL");
         if e["event"] == "delivery-failed" {
-            assert_eq!(e["reason"], "delivery", "reason REQUIRED on delivery-failed");
+            assert_eq!(e["class"], "delivery", "class REQUIRED on delivery-failed (R14.2)");
         } else {
             assert!(
-                e.get("reason").is_none(),
-                "reason FORBIDDEN (key omitted) on row {i}: {e}"
+                e.get("class").is_none(),
+                "class FORBIDDEN (key omitted) on the plain variant row {i}: {e}"
             );
         }
     }
@@ -378,13 +392,75 @@ fn host_flag_unions_the_peer_replica() {
     assert_eq!(ids, vec!["LOCAL", "PEER"], "--host unions in the peer");
     let peer_rec = recs.iter().find(|r| r["correlation_id"] == "PEER").unwrap();
     assert_eq!(peer_rec["state"], "delivered", "peer's delivered event projected");
-    assert_eq!(peer_rec["witness"], "brano", "witness carried from the peer's event");
+    // R14.2: origin comes from the peer's joined envelope (unioned in), not the event.
+    assert_eq!(peer_rec["origin"], "brano", "origin from the peer's joined envelope");
 
     let (code, stdout, _) = run_dispositions(&home, &["--host", "peerbox", "--events"]);
     assert_eq!(code, 0);
     let events = parse_events(&stdout);
     assert_eq!(events.len(), 1, "--events unions the peer's raw rows ({stdout})");
     assert_eq!(events[0]["correlation_id"], "PEER");
+}
+
+/// R14a pin 2 at the INTEGRATION level: `--all` unions every `remote/<host>/`
+/// replica in SORTED-HOST order, so the projection is INVARIANT under any
+/// filesystem/directory-enumeration order (event rows no longer carry a
+/// source/witness column, so cross-source determinism is the reader's job).
+///
+/// TWO peer hosts each hold ONE event for the SAME id "SHARED" at the SAME
+/// created_at (the discriminating tie). hostA says delivery-failed, hostB says
+/// attempted. Because the union is sorted-host (hostA before hostB), hostB's
+/// `attempted` is always later-in-input and always wins the last_event tie →
+/// last_event=attempted, deterministically. The `--all` summary AND `--events`
+/// output are byte-identical across repeated runs (no dependence on scan order).
+#[test]
+fn all_scope_cross_source_projection_is_order_invariant() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = jail_home(temp.path());
+    let root = dispatch_root(&home);
+    let authored = 1_700_000_000_000i64;
+    let far_future = 8_000_000_000_000i64;
+    let t = 1_700_000_000_500i64; // the SAME created_at on both hosts (the tie)
+
+    // A local envelope for SHARED so origin/authored_at are populated (the join),
+    // plus the two peer replicas each carrying one event at the same created_at.
+    write_lines(&root.join("log.jsonl"), &[&log_row("SHARED", authored, far_future)]);
+    let host_a = root.join("remote").join("hostA");
+    let host_b = root.join("remote").join("hostB");
+    write_lines(&host_a.join("dispositions.jsonl"), &[&ev_failed_row("SHARED", t, authored, "wake")]);
+    write_lines(&host_b.join("dispositions.jsonl"), &[&ev_row("SHARED", "attempted", t, authored)]);
+
+    // First read establishes the reference output; repeat many times — the
+    // sorted-host union makes both the summary and the raw funnel byte-stable.
+    let (_c, ref_summary, _) = run_dispositions(&home, &["--all"]);
+    let (_c, ref_events, _) = run_dispositions(&home, &["--all", "--events"]);
+    for _ in 0..10 {
+        let (code, summary, stderr) = run_dispositions(&home, &["--all"]);
+        assert_eq!(code, 0, "--all summary exit 0 (stderr: {stderr})");
+        assert_eq!(summary, ref_summary, "--all summary is order-invariant across reads");
+        let (code, events, _) = run_dispositions(&home, &["--all", "--events"]);
+        assert_eq!(code, 0);
+        assert_eq!(events, ref_events, "--all --events is order-invariant across reads");
+    }
+
+    // The tie resolves to the SORTED-LAST host's event (hostB's attempted),
+    // proving the union order is sorted-host, not scan order.
+    let recs = parse_records(&ref_summary);
+    let s = recs.iter().find(|r| r["correlation_id"] == "SHARED").unwrap();
+    assert_eq!(
+        s["last_event"], "attempted",
+        "the sorted-last host wins the equal-created_at tie, deterministically ({ref_summary})"
+    );
+    assert_eq!(s["state"], "pending", "attempted latest, no delivery ⇒ pending");
+    // Both hosts' raw rows are present, hostA (delivery-failed) before hostB
+    // (attempted) — the sorted-host concatenation the projection folds over.
+    let evs = parse_events(&ref_events);
+    let kinds: Vec<&str> = evs.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        vec!["delivery-failed", "attempted"],
+        "sorted-host order: hostA's row before hostB's ({ref_events})"
+    );
 }
 
 #[test]
@@ -432,10 +508,12 @@ fn archive_flag_unions_the_local_archive_tier() {
 }
 
 #[test]
-fn window_filters_by_authored_at_in_both_modes() {
-    // Two envelopes with very different authored_at (each with one event row
-    // carrying the SAME authored_at — the origin timeline copied onto every
-    // event, §2); --window keeps only the recent one in BOTH modes.
+fn window_filters_summary_by_authored_at_and_events_by_created_at() {
+    // R14.2 SPLIT: the summary windows on the envelope's `authored_at`; `--events`
+    // windows on each event's `created_at` (events no longer copy authored_at).
+    // Here each event's created_at (authored + 100ms) is on the same side of the
+    // window as its envelope's authored_at, so both modes keep exactly the recent
+    // id — but they are now measured on DIFFERENT timestamps.
     let temp = tempfile::tempdir().unwrap();
     let home = jail_home(temp.path());
     let root = dispatch_root(&home);
@@ -469,11 +547,11 @@ fn window_filters_by_authored_at_in_both_modes() {
         .collect();
     assert_eq!(ids, vec!["NEW"], "summary window keeps recent, drops ancient ({stdout})");
 
-    // The SAME --window rule bounds authored_at in --events mode.
+    // In --events mode the window bounds each row's `created_at` (R14.2 split).
     let (code, stdout, stderr) = run_dispositions(&home, &["--window", "3650d", "--events"]);
     assert_eq!(code, 0, "windowed events exit 0 (stderr: {stderr})");
     let events = parse_events(&stdout);
-    assert_eq!(events.len(), 1, "events window keeps only the recent row ({stdout})");
+    assert_eq!(events.len(), 1, "events window (on created_at) keeps only the recent row ({stdout})");
     assert_eq!(events[0]["correlation_id"], "NEW");
 
     // No window ⇒ everything in scope, both modes.
@@ -481,6 +559,57 @@ fn window_filters_by_authored_at_in_both_modes() {
     assert_eq!(parse_records(&stdout).len(), 2, "no window ⇒ all summaries");
     let (_, stdout, _) = run_dispositions(&home, &["--events"]);
     assert_eq!(parse_events(&stdout).len(), 2, "no window ⇒ all event rows");
+}
+
+/// R14.2 honest-null + the window's orphan carve-out: an ORPHAN-event summary
+/// (an event whose envelope is NOT in scope) has `origin`/`authored_at`/
+/// `expires_at` ALL null — and because its timeline is absent, a `--window` can
+/// never position it, so the summary is ALWAYS KEPT (never silently dropped by a
+/// bound it cannot be measured against).
+#[test]
+fn orphan_event_summary_is_triple_null_and_survives_any_window() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = jail_home(temp.path());
+    let root = dispatch_root(&home);
+
+    // A delivered event with NO envelope in scope (no log.jsonl row for it).
+    write_lines(
+        &root.join("dispositions.jsonl"),
+        &[&ev_row("ORPH", "delivered", 1_700_000_000_500, 1_700_000_000_000)],
+    );
+
+    // The summary derives `delivered` from the event alone, with the three
+    // envelope-sourced columns honestly null (R14.2).
+    let (code, stdout, stderr) = run_dispositions(&home, &["ORPH"]);
+    assert_eq!(code, 0, "orphan summary exit 0 (stderr: {stderr})");
+    let recs = parse_records(&stdout);
+    assert_eq!(recs.len(), 1, "one orphan summary ({stdout})");
+    let o = &recs[0];
+    assert_eq!(o["state"], "delivered", "delivered event exists ⇒ delivered");
+    assert_eq!(o["origin"], serde_json::Value::Null, "no envelope ⇒ origin null");
+    assert_eq!(o["authored_at"], serde_json::Value::Null, "no envelope ⇒ authored_at null");
+    assert_eq!(o["expires_at"], serde_json::Value::Null, "no envelope ⇒ expires_at null");
+
+    // A tight window that would exclude any ancient timeline still KEEPS the
+    // orphan summary — an absent authored_at can never fall outside the bound.
+    let (code, stdout, stderr) = run_dispositions(&home, &["ORPH", "--window", "1s"]);
+    assert_eq!(code, 0, "windowed orphan summary exit 0 (stderr: {stderr})");
+    let recs = parse_records(&stdout);
+    assert_eq!(
+        recs.len(),
+        1,
+        "a null-timeline orphan summary is never dropped by a window ({stdout})"
+    );
+    assert_eq!(recs[0]["correlation_id"], "ORPH");
+
+    // But the SAME tight window DOES drop the orphan's event in --events mode:
+    // the event carries a concrete created_at (year 2023), far outside a 1s window.
+    let (code, stdout, stderr) = run_dispositions(&home, &["ORPH", "--events", "--window", "1s"]);
+    assert_eq!(code, 0, "windowed orphan events exit 0 (stderr: {stderr})");
+    assert!(
+        parse_events(&stdout).is_empty(),
+        "the orphan's event (old created_at) is outside a 1s window ({stdout})"
+    );
 }
 
 #[test]

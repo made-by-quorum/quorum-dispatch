@@ -6,25 +6,28 @@
 //! Inbound mode admits a peer's ALREADY-minted envelope at the door: qd validates
 //! it (malformed / past-expiry / mis-addressed / ambiguous refusals), is IDEMPOTENT
 //! on a `delivered` EVENT EXISTING for the envelope's `correlation_id` (R8 — a
-//! replayed already-delivered envelope no-ops with NO new rows, not even
-//! `accepted`; a `delivery-failed` row does NOT block a retry), and
-//! (resume-and-)delivers WITHOUT ever appending to its own `log.jsonl` (the
-//! own-origin log is for envelopes qd ORIGINATED; a peer's envelope lives in the
-//! mirror). These pin the bin wiring end-to-end:
+//! replayed already-delivered envelope no-ops with NO new rows; a
+//! `delivery-failed` row does NOT block a retry), and (resume-and-)delivers
+//! WITHOUT ever appending to its own `log.jsonl` (the own-origin log is for
+//! envelopes qd ORIGINATED; a peer's envelope lives in the mirror). These pin the
+//! bin wiring end-to-end:
 //!   - acceptance #2 IDEMPOTENCE: a delivered event present ⇒ replay is a no-op
 //!     success ("already delivered — no-op", exit 0, dispositions byte-unchanged);
 //!   - THE R8 DISCRIMINATOR: a prior `delivery-failed` row does NOT no-op the
-//!     door — the envelope is re-admitted (a fresh `accepted` row lands);
-//!   - the inbound not-live FUNNEL: accepted → attempted → queued →
-//!     delivery-failed{wake} rows, in file order, `log.jsonl` empty throughout;
-//!   - acceptance #3 DOOR REFUSALS: malformed / v:2 / past-expiry / unknown /
-//!     ambiguous, each with the exact `qd send: <family>{<class>}:` stderr + exit 12
-//!     (refusals stamp NOTHING — only an ADMITTED envelope stamps `accepted`);
+//!     door — the envelope is re-admitted (a fresh `attempted` row lands;
+//!     `accepted` is retired, R14.3);
+//!   - the inbound not-live FUNNEL: attempted → queued → delivery-failed{wake}
+//!     rows (normalized, R14.2), in file order, `log.jsonl` empty throughout;
+//!   - acceptance #3 DOOR REFUSALS: malformed / v:2 each stderr-only with the
+//!     exact `qd send: refused{malformed}:` + exit 12 (NO row — no trustworthy
+//!     id); past-expiry / unknown / ambiguous each stamp a `refused{class}` row
+//!     IN the funnel (R14.3) alongside the stderr + exit 12;
 //!   - stdin (`-`) source; and origin-mode preservation (the two modes are
-//!     mutually exclusive; a mixed invocation is a sync arg refusal).
+//!     mutually exclusive; a mixed invocation is a sync arg refusal — ROW-LESS,
+//!     R14a pin 3).
 //!
 //! The funnel probes ride an UNWAKEABLE (unknown-provider) cold target: the
-//! inbound door accepts, attempts, queues, then the wake fails → a
+//! inbound door admits, attempts, queues, then the wake fails → a
 //! `delivery-failed{wake}` EVENT — hermetic and fast, no live carrier. Under R8
 //! that failure is HISTORY, not a verdict: only a `delivered` event no-ops a
 //! replay.
@@ -157,18 +160,21 @@ fn seed_dispositions(j: &Jail, lines: &[&str]) {
     std::fs::write(root.join("dispositions.jsonl"), body).unwrap();
 }
 
-/// A seeded `delivered` EVENT row (format doc §2 key order) — witness "local"
-/// (this qd's v1 placeholder host id), origin "peerhost" (the envelope's).
-fn seeded_delivered(cid: &str, witnessed: i64, authored: i64) -> String {
+/// A seeded `delivered` EVENT row — normalized (R14.2): `{v, correlation_id,
+/// event, created_at}`. The `authored` param is accepted for call-site
+/// compatibility but is NOT a field on a normalized event row (the origin
+/// timeline lives on the envelope; events join by correlation_id).
+fn seeded_delivered(cid: &str, created_at: i64, _authored: i64) -> String {
     format!(
-        r#"{{"v":1,"correlation_id":"{cid}","event":"delivered","witnessed_at":{witnessed},"witness":"local","origin":"peerhost","authored_at":{authored}}}"#
+        r#"{{"v":1,"correlation_id":"{cid}","event":"delivered","created_at":{created_at}}}"#
     )
 }
 
-/// A seeded `delivery-failed` EVENT row (reason REQUIRED, last on the wire).
-fn seeded_failed(cid: &str, witnessed: i64, authored: i64, reason: &str) -> String {
+/// A seeded `delivery-failed` EVENT row — the machine `class` REQUIRED, last on
+/// the wire (R14.2).
+fn seeded_failed(cid: &str, created_at: i64, _authored: i64, class: &str) -> String {
     format!(
-        r#"{{"v":1,"correlation_id":"{cid}","event":"delivery-failed","witnessed_at":{witnessed},"witness":"local","origin":"peerhost","authored_at":{authored},"reason":"{reason}"}}"#
+        r#"{{"v":1,"correlation_id":"{cid}","event":"delivery-failed","created_at":{created_at},"class":"{class}"}}"#
     )
 }
 
@@ -238,9 +244,10 @@ fn inbound_already_delivered_envelope_noops_with_no_new_rows() {
 
 /// THE R8 DISCRIMINATOR ("first terminal wins" is DEAD): a prior
 /// `delivery-failed` row for the id does NOT no-op the door. Presenting the
-/// envelope again PROCEEDS — a fresh `accepted` row proves admission, the
-/// attempt re-runs (attempted → queued → delivery-failed{wake} on this
-/// unwakeable target), and the pre-existing failure row is untouched history.
+/// envelope again PROCEEDS — a fresh `attempted` row proves admission (`accepted`
+/// is retired, R14.3), the attempt re-runs (attempted → queued →
+/// delivery-failed{wake} on this unwakeable target), and the pre-existing failure
+/// row is untouched history.
 #[test]
 fn inbound_prior_delivery_failed_event_does_not_block_readmission() {
     let temp = tempfile::tempdir().unwrap();
@@ -271,26 +278,27 @@ fn inbound_prior_delivery_failed_event_does_not_block_readmission() {
     assert!(log.is_empty(), "inbound still never logs, got: {log:?}");
 
     // The pre-existing failure row is intact AND a fresh funnel landed after it:
-    // [seeded delivery-failed] + accepted, attempted, queued, delivery-failed.
+    // [seeded delivery-failed] + attempted, queued, delivery-failed (no accepted).
     let rows = parse_event_rows(&disps);
     assert!(rows.iter().all(|r| r["correlation_id"] == cid));
     let kinds: Vec<&str> = rows.iter().map(|r| r["event"].as_str().unwrap()).collect();
     assert_eq!(
         kinds,
-        vec!["delivery-failed", "accepted", "attempted", "queued", "delivery-failed"],
+        vec!["delivery-failed", "attempted", "queued", "delivery-failed"],
         "fresh admission funnel appended AFTER the seeded failure, got: {disps:?}"
     );
     assert_eq!(
-        rows[1]["event"], "accepted",
-        "a FRESH accepted row proves the door admitted the replay"
+        rows[1]["event"], "attempted",
+        "a FRESH attempted row proves the door admitted the replay (R14.3: accepted retired)"
     );
 }
 
 /// The inbound not-live FUNNEL on a clean store: one presentation stamps
-/// accepted → attempted → queued → delivery-failed{wake}, in file order, each
-/// row carrying witness "local" (this host) + origin "peerhost" (the envelope's
-/// — the R9/N10 split), reason ONLY on the delivery-failed row. log.jsonl stays
-/// empty (inbound never appends to its own origin log).
+/// attempted → queued → delivery-failed{wake}, in file order (`accepted` retired,
+/// R14.3). Rows are FULLY NORMALIZED (R14.2): `{v, correlation_id, event,
+/// created_at}` + the machine `class` ONLY on the delivery-failed row — NO
+/// witness/origin/authored_at (they live on the peer's envelope in the mirror and
+/// join by correlation_id). log.jsonl stays empty (inbound never appends).
 #[test]
 fn inbound_first_presentation_stamps_the_full_funnel_and_never_logs() {
     let temp = tempfile::tempdir().unwrap();
@@ -310,24 +318,29 @@ fn inbound_first_presentation_stamps_the_full_funnel_and_never_logs() {
     let kinds: Vec<&str> = rows.iter().map(|r| r["event"].as_str().unwrap()).collect();
     assert_eq!(
         kinds,
-        vec!["accepted", "attempted", "queued", "delivery-failed"],
-        "the inbound not-live funnel, in file order, got: {disps:?}"
+        vec!["attempted", "queued", "delivery-failed"],
+        "the inbound not-live funnel, in file order (no accepted), got: {disps:?}"
     );
     for r in &rows {
         assert_eq!(r["correlation_id"], cid, "every row keys on the envelope's id");
-        assert_eq!(r["witness"], "local", "witness = THIS host (v1 placeholder)");
-        assert_eq!(r["origin"], "peerhost", "origin = the ENVELOPE's origin (the peer)");
+        // R14.2: normalized rows carry NO witness/origin/authored_at.
+        assert!(r.get("witness").is_none(), "no witness on a normalized event: {r}");
+        assert!(r.get("origin").is_none(), "no origin on a normalized event: {r}");
+        assert!(r.get("authored_at").is_none(), "no authored_at on a normalized event: {r}");
+        assert!(r["created_at"].is_i64(), "created_at REQUIRED on every event row: {r}");
         if r["event"] == "delivery-failed" {
-            assert_eq!(r["reason"], "wake", "reason REQUIRED on delivery-failed");
+            assert_eq!(r["class"], "wake", "class REQUIRED on delivery-failed");
         } else {
-            assert!(r.get("reason").is_none(), "reason FORBIDDEN elsewhere: {r}");
+            assert!(r.get("class").is_none(), "class FORBIDDEN on the plain variants: {r}");
         }
     }
 }
 
 // ===========================================================================
 // Acceptance #3 — DOOR REFUSALS (exact `qd send: <family>{<class>}:` + exit 12).
-// A refusal stamps NOTHING — only an ADMITTED envelope stamps `accepted`.
+// R14.3: MALFORMED / bad-v stay stderr-only (no trustworthy correlation_id → NO
+// row); a PARSE-VALID inbound refusal (past-expiry / unknown / ambiguous) stamps
+// exactly ONE `refused{class}` row IN the funnel.
 // ===========================================================================
 
 /// Malformed bytes (not JSON) ⇒ refused{malformed} exit 12. Refused at the door,
@@ -414,16 +427,19 @@ fn inbound_missing_required_field_is_refused_malformed() {
     );
 }
 
-/// A past-expiry envelope ⇒ expired{past-expiry} exit 12, REFUSED at the door (not
-/// stamped `expired`). Checked BEFORE resolve, so it needs no session; and nothing
-/// is stamped (expired is a DERIVED view state, never authored — there is no
-/// expired EVENT type at all).
+/// A past-expiry envelope ⇒ expired{past-expiry} stderr + exit 12, REFUSED at the
+/// door. R14.3: a PARSE-VALID inbound refusal stamps exactly ONE
+/// `refused{past-expiry}` EVENT row (the refusal rides IN the funnel) — but NEVER
+/// an `expired` row (expired is a DERIVED view state, never authored; there is no
+/// expired EVENT type). Checked BEFORE resolve, so it needs no session; inbound
+/// never logs, so log.jsonl stays empty.
 #[test]
 fn inbound_past_expiry_is_refused_at_the_door_exit_12() {
     let temp = tempfile::tempdir().unwrap();
     let j = jail(temp.path());
+    let cid = "01PASTEXPIRYAAAAAAAAAAAAAA";
     // expires_at strictly in the past.
-    let env = envelope_json("01PASTEXPIRYAAAAAAAAAAAAAA", "inbwk", "stale", now_ms() - 60_000);
+    let env = envelope_json(cid, "inbwk", "stale", now_ms() - 60_000);
     let path = envelope_file(&j, "expired.json", &env);
     let (code, _out, err, log, disps) = run_inbound(&j, &path, &[], None);
     assert_eq!(code, 12, "past-expiry → exit 12 (stderr: {err})");
@@ -431,19 +447,25 @@ fn inbound_past_expiry_is_refused_at_the_door_exit_12() {
         err.starts_with("qd send: expired{past-expiry}:"),
         "expected the expired{{past-expiry}} render, got: {err}"
     );
-    assert!(
-        log.is_empty() && disps.is_empty(),
-        "past-expiry is a DOOR refusal — no event stamped (not even accepted), got disps: {disps:?}"
-    );
+    assert!(log.is_empty(), "inbound never logs an envelope, got: {log:?}");
+    // R14.3: exactly one `refused{past-expiry}` row — never an `expired` row.
+    let rows = parse_event_rows(&disps);
+    assert_eq!(rows.len(), 1, "exactly one refused row, got: {disps:?}");
+    assert_eq!(rows[0]["event"], "refused", "the row is `refused`, not `expired`: {disps:?}");
+    assert_eq!(rows[0]["class"], "past-expiry", "{disps:?}");
+    assert_eq!(rows[0]["correlation_id"], cid, "{disps:?}");
 }
 
 /// An unknown target ⇒ refused{unknown} exit 12 (empty registry ⇒ no match).
+/// R14.3: this parse-valid resolution refusal stamps exactly ONE `refused{unknown}`
+/// row IN the funnel.
 #[test]
 fn inbound_unknown_target_is_refused_exit_12() {
     let temp = tempfile::tempdir().unwrap();
     let j = jail(temp.path());
+    let cid = "01UNKNOWNTGTAAAAAAAAAAAAAA";
     // No rows written → the resolver finds nothing.
-    let env = envelope_json("01UNKNOWNTGTAAAAAAAAAAAAAA", "ghost", "hi", now_ms() + 3_600_000);
+    let env = envelope_json(cid, "ghost", "hi", now_ms() + 3_600_000);
     let path = envelope_file(&j, "unknown.json", &env);
     let (code, _out, err, _log, disps) = run_inbound(&j, &path, &[], None);
     assert_eq!(code, 12, "unknown target → exit 12 (stderr: {err})");
@@ -458,7 +480,12 @@ fn inbound_unknown_target_is_refused_exit_12() {
         err.contains("no session matching \"ghost\""),
         "the refusal is a genuine resolver miss (not a store-unavailable fallback), got: {err}"
     );
-    assert!(disps.is_empty(), "a resolve refusal stamps nothing (not even accepted)");
+    // R14.3: exactly one `refused{unknown}` row keyed on the envelope's id.
+    let rows = parse_event_rows(&disps);
+    assert_eq!(rows.len(), 1, "exactly one refused row, got: {disps:?}");
+    assert_eq!(rows[0]["event"], "refused", "{disps:?}");
+    assert_eq!(rows[0]["class"], "unknown", "{disps:?}");
+    assert_eq!(rows[0]["correlation_id"], cid, "{disps:?}");
 }
 
 /// An ambiguous target (two GENUINELY-LIVE sessions sharing one name) ⇒
@@ -478,7 +505,8 @@ fn inbound_ambiguous_target_is_refused_exit_12() {
     );
     std::fs::write(j.sessions.join("ambi-b.json"), row_b).unwrap();
 
-    let env = envelope_json("01AMBIGUOUSAAAAAAAAAAAAAAA", "twin", "hi", now_ms() + 3_600_000);
+    let cid = "01AMBIGUOUSAAAAAAAAAAAAAAA";
+    let env = envelope_json(cid, "twin", "hi", now_ms() + 3_600_000);
     let path = envelope_file(&j, "ambi.json", &env);
     let (code, _out, err, _log, disps) = run_inbound(&j, &path, &[], None);
     assert_eq!(code, 12, "ambiguous target → exit 12 (stderr: {err})");
@@ -490,7 +518,12 @@ fn inbound_ambiguous_target_is_refused_exit_12() {
         err.contains("matches 2 sessions"),
         "the refusal names the collision (two live same-name rows), got: {err}"
     );
-    assert!(disps.is_empty(), "an ambiguity refusal stamps nothing");
+    // R14.3: exactly one `refused{ambiguous}` row IN the funnel (never first-match).
+    let rows = parse_event_rows(&disps);
+    assert_eq!(rows.len(), 1, "exactly one refused row, got: {disps:?}");
+    assert_eq!(rows[0]["event"], "refused", "{disps:?}");
+    assert_eq!(rows[0]["class"], "ambiguous", "{disps:?}");
+    assert_eq!(rows[0]["correlation_id"], cid, "{disps:?}");
 }
 
 // ===========================================================================
@@ -600,19 +633,21 @@ fn origin_mode_unchanged_when_inbound_absent() {
 }
 
 // ===========================================================================
-// R12 — the admitted-then-carrier-refused edge (post-admission pre-flight).
+// R12 (reworked for R14.3) — the admitted-then-carrier-refused edge.
 // ===========================================================================
 
-/// R12 (ruled): an ADMITTED live-target envelope whose CARRIER SELECTION then
-/// refuses is a POST-ADMISSION PRE-FLIGHT REFUSAL — refusal exit with EXACTLY
-/// ONE `accepted` row and NO `attempted` (a `delivery-failed` here would
-/// fabricate an attempt that never started — R11.1's sin at the next seam
-/// over). The contract's "accepted ⇒ the engine owes a disposition" is met by
-/// the pending → expired ABSENCE path; the summary reads `pending`. Repeated
-/// accepted-with-no-attempted rows are this edge's signature; the refusal
-/// class rides the presenting caller's stderr, never the funnel.
+/// R12, reworked for R14.3: an inbound live-target envelope whose CARRIER
+/// SELECTION then refuses is a POST-ADMISSION PRE-FLIGHT REFUSAL — it stamps
+/// EXACTLY ONE `refused{no-live-receive-path}` row IN the funnel and NO
+/// `attempted` (the message never admitted-and-started; a `delivery-failed` here
+/// would fabricate an attempt that never ran, and an `attempted` would claim a
+/// start that never happened). Under R14.3 the refusal class now RIDES IN THE
+/// FUNNEL (not stderr-only), and the exit is the shared refusal code (12). The
+/// summary VIEW reads `pending` — `refused` is pending-class (refused = never
+/// left ≠ failed); with no envelope in scope it is an orphan-event summary, so
+/// origin/authored_at/expires_at are all honestly null (R14.2).
 #[test]
-fn inbound_admitted_then_carrier_refusal_lone_accepted_summary_pending() {
+fn inbound_admitted_then_carrier_refusal_lone_refused_summary_pending() {
     let temp = tempfile::tempdir().unwrap();
     let j = jail(temp.path());
     // A LIVE claude-code row (this test's pid, status idle) with NO relay port
@@ -626,24 +661,27 @@ fn inbound_admitted_then_carrier_refusal_lone_accepted_summary_pending() {
     let path = envelope_file(&j, "r12.json", &env);
     let (code, _out, err, log, disps) = run_inbound(&j, &path, &[], None);
 
-    assert_eq!(code, 1, "carrier refusal exit (stderr: {err})");
+    assert_eq!(code, 12, "carrier refusal → the shared refusal exit 12 (stderr: {err})");
     assert!(
         err.contains("no live receive path"),
-        "the refusal class rides the caller's stderr, not the funnel: {err}"
+        "the refusal names the no-live-receive-path class: {err}"
     );
     assert!(log.is_empty(), "inbound never logs an envelope");
 
+    // R14.3: EXACTLY ONE `refused{no-live-receive-path}` row — NO `attempted`.
     let rows = parse_event_rows(&disps);
-    assert_eq!(rows.len(), 1, "EXACTLY ONE row — accepted, nothing else: {disps:?}");
-    assert_eq!(rows[0]["event"], "accepted", "{disps:?}");
+    assert_eq!(rows.len(), 1, "EXACTLY ONE row — refused, nothing else: {disps:?}");
+    assert_eq!(rows[0]["event"], "refused", "the funnel row is `refused` (not `attempted`): {disps:?}");
+    assert_eq!(rows[0]["class"], "no-live-receive-path", "{disps:?}");
     assert_eq!(rows[0]["correlation_id"], cid);
-    assert_eq!(rows[0]["witness"], "local", "witness = this host");
-    assert_eq!(rows[0]["origin"], "peerhost", "origin = the envelope's origin");
+    // R14.2: the normalized row carries no witness/origin.
+    assert!(rows[0].get("witness").is_none(), "no witness on a normalized event: {disps:?}");
+    assert!(rows[0].get("origin").is_none(), "no origin on a normalized event: {disps:?}");
 
-    // The summary VIEW over the lone accepted row: `pending` (admitted, no
-    // attempt started; dies by absence at expiry). The peer's envelope is not
-    // in MY log (inbound never logs) and no mirror is seeded, so this is an
-    // orphan-event summary: expires_at null, origin from the event's copy.
+    // The summary VIEW over the lone refused row: `pending` (refused is
+    // pending-class — never left ≠ failed). The peer's envelope is not in MY log
+    // (inbound never logs) and no mirror is seeded, so this is an orphan-event
+    // summary: origin/authored_at/expires_at ALL null (R14.2 honest null).
     let out = Command::new(qd_bin())
         .args(["dispositions", cid])
         .env("HOME", &j.home)
@@ -656,11 +694,19 @@ fn inbound_admitted_then_carrier_refusal_lone_accepted_summary_pending() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let summary: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("one summary row for {cid}, got {stdout:?} ({e})"));
-    assert_eq!(summary["state"], "pending", "{stdout}");
-    assert_eq!(summary["attempts"], 0, "{stdout}");
-    assert_eq!(summary["last_event"], "accepted", "{stdout}");
-    assert_eq!(summary["witness"], "local", "{stdout}");
-    assert_eq!(summary["origin"], "peerhost", "{stdout}");
+    assert_eq!(summary["state"], "pending", "refused is pending-class: {stdout}");
+    assert_eq!(summary["attempts"], 0, "refused is not an attempt: {stdout}");
+    assert_eq!(summary["last_event"], "refused", "{stdout}");
+    assert_eq!(
+        summary["origin"],
+        serde_json::Value::Null,
+        "orphan-event summary — no envelope in scope → origin null (R14.2): {stdout}"
+    );
+    assert_eq!(
+        summary["authored_at"],
+        serde_json::Value::Null,
+        "orphan-event summary — authored_at null (R14.2): {stdout}"
+    );
     assert_eq!(
         summary["expires_at"],
         serde_json::Value::Null,

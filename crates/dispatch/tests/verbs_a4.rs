@@ -316,7 +316,7 @@ fn run_send_with_row(
     let out = Command::new(qd_bin())
         .args(args)
         .env_remove("QD_HOME") // transport files land under <home>/.quorum/dispatch
-        .env_remove("QD_HOST") // origin/witness stamp as the "local" v1 placeholder
+        .env_remove("QD_HOST") // the envelope's origin stamps as the "local" v1 placeholder
         .env("HOME", &home)
         .env("ZMX_DIR", &zmx)
         .output()
@@ -333,8 +333,8 @@ fn run_send_with_row(
     )
 }
 
-/// Parse a dispositions.jsonl body into its raw EVENT rows (R8: one typed
-/// witnessed event per line — never state records).
+/// Parse a dispositions.jsonl body into its raw EVENT rows (R8/R14: one typed
+/// normalized event per line — never state records).
 fn parse_event_rows(disps: &str) -> Vec<serde_json::Value> {
     disps
         .lines()
@@ -382,7 +382,8 @@ fn send_cold_target_wakes_and_is_not_refused_as_stopped() {
         !err.contains("resume it first") && !err.contains("Use 'qd resume'") && !err.contains("is dead"),
         "a cold target must NOT be refused with a resume-it-first message, got: {err}"
     );
-    // The NEW behavior: accepted → wake attempted → failed{wake} (exit 12).
+    // The NEW behavior: wake attempted → failed{wake} (exit 12). `accepted` is
+    // retired (R14.3); origin-mode admission is marked by `attempted`.
     assert_eq!(code, 12, "unwakeable cold target → failed{{wake}} exit 12 (stderr: {err})");
     assert!(
         err.contains("failed{wake}"),
@@ -395,7 +396,7 @@ fn send_cold_target_wakes_and_is_not_refused_as_stopped() {
         "the envelope (with origin) must be logged before the wake, got log.jsonl: {log:?}"
     );
     // The funnel EVENT rows, in file order: attempted, queued, then
-    // delivery-failed carrying the REQUIRED reason (the wake class).
+    // delivery-failed carrying the REQUIRED machine `class` (the wake class).
     let rows = parse_event_rows(&disps);
     let kinds: Vec<&str> = rows.iter().map(|r| r["event"].as_str().unwrap()).collect();
     assert_eq!(
@@ -403,10 +404,10 @@ fn send_cold_target_wakes_and_is_not_refused_as_stopped() {
         vec!["attempted", "queued", "delivery-failed"],
         "the origin not-live funnel in file order, got: {disps:?}"
     );
-    assert_eq!(rows[2]["reason"], "wake", "delivery-failed carries reason wake: {disps:?}");
+    assert_eq!(rows[2]["class"], "wake", "delivery-failed carries class wake (R14.2): {disps:?}");
     assert!(
-        rows[0].get("reason").is_none() && rows[1].get("reason").is_none(),
-        "reason FORBIDDEN on attempted/queued: {disps:?}"
+        rows[0].get("class").is_none() && rows[1].get("class").is_none(),
+        "class FORBIDDEN on the plain attempted/queued variants: {disps:?}"
     );
 
     // The summary VIEW folds the funnel to failed (latest event delivery-failed,
@@ -454,7 +455,7 @@ fn send_tombstoned_target_wakes_and_is_not_rejected() {
         vec!["attempted", "queued", "delivery-failed"],
         "funnel event rows written, got dispositions.jsonl: {disps:?}"
     );
-    assert_eq!(rows[2]["reason"], "wake", "the wake-failure class, got: {disps:?}");
+    assert_eq!(rows[2]["class"], "wake", "the wake-failure class (R14.2), got: {disps:?}");
 }
 
 // ===========================================================================

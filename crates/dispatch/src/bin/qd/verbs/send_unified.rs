@@ -686,33 +686,39 @@ fn resolve_target(name: &str, host: Option<&str>, env: &dyn Env) -> Result<Sessi
 /// qd–qf W4 — INBOUND MODE. Admit a peer's ALREADY-minted envelope at the door,
 /// validate it, be idempotent on its id, and (resume-and-)deliver it — WITHOUT
 /// ever appending to this host's own `log.jsonl` (my log = envelopes I
-/// ORIGINATED; the peer's envelope lives in the mirror). Every event this door
-/// stamps carries `witness` = THIS host, `origin` = the ENVELOPE's origin (the
-/// peer), `authored_at` copied from the envelope, `witnessed_at` = now.
+/// ORIGINATED; the peer's envelope lives in the mirror). Under R14.2 event rows
+/// are FULLY NORMALIZED: they carry ONLY `{v, correlation_id, event, created_at}`
+/// (+ `class` on refused/delivery-failed) — NO `witness`, NO copied `origin`, NO
+/// copied `authored_at`. `created_at` = when THIS host recorded the moment; the
+/// peer's `origin`/`authored_at` live on the envelope in the mirror and JOIN by
+/// `correlation_id`.
 ///
 /// Door order (validate cheap→expensive, side-effect-free until delivery):
 ///   1. READ the envelope bytes (`<path>`, or stdin for `-`). IO error ⇒ error.
 ///   2. PARSE into [`Envelope`] via serde; a parse failure / `v != 1` / a missing
-///      field ⇒ `refused{malformed}`.
-///   3. PAST-EXPIRY: `expires_at < now` ⇒ `expired{past-expiry}` (REFUSED at the
-///      door, never stamped `expired` — `expired` is a DERIVED view state, §2/§3).
+///      field ⇒ stderr-only `refused{malformed}` — NO row (no trustworthy id to
+///      key one on; R14.3 malformed carve-out).
+///   3. PAST-EXPIRY: `expires_at < now` ⇒ stamp `refused{past-expiry}` THEN the
+///      stderr refusal + exit 12 (R14.3: a parse-valid inbound refusal rides IN
+///      the funnel; `expired` stays a DERIVED view state, never authored).
 ///   4. RESOLVE the envelope's `target` (desugar `name@host`, then [`resolve_target`]):
 ///      unknown ⇒ `refused{unknown}`, ambiguous ⇒ `refused{ambiguous}` (never
 ///      first-match); a host-qualified address ⇒ the single-machine no-fleet-state
-///      refusal.
+///      refusal — each stamps a `refused{class}` row (parse-valid id) then emits.
 ///   5. IDEMPOTENCY: a `delivered` event already present for `correlation_id`
 ///      ([`dispatch::dispositions::has_delivered_event`]) ⇒ NO-OP SUCCESS
 ///      (deliver nothing, stamp nothing, exit 0). Delivery is irreversible;
 ///      idempotence keys on the delivered event EXISTING (R8) — a
-///      `delivery-failed` row does NOT block the retry. Ruled: `accepted` is
-///      emitted AFTER this short-circuit — a replayed already-delivered
-///      envelope no-ops with NO fresh accepted row.
-///   6. ACCEPT + (resume-and-)DELIVER: emit `accepted`, then `attempted`; a
-///      not-live target additionally emits `queued` and is WOKEN (reuse the W3b
-///      [`Waker`] wake path) before delivery; a wake that cannot succeed stamps
-///      `delivery-failed{class}` (exit 12). NO envelope log append (contract §4).
-///   7. STAMP the witnessed outcome (`delivered` / `delivery-failed{delivery}`)
-///      via the SHARED [`deliver_then_stamp`] tail — best-effort append.
+///      `delivery-failed` row does NOT block the retry.
+///   6. ADMIT + (resume-and-)DELIVER: `accepted` is RETIRED (R14.3) — admission
+///      is marked by `attempted`; a not-live target additionally emits `queued`
+///      and is WOKEN (reuse the W3b [`Waker`] wake path) before delivery; a wake
+///      that cannot succeed stamps `delivery-failed{class}` (exit 12). A live but
+///      carrierless select_carrier refusal stamps `refused{no-live-receive-path}`
+///      (NO `attempted` — the R12 family split, now a refused row) + refusal exit.
+///      NO envelope log append (contract §4).
+///   7. STAMP the outcome (`delivered` / `delivery-failed{delivery}`) via the
+///      SHARED [`deliver_then_stamp`] tail — best-effort append.
 ///
 /// Seamed (deps injected — `env`/`backend`/`waker`) so the whole door is proven
 /// with mocks + a jailed store, no live carrier/revive.
@@ -759,38 +765,63 @@ fn run_inbound(
     let clock = RealClock;
     let now = clock.now_ms();
 
-    // (3) PAST-EXPIRY door — a past-expiry inbound envelope is REFUSED at the door,
-    // NOT stamped `expired` (that is a DERIVED view state, never authored).
-    if envelope.expires_at < now {
-        return Refusal::expired(
-            "past-expiry",
-            format!(
-                "envelope {} expired at {} (now {})",
-                envelope.correlation_id, envelope.expires_at, now
+    // The transport files honor QD_HOME (from_home_env), matching the store + the
+    // W5 reader. Resolve them UP FRONT so every parse-valid door refusal below can
+    // stamp its `refused{class}` row IN the funnel (R14.3). A HOME-unset failure
+    // here is a plain IO error (surface it) — the same failure `resolve_target`'s
+    // gather would raise.
+    let paths = match common::paths_from_home(env) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
+
+    // Stamp a `refused{class}` row for a parse-valid inbound door refusal (R14.3 —
+    // the refusal class rides IN the funnel), then emit the shared stderr refusal
+    // and return its exit code. `created_at` = now (this host recorded it). NO
+    // `attempted` precedes a refusal that never admitted the message.
+    let stamp_refused = |refusal: Refusal, class: &str| -> i32 {
+        stamp_event(
+            &tpaths,
+            &dispatch::dispositions::DispositionEvent::refused(
+                envelope.correlation_id.clone(),
+                clock.now_ms(),
+                class.to_string(),
             ),
-        )
-        .emit();
+        );
+        refusal.emit()
+    };
+
+    // (3) PAST-EXPIRY door — a past-expiry inbound envelope is REFUSED at the door;
+    // R14.3 stamps a `refused{past-expiry}` row (the refusal rides IN the funnel),
+    // NOT an `expired` row (that is a DERIVED view state, never authored).
+    if envelope.expires_at < now {
+        return stamp_refused(
+            Refusal::expired(
+                "past-expiry",
+                format!(
+                    "envelope {} expired at {} (now {})",
+                    envelope.correlation_id, envelope.expires_at, now
+                ),
+            ),
+            "past-expiry",
+        );
     }
 
     // (4) RESOLVE the ENVELOPE's target (mis-addressed / ambiguous ⇒ named refusal).
     // qd–qf W6: desugar the envelope's `target` `name@host` too — an inbound
     // envelope carries a raw address string, so a host qualifier in it routes the
     // SAME shared resolver (host-qualified ⇒ the single-machine no-fleet-state
-    // refusal; `@local`/bare ⇒ local resolution).
+    // refusal; `@local`/bare ⇒ local resolution). Each parse-valid resolution
+    // refusal stamps a `refused{class}` row before emitting (R14.3).
     let (in_name, in_host) = parse_address(&envelope.target);
     let target = match resolve_target(in_name, in_host, env) {
         Ok(s) => s,
-        Err(refusal) => return refusal.emit(),
+        Err(refusal) => {
+            let class = refusal.class.clone();
+            return stamp_refused(refusal, &class);
+        }
     };
-
-    // The transport files honor QD_HOME (from_home_env), matching the store + the
-    // W5 reader. HOME/paths already succeeded inside `resolve_target`'s gather, so
-    // a failure here is only a fresh HOME-unset race — surface it.
-    let paths = match common::paths_from_home(env) {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
 
     // (5) IDEMPOTENCY — a `delivered` event already present for this id ⇒ NO-OP
     // SUCCESS (deliver nothing, stamp nothing — not even a fresh `accepted` —
@@ -816,36 +847,22 @@ fn run_inbound(
         }
     }
 
-    // (6) ACCEPT + (resume-and-)DELIVER. Every event this door stamps carries
-    // `witness` = THIS host and `origin` = the ENVELOPE's origin (the peer);
-    // `authored_at` is copied from the envelope — the R9/N10 split.
-    let witness = dispositions::local_host(env);
-
-    // The door is passed: stamp `accepted` (the inbound envelope was presented
-    // and accepted). Ruled: this comes AFTER the idempotency short-circuit — a
-    // replayed already-delivered envelope no-ops with NO fresh accepted row.
-    stamp_event(
-        &tpaths,
-        &dispatch::dispositions::DispositionEvent::accepted(
-            envelope.correlation_id.clone(),
-            clock.now_ms(),
-            witness.clone(),
-            envelope.origin.clone(),
-            envelope.authored_at,
-        ),
-    );
+    // (6) ADMIT + (resume-and-)DELIVER. `accepted` is RETIRED (R14.3) — admission
+    // is marked by `attempted`. Event rows are fully normalized (R14.2): they
+    // carry ONLY `{v, correlation_id, event, created_at}` (+ `class` on
+    // refused/delivery-failed); the peer's `origin`/`authored_at` live on the
+    // envelope in the mirror and JOIN by `correlation_id`.
 
     // The attempt-start stamp every inbound delivery route shares (each route
-    // below is one attempt; a retry is a fresh inbound presentation).
+    // below is one attempt; a retry is a fresh inbound presentation). Stamped
+    // AFTER the idempotency short-circuit — a replayed already-delivered envelope
+    // no-ops with no fresh row.
     let stamp_attempted = || {
         stamp_event(
             &tpaths,
             &dispatch::dispositions::DispositionEvent::attempted(
                 envelope.correlation_id.clone(),
                 clock.now_ms(),
-                witness.clone(),
-                envelope.origin.clone(),
-                envelope.authored_at,
             ),
         );
     };
@@ -855,7 +872,20 @@ fn run_inbound(
     if is_live(&target) {
         let carrier = match select_carrier(&target) {
             Ok(c) => c,
-            Err(refusal) => return report_refusal(&envelope.target, &target, refusal),
+            // R14.3: a live-but-carrierless target is a parse-valid inbound refusal
+            // — stamp `refused{no-live-receive-path}` IN the funnel (NO `attempted`,
+            // the message never admitted) + the refusal exit. The old `report_refusal`
+            // (a row-less exit-1) is replaced here for the inbound door.
+            Err(_refusal) => {
+                let label = target.name.as_deref().unwrap_or(&envelope.target);
+                return stamp_refused(
+                    Refusal::refused(
+                        "no-live-receive-path",
+                        format!("\"{label}\" has no live receive path — not sendable"),
+                    ),
+                    "no-live-receive-path",
+                );
+            }
         };
         stamp_attempted();
         deliver_then_stamp(
@@ -865,9 +895,6 @@ fn run_inbound(
             &target,
             &envelope.body,
             &envelope.correlation_id,
-            envelope.authored_at,
-            &witness,
-            &envelope.origin,
             &clock,
         )
     } else {
@@ -878,7 +905,7 @@ fn run_inbound(
             dispatch::launch::render_default_from_config(env).as_deref(),
         );
         // On a wake failure, stamp `delivery-failed{class}` against the ENVELOPE
-        // (witnessed by this host, origin = the peer's, authored_at copied) +
+        // (created_at = now; the peer's origin/authored_at join from the mirror) +
         // exit 12 — the SAME contract as W3b, but with NO envelope log append.
         let stamp_failed_wake = |refusal: Refusal| -> i32 {
             stamp_event(
@@ -886,9 +913,6 @@ fn run_inbound(
                 &dispatch::dispositions::DispositionEvent::delivery_failed(
                     envelope.correlation_id.clone(),
                     clock.now_ms(),
-                    witness.clone(),
-                    envelope.origin.clone(),
-                    envelope.authored_at,
                     refusal.class.clone(),
                 ),
             );
@@ -902,9 +926,6 @@ fn run_inbound(
             &dispatch::dispositions::DispositionEvent::queued(
                 envelope.correlation_id.clone(),
                 clock.now_ms(),
-                witness.clone(),
-                envelope.origin.clone(),
-                envelope.authored_at,
             ),
         );
         let (refreshed, carrier) = match waker.wake(&target, render) {
@@ -930,9 +951,6 @@ fn run_inbound(
             &refreshed,
             &envelope.body,
             &envelope.correlation_id,
-            envelope.authored_at,
-            &witness,
-            &envelope.origin,
             &clock,
         )
     }
@@ -992,8 +1010,8 @@ fn deliver_with_durability(
     // disposition events (via deliver_then_stamp) — they must key on one id. The
     // empty-id sync refusal was already applied at the verb entry.
     let correlation_id = supplied_correlation_id.unwrap_or_else(|| mint_correlation_id(&clock));
-    // This qd ORIGINATES here, so local_host is the envelope's `origin`; it is
-    // ALSO the `witness` of every event this invocation stamps (same host).
+    // This qd ORIGINATES here, so local_host is the envelope's `origin` (the single
+    // normalized HOME of origin, R14.2). Event rows no longer carry origin/witness.
     let origin = dispositions::local_host(env);
 
     // Mint + LOG FIRST (write-then-deliver). `target` is the RAW address the
@@ -1017,23 +1035,21 @@ fn deliver_with_durability(
 
     // The delivery attempt STARTS here (the envelope is durable): stamp
     // `attempted` — each retry invocation is a fresh attempted event (R8b).
+    // Normalized (R14.2): the row carries only `{v, correlation_id, event,
+    // created_at}`; `created_at = now` (this host recorded it).
     stamp_event(
         &tpaths,
         &dispatch::dispositions::DispositionEvent::attempted(
             correlation_id.clone(),
             clock.now_ms(),
-            origin.clone(), // witness = this host
-            origin.clone(), // origin  = this host (it originated)
-            authored_at,
         ),
     );
 
-    // Deliver via the existing unified carrier + stamp the witnessed outcome.
-    // (This is the LIVE path — a not-live target's resume-and-deliver /
-    // failed{wake} lives in `wake_then_deliver`.) The deliver + outcome-stamp
-    // tail is the SHARED `deliver_then_stamp` core (identical to the not-live and
-    // W4 inbound tails): exit 0 ⇒ `delivered`; a definitive failure ⇒
-    // `delivery-failed{delivery}`.
+    // Deliver via the existing unified carrier + stamp the outcome. (This is the
+    // LIVE path — a not-live target's resume-and-deliver / failed{wake} lives in
+    // `wake_then_deliver`.) The deliver + outcome-stamp tail is the SHARED
+    // `deliver_then_stamp` core (identical to the not-live and W4 inbound tails):
+    // exit 0 ⇒ `delivered`; a definitive failure ⇒ `delivery-failed{delivery}`.
     deliver_then_stamp(
         &tpaths,
         backend,
@@ -1041,9 +1057,6 @@ fn deliver_with_durability(
         session,
         message,
         &correlation_id,
-        authored_at,
-        &origin, // witness = this host
-        &origin, // origin  = this host (it originated)
         &clock,
     )
 }
@@ -1065,16 +1078,15 @@ fn stamp_event(
 /// `attempted` emission — CALLERS own the attempt-start event). The envelope is
 /// ALREADY durable (origin logged it; inbound never logs its own). One carrier
 /// call, then a best-effort outcome [`dispatch::dispositions::DispositionEvent`]:
-///   - exit 0             ⇒ `delivered` (no reason),
+///   - exit 0             ⇒ `delivered`,
 ///   - definitive nonzero ⇒ `delivery-failed{delivery}`.
 ///
-/// `witness` is THIS host (the witness-timeline half of the R9/N10 split);
-/// `origin` is the ENVELOPE's origin host (this host for an origin send, the
-/// PEER's for an inbound one); `authored_at` is copied verbatim from the
-/// envelope — every event row is self-contained (§2). Used by the origin live
-/// path, the origin resume-and-deliver path, AND W4 inbound — so the three
-/// cannot drift.
-#[allow(clippy::too_many_arguments)]
+/// R14.2: event rows are FULLY NORMALIZED — the outcome row carries ONLY
+/// `{v, correlation_id, event, created_at}` (+ `class` on the failed variant).
+/// `created_at` = when THIS host recorded the outcome (observation time, R14.1);
+/// there is NO `witness`/`origin`/`authored_at` on the row (they live on the
+/// envelope and join by `correlation_id`). Used by the origin live path, the
+/// origin resume-and-deliver path, AND W4 inbound — so the three cannot drift.
 fn deliver_then_stamp(
     tpaths: &dispatch::paths::QdPaths,
     backend: &dyn UnifiedBackend,
@@ -1082,9 +1094,6 @@ fn deliver_then_stamp(
     session: &Session,
     message: &str,
     correlation_id: &str,
-    authored_at: i64,
-    witness: &str,
-    origin: &str,
     clock: &dyn dispatch::effects::Clock,
 ) -> i32 {
     use dispatch::dispositions::DispositionEvent;
@@ -1092,20 +1101,11 @@ fn deliver_then_stamp(
     let code = dispatch_selected(backend, carrier, session, message);
 
     let event = if code == 0 {
-        DispositionEvent::delivered(
-            correlation_id.to_string(),
-            clock.now_ms(),
-            witness.to_string(),
-            origin.to_string(),
-            authored_at,
-        )
+        DispositionEvent::delivered(correlation_id.to_string(), clock.now_ms())
     } else {
         DispositionEvent::delivery_failed(
             correlation_id.to_string(),
             clock.now_ms(),
-            witness.to_string(),
-            origin.to_string(),
-            authored_at,
             "delivery".to_string(),
         )
     };
@@ -1165,8 +1165,8 @@ fn wake_then_deliver(
     // envelope AND every stamped event key on it. Absent ⇒ mint (the BARE-send
     // default). Empty was already refused at the verb entry.
     let correlation_id = supplied_correlation_id.unwrap_or_else(|| mint_correlation_id(&clock));
-    // This qd ORIGINATES here: local_host is the envelope's `origin` AND the
-    // `witness` of every event this invocation stamps (same host).
+    // This qd ORIGINATES here: local_host is the envelope's `origin` (the single
+    // normalized HOME of origin, R14.2). Event rows no longer carry origin/witness.
     let origin = dispositions::local_host(env);
 
     // (1) LOG FIRST — even a wake that later fails leaves the durable envelope, so
@@ -1188,28 +1188,16 @@ fn wake_then_deliver(
     }
 
     // The delivery attempt STARTS here: stamp `attempted`, then `queued` — the
-    // attempt placed the message durably awaiting the target's WAKE (a witnessed
+    // attempt placed the message durably awaiting the target's WAKE (a recorded
     // moment, stamped BEFORE the wake is tried; the prose may land minutes from
-    // now).
+    // now). Normalized rows (R14.2): `{v, correlation_id, event, created_at}` only.
     stamp_event(
         &tpaths,
-        &DispositionEvent::attempted(
-            correlation_id.clone(),
-            clock.now_ms(),
-            origin.clone(), // witness = this host
-            origin.clone(), // origin  = this host (it originated)
-            authored_at,
-        ),
+        &DispositionEvent::attempted(correlation_id.clone(), clock.now_ms()),
     );
     stamp_event(
         &tpaths,
-        &DispositionEvent::queued(
-            correlation_id.clone(),
-            clock.now_ms(),
-            origin.clone(),
-            origin.clone(),
-            authored_at,
-        ),
+        &DispositionEvent::queued(correlation_id.clone(), clock.now_ms()),
     );
 
     // A wake that cannot succeed: stamp a `delivery-failed{class}` event against
@@ -1222,9 +1210,6 @@ fn wake_then_deliver(
             &DispositionEvent::delivery_failed(
                 correlation_id.clone(),
                 clock.now_ms(),
-                origin.clone(), // witness = this host
-                origin.clone(), // origin  = this host (it originated)
-                authored_at,
                 refusal.class.clone(),
             ),
         );
@@ -1250,8 +1235,8 @@ fn wake_then_deliver(
         Err(refusal) => return stamp_failed_wake(refusal),
     };
 
-    // (4) DELIVER into the refreshed row + STAMP the witnessed outcome (the
-    // SHARED `deliver_then_stamp` tail — identical to the live + inbound paths).
+    // (4) DELIVER into the refreshed row + STAMP the outcome (the SHARED
+    // `deliver_then_stamp` tail — identical to the live + inbound paths).
     deliver_then_stamp(
         &tpaths,
         backend,
@@ -1259,9 +1244,6 @@ fn wake_then_deliver(
         &refreshed,
         message,
         &correlation_id,
-        authored_at,
-        &origin, // witness = this host
-        &origin, // origin  = this host (it originated)
         &clock,
     )
 }
@@ -1302,6 +1284,21 @@ mod tests {
             hosting: None,
             which_branch: SessionBranch::LiveRegistry,
         }
+    }
+
+    /// Reduce a normalized [`dispatch::dispositions::DispositionEvent`] to
+    /// `(kind, class?)` — the class is `Some` only on the delivery-failed / refused
+    /// variants (the discriminated-union tail), `None` on the three plain variants.
+    /// The R14 test analogue of the old `(e.event, e.reason.as_deref())` tuple.
+    fn event_row(
+        e: &dispatch::dispositions::DispositionEvent,
+    ) -> (dispatch::dispositions::EventKind, Option<String>) {
+        use dispatch::dispositions::DispositionEvent as E;
+        let class = match e {
+            E::DeliveryFailed { class, .. } | E::Refused { class, .. } => Some(class.clone()),
+            _ => None,
+        };
+        (e.kind(), class)
     }
 
     // === qd–qf W6 — ADDRESSING: parse_address + resolve_target host dispatch ===
@@ -1658,7 +1655,7 @@ mod tests {
     fn jail_env(home: &std::path::Path) -> MapEnv {
         let mut e = MapEnv::default();
         e.vars.insert("HOME".into(), home.to_string_lossy().into_owned());
-        // QD_HOST unset ⇒ local_host = "local" (the v1 origin/witness placeholder).
+        // QD_HOST unset ⇒ local_host = "local" (the v1 envelope-origin placeholder).
         e
     }
 
@@ -1699,10 +1696,12 @@ mod tests {
             env_row.authored_at + dispatch::origin_send::DEFAULT_EXPIRES_MS
         );
 
-        // The witnessed funnel for a live-origin success: attempted, delivered.
+        // The funnel for a live-origin success: attempted, delivered. Rows are
+        // fully normalized (R14.2) — no witness/origin/authored_at fields; every
+        // row joins the envelope by correlation_id and carries only created_at.
         let events = dispatch::dispositions::read_local_events(&tpaths);
         let kinds: Vec<dispatch::dispositions::EventKind> =
-            events.records.iter().map(|e| e.event).collect();
+            events.records.iter().map(|e| e.kind()).collect();
         assert_eq!(
             kinds,
             vec![
@@ -1713,14 +1712,24 @@ mod tests {
         );
         for d in &events.records {
             assert_eq!(
-                d.correlation_id, env_row.correlation_id,
+                d.correlation_id(),
+                env_row.correlation_id,
                 "every event joins the envelope on correlation_id"
             );
-            assert_eq!(d.reason, None, "no reason on attempted/delivered");
-            assert_eq!(d.witness, "local", "witness = this host");
-            assert_eq!(d.origin, "local", "origin = this host (it originated)");
-            assert_eq!(d.authored_at, env_row.authored_at, "authored_at copied from envelope");
-            assert!(d.witnessed_at >= d.authored_at, "witnessed at/after authored");
+            // The plain variants carry NO class tail (only delivery-failed/refused
+            // do — enforced by the type; assert the variant shape here).
+            assert!(
+                matches!(
+                    d,
+                    dispatch::dispositions::DispositionEvent::Attempted { .. }
+                        | dispatch::dispositions::DispositionEvent::Delivered { .. }
+                ),
+                "attempted/delivered carry no class tail"
+            );
+            assert!(
+                d.created_at() >= env_row.authored_at,
+                "created_at recorded at/after the envelope was authored"
+            );
         }
     }
 
@@ -1750,22 +1759,19 @@ mod tests {
         let log = dispatch::dispositions::read_local_log(&tpaths);
         assert_eq!(log.records.len(), 1);
         // The funnel for a live-origin definitive failure: attempted, then
-        // delivery-failed{delivery} — the reason ONLY on the failed row.
+        // delivery-failed{delivery} — the class ONLY on the failed row.
         let events = dispatch::dispositions::read_local_events(&tpaths);
-        let rows: Vec<(dispatch::dispositions::EventKind, Option<&str>)> = events
-            .records
-            .iter()
-            .map(|e| (e.event, e.reason.as_deref()))
-            .collect();
+        let rows: Vec<(dispatch::dispositions::EventKind, Option<String>)> =
+            events.records.iter().map(event_row).collect();
         assert_eq!(
             rows,
             vec![
                 (dispatch::dispositions::EventKind::Attempted, None),
-                (dispatch::dispositions::EventKind::DeliveryFailed, Some("delivery")),
+                (dispatch::dispositions::EventKind::DeliveryFailed, Some("delivery".to_string())),
             ]
         );
         for d in &events.records {
-            assert_eq!(d.correlation_id, log.records[0].correlation_id);
+            assert_eq!(d.correlation_id(), log.records[0].correlation_id);
         }
     }
 
@@ -1839,7 +1845,7 @@ mod tests {
         let events = dispatch::dispositions::read_local_events(&tpaths);
         assert!(!events.records.is_empty());
         assert!(
-            events.records.iter().all(|e| e.correlation_id == "FRAME-EVT-123"),
+            events.records.iter().all(|e| e.correlation_id() == "FRAME-EVT-123"),
             "every stamped event keys on the SAME supplied id as the envelope"
         );
         // Not a minted ULID (26 Crockford chars): the supplied id is 13 chars.
@@ -1880,7 +1886,7 @@ mod tests {
             events
                 .records
                 .iter()
-                .all(|e| e.correlation_id == log.records[0].correlation_id),
+                .all(|e| e.correlation_id() == log.records[0].correlation_id),
             "every event joins the minted id"
         );
     }
@@ -1919,7 +1925,7 @@ mod tests {
         let events = dispatch::dispositions::read_local_events(&tpaths);
         assert!(!events.records.is_empty());
         assert!(
-            events.records.iter().all(|e| e.correlation_id == "FRAME-EVT-WAKE"),
+            events.records.iter().all(|e| e.correlation_id() == "FRAME-EVT-WAKE"),
             "every wake-path event keys on the supplied id"
         );
     }
@@ -1992,22 +1998,22 @@ mod tests {
         // the reason appearing ONLY on the delivery-failed row.
         let events = read_local_events(&tpaths);
         assert_eq!(events.corrupt_interior, 0, "every event row parses");
-        let rows: Vec<(EventKind, Option<&str>)> = events
+        let rows: Vec<(EventKind, Option<String>)> = events
             .records
             .iter()
-            .filter(|e| e.correlation_id == "Q6FUNNEL")
-            .map(|e| (e.event, e.reason.as_deref()))
+            .filter(|e| e.correlation_id() == "Q6FUNNEL")
+            .map(event_row)
             .collect();
         assert_eq!(
             rows,
             vec![
                 (EventKind::Attempted, None),
-                (EventKind::DeliveryFailed, Some("delivery")),
+                (EventKind::DeliveryFailed, Some("delivery".to_string())),
                 (EventKind::Attempted, None),
                 (EventKind::Queued, None),
                 (EventKind::Delivered, None),
             ],
-            "the full witnessed funnel in file order; reason only on delivery-failed"
+            "the full funnel in file order; class only on delivery-failed"
         );
 
         // log.jsonl: TWO envelopes for the id — each origin invocation logs
@@ -2121,11 +2127,8 @@ mod tests {
         assert_eq!(log.records.len(), 1, "envelope logged before the wake");
         assert_eq!(log.records[0].target, "worker@brano");
         let events = dispatch::dispositions::read_local_events(&tpaths);
-        let rows: Vec<(dispatch::dispositions::EventKind, Option<&str>)> = events
-            .records
-            .iter()
-            .map(|e| (e.event, e.reason.as_deref()))
-            .collect();
+        let rows: Vec<(dispatch::dispositions::EventKind, Option<String>)> =
+            events.records.iter().map(event_row).collect();
         assert_eq!(
             rows,
             vec![
@@ -2136,7 +2139,7 @@ mod tests {
             "wake-origin funnel in file order"
         );
         for d in &events.records {
-            assert_eq!(d.correlation_id, log.records[0].correlation_id);
+            assert_eq!(d.correlation_id(), log.records[0].correlation_id);
         }
     }
 
@@ -2175,22 +2178,19 @@ mod tests {
         let log = dispatch::dispositions::read_local_log(&tpaths);
         assert_eq!(log.records.len(), 1, "envelope logged even though the wake failed");
         let events = dispatch::dispositions::read_local_events(&tpaths);
-        let rows: Vec<(dispatch::dispositions::EventKind, Option<&str>)> = events
-            .records
-            .iter()
-            .map(|e| (e.event, e.reason.as_deref()))
-            .collect();
+        let rows: Vec<(dispatch::dispositions::EventKind, Option<String>)> =
+            events.records.iter().map(event_row).collect();
         assert_eq!(
             rows,
             vec![
                 (dispatch::dispositions::EventKind::Attempted, None),
                 (dispatch::dispositions::EventKind::Queued, None),
-                (dispatch::dispositions::EventKind::DeliveryFailed, Some("wake")),
+                (dispatch::dispositions::EventKind::DeliveryFailed, Some("wake".to_string())),
             ],
             "wake failure funnel: attempted, queued, delivery-failed{{wake}}"
         );
         for d in &events.records {
-            assert_eq!(d.correlation_id, log.records[0].correlation_id);
+            assert_eq!(d.correlation_id(), log.records[0].correlation_id);
         }
     }
 
@@ -2228,8 +2228,7 @@ mod tests {
         let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
         let events = dispatch::dispositions::read_local_events(&tpaths);
         let last = events.records.last().expect("a delivery-failed event was stamped");
-        assert_eq!(last.event, dispatch::dispositions::EventKind::DeliveryFailed);
-        assert_eq!(last.reason.as_deref(), Some("wake"));
+        assert_eq!(event_row(last), (dispatch::dispositions::EventKind::DeliveryFailed, Some("wake".to_string())));
     }
 
     #[test]

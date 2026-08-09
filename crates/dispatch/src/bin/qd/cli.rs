@@ -583,13 +583,15 @@ fn cmd_dispositions() -> Command {
             "events",
             "Emit the raw witnessed-event rows (the funnel) instead of the per-id summary",
         ))
-        // Caller-windowed lower bound on authored_at: keep records authored within
-        // the last <dur>. Same grammar as `qd send --expires` (bare int = seconds,
-        // else <int>{s|m|h|d}). STATELESS — qd stores no read cursor (N2).
+        // Caller-windowed lower bound within the last <dur>. The summary windows
+        // on the envelope's authored_at (null-timeline orphans always kept);
+        // --events windows on each event's created_at (R14.2). Same grammar as
+        // `qd send --expires` (bare int = seconds, else <int>{s|m|h|d}). STATELESS
+        // — qd stores no read cursor (N2).
         .arg(long_val(
             "window",
             "dur",
-            "Only records authored within the last <dur> (e.g. 12h, 30m, 45s, 1d; bare integer = seconds). Stateless/caller-windowed — qd stores no cursor",
+            "Only rows within the last <dur> (summary: envelope authored_at; --events: created_at; e.g. 12h, 30m, 45s, 1d; bare integer = seconds). Stateless/caller-windowed — qd stores no cursor",
         ))
         // Scope: --host unions one peer's remote replica; --all unions every peer.
         // Mutually exclusive (one scope per query).

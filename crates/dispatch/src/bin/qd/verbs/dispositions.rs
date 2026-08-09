@@ -8,21 +8,35 @@
 //! - **§3a DEFAULT (summary)**: one [`dispatch::dispositions::SummaryRecord`]
 //!   `to_jsonl_line` per `correlation_id` in scope, via the store's
 //!   [`query_summary`] — the folded per-id view: the coarse 4-state `state`
-//!   plus `last_event`/`witness` and the analytics fields. The state
-//!   precedence is RATIFIED (R10): delivered > expired > failed > pending —
-//!   a delivered event existing is the only absorbing state.
-//! - **§3b `--events`**: the RAW witnessed-event rows (the funnel) instead —
-//!   one [`dispatch::dispositions::DispositionEvent`] `to_jsonl_line` per row
-//!   via [`read_events`], file/union order preserved, no fold, no state. The
+//!   plus `last_event` (nullable) and the analytics fields, with
+//!   `origin`/`authored_at`/`expires_at` from the JOINED envelope only (nullable,
+//!   R14.2). The state precedence is RATIFIED (R10): delivered > expired > failed
+//!   > pending — a delivered event existing is the only absorbing state.
+//! - **§3b `--events`**: the RAW event rows (the funnel) instead — one
+//!   [`dispatch::dispositions::DispositionEvent`] `to_jsonl_line` per row via
+//!   [`read_events`], file/union order preserved, no fold, no state. Rows are
+//!   normalized `{v, correlation_id, event, created_at, [class]}` (R14.2). The
 //!   same scope/archive/point-query flags apply.
 //!
 //! ## `--window` is STATELESS + caller-windowed (N2)
 //!
 //! qd stores NO read-state and NO cursor, ever. `--window <dur>` is purely a
-//! lower bound the CALLER brings each invocation: keep only rows whose
-//! `authored_at >= now_ms - dur_ms`. BOTH row types carry `authored_at` (the
-//! envelope's ORIGIN timeline, copied onto every event row) — so ONE rule
-//! filters both modes identically. Absent ⇒ no window (every row in scope).
+//! lower bound the CALLER brings each invocation: keep only rows within the last
+//! `dur_ms` of `now_ms`. Absent ⇒ no window (every row in scope).
+//!
+//! Under R14.2 (fully-normalized events) the two modes window on DIFFERENT
+//! timestamps, because event rows no longer copy `authored_at`:
+//!
+//! - **`--events` (the funnel)** windows on each event's `created_at` — the
+//!   moment THIS host recorded the event (R14.1). Every event row carries it.
+//! - **the default summary** windows on the summary's `authored_at` — the JOINED
+//!   envelope's ORIGIN timeline — which is now NULLABLE. An orphan-event summary
+//!   (no envelope in scope) has `authored_at = null`; an absent timeline can
+//!   never position a row inside/outside a window, so such a summary is ALWAYS
+//!   KEPT (never silently dropped by a bound it cannot be measured against). See
+//!   [`passes_window`] (events, `i64`) vs [`passes_window_summary`] (summary,
+//!   `Option<i64>` — keeps `None`).
+//!
 //! The duration grammar is shared with `qd send --expires`
 //! ([`dispatch::origin_send::parse_expires`]): a bare integer = seconds, else
 //! `<int>{s|m|h|d}`. A bad form is a SYNC arg refusal (exit
@@ -115,12 +129,28 @@ fn window_lower_bound(now_ms: i64, m: &ArgMatches) -> Result<Option<i64>, Refusa
     }
 }
 
-/// A record passes the `--window` filter iff its `authored_at` is at/after the
-/// resolved lower bound. `None` bound ⇒ always kept (no window).
-fn passes_window(authored_at: i64, lower_bound: Option<i64>) -> bool {
+/// An EVENT row passes the `--window` filter iff its `created_at` is at/after the
+/// resolved lower bound. `None` bound ⇒ always kept (no window). Used for the
+/// `--events` funnel (R14.2: event rows window on `created_at`, not `authored_at`).
+fn passes_window(created_at: i64, lower_bound: Option<i64>) -> bool {
     match lower_bound {
         None => true,
-        Some(lb) => authored_at >= lb,
+        Some(lb) => created_at >= lb,
+    }
+}
+
+/// A SUMMARY row passes the `--window` filter on its NULLABLE `authored_at` (the
+/// joined envelope's origin timeline, R14.2). `None` bound ⇒ always kept.
+///
+/// A summary whose `authored_at` is `None` (an orphan-event summary — no envelope
+/// in scope) is ALWAYS KEPT: an absent timeline can never place a row outside a
+/// window, so a caller-brought lower bound must never silently drop an orphan it
+/// cannot position. Only a summary WITH a timeline is subject to the bound.
+fn passes_window_summary(authored_at: Option<i64>, lower_bound: Option<i64>) -> bool {
+    match (lower_bound, authored_at) {
+        (None, _) => true,             // no window ⇒ every row
+        (Some(_), None) => true,       // orphan (null timeline) ⇒ never excluded
+        (Some(lb), Some(a)) => a >= lb, // has a timeline ⇒ subject to the bound
     }
 }
 
@@ -165,7 +195,10 @@ pub fn run(m: &ArgMatches) -> i32 {
             }
         };
         for ev in &rows {
-            if passes_window(ev.authored_at, lower_bound) {
+            // R14.2: event rows carry NO `authored_at` (the origin timeline lives
+            // on the envelope now) — the funnel windows on `created_at`, the moment
+            // THIS host recorded the event (R14.1).
+            if passes_window(ev.created_at(), lower_bound) {
                 buf.push_str(&ev.to_jsonl_line());
                 buf.push('\n');
             }
@@ -180,7 +213,12 @@ pub fn run(m: &ArgMatches) -> i32 {
             }
         };
         for rec in &records {
-            if passes_window(rec.authored_at, lower_bound) {
+            // A summary windows on the JOINED envelope's `authored_at` (the origin
+            // timeline, R14.2). It is NULLABLE now: an orphan-event summary (no
+            // envelope in scope) has no timeline — and an absent timeline can never
+            // exclude a row (`passes_window_summary` keeps `None`), so we never
+            // silently drop an orphan the caller asked to see.
+            if passes_window_summary(rec.authored_at, lower_bound) {
                 buf.push_str(&rec.to_jsonl_line());
                 buf.push('\n');
             }
@@ -328,11 +366,30 @@ mod tests {
 
     #[test]
     fn passes_window_boundary_is_inclusive() {
-        // authored_at == bound is KEPT (>=).
+        // For an event row, created_at == bound is KEPT (>=).
         assert!(passes_window(1000, Some(1000)));
         assert!(passes_window(1001, Some(1000)));
         assert!(!passes_window(999, Some(1000)));
         // No bound keeps everything.
         assert!(passes_window(i64::MIN, None));
+    }
+
+    #[test]
+    fn passes_window_summary_keeps_null_authored_at_orphans() {
+        // A summary WITH a timeline is subject to the bound (inclusive >=).
+        assert!(passes_window_summary(Some(1000), Some(1000)));
+        assert!(passes_window_summary(Some(1001), Some(1000)));
+        assert!(!passes_window_summary(Some(999), Some(1000)));
+        // No bound keeps everything, timeline or not.
+        assert!(passes_window_summary(Some(i64::MIN), None));
+        assert!(passes_window_summary(None, None));
+        // R14.2: an orphan-event summary (authored_at null) is ALWAYS KEPT even
+        // under a window — an absent timeline can never place it outside the bound,
+        // so the caller's window must never silently drop it.
+        assert!(
+            passes_window_summary(None, Some(1000)),
+            "a null-timeline orphan summary is never excluded by a window"
+        );
+        assert!(passes_window_summary(None, Some(i64::MAX)));
     }
 }
