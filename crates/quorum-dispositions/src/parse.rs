@@ -63,9 +63,24 @@ fn parse_versioned_value(line: &[u8]) -> Option<Value> {
 /// `None` (⇒ count corrupt) on non-UTF-8, non-JSON, missing/non-1 `v`, or
 /// shape-mismatch against `T` (for a [`DispositionEvent`] that includes the
 /// discriminated-union invariants, enforced by its own `Deserialize`).
+///
+/// The `v == 1` marker is peeked via a `serde_json::Value` probe
+/// ([`parse_versioned_value`]) — cheap and version-only. But the FINAL typed
+/// deserialize consumes the RAW LINE BYTES (`from_slice`), NOT the intermediate
+/// `Value` (audit follow-up #3b). This is load-bearing: a `serde_json::Value`
+/// COLLAPSES a duplicate object key (last-wins) DURING its own parse, so a
+/// `from_value` deserialize would receive an already-deduped map — the type's
+/// `Deserialize` (the `MapAccess` `set_once` dup-key guard in
+/// [`crate::record`]) would NEVER see the duplicate and could not reject it. A
+/// row with a duplicated key is CORRUPT, never silently deduped; deserializing
+/// from the raw bytes runs `set_once` over the true token stream so the guard is
+/// live on this deployed file-read path (not only on the direct `from_str`
+/// unit-test path).
 fn parse_row<T: DeserializeOwned>(line: &[u8]) -> Option<T> {
-    let value = parse_versioned_value(line)?;
-    serde_json::from_value(value).ok()
+    // v-peek only (the Value probe may keep its dedup — we discard it here); the
+    // TYPED deserialize is from the raw bytes so `set_once` sees duplicate keys.
+    let _v = parse_versioned_value(line)?;
+    serde_json::from_slice(line).ok()
 }
 
 fn parse_jsonl<T: DeserializeOwned>(bytes: &[u8]) -> ReadResult<T> {
@@ -343,5 +358,90 @@ mod tests {
         let r = parse_dispositions(buf.as_bytes());
         assert_eq!(r.records.len(), 1, "only the created_at-carrying row survives");
         assert_eq!(r.corrupt_interior, 1, "an event row missing `created_at` is corrupt");
+    }
+
+    // ------- audit follow-up #3b: dup-key guard on the DEPLOYED read path -------
+    //
+    // These drive the ACTUAL file-read entry point (`parse_dispositions` /
+    // `parse_log` → `parse_row`), NOT a direct `from_str::<T>`. Before the fix,
+    // `parse_row` deserialized from an intermediate `serde_json::Value`, which
+    // COLLAPSES a duplicate object key (last-wins) before the type's `set_once`
+    // dup-key guard ever runs — so a duplicated field was silently accepted on the
+    // real read path (the guard was DEAD here; only the direct-`from_str` unit
+    // tests exercised it). The fix makes the typed deserialize consume the RAW LINE
+    // BYTES (`from_slice`), so `set_once` sees the duplicate token and rejects the
+    // row as corrupt.
+    //
+    // MUTATION PROOF: revert `parse_row` to `serde_json::from_value(value)` and
+    // every "records=0 / corrupt_interior=1" assertion below FLIPS to "records=1"
+    // (the last-wins dedup makes the row parse) — these tests go RED. That is
+    // exactly the dead-guard regression this fix closes.
+
+    #[test]
+    fn duplicate_event_key_is_corrupt_on_the_read_path() {
+        // (a) A duplicated `event` key. Pre-fix: the Value collapses it to the
+        // last value ("queued") and the row parses as records=1, kind=Queued.
+        // Post-fix: `set_once` rejects the duplicate → records=0, corrupt=1.
+        let dup = r#"{"v":1,"correlation_id":"a","event":"attempted","event":"queued","created_at":5}"#;
+        let r = parse_dispositions(format!("{dup}\n").as_bytes());
+        assert_eq!(r.records.len(), 0, "a duplicated `event` key is rejected (not last-wins deduped)");
+        assert_eq!(r.corrupt_interior, 1, "the dup-key row is counted corrupt on the read path");
+    }
+
+    #[test]
+    fn duplicate_body_digest_key_is_corrupt_on_the_read_path() {
+        // (b) R21 explicitly requires a duplicated `body_digest` case. A delivered
+        // row with two `body_digest` values must be corrupt — a tampered/torn row
+        // must never silently resolve to the last digest (the R15 integrity
+        // binding). Pre-fix the Value keeps only the last, and the row parses.
+        let dup = r#"{"v":1,"correlation_id":"a","event":"delivered","created_at":5,"body_digest":"aaaa","body_digest":"bbbb"}"#;
+        let r = parse_dispositions(format!("{dup}\n").as_bytes());
+        assert_eq!(r.records.len(), 0, "a duplicated `body_digest` key is rejected");
+        assert_eq!(r.corrupt_interior, 1, "the dup-body_digest row is corrupt on the read path");
+    }
+
+    #[test]
+    fn duplicate_correlation_id_key_is_corrupt_on_the_read_path() {
+        // A duplicated join key is equally corrupt (belt-and-suspenders over (a)/(b)).
+        let dup = r#"{"v":1,"correlation_id":"a","correlation_id":"b","event":"attempted","created_at":5}"#;
+        let r = parse_dispositions(format!("{dup}\n").as_bytes());
+        assert_eq!(r.records.len(), 0, "a duplicated `correlation_id` key is rejected");
+        assert_eq!(r.corrupt_interior, 1);
+    }
+
+    #[test]
+    fn single_key_control_still_parses_on_the_read_path() {
+        // (c) CONTROL: a valid single-key line still parses unchanged — the fix
+        // rejects ONLY duplicate keys, never a well-formed row.
+        let good = DispositionEvent::delivered("a".into(), 5, "digest".into()).to_jsonl_line();
+        let r = parse_dispositions(format!("{good}\n").as_bytes());
+        assert_eq!(r.records.len(), 1, "a valid single-key row still parses");
+        assert_eq!(r.corrupt_interior, 0);
+        assert_eq!(r.records[0].kind(), EventKind::Delivered);
+        assert_eq!(r.records[0].body_digest(), Some("digest"));
+    }
+
+    #[test]
+    fn duplicate_envelope_key_is_corrupt_on_the_log_read_path() {
+        // The SINGLE fix covers `parse_log` (Envelope) too — both route through
+        // `parse_row`. A duplicated `correlation_id` on an envelope row is corrupt
+        // on the deployed read path (serde's derived struct Deserialize rejects the
+        // dup once it runs over raw bytes; pre-fix the Value dedup hid it).
+        let dup = r#"{"v":1,"correlation_id":"a","correlation_id":"b","authored_at":1,"expires_at":2,"target":"t","origin":"o","body":"x"}"#;
+        let r = parse_log(format!("{dup}\n").as_bytes());
+        assert_eq!(r.records.len(), 0, "a duplicated envelope key is rejected on the read path");
+        assert_eq!(r.corrupt_interior, 1);
+    }
+
+    #[test]
+    fn version_gate_and_valid_rows_unchanged_by_the_dup_fix() {
+        // Confirm the version gate still refuses `v != 1`, and valid rows parse
+        // unchanged (the peek stays; only the typed source changed to raw bytes).
+        let v2 = r#"{"v":2,"correlation_id":"y","event":"delivered","created_at":9,"body_digest":"d"}"#;
+        let good = DispositionEvent::attempted("z".into(), 7).to_jsonl_line();
+        let r = parse_dispositions(format!("{v2}\n{good}\n").as_bytes());
+        assert_eq!(r.records.len(), 1, "the valid v1 row parses unchanged");
+        assert_eq!(r.corrupt_interior, 1, "the v!=1 row is still refused by the version gate");
+        assert_eq!(r.records[0].kind(), EventKind::Attempted);
     }
 }
