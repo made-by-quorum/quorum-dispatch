@@ -227,10 +227,10 @@ pub fn append_event(paths: &QdPaths, event: &DispositionEvent) -> io::Result<()>
 
 /// The shared append core: create the parent dir, take the exclusive append
 /// lock, then do ONE `O_APPEND | O_CREAT` mode-0600 `write_all` of the COMPLETE
-/// record (`line` + `"\n"` as a single buffer — audit #3: the `\n` shares the
-/// record's one write, closing the two-write window where a COMPLETE record
-/// persisted un-terminated and fused the next append; see the body for the
-/// residual mid-write-crash case).
+/// record, SELF-DELIMITED as `\n{line}\n` — the LEADING newline closes any torn
+/// prefix a prior interrupted write may have left, so a new complete record can
+/// never FUSE onto a torn tail (audit follow-up #3a; mirrors telemetry.rs's
+/// `append_observed_self_delimited`, F-DEOBS-1).
 ///
 /// The lock is held across the append (acquired before the truth-file open,
 /// dropped after the write) so two writers serialize at the byte level even for
@@ -247,23 +247,31 @@ fn append_line(target: &Path, line: &str) -> io::Result<()> {
         .append(true)
         .mode(0o600)
         .open(target)?;
-    // ONE `write_all` of the COMPLETE record — the line AND its terminating '\n'
-    // as a SINGLE buffer (audit #3 fix). A prior version wrote the bytes and the
-    // '\n' in two SEPARATE `write_all` calls; a crash / ENOSPC / EINTR BETWEEN the
-    // two successful writes would leave a COMPLETE line on disk WITHOUT its
-    // terminator, and the next append would fuse onto it — the torn-tail rule then
-    // silently drops BOTH records (the reader treats the un-terminated
-    // concatenation as one torn tail) while the appends returned exit 0. Building
-    // `line + "\n"` up front removes that gap: the terminator is never a separate
-    // syscall from the record, so there is no point BETWEEN two successful writes
-    // where a COMPLETE line sits un-terminated. (A crash MID-write can still
-    // truncate the buffer before its last byte, leaving a partial that a later
-    // append would fuse — but that residual needs fsync / atomic-framing, out of
-    // scope; what the single write removes is the two-write window where a whole
-    // record sat un-terminated.) A COMPLETED `write_all` always lands the whole
-    // record incl. its newline. Under the flock this is the single-writer,
-    // whole-record append the format contract requires.
-    let mut record = String::with_capacity(line.len() + 1);
+    // ONE `write_all` of the SELF-DELIMITED record — `\n{line}\n` as a SINGLE
+    // buffer (audit follow-up #3a, mirroring telemetry.rs F-DEOBS-1). The prior
+    // form (`{line}\n`, audit #3) already closed the two-write window where a
+    // COMPLETE record sat un-terminated between two syscalls. But it left a
+    // residual: a crash MID the single write of a `>PIPE_BUF` body (or ENOSPC /
+    // EIO) can truncate the buffer before its last byte, leaving a PARTIAL,
+    // non-newline-terminated fragment on disk. The NEXT bare-`{line}\n` append
+    // would GLUE its complete record onto that torn fragment; the reader's
+    // torn-tail rule then treats `fragment + record` as ONE unparseable line and
+    // silently drops BOTH — the following COMPLETE, valid record vanishes though
+    // the append returned exit 0 (the delivered-fact-loss contract violation).
+    //
+    // The LEADING '\n' unconditionally CLOSES any torn prefix: the torn fragment
+    // becomes its own (unparseable, reader-skipped) line, and our record starts
+    // fresh on the next line — INDEPENDENTLY readable. When the tail was already
+    // clean (or the file empty / newline-terminated), the leading '\n' merely
+    // yields a harmless BLANK line, which the JSONL reader's `parse_jsonl` skips
+    // (an empty trimmed segment is not a record and is NOT counted corrupt —
+    // parse.rs, the reader half of this self-delimiting framing). Because the
+    // whole `\n{line}\n` is written by ONE `write_all` under the exclusive flock,
+    // and a sub-`PIPE_BUF` record lands atomically, there is no
+    // peek-last-byte-then-append TOCTOU. This bounds loss to the torn record ONLY
+    // — never the following complete record (the R21 ruled property).
+    let mut record = String::with_capacity(line.len() + 2);
+    record.push('\n');
     record.push_str(line);
     record.push('\n');
     f.write_all(record.as_bytes())
@@ -734,18 +742,20 @@ mod tests {
         assert_eq!(mode, 0o600, "truth file is mode 0600");
     }
 
-    // ---- audit #3: torn/fused append (single write_all of the whole record) ----
+    // ---- audit #3 / follow-up #3a: torn/fused append (self-delimiting write) ----
 
     #[test]
     fn append_always_leaves_a_newline_terminated_file() {
         // THE anti-fusion invariant: after EVERY append the on-disk file ends with
         // '\n', so the NEXT append can never fuse onto an un-terminated tail. This
-        // is what the single-`write_all`-of-`line + "\n"` guarantees — the audit #3
-        // fix ensures the terminator is never a separate syscall that a crash /
-        // ENOSPC / EINTR could skip. A large (>PIPE_BUF) body — the case a short
-        // write is most plausible on — is included: `write_all` loops over short
-        // writes, but the newline is part of the one buffer, so a completed
-        // `write_all` never lands a record without its terminator.
+        // is what the single self-delimiting `write_all` of `\n{line}\n` guarantees
+        // — the terminator is never a separate syscall that a crash / ENOSPC /
+        // EINTR could skip, AND the LEADING '\n' closes any torn prefix a prior
+        // interrupted write left (follow-up #3a). A large (>PIPE_BUF) body — the
+        // case a short write is most plausible on — is included: `write_all` loops
+        // over short writes, but the newline is part of the one buffer, so a
+        // completed `write_all` never lands a record without its terminator. The
+        // leading blank line the framing inserts is reader-skipped (0 corrupt).
         let (_tmp, paths) = jailed_paths();
         let big = "x".repeat(9000); // comfortably > PIPE_BUF (4096)
         let bodies = ["a", "", "line with spaces", &big, "後"];
@@ -776,14 +786,14 @@ mod tests {
 
     #[test]
     fn append_line_does_exactly_one_write_all() {
-        // MUTATION GUARD (audit #3): the fix is a SINGLE `write_all` of the
-        // combined `line + "\n"` buffer. A revert to the two-write form (bytes,
-        // then a separate `b"\n"`) reopens the torn/fused-record hole — where a
-        // crash between the two writes leaves a record without its newline. Pin the
-        // single-write shape at source so a future edit cannot silently reintroduce
-        // the second write. (The behavioural invariant above proves the effect;
-        // this proves the mechanism, since a partial-write injection is not
-        // exercisable at this layer.)
+        // MUTATION GUARD (audit #3 + follow-up #3a): the fix is a SINGLE
+        // `write_all` of the combined self-delimiting `\n{line}\n` buffer. A revert
+        // to the two-write form (bytes, then a separate `b"\n"`) reopens the
+        // torn/fused-record hole. Pin the single-write shape at source so a future
+        // edit cannot silently reintroduce the second write. (The behavioural
+        // invariant above proves the terminator effect; the fusion-survival test
+        // below proves the LEADING-newline effect; this proves the mechanism, since
+        // a partial-write injection is not exercisable at this layer.)
         let src = include_str!("dispositions.rs");
         let start = src
             .find("fn append_line(")
@@ -806,6 +816,66 @@ mod tests {
             !body.contains("f.write_all(b\"\\n\")"),
             "the newline must be part of the single record buffer, not a separate write. Body:\n{body}"
         );
+        // Follow-up #3a: the buffer must LEAD with a newline (`record.push('\n')`
+        // BEFORE the line) — that leading '\n' is what closes a torn prefix. A
+        // revert to `{line}\n` (no leading push) reopens the mid-write-fusion hole
+        // this follow-up closes.
+        assert!(
+            body.contains("record.push('\\n');\n    record.push_str(line);"),
+            "the record buffer must LEAD with a '\\n' (self-delimiting #3a). Body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn append_over_a_torn_tail_preserves_the_following_complete_record() {
+        // FOLLOW-UP #3a — the delivered-fact-loss contract. Inject a TORN,
+        // un-terminated fragment (exactly the on-disk residual a crash MID the
+        // single write of a >PIPE_BUF body leaves), then do a REAL `append_event`,
+        // then read back through the DEPLOYED torn-tolerant path
+        // (`read_local_events` → `parse_dispositions`). The later COMPLETE record
+        // MUST still parse.
+        //
+        // COULD-HAVE-FAILED / MUTATION PROOF: with the OLD bare-`{line}\n` writer
+        // the real append fuses onto the torn fragment — `…que{…R3…}\n` becomes ONE
+        // unparseable interior line and BOTH the torn fragment AND R3 (a complete,
+        // valid record) are dropped, so this assertion FAILS. Reverting
+        // `append_line` to push only `line` + `'\n'` (dropping the leading '\n')
+        // makes this test RED. The self-delimiting `\n{line}\n` write closes the
+        // torn fragment as its own (skipped) line and lands R3 on a fresh, readable
+        // line — so it survives.
+        let (_tmp, paths) = jailed_paths();
+        std::fs::create_dir_all(&paths.dispatch_root).unwrap();
+        let disp = paths.dispositions_path();
+
+        // R1 lands cleanly (a prior good append, newline-terminated), then a torn
+        // R2 fragment with NO terminating '\n' (the mid-write-crash residual).
+        let rec1 = attempted("R1", 1).to_jsonl_line();
+        let torn_fragment = r#"{"v":1,"correlation_id":"R2","event":"que"#; // truncated
+        let mut initial = String::new();
+        initial.push('\n'); // the file's own self-delimited R1 lead-in
+        initial.push_str(&rec1);
+        initial.push('\n');
+        initial.push_str(torn_fragment); // torn tail: no trailing '\n'
+        std::fs::write(&disp, &initial).unwrap();
+
+        // A fresh COMPLETE valid record R3 through the REAL deployed writer.
+        append_event(&paths, &delivered("R3", 3)).unwrap();
+
+        // Read back via the deployed torn-tolerant parser.
+        let r = read_local_events(&paths);
+        let ids: Vec<&str> = r.records.iter().map(|e| e.correlation_id()).collect();
+        assert!(
+            ids.contains(&"R1"),
+            "R1 (cleanly terminated) survives — got {ids:?}"
+        );
+        assert!(
+            ids.contains(&"R3"),
+            "R3 — a COMPLETE, valid append — must survive the torn tail (delivered-fact-loss \
+             contract). With the old `{{line}}\\n` writer it fuses onto the torn R2 fragment and is \
+             LOST; the leading-newline `\\n{{line}}\\n` self-delimiting write keeps it. got {ids:?}"
+        );
+        // Only the torn R2 fragment is lost — bounded to the torn record alone.
+        assert!(!ids.contains(&"R2"), "the torn R2 fragment is (correctly) the only loss");
     }
 
     // ---- concurrent-append safety (validates the flock guard) --------------

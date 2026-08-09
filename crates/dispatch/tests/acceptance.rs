@@ -495,7 +495,14 @@ fn sec6_failed_then_retry_summary_delivered_while_failure_row_persists() {
     // the funnel EVENT rows attempted, queued, delivery-failed{wake}.
     let log_body = std::fs::read_to_string(root.join("log.jsonl")).unwrap_or_default();
     let disp_body = std::fs::read_to_string(root.join("dispositions.jsonl")).unwrap_or_default();
-    let env_val: serde_json::Value = serde_json::from_str(log_body.lines().next().unwrap())
+    // The self-delimiting `\n{line}\n` append framing (audit follow-up #3a) leaves
+    // a leading blank line before each record, so skip empties to reach the first
+    // real envelope row (mirrors `parse_event_rows`).
+    let first_env_line = log_body
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .expect("a logged envelope line");
+    let env_val: serde_json::Value = serde_json::from_str(first_env_line)
         .expect("the logged envelope is valid JSON");
     assert!(env_val["origin"].is_string(), "the envelope carries `origin`: {log_body:?}");
     let real_id = env_val["correlation_id"].as_str().expect("correlation_id string").to_string();

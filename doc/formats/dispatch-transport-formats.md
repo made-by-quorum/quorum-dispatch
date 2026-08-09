@@ -35,7 +35,19 @@ Common framing for every `*.jsonl` file here:
   model is normalized; you build views over it.
 - **Torn-tail rule**: a reader tolerates a final unterminated (partial) line by
   ignoring it. An unparseable *interior* line is corruption (counted, never
-  silently treated as absence-of-record).
+  silently treated as absence-of-record). A **blank** (all-whitespace) interior
+  line is NOT corruption — it is skipped (it carries no record to lose); this is
+  the reader half of the self-delimiting append framing below.
+- **Self-delimiting torn-safe append framing** (audit follow-up #3a): qd writes
+  each record as a SINGLE `O_APPEND` `write_all` of `\n{line}\n` — a LEADING
+  newline as well as the trailing one. The leading `\n` unconditionally closes
+  any torn prefix a prior interrupted write may have left (a crash MID the write
+  of a `>PIPE_BUF` body, ENOSPC, EIO), so a new complete record can never FUSE
+  onto a torn tail: loss is bounded to the torn record ALONE, never the following
+  complete record (the delivered-fact-loss guarantee). On a clean/empty tail the
+  leading `\n` yields a harmless blank line, which the reader skips (per the
+  torn-tail rule above). Precedent: telemetry.rs `append_observed_self_delimited`
+  (F-DEOBS-1).
 - **Version marker**: every row carries `"v": 1`. A reader rejecting an unknown
   `v` refuses with a named reason; it never guesses.
 - **Timestamps** are epoch-milliseconds **integers** (`i64`), UTC. Integers, not

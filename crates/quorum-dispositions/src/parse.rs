@@ -72,6 +72,20 @@ fn parse_jsonl<T: DeserializeOwned>(bytes: &[u8]) -> ReadResult<T> {
     let mut records = Vec::new();
     let mut corrupt_interior = 0u64;
     for line in terminated_lines(bytes) {
+        // A BLANK (all-whitespace) interior line is NOT a record and is NOT
+        // corruption — it is skipped. This is the reader half of the
+        // self-delimiting `\n{line}\n` append framing (dispatch dispositions.rs
+        // `append_line`, audit follow-up #3a; telemetry.rs F-DEOBS-1): the LEADING
+        // newline of every append leaves a harmless blank line on a clean tail, so
+        // a valid file is a run of `record\n\nrecord\n\n…` (or `record\n\n…` after
+        // any legacy bare-`{line}\n` rows). Counting those blanks corrupt would
+        // both inflate the forensic count and trip the store's per-file
+        // corrupt-interior warn on EVERY read. An empty line carries no bytes to
+        // lose, so skipping it cannot hide a dropped record; a NON-blank
+        // unparseable interior line is STILL corruption (counted below).
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
         match parse_row::<T>(line) {
             Some(rec) => records.push(rec),
             None => corrupt_interior += 1,
@@ -174,12 +188,39 @@ mod tests {
     }
 
     #[test]
-    fn blank_interior_line_is_corrupt() {
-        // A stray empty interior line (\n\n) is not a record.
+    fn blank_interior_line_is_skipped_not_corrupt() {
+        // A stray empty interior line (\n\n) is NOT a record and is NOT corruption
+        // — it is skipped (audit follow-up #3a). This is the reader half of the
+        // self-delimiting `\n{line}\n` append framing: every append leaves a
+        // leading blank line on a clean tail, so a valid file is a run of
+        // `record\n\nrecord\n\n…`. Counting those blanks corrupt would inflate the
+        // forensic count and trip the store's per-file corrupt-interior warn on
+        // every read. (Pre-#3a this asserted `corrupt_interior == 1`; the
+        // self-delimiting write flips a blank line from corrupt→skipped.)
         let buf = format!("{}\n\n{}\n", env_line("a"), env_line("b"));
         let r = parse_log(buf.as_bytes());
-        assert_eq!(r.records.len(), 2);
-        assert_eq!(r.corrupt_interior, 1);
+        assert_eq!(r.records.len(), 2, "both real records parse across the blank");
+        assert_eq!(r.corrupt_interior, 0, "a blank interior line is skipped, not corrupt");
+    }
+
+    #[test]
+    fn self_delimited_framing_round_trips_with_leading_blank_lines() {
+        // The exact on-disk shape the self-delimiting `\n{line}\n` writer produces
+        // (dispatch dispositions.rs `append_line`, audit follow-up #3a): a leading
+        // blank line before EVERY record, i.e. `\nA\n\nB\n\nC\n`. Every record must
+        // parse and NONE of the interspersed blank lines counts corrupt — this is
+        // the reader-side guarantee the writer relies on.
+        let buf = format!(
+            "\n{}\n\n{}\n\n{}\n",
+            env_line("a"),
+            env_line("b"),
+            env_line("c")
+        );
+        let r = parse_log(buf.as_bytes());
+        assert_eq!(r.records.len(), 3, "all three records survive the leading blanks");
+        assert_eq!(r.corrupt_interior, 0, "no blank line miscounted as corrupt");
+        let ids: Vec<&str> = r.records.iter().map(|e| e.correlation_id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "b", "c"], "order preserved across the framing");
     }
 
     #[test]
