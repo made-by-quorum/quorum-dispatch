@@ -226,7 +226,11 @@ pub fn append_event(paths: &QdPaths, event: &DispositionEvent) -> io::Result<()>
 }
 
 /// The shared append core: create the parent dir, take the exclusive append
-/// lock, then do ONE `O_APPEND | O_CREAT` mode-0600 `write_all` of `line + "\n"`.
+/// lock, then do ONE `O_APPEND | O_CREAT` mode-0600 `write_all` of the COMPLETE
+/// record (`line` + `"\n"` as a single buffer — audit #3: the `\n` shares the
+/// record's one write, closing the two-write window where a COMPLETE record
+/// persisted un-terminated and fused the next append; see the body for the
+/// residual mid-write-crash case).
 ///
 /// The lock is held across the append (acquired before the truth-file open,
 /// dropped after the write) so two writers serialize at the byte level even for
@@ -243,10 +247,26 @@ fn append_line(target: &Path, line: &str) -> io::Result<()> {
         .append(true)
         .mode(0o600)
         .open(target)?;
-    // ONE write_all of the complete line + '\n'. Under the flock this is the
-    // single-writer append the format contract requires.
-    f.write_all(line.as_bytes())?;
-    f.write_all(b"\n")
+    // ONE `write_all` of the COMPLETE record — the line AND its terminating '\n'
+    // as a SINGLE buffer (audit #3 fix). A prior version wrote the bytes and the
+    // '\n' in two SEPARATE `write_all` calls; a crash / ENOSPC / EINTR BETWEEN the
+    // two successful writes would leave a COMPLETE line on disk WITHOUT its
+    // terminator, and the next append would fuse onto it — the torn-tail rule then
+    // silently drops BOTH records (the reader treats the un-terminated
+    // concatenation as one torn tail) while the appends returned exit 0. Building
+    // `line + "\n"` up front removes that gap: the terminator is never a separate
+    // syscall from the record, so there is no point BETWEEN two successful writes
+    // where a COMPLETE line sits un-terminated. (A crash MID-write can still
+    // truncate the buffer before its last byte, leaving a partial that a later
+    // append would fuse — but that residual needs fsync / atomic-framing, out of
+    // scope; what the single write removes is the two-write window where a whole
+    // record sat un-terminated.) A COMPLETED `write_all` always lands the whole
+    // record incl. its newline. Under the flock this is the single-writer,
+    // whole-record append the format contract requires.
+    let mut record = String::with_capacity(line.len() + 1);
+    record.push_str(line);
+    record.push('\n');
+    f.write_all(record.as_bytes())
     // `_lock` drops here → the OS releases the advisory lock.
 }
 
@@ -700,6 +720,80 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600, "truth file is mode 0600");
+    }
+
+    // ---- audit #3: torn/fused append (single write_all of the whole record) ----
+
+    #[test]
+    fn append_always_leaves_a_newline_terminated_file() {
+        // THE anti-fusion invariant: after EVERY append the on-disk file ends with
+        // '\n', so the NEXT append can never fuse onto an un-terminated tail. This
+        // is what the single-`write_all`-of-`line + "\n"` guarantees — the audit #3
+        // fix ensures the terminator is never a separate syscall that a crash /
+        // ENOSPC / EINTR could skip. A large (>PIPE_BUF) body — the case a short
+        // write is most plausible on — is included: `write_all` loops over short
+        // writes, but the newline is part of the one buffer, so a completed
+        // `write_all` never lands a record without its terminator.
+        let (_tmp, paths) = jailed_paths();
+        let big = "x".repeat(9000); // comfortably > PIPE_BUF (4096)
+        let bodies = ["a", "", "line with spaces", &big, "後"];
+        for (i, body) in bodies.iter().enumerate() {
+            let e = Envelope {
+                v: 1,
+                correlation_id: format!("id{i}"),
+                authored_at: 1,
+                expires_at: 2,
+                target: "t".to_string(),
+                origin: "o".to_string(),
+                body: body.to_string(),
+            };
+            append_envelope(&paths, &e).unwrap();
+            // The whole file ends with exactly one '\n' after each append.
+            let bytes = std::fs::read(paths.log_path()).unwrap();
+            assert_eq!(
+                bytes.last(),
+                Some(&b'\n'),
+                "after append {i} the file is newline-terminated (no un-terminated tail to fuse onto)"
+            );
+        }
+        // And every record parsed — none fused or lost (0 corrupt interior).
+        let r = read_local_log(&paths);
+        assert_eq!(r.corrupt_interior, 0, "no fused/lost records");
+        assert_eq!(r.records.len(), bodies.len(), "every appended record present");
+    }
+
+    #[test]
+    fn append_line_does_exactly_one_write_all() {
+        // MUTATION GUARD (audit #3): the fix is a SINGLE `write_all` of the
+        // combined `line + "\n"` buffer. A revert to the two-write form (bytes,
+        // then a separate `b"\n"`) reopens the torn/fused-record hole — where a
+        // crash between the two writes leaves a record without its newline. Pin the
+        // single-write shape at source so a future edit cannot silently reintroduce
+        // the second write. (The behavioural invariant above proves the effect;
+        // this proves the mechanism, since a partial-write injection is not
+        // exercisable at this layer.)
+        let src = include_str!("dispositions.rs");
+        let start = src
+            .find("fn append_line(")
+            .expect("append_line must exist");
+        // Scope to the fn body: it ends at the next top-level item boundary.
+        let after = &src[start..];
+        let end = after
+            .find("\n// ===")
+            .expect("a section boundary follows append_line");
+        let body = &after[..end];
+        // Count the actual write CALLS (`f.write_all(`), not the word in comments.
+        let write_calls = body.matches("f.write_all(").count();
+        assert_eq!(
+            write_calls, 1,
+            "append_line must do EXACTLY ONE f.write_all(...) (audit #3 anti-fusion); found {write_calls}. Body:\n{body}"
+        );
+        // And that one write must NOT be the bare `b\"\\n\"` terminator alone — the
+        // record's newline lives inside the single buffer (the fix builds it up).
+        assert!(
+            !body.contains("f.write_all(b\"\\n\")"),
+            "the newline must be part of the single record buffer, not a separate write. Body:\n{body}"
+        );
     }
 
     // ---- concurrent-append safety (validates the flock guard) --------------
