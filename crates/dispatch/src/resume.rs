@@ -227,6 +227,25 @@ mod tests {
         assert!(validate_session_name("a;rm -rf").is_some());
     }
 
+    #[test]
+    fn at_sign_rejected_guards_the_name_at_host_addressing_grammar() {
+        // LOAD-BEARING ADDRESSING INVARIANT (named per the R8 lesson — guarded by a
+        // test, not merely implied by the whitelist). `qd send` parses `name@host` on
+        // the LAST `@` (send_unified.rs `parse_address`, `rsplit_once('@')`), and the
+        // apply-driver routing filter parses the target host the SAME way (last-@).
+        // BOTH rely on session names — and stable_ids (qdId base32, sessionId UUID) —
+        // NEVER containing `@`; otherwise a bare local send to a session named `a@b`
+        // would misparse as name=`a`, host=`b` (a phantom remote send). That invariant
+        // is ENFORCED here: `validate_session_name` (run FIRST at `qd start`, create.rs
+        // `run_new` step 0a) refuses `@` — it is not in the `[A-Za-z0-9._-]` whitelist.
+        assert!(validate_session_name("a@b").is_some(), "'@' must be refused in a session name");
+        assert!(validate_session_name("cut-els@els").is_some());
+        assert!(validate_session_name("@host").is_some());
+        // Auto-derived names cannot smuggle the delimiter either: `sanitize_zmx_name`
+        // maps `@` (a non-whitelist byte) to `-`.
+        assert!(!sanitize_zmx_name("a@b").contains('@'));
+    }
+
     // --- derive_zmx_name (lifecycle.ts:475-477) ---
 
     #[test]
