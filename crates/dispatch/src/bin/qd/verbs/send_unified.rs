@@ -440,6 +440,37 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
         (None, None) => None,
     };
 
+    // ORIGIN-MODE REMOTE SEND (the last P5 gap): a host-qualified target for a host
+    // that is NOT this one AND has fleet state present. Resolve the name inside that
+    // host's mirrored namespace (`remote/<h>/ls.json`, strict W7 read), then
+    // APPEND-ONLY — no local delivery attempt, no disposition stamped by origin
+    // (pending = absence, facts-only). The TARGET host's apply-driver presents the
+    // never-attempted envelope; its door stamps the outcome; dispositions ride back
+    // full-mesh. An absent/torn mirror or unknown/ambiguous name refuses
+    // (`resolve_remote_target`); an empty host ("name@") is left to `resolve_target`
+    // below (`refused{host}`). Self-host = `QD_HOST` / the "local" placeholder.
+    if let Some(h) = effective_host {
+        if !h.is_empty() && h != dispatch::dispositions::local_host(&env) {
+            return match resolve_remote_target(name, h, &env) {
+                Ok(()) => {
+                    let paths = match common::paths_from_home(&env) {
+                        Ok(paths) => paths,
+                        Err(code) => return code,
+                    };
+                    origin_remote_send(
+                        &env,
+                        &paths,
+                        query,
+                        message,
+                        expires_ms,
+                        supplied_correlation_id,
+                    )
+                }
+                Err(refusal) => refusal.emit(),
+            };
+        }
+    }
+
     // Resolve the caller's handle exactly once, through the SHARED W6 resolver
     // (host-aware: local resolution for bare/@local, the single-machine
     // no-fleet-state refusal for a foreign host). All later refresh/revalidation
@@ -681,6 +712,187 @@ fn resolve_target(name: &str, host: Option<&str>, env: &dyn Env) -> Result<Sessi
             format!("\"{name}\" matches {} sessions — refusing to guess", v.len()),
         )),
     }
+}
+
+/// The outcome of resolving a bare handle within a peer mirror's session rows.
+enum MirrorResolve {
+    One,
+    None,
+    Many,
+}
+
+/// Resolve `name` within a peer mirror's opaque `sessions` rows (`qd ls --json`
+/// shape). A row matches on an EXACT `name`/`sessionId`/`qdId`, else (only when no
+/// exact match exists) on a `name`/`qdId` PREFIX (git-short-ref style). One ⇒
+/// resolvable; None ⇒ `unknown`; Many ⇒ `ambiguous` (never guess). Pure over the
+/// rows so the resolution semantics are unit-testable without the filesystem.
+fn resolve_name_in_mirror(sessions: &[serde_json::Value], name: &str) -> MirrorResolve {
+    let field = |row: &serde_json::Value, key: &str| {
+        row.get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let exact = sessions
+        .iter()
+        .filter(|r| {
+            field(r, "name").as_deref() == Some(name)
+                || field(r, "sessionId").as_deref() == Some(name)
+                || field(r, "qdId").as_deref() == Some(name)
+        })
+        .count();
+    if exact == 1 {
+        return MirrorResolve::One;
+    }
+    if exact > 1 {
+        return MirrorResolve::Many;
+    }
+    // No exact match — fall back to a prefix match (name or the short qd id).
+    let prefix = sessions
+        .iter()
+        .filter(|r| {
+            field(r, "name").is_some_and(|n| n.starts_with(name))
+                || field(r, "qdId").is_some_and(|q| q.starts_with(name))
+        })
+        .count();
+    match prefix {
+        0 => MirrorResolve::None,
+        1 => MirrorResolve::One,
+        _ => MirrorResolve::Many,
+    }
+}
+
+/// Resolve a host-qualified ORIGIN target within a foreign host's mirror
+/// (`remote/<host>/ls.json`, the strict W7 read). `Ok(())` ⇒ the name identifies
+/// exactly one session there; the caller appends the envelope (raw target string)
+/// and lets THAT host's apply-driver deliver. Refusals mirror the local resolver's
+/// family: empty name ⇒ `address`; absent mirror ⇒ `no-fleet-state` (the
+/// single-machine contract, unchanged); torn/`v!=1` ⇒ `torn-mirror`; no match ⇒
+/// `unknown`; many ⇒ `ambiguous`. A stale-but-readable mirror STILL resolves —
+/// staleness is surfaced at `qd ls`; a dead letter dies by its own `expires_at`.
+fn resolve_remote_target(name: &str, host: &str, env: &dyn Env) -> Result<(), Refusal> {
+    use super::mirror::{read_mirror, MirrorRead};
+    if name.is_empty() {
+        return Err(Refusal::refused(
+            "address",
+            "address has an empty name — nothing to resolve".to_string(),
+        ));
+    }
+    // The mirror honors QD_HOME (from_home_env) — the SAME resolution `qd ls --host`
+    // and the transport writers use, not the `.claude`-layout registry root.
+    let paths = match common::paths_from_home(env) {
+        Ok(paths) => paths,
+        Err(_code) => {
+            return Err(Refusal::refused(
+                "no-fleet-state",
+                format!("host-qualified address for host \"{host}\" but the session store is unavailable"),
+            ))
+        }
+    };
+    let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
+    match read_mirror(&tpaths, host) {
+        MirrorRead::Absent { host } => Err(Refusal::refused(
+            "no-fleet-state",
+            format!("host-qualified address for host \"{host}\" but no fleet state for it on this host"),
+        )),
+        MirrorRead::Torn { host, why } => Err(Refusal::refused(
+            "torn-mirror",
+            format!("mirror for host \"{host}\" is unreadable: {why}"),
+        )),
+        MirrorRead::Ok(mirror) => match resolve_name_in_mirror(&mirror.sessions, name) {
+            MirrorResolve::One => Ok(()),
+            MirrorResolve::None => Err(Refusal::refused(
+                "unknown",
+                format!("no session matching \"{name}\" on host \"{host}\""),
+            )),
+            MirrorResolve::Many => Err(Refusal::refused(
+                "ambiguous",
+                format!("\"{name}\" matches more than one session on host \"{host}\" — refusing to guess"),
+            )),
+        },
+    }
+}
+
+/// Origin-mode REMOTE send: APPEND the envelope to our own `log.jsonl` (the write
+/// half) and STOP — no local delivery attempt, no disposition stamped by origin
+/// (facts-only: pending = absence). The target host's apply-driver sees a
+/// never-attempted envelope (⇒ due), delivers through its own door, and the
+/// `delivered` disposition rides back full-mesh. Exit 0 + print the correlation_id.
+/// R15 idempotency is preserved: same id + same body + already delivered ⇒ no-op;
+/// body mismatch ⇒ `refused{body-mismatch}`; same id + same body not-yet-delivered
+/// ⇒ idempotent no-op success (already durable + pending — never re-append, never
+/// stamp).
+fn origin_remote_send(
+    env: &dyn Env,
+    paths: &dispatch::paths::QdPaths,
+    raw_target: &str,
+    message: &str,
+    expires_ms: i64,
+    supplied_correlation_id: Option<String>,
+) -> i32 {
+    use dispatch::dispositions;
+    use dispatch::effects::{Clock, RealClock};
+    use dispatch::origin_send::{build_envelope, mint_correlation_id};
+
+    let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
+    let clock = RealClock;
+    let authored_at = clock.now_ms();
+    let correlation_id = supplied_correlation_id.unwrap_or_else(|| mint_correlation_id(&clock));
+    let origin = dispositions::local_host(env);
+
+    // R15 CLAIM LOCK — serialize concurrent same-id origin submits + the body check.
+    let _claim = match dispositions::acquire_claim(&tpaths, &correlation_id) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("qd send: could not acquire the delivery claim for {correlation_id} ({e}) — not sent.");
+            return 1;
+        }
+    };
+
+    let presented_digest = dispatch::origin_send::body_digest(message);
+    if let Some(prior) = dispositions::logged_envelope(&tpaths, &correlation_id) {
+        if dispatch::origin_send::body_digest(&prior.body) != presented_digest {
+            return Refusal::refused(
+                "body-mismatch",
+                format!("{correlation_id} is already in the log with a different body — refusing to re-submit a conflicting body under the same id"),
+            )
+            .emit();
+        }
+        // Same body already logged. A `delivered` event ⇒ no-op success; otherwise
+        // the envelope is still durable and pending (the target's apply-driver has
+        // it) — an idempotent no-op success, NEVER a re-append, NEVER an origin stamp.
+        match dispositions::recorded_delivered_digest(&tpaths, &correlation_id) {
+            Ok(Some(_)) => {
+                eprintln!("qd send: {correlation_id} already delivered — no-op");
+                return 0;
+            }
+            Ok(None) => {
+                println!("{correlation_id}");
+                return 0;
+            }
+            Err(e) => {
+                eprintln!("qd send: could not read the disposition ledger for {correlation_id} ({e}) — not sent.");
+                return 1;
+            }
+        }
+    }
+
+    // Write half: `target` is the RAW caller address (R9.4), `body` verbatim,
+    // correlation_id minted/carried exactly as a local send, default 12h expiry. No
+    // attempted/queued row — origin never attempts a remote delivery.
+    let envelope = build_envelope(
+        correlation_id.clone(),
+        authored_at,
+        expires_ms,
+        raw_target.to_string(),
+        origin,
+        message.to_string(),
+    );
+    if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
+        eprintln!("qd send: could not durably record the message ({e}) — not sent.");
+        return 1;
+    }
+    println!("{correlation_id}");
+    0
 }
 
 /// qd–qf W4 — INBOUND MODE. Admit a peer's ALREADY-minted envelope at the door,
@@ -1524,6 +1736,31 @@ mod tests {
             "the refusal names the host + the absent-fleet-state reason, got: {}",
             r.reason
         );
+    }
+
+    #[test]
+    fn mirror_resolve_one_none_many_and_prefix() {
+        // The pure resolution semantics origin-remote send uses over a peer mirror's
+        // opaque `qd ls --json` rows: exact name/id, unique prefix, unknown, ambiguous.
+        use serde_json::json;
+        let rows = vec![
+            json!({"name":"cut-els","userNamed":true,"sessionId":"uuid-1","qdId":"ab12cdef","status":"idle"}),
+            json!({"name":"other","sessionId":"uuid-2","qdId":"ff99aaaa","status":"idle"}),
+        ];
+        assert!(matches!(resolve_name_in_mirror(&rows, "cut-els"), MirrorResolve::One));
+        assert!(matches!(resolve_name_in_mirror(&rows, "uuid-2"), MirrorResolve::One)); // by sessionId
+        assert!(matches!(resolve_name_in_mirror(&rows, "ff99aaaa"), MirrorResolve::One)); // by qdId
+        assert!(matches!(resolve_name_in_mirror(&rows, "ab12"), MirrorResolve::One)); // unique qdId prefix
+        assert!(matches!(resolve_name_in_mirror(&rows, "ghost"), MirrorResolve::None));
+        // ambiguous: two rows share a name.
+        let dup = vec![json!({"name":"dup","sessionId":"a"}), json!({"name":"dup","sessionId":"b"})];
+        assert!(matches!(resolve_name_in_mirror(&dup, "dup"), MirrorResolve::Many));
+        // ambiguous prefix across two distinct names.
+        let pfx = vec![json!({"name":"alpha","qdId":"x1"}), json!({"name":"alphb","qdId":"x2"})];
+        assert!(matches!(resolve_name_in_mirror(&pfx, "alph"), MirrorResolve::Many));
+        // an EXACT match wins even when it also prefixes another row ("al" vs "alpha").
+        let exwin = vec![json!({"name":"al","qdId":"y1"}), json!({"name":"alpha","qdId":"y2"})];
+        assert!(matches!(resolve_name_in_mirror(&exwin, "al"), MirrorResolve::One));
     }
 
     #[test]
