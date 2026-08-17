@@ -187,6 +187,41 @@ pub fn run(m: &ArgMatches) -> i32 {
                 Err(code) => code,
             }
         }
+        // pi-interactive: the same cold-attach experience for pi. `revive_pi_tui`
+        // carries the row's recorded session id into `pi --session-id <id>`, which
+        // reopens that conversation rather than starting a new one under the old
+        // name.
+        AttachOutcome::Cold
+            if session.provider == "pi"
+                && dispatch::provider::row_hosting(
+                    &session.provider,
+                    session.hosting.as_deref(),
+                ) == Some(dispatch::provider::Hosting::MuxPane) =>
+        {
+            match lifecycle::revive_pi_tui(session, render, "attach") {
+                Ok(handle) => {
+                    println!("Revived \"{}\"; attaching...", handle.zmx_name);
+                    let mux = match common::real_mux() {
+                        Ok(m) => m,
+                        Err(code) => return code,
+                    };
+                    match mux.attach(&handle.socket_dir, &handle.zmx_name) {
+                        Ok(code) => {
+                            if code == 0 {
+                                invoked_connect(session);
+                            }
+                            code
+                        }
+                        Err(e) => {
+                            eprintln!("qd attach: {e}");
+                            1
+                        }
+                    }
+                }
+                // revive_pi_tui already printed its own loud error.
+                Err(code) => code,
+            }
+        }
         // Any OTHER non-claude provider reaching Cold: `revive_claude` builds a
         // `claude … --resume <sid>` argv, so feeding it a foreign session id would
         // launch the wrong harness against an id it cannot read. Refuse LOUDLY.

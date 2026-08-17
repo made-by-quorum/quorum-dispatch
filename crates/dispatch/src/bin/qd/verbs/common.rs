@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use dispatch::discovery::DiscoveryHealth;
 use dispatch::effects::{is_pid_alive, Clock, Env, RealClock, RealEnv, RealProcessTable};
 use dispatch::exec::RealExec;
 use dispatch::join::{self, JoinOpts, MuxDirs};
@@ -160,6 +161,22 @@ pub fn all_sessions(opts: JoinOpts) -> Result<Vec<Session>, i32> {
 /// is uncapped) — see [`join::join_sessions_counted`]. Only the `ls` verb's
 /// truncation trailer consumes it.
 pub fn all_sessions_counted(opts: JoinOpts) -> Result<(Vec<Session>, usize), i32> {
+    let (sessions, capped_out, _health) = all_sessions_full(opts)?;
+    Ok((sessions, capped_out))
+}
+
+/// [`all_sessions_counted`] plus the gather's [`DiscoveryHealth`] — which
+/// effectful discovery reads FAILED, as opposed to legitimately finding nothing.
+///
+/// The join drops [`join::JoinInputs`] on the floor, so without this the fact
+/// that `ps` was refused never reaches a verb: a `relay_port: None` produced by
+/// a denied read is indistinguishable from a session that genuinely has no
+/// relay. Callers that REPORT an absence (`send`'s refusal, `info`'s field
+/// rendering) take this door so they can say "undetermined" honestly. Callers
+/// that merely list rows keep the narrower signatures.
+pub fn all_sessions_full(
+    opts: JoinOpts,
+) -> Result<(Vec<Session>, usize, DiscoveryHealth), i32> {
     let env = RealEnv;
     let paths = paths_from_home(&env)?;
     let home = home_path(&env)?;
@@ -198,7 +215,33 @@ pub fn all_sessions_counted(opts: JoinOpts) -> Result<(Vec<Session>, usize), i32
     // WP-B5-iii obl-4: fill a fork's lineage (parent qdId) from the SAME fold —
     // so a fork's parent is discoverable through this live resolver path.
     dispatch::idstore::fill_lineage(&mut sessions, &ids);
-    Ok((sessions, capped_out))
+
+    // ITEM 1 — loud at the source. A degraded gather is reported ONCE per
+    // process, on stderr, the moment it is observed. This is the cheapest and
+    // largest part of the fix: an agent that sees `ps` was refused does not
+    // need to reverse-engineer a downstream "no live receive path" at all.
+    warn_if_degraded(&inputs.discovery);
+
+    Ok((sessions, capped_out, inputs.discovery))
+}
+
+/// Print the degradation warning at most once per process. Stderr only — no
+/// stdout surface (including `--json`) changes shape, so scripted consumers are
+/// byte-unaffected.
+fn warn_if_degraded(health: &DiscoveryHealth) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    if !health.is_degraded() {
+        return;
+    }
+    WARNED.call_once(|| {
+        eprintln!("qd: warning: session discovery is degraded — {}", health.evidence());
+        eprintln!(
+            "qd: warning: relay and mux facts may be missing; absent values below are UNKNOWN, not confirmed absent."
+        );
+        if let Some(hint) = health.hint() {
+            eprintln!("qd: warning: {hint}");
+        }
+    });
 }
 
 /// `parseInt(opts.limit, 10)` semantics for `-n` (index.ts:48): an explicit value
@@ -403,6 +446,21 @@ pub fn resolve_session_uncapped(query: &str) -> Result<Session, i32> {
     Ok(resolve_session_uncapped_in_list(query, false)?.0)
 }
 
+/// [`resolve_session_uncapped`] that ALSO returns the [`DiscoveryHealth`] of the
+/// gather the resolution ran against. Same sealed cap axes — this adds a
+/// diagnostic output, never a resolution knob.
+///
+/// `send` is the caller: it must distinguish a session that HAS no receive path
+/// from one whose receive path could not be READ, and that distinction lives in
+/// the gather, not in the resolved row.
+pub fn resolve_session_uncapped_with_health(
+    query: &str,
+) -> Result<(Session, DiscoveryHealth), i32> {
+    let (session, _sessions, health) =
+        resolve_session_uncapped_in_list_with_health(query, false)?;
+    Ok((session, health))
+}
+
 /// [`resolve_session_uncapped`] that ALSO returns the full gathered list the
 /// resolution ran against, plus a caller-chosen `include_preview`. `info` is the
 /// only caller: it needs both the resolved row AND the list, to compute the `qdId`
@@ -414,15 +472,27 @@ pub fn resolve_session_uncapped_in_list(
     query: &str,
     include_preview: bool,
 ) -> Result<(Session, Vec<Session>), i32> {
+    let (session, sessions, _health) =
+        resolve_session_uncapped_in_list_with_health(query, include_preview)?;
+    Ok((session, sessions))
+}
+
+/// [`resolve_session_uncapped_in_list`] plus the gather's [`DiscoveryHealth`].
+/// `info` takes this door so it can render an unread field as `unknown (…)`
+/// rather than as `-`, which would assert an absence it never observed.
+pub fn resolve_session_uncapped_in_list_with_health(
+    query: &str,
+    include_preview: bool,
+) -> Result<(Session, Vec<Session>, DiscoveryHealth), i32> {
     let opts = JoinOpts {
         include_all: true,
         include_tombstoned: true,
         include_preview,
         limit: None,
     };
-    let sessions = all_sessions(opts)?;
+    let (sessions, _capped, health) = all_sessions_full(opts)?;
     let session = resolve_or_die(query, &sessions)?.clone();
-    Ok((session, sessions))
+    Ok((session, sessions, health))
 }
 
 /// D-2 post-resolve tombstone rejection. A resolved session whose status is

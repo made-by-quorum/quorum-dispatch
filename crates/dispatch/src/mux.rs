@@ -152,6 +152,10 @@ pub struct FixtureMux {
     calls: RefCell<Vec<MuxCall>>,
     /// Exit code returned by `kill`/`wait`/`attach` (default 0).
     verb_exit: i32,
+    /// When set, `list`/`list_raw` FAIL with this errno instead of serving the
+    /// canned dirs — the refused mux read a sandboxed host produces. `None`
+    /// (the default) leaves every existing fixture byte-identical.
+    list_errno: Option<i32>,
 }
 
 impl FixtureMux {
@@ -183,6 +187,14 @@ impl FixtureMux {
     /// Set the exit code the kill/wait/attach verbs return.
     pub fn with_verb_exit(mut self, code: i32) -> Self {
         self.verb_exit = code;
+        self
+    }
+
+    /// Make `list`/`list_raw` fail with `EPERM`, as under a sandbox that denies
+    /// the mux socket read. Distinct from an EMPTY list, which is the fixture's
+    /// way of saying "read fine, no panes".
+    pub fn with_denied_list(mut self) -> Self {
+        self.list_errno = Some(libc::EPERM);
         self
     }
 
@@ -218,6 +230,9 @@ impl FixtureMux {
 
 impl Mux for FixtureMux {
     fn list(&self, socket_dir: &Path) -> io::Result<Vec<MuxSession>> {
+        if let Some(e) = self.list_errno {
+            return Err(io::Error::from_raw_os_error(e));
+        }
         Ok(self
             .scan(socket_dir)
             .into_iter()
@@ -226,6 +241,9 @@ impl Mux for FixtureMux {
     }
 
     fn list_raw(&self, socket_dir: &Path) -> io::Result<Vec<MuxSession>> {
+        if let Some(e) = self.list_errno {
+            return Err(io::Error::from_raw_os_error(e));
+        }
         Ok(self.scan(socket_dir))
     }
 

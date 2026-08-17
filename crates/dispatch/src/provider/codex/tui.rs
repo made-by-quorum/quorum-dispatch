@@ -248,14 +248,13 @@ pub fn backfill_thread_id(
     pick_thread(&candidates, &cwd, since_ms, owned_ids)
 }
 
-/// Resolve a directory to its canonical form for comparison, falling back to the
-/// input unchanged when it cannot be resolved (a dir that has since been removed,
-/// or a permission failure). The fallback is why this is safe to apply to both
-/// sides: two unresolvable paths still compare as the plain strings they were.
+/// Resolve a directory to its canonical form for comparison — the crate-shared
+/// [`crate::provider::canonical_dir`], whose doc records why this compare needs
+/// normalizing at all (this module's end-to-end /tmp vs /private/tmp defect) and
+/// why the same trap waits for every other provider that attributes on-disk
+/// sessions by cwd.
 fn normalize_dir(dir: &str) -> String {
-    std::fs::canonicalize(dir)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| dir.to_string())
+    crate::provider::canonical_dir(dir)
 }
 
 /// The rollout root for a codex home — `<codex_home>/sessions`. Exposed so the

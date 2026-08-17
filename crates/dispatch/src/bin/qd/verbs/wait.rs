@@ -1082,15 +1082,21 @@ fn emit_pi_seen_for_landed(
     landed.len()
 }
 
-/// Drive the pi content-keyed observer from the wait seam (at/after turn close):
-/// read the resident's rollout jsonl (READ-ONLY, via the row's recorded
-/// `jsonl_path`) + the target's delivery log, then emit message-seen for every
-/// pending pi send whose content LANDED. Best-effort; never changes the wait exit.
-/// Resident lane only. (The deferred live steer-into-open-turn cell exercises this
+/// Drive the pi content-keyed observer: read the resident's rollout jsonl
+/// (READ-ONLY, via the row's recorded `jsonl_path`) + the target's delivery log,
+/// then emit message-seen for every pending pi send whose content LANDED.
+/// Best-effort; never changes the caller's exit. Resident lane only.
+///
+/// Driven from TWO seams: the wait seam (at/after turn close) and — since the
+/// busy-drop fix — the SEND seam's bounded post-inject landing check
+/// (`send_relay::pi_confirm_landing`), so a plain fire-and-forget
+/// `qd send:relay` can reach its terminal without a `qd wait`. Emission is
+/// idempotent across both: `pi_pending_landed_sends` skips any send that already
+/// has a terminal (first-terminal-wins). (The deferred live steer-into-open-turn cell exercises this
 /// end-to-end under pi OAuth; the observer's CORRECTNESS is proven hermetically via
 /// `emit_pi_seen_for_landed`.)
-fn pi_observe_landed_sends(
-    env: &RealEnv,
+pub(super) fn pi_observe_landed_sends(
+    env: &dyn dispatch::effects::Env,
     paths: &dispatch::paths::QdPaths,
     session: &dispatch::model::Session,
 ) {

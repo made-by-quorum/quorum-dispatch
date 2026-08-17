@@ -197,7 +197,7 @@ splits into a **record-presence FLOOR** ("the bytes are present as a record") an
 | **claude-pty** (`send:pty`, `new-p`) | `turn-anchored` | **STRONG** (turn-anchored) | the sent bytes appear as a consumed user-turn at/after the anchor offset (`send.rs:951`, `:1064`; new-p `lifecycle.rs:1561`); async no-wait pty also emits `message-seen` (W8 read-back, `send.rs:1042`) | `turn-anchored-mismatch` (truncation, `send.rs:1104`); `anchor-timeout` (watch timeout, recoverable); dead-dangling → `qd delivery:recover` (§2.2) |
 | **claude-relay** | `message-seen` | **FLOOR** (record-presence) | a recipient-side transcript observer (`relay_server/mod.rs run_received_observer`, emit `:994`) emits `message-seen` when the relay `message_id` lands as a `<channel … message_id="…">` **wrapper attribute** in the recipient's own transcript | `seen-failed{recipient-gone}` at the recipient's session-close bookend for a tracked-but-unpulled id (`relay_server/mod.rs:1125`); latency is **never** a failure (an un-pulled but alive message stays PENDING) |
 | **ACP** (acp/claude-code, opencode) | `message-seen` | **STRONG** on clean turn; **FLOOR** on landing-check | see §3.1 — post-inject StopReason is turn-outcome; delivery = a **landing check** against `~/.claude/projects`, content-keyed on `content_sha256` (`wait.rs:545-565`, emit `:619`) | **NO terminal** on not-landed/ambiguous — the send stays recoverable (§3.1). **ACP never mints `seen-failed`** |
-| **pi** | `message-seen` | **FLOOR** (record-presence) | a content-keyed rollout observer emits `message-seen` when the sent `content_sha256` appears as a user-turn record in the pi rollout (`wait.rs:1002-1069`, emit `:1066`); the dead-only structured floor sub-lane emits via `emit_daemon_seen` (`send_relay.rs:355-404`, `:400`) | door failure → `send-failed` (§1.2); otherwise stays PENDING. **pi LIVE conformance is DEFERRED** (§6) |
+| **pi** | `message-seen` | **FLOOR** (record-presence) | a content-keyed rollout observer emits `message-seen` when the sent `content_sha256` appears as a user-turn record in the pi rollout (`wait.rs` `emit_pi_seen_for_landed`), driven from BOTH the wait seam and the SEND seam's bounded landing check (`send_relay.rs` `pi_confirm_landing`, §3.2); the dead-only structured floor sub-lane emits via `emit_daemon_seen` | door failure → `send-failed` (§1.2); otherwise stays PENDING. **pi LIVE conformance is DEFERRED** (§6) |
 | **codex** | — | — | **DEFERRED — codex dies on brano** (`qd start --provider codex` unsupported; sessions die instantly). No conformance; do not rely on codex receipts | door failure → `send-failed`; otherwise PENDING |
 
 **Floor vs strong, labeled:** relay `message-seen`, pi `message-seen`, and the ACP
@@ -241,6 +241,53 @@ observation of the recipient's own record, not an inference.
 > **current** code degraded that arm: `wait.rs` no longer constructs `SeenFailed`. The map
 > is stale on this row; the shipped behavior is the degrade above. **The code is the
 > arbiter.**
+
+### 3.2 Busy recipients — routing, and the send-seam landing check
+
+A daemon-hosted recipient that is MID-TURN was the one shape where an accepted send
+could vanish with nothing in the log to contradict it. Three fences close it; note that
+none of them is a queue inside qd — `qd send` is a short-lived sync CLI (connect, one
+in-flight RPC, disconnect), so a queue held here would die with the process.
+
+- **pi routing (`provider/pi/mod.rs` `inject`).** The prompt's `streamingBehavior` is
+  chosen from the resident's own `get_state().is_streaming`, read through the rpc
+  `inject` already holds — server truth at the last possible moment. BUSY routes
+  **`FollowUp`** (pi QUEUES it and runs it when the open turn closes); IDLE routes
+  `Steer` (on an idle resident, simply a fresh turn). The retired always-`Steer` call
+  INTERRUPTED the open turn, and a steer arriving mid-tool-call can be discarded by pi
+  behind a `success:true` reply — accepted and lost. The queue belongs in the RESIDENT,
+  which outlives the sender. A failed probe degrades to `Steer` (a transport too sick to
+  answer `get_state` fails the `prompt` on the next line anyway).
+
+- **codex ladder (`provider/codex/mod.rs` `inject`).** The believed-BUSY direction
+  always self-corrected via the stale `expectedTurnId` fence (steer → `StaleTurn` →
+  `turn/start`). The believed-IDLE direction did not: the belief comes from the rollout
+  TAIL, which LAGS, so a thread whose turn started microseconds ago reads as idle and
+  `turn/start` fires into an open turn. A `turn/start` refused with
+  `INVALID_REQUEST_CODE` is now read as "the belief was wrong" — re-read the tail (the
+  server has just told us a turn is active, so the lagging record is far likelier to be
+  present) and **steer** the turn we should have steered. Classification is on the CODE,
+  never the message text, and is self-correcting the same way the original fence is: a
+  non-busy -32600 fails the steer and the ORIGINAL server error surfaces. Two refusals
+  in a row is a racing thread, not a recoverable belief — refuse, never loop.
+
+- **pi send-seam landing check (`send_relay.rs` `pi_confirm_landing`).** The terminal
+  used to be reachable only through the wait observer, so a plain fire-and-forget
+  `qd send:relay` left a `turn-accepted` and nothing else — a delivered send and a
+  dropped one produced identical logs. The send seam now polls the rollout for at most
+  2s for the sent bytes as a USER record and drives the same content-keyed observer,
+  emitting `message-seen`. A send routed `FollowUp` skips the poll entirely and is
+  reported as PENDING (it legitimately lands when the open turn closes; polling would
+  burn the window and prove nothing).
+
+  **A closed window is NOT a `seen-failed`.** An un-landed-yet send is indistinguishable
+  from a slow rollout write, so it emits NOTHING and stays recoverable — the §2 rule that
+  nothing ever claims "didn't land" is unchanged. The bound makes this a *confirmation*
+  window, not a wait; `qd wait` remains the unbounded resolver.
+
+**Still true after all three:** §2.4 — the exit code is not a receipt. Exit 0 still means
+the wire accepted the send. What changed is that the plain send can now REACH its
+terminal, and that a busy recipient is far less likely to need one.
 
 ---
 

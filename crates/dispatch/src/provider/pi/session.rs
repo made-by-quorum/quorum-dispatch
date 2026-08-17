@@ -141,21 +141,52 @@ pub fn encode_cwd_dir(cwd: &str) -> String {
     format!("--{mapped}--")
 }
 
-/// Locate a session file by id under the sessions root, **lazy-write tolerant**.
-/// Scans `<root>/--<enc-cwd>--/<ts>_<uuid>.jsonl`; if `cwd` is known we look only
-/// in that encoded dir, else we scan every `--*--` dir. Returns `None` when no
-/// matching file exists YET (the pre-first-turn window) — the caller must treat
-/// that as "session not yet flushed", not "no session".
+/// Locate a session file by id under the sessions root, **lazy-write tolerant**
+/// and **tolerant of BOTH of pi's on-disk layouts**.
+///
+/// TWO LAYOUTS, and qd sees both (verified live against pi 0.80.2):
+///
+///   - **BUCKETED** — `<root>/--<enc-cwd>--/<ts>_<id>.jsonl`. What pi writes when
+///     it picks the session dir itself: `getDefaultSessionDirPath(cwd)` encodes the
+///     RESOLVED cwd into a directory name under `<agentDir>/sessions/`. This is
+///     the `$HOME/.pi/agent/sessions` case.
+///   - **FLAT** — `<root>/<ts>_<id>.jsonl`. What pi writes when the session dir is
+///     given to it explicitly, by `--session-dir` OR by
+///     `PI_CODING_AGENT_SESSION_DIR`: `main.js` passes that value straight through
+///     as `sessionDir`, and `SessionManager` joins the filename onto it with NO
+///     cwd bucket. `usesDefaultSessionDir()` exists precisely to distinguish the
+///     two.
+///
+/// WHY BOTH MUST BE READ, and why reading only the first was a silent hole: qd's
+/// root resolution prefers `PI_CODING_AGENT_SESSION_DIR` when it is set — which is
+/// the case in every jailed test lane and any deployment that pins the store — so
+/// the FLAT layout is not an exotic case, it is the one qd's own configuration
+/// produces. Against it, a bucket-only search does not merely fail to match; it
+/// reads a directory that does not exist, and returns `None` forever. And `None`
+/// here is indistinguishable from pi's legitimate lazy-write window, so the
+/// failure is invisible: the session simply never grows a transcript, turn count,
+/// or preview.
+///
+/// An id match is unambiguous either way (the filename carries it), so searching
+/// both places cannot produce a wrong answer — only an extra directory read.
+///
+/// Still lazy-write tolerant: `None` means no matching file exists YET
+/// (pre-first-assistant-reply), which the caller must treat as "not yet flushed",
+/// never as "no session".
 pub fn find_session_file(root: &Path, id: &str, cwd: Option<&str>) -> Option<PathBuf> {
-    let dirs: Vec<PathBuf> = match cwd {
+    let mut dirs: Vec<PathBuf> = match cwd {
         Some(c) => vec![root.join(encode_cwd_dir(c))],
         None => std::fs::read_dir(root)
-            .ok()?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
+    // The FLAT layout: the root itself holds the session files.
+    dirs.push(root.to_path_buf());
     for dir in dirs {
         let Ok(files) = std::fs::read_dir(&dir) else {
             continue;
@@ -220,6 +251,50 @@ mod tests {
         // Windows-ish: `:` AND `\` each map to a dash (pi's regex replaces every
         // [/\\:] independently, no collapsing), so the adjacent `C:\` → `C--`.
         assert_eq!(encode_cwd_dir("C:\\proj\\a"), "--C--proj-a--");
+    }
+
+    // --- BOTH layouts (verified live against pi 0.80.2) ----------------------
+    //
+    // pi picks its layout from WHO chose the session dir. These pin both, because
+    // qd sees both: the default store is bucketed, and any store qd pins through
+    // `PI_CODING_AGENT_SESSION_DIR` is flat.
+
+    #[test]
+    fn find_locates_a_flat_file_when_the_session_dir_was_given_to_pi() {
+        // THE case a bucket-only search missed entirely. With
+        // `PI_CODING_AGENT_SESSION_DIR=<root>` (or `--session-dir <root>`), pi
+        // joins the filename straight onto <root> — no cwd bucket exists at all,
+        // so the old search read a directory that was never created and returned
+        // None forever, which is indistinguishable from the lazy-write window.
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("2026-08-07T17-50-22-160Z_envtestid.jsonl"),
+            "{}",
+        )
+        .unwrap();
+        // Found whether or not the caller can name a cwd.
+        assert!(find_session_file(root.path(), "envtestid", Some("/w")).is_some());
+        assert!(find_session_file(root.path(), "envtestid", None).is_some());
+        assert!(find_session_file(root.path(), "no-such-id", Some("/w")).is_none());
+    }
+
+    #[test]
+    fn both_layouts_coexist_under_one_root_without_confusing_each_other() {
+        // A store that has been used both ways. The id is in the filename, so a
+        // match is unambiguous regardless of which place it was found in.
+        let root = tempfile::tempdir().unwrap();
+        let bucket = root.path().join(encode_cwd_dir("/w"));
+        std::fs::create_dir_all(&bucket).unwrap();
+        std::fs::write(bucket.join("2026-08-07T00-00-00-000Z_bucketed.jsonl"), "{}").unwrap();
+        std::fs::write(root.path().join("2026-08-07T00-00-01-000Z_flat.jsonl"), "{}").unwrap();
+
+        let b = find_session_file(root.path(), "bucketed", Some("/w")).unwrap();
+        assert!(b.ends_with("2026-08-07T00-00-00-000Z_bucketed.jsonl"));
+        assert!(b.parent().unwrap().ends_with(encode_cwd_dir("/w")));
+
+        let f = find_session_file(root.path(), "flat", Some("/w")).unwrap();
+        assert!(f.ends_with("2026-08-07T00-00-01-000Z_flat.jsonl"));
+        assert_eq!(f.parent().unwrap(), root.path());
     }
 
     #[test]

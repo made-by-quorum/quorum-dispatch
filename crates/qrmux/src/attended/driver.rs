@@ -100,34 +100,37 @@ impl StatusSource {
     }
 
     /// A harness with NO landed busy/idle status source (codex + pi — the Q7
-    /// busy-state residual; not established by the Q7 spike, so not forced).
-    /// Acceptance is NOT confirmable ⇒ the fire is gated OFF **before any
-    /// clear/inject** (F1): the send resolves to an honest non-delivery terminal
-    /// (`send-failed{acceptance-unconfirmable}`) with the composer UNTOUCHED — no
-    /// clear, no inject, no CR, no delivery lie, no double-submit.
+    /// busy-state residual). `read()` therefore always answers `None`, and
+    /// [`StatusSource::is_acceptance_confirmable`] is false.
     ///
-    /// Un-gating codex/pi delivery needs BOTH (either alone is a no-op):
-    /// - **(a) reachability — LANDED (M5/T5).** A spawned codex/pi pane now resolves
-    ///   to [`Harness::Codex`]/[`Harness::Pi`] via [`Harness::from_command`] (it
-    ///   parses the `bash -lc command '<bin>' …` login-shell launch), so THIS
-    ///   `none_source` + the CodexFacts/PiFacts/CodexLandingProbe + the F1 gate are
-    ///   actually SELECTED. Before T5, argv0 was always `bash` ⇒ everything fell to
-    ///   `Harness::Default` and this code was dead.
-    /// - **(b) a genuinely-confirmable status source — STILL DEFERRED (M5/T6).** To
-    ///   flip `confirmable_acceptance: true` HONESTLY the source must confirm
-    ///   acceptance from primary source (a real busy transition after CR, or a
-    ///   LandingProbe hit) BEFORE any success is reported (M4's F1). M5 observation
-    ///   (codex 0.144.1 / pi 0.80.2, live): pi shows a reliable whole-turn
-    ///   `Working…` status row (acceptance-confirmable) but its session transcript
-    ///   is append-on-exit, so a LIVE landing is not LandingProbe-confirmable (and
-    ///   the session dies with the mux); codex's `esc to interrupt` busy line is
-    ///   REPLACED by streamed text mid-turn, so `wait_for_busy` can miss it → a
-    ///   remediation-CR double-submit + false not-accepted (F1). Neither writes a
-    ///   pollable busy/idle file. So both stay honestly verify-blocked. Re-entry:
-    ///   pi needs a live-readable transcript source (or landing-as-acceptance in the
-    ///   fire); codex needs a streaming-covering busy signal (or landing-as-
-    ///   acceptance). When one lands, wire it here (`confirmable_acceptance: true` +
-    ///   the real source) and the fire un-gates for that harness.
+    /// WHAT THAT NO LONGER MEANS. This used to gate the fire OFF outright: no
+    /// status source ⇒ acceptance unconfirmable ⇒ honest non-delivery with the
+    /// composer untouched. Both harnesses have since been un-gated, because a busy
+    /// transition was never the only possible proof:
+    ///
+    /// - **codex (M5/T6)** records the submitted message in its rollout, so
+    ///   acceptance is read from the transcript
+    ///   ([`super::fire::AcceptanceSignal::Landing`]) instead.
+    /// - **pi (pi-interactive)** does the same, once its persist law was read at
+    ///   source rather than inferred from observation. The M5 note here held that
+    ///   pi's transcript was "append-on-exit", which would make a live landing
+    ///   unobservable; `dist/core/session-manager.js` `_persist` shows it is
+    ///   append-per-entry, deferred only until the buffer holds an assistant
+    ///   message. See [`dispatch::provider::pi::tui`] for the full law. pi's user
+    ///   records are the shape [`super::fire::TranscriptLandingProbe`] already
+    ///   parses, so it needed no probe of its own.
+    ///
+    /// So this source now says only "there is no status to poll" — a true fact
+    /// both harnesses still have, and one the fire's `landing_terminal` depends on
+    /// knowing (it must NOT read a `None` status as a dead recipient for a Landing
+    /// harness). The F1 gate itself now closes for no shipped harness; it remains
+    /// the floor for a future carrier with neither signal.
+    ///
+    /// Reachability (M5/T5) is what made any of this selectable: a spawned
+    /// codex/pi pane resolves to [`Harness::Codex`]/[`Harness::Pi`] via
+    /// [`Harness::from_command`], which parses the `bash -lc command '<bin>' …`
+    /// login-shell launch. Before T5, argv0 was always `bash` ⇒ everything fell to
+    /// [`Harness::Default`] and this code was dead.
     pub fn none_source(name: &str) -> Self {
         Self {
             sessions_dir: None,
@@ -247,7 +250,10 @@ impl Harness {
     }
 
     /// The M4 per-harness landing probe. codex rollouts need their own shape; pi
-    /// records land via the (broadened) default probe alongside claude.
+    /// records land via the (broadened) default probe alongside claude — pi's
+    /// `{"type":"message","message":{"role":"user",…}}` entries are exactly what
+    /// [`TranscriptLandingProbe`] was widened to read, which is why un-gating pi
+    /// delivery needed no probe of its own.
     fn probe(self) -> Arc<dyn LandingProbe> {
         match self {
             Harness::Codex => Arc::new(super::fire::CodexLandingProbe),
@@ -256,10 +262,10 @@ impl Harness {
     }
 
     /// The status source. codex/pi have no landed busy/idle source (Q7 residual) ⇒
-    /// a `none_source` whose acceptance is UNCONFIRMABLE ⇒ the fire is gated OFF
-    /// before any clear/inject (F1: honest non-delivery, composer untouched, no
-    /// delivery lie); claude/default rides the claude-shaped registry source and
-    /// fires normally.
+    /// a `none_source`; both confirm acceptance from their TRANSCRIPT instead
+    /// (`AcceptanceSignal::Landing`), so they fire and are verified by landing,
+    /// not gated off. claude/default rides the claude-shaped registry source and
+    /// fires on the busy transition. See [`StatusSource::none_source`].
     fn status_source(self, name: &str) -> StatusSource {
         match self {
             Harness::Codex | Harness::Pi => StatusSource::none_source(name),
@@ -1422,7 +1428,10 @@ mod tests {
     #[test]
     fn codex_pi_have_no_landed_status_source_default_is_claude() {
         // codex/pi: no landed busy/idle source (Q7 residual) ⇒ none_source ⇒
-        // read() None ⇒ honest not-accepted (deferred). NOT the claude registry.
+        // read() None. NOT the claude registry. Both now confirm acceptance from
+        // their transcript instead of a status, so this is no longer a gate —
+        // but `landing_terminal` still depends on the None being HONEST (it must
+        // not read it as a dead recipient for a Landing harness).
         assert_eq!(Harness::Codex.status_source("x").sessions_dir, None);
         assert_eq!(Harness::Pi.status_source("x").sessions_dir, None);
         // Default rides the claude-shaped registry source.

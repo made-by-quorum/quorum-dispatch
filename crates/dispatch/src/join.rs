@@ -37,6 +37,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::discovery::{AcquireFailure, DiscoveryHealth};
 use crate::effects::{Clock, Env, ProcessTable, RelayProbe};
 use crate::jsonl::{self, JsonlStats, TranscriptMeta};
 use crate::model::{Session, SessionBranch, SessionStatus};
@@ -187,6 +188,12 @@ pub struct JoinInputs {
     /// OR its root is absent → a clean zero, byte-stable no-op for every non-opencode
     /// fleet.
     pub opencode_cold: Vec<OpencodeColdRow>,
+    /// Which of the gather's effectful reads FAILED (as opposed to finding
+    /// nothing). The join itself never consults this — it is carried so the
+    /// VERB layer can tell "no receive path" from "could not determine a
+    /// receive path". Default (= everything succeeded) keeps every existing
+    /// fixture's meaning exactly. See [`crate::discovery`].
+    pub discovery: DiscoveryHealth,
 }
 
 /// A discovered COLD codex row (codex-p2-spec section 7.4) — a foreign or dead
@@ -1163,9 +1170,22 @@ pub fn gather_with_dirs(
     opts: JoinOpts,
 ) -> JoinInputs {
     // --- mux: ordered dirs (canonical first), per-dir filtered list, canonical-wins. ---
+    let mut discovery = DiscoveryHealth::default();
     let mut scans: Vec<(PathBuf, Vec<MuxSession>)> = Vec::new();
     for dir in mux_dirs.ordered() {
-        let list = mux.list(&dir).unwrap_or_default();
+        // A failed list is NOT an empty list: record it, so a missing
+        // `zmx_name`/`socket_dir` downstream reads as undetermined rather than
+        // as a confirmed absence of the PTY carrier. First failure wins (they
+        // share one cause); the empty-result path is untouched.
+        let list = match mux.list(&dir) {
+            Ok(list) => list,
+            Err(e) => {
+                discovery
+                    .mux_list
+                    .get_or_insert_with(|| AcquireFailure::new("mux list", &e));
+                Vec::new()
+            }
+        };
         scans.push((dir, list));
     }
     let zmx_sessions = merge_canonical_wins(scans);
@@ -1182,8 +1202,24 @@ pub fn gather_with_dirs(
     let relays = relay::get_relay_ports(&paths.relay_dir, probe);
 
     // --- ppid map + claude procs. ---
-    let ppid_map = pt.ppid_map().unwrap_or_default();
-    let claude_procs = pt.claude_procs().unwrap_or_default();
+    // An unreadable process table is the load-bearing failure: `match_by_ancestry`
+    // over an EMPTY map matches no relay, so EVERY claude row silently loses its
+    // `relay_port`. Recording the error is what lets the send refusal say
+    // "could not determine" instead of asserting an absence it never observed.
+    let ppid_map = match pt.ppid_map() {
+        Ok(map) => map,
+        Err(e) => {
+            discovery.process_table = Some(AcquireFailure::new("ps", &e));
+            HashMap::new()
+        }
+    };
+    let claude_procs = match pt.claude_procs() {
+        Ok(procs) => procs,
+        Err(e) => {
+            discovery.claude_procs = Some(AcquireFailure::new("ps", &e));
+            Vec::new()
+        }
+    };
 
     // --- transcripts scan + per-path stats: the PER-PROVIDER SCAN UNION (P2). ---
     // lsview A2: the P2 note below anticipated this — a multi-provider gather that
@@ -1208,14 +1244,15 @@ pub fn gather_with_dirs(
         .expect("claude-code provider is always registered");
     let pi_provider =
         crate::provider::provider_for("pi").expect("pi provider is always registered");
-    // A MINIMAL fx for pi's root resolution: pi reads ONLY `fx.env` (HOME /
-    // PI_CODING_AGENT_SESSION_DIR), never `fx.paths` — the placeholder home is
-    // unused by it (the same minimal-fx shape `gather_codex` builds for codex).
-    let pi_fx_home = QdPaths::from_home(Path::new("/nonexistent-pi-fx-home"));
-    let pi_fx = crate::provider::ProviderFx {
+    // A MINIMAL fx for provider root resolution off `fx.env` (pi reads HOME /
+    // PI_CODING_AGENT_SESSION_DIR; claude reads `fx.paths.projects_dir`), the same
+    // minimal-fx shape `gather_codex` builds for codex. `paths` is the REAL paths
+    // so `ClaudeProvider::transcript_root` keeps answering `projects_dir`.
+    let root_fx_paths = paths.clone();
+    let root_fx = crate::provider::ProviderFx {
         await_relay: None,
         env,
-        paths: &pi_fx_home,
+        paths: &root_fx_paths,
         socket_dir: PathBuf::new(),
         mux: None,
         clock: None,
@@ -1231,7 +1268,7 @@ pub fn gather_with_dirs(
     // claude's scan → the existing ColdJsonl channel (byte-identical). pi's scan →
     // the additive `pi_cold` channel (join emits those as `provider: "pi"` rows).
     let transcripts = claude.scan_transcripts(&paths.projects_dir);
-    let pi_cold = pi_provider.scan_transcripts(&pi_provider.transcript_root(&pi_fx));
+    let pi_cold = pi_provider.scan_transcripts(&pi_provider.transcript_root(&root_fx));
 
     // lsview A1: the persistent per-transcript stats cache. ONE cache, shared by
     // EVERY provider's stats acquisition below (claude here, codex in
@@ -1253,9 +1290,26 @@ pub fn gather_with_dirs(
     // row degrades to the claude derivation for render-survival (same L8 posture
     // as W6: `ls` must show the row; ACTING verbs already refuse). The SessionKey
     // is built from the row (id = sessionId, cwd from the row).
+    //
+    // pi-interactive: the ROOT is now resolved through the provider too
+    // (`transcript_root`), not hard-coded to the claude `projects_dir`. This loop
+    // was written when claude was the only provider with rows in it, so the claude
+    // root was the only root there was; the provider-routed `transcript_path`
+    // arrived above it and inherited the hard-coded argument. claude is unmoved
+    // (`ClaudeProvider::transcript_root` IS `paths.projects_dir`), but a pi row was
+    // being asked to find its session file under claude's tree, where it can never
+    // be — so `jsonlPath` was silently always absent for pi, and "no transcript
+    // resolved" is indistinguishable from pi's legitimate pre-first-reply state.
     for scanned in &registry {
         if let Some(sid) = &scanned.entry.session_id {
             let provider_id = scanned.entry.provider.as_deref().unwrap_or("claude-code");
+            // codex is deliberately EXCLUDED: `gather_codex` already resolves each
+            // codex row's rollout off the codex root and inserts it below, deriving
+            // the row's status from the SAME read. Resolving it here as well would
+            // pay for the sqlite lookup / date-walk twice on every `ls`.
+            if provider_id == "codex" {
+                continue;
+            }
             let prov = crate::provider::provider_for(provider_id)
                 .unwrap_or_else(|| crate::provider::provider_for("claude-code").unwrap());
             let key = crate::provider::SessionKey {
@@ -1264,7 +1318,7 @@ pub fn gather_with_dirs(
                 cwd: scanned.entry.cwd.as_deref(),
                 pid: scanned.entry.pid,
             };
-            if let Some(p) = prov.transcript_path(&paths.projects_dir, &key) {
+            if let Some(p) = prov.transcript_path(&prov.transcript_root(&root_fx), &key) {
                 stats_for.entry(p.clone()).or_insert_with(|| {
                     stats_cache
                         .get_or_read(&p, opts.include_preview, |pp| jsonl::read_stats(pp, true))
@@ -1281,6 +1335,9 @@ pub fn gather_with_dirs(
         if let Some(sid) = &t.data.session_id {
             if !jsonl_path_for.contains_key(sid) {
                 let provider_id = t.data.provider.as_deref().unwrap_or("claude-code");
+                if provider_id == "codex" {
+                    continue; // see the live loop: gather_codex owns codex paths.
+                }
                 let prov = crate::provider::provider_for(provider_id)
                     .unwrap_or_else(|| crate::provider::provider_for("claude-code").unwrap());
                 let key = crate::provider::SessionKey {
@@ -1289,7 +1346,7 @@ pub fn gather_with_dirs(
                     cwd: t.data.cwd.as_deref(),
                     pid: t.data.pid,
                 };
-                if let Some(p) = prov.transcript_path(&paths.projects_dir, &key) {
+                if let Some(p) = prov.transcript_path(&prov.transcript_root(&root_fx), &key) {
                     stats_for.entry(p.clone()).or_insert_with(|| {
                         stats_cache
                             .get_or_read(&p, opts.include_preview, |pp| jsonl::read_stats(pp, true))
@@ -1386,6 +1443,7 @@ pub fn gather_with_dirs(
         pi_turns_for,
         pi_cold,
         opencode_cold,
+        discovery,
     }
 }
 

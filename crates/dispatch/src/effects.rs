@@ -132,15 +132,18 @@ pub struct BareCandidate {
 pub trait ProcessTable {
     /// pid → ppid for every visible process.
     fn ppid_map(&self) -> io::Result<HashMap<i32, i32>>;
-    /// Liveness check (`kill(pid, 0)` probe): `== 0` is the ALIVE signal; ANY
-    /// nonzero result is treated as dead. That is correct for ESRCH (no such
-    /// process) but CONFLATES EPERM — the pid EXISTS but belongs to another
-    /// user (alive-but-unsignalable) — with death. Known TS-parity limitation
-    /// (utils.ts:380-388 has the same shape), kept deliberately: qd sessions
-    /// are same-uid by construction, so EPERM needs a foreign-uid pid reuse to
-    /// arise (punch B5 item 13 doc). An errno-aware probe exists where the
-    /// distinction is load-bearing: relay_server's `pid_alive`
-    /// (relay_server/mod.rs — only ESRCH counts as dead).
+    /// Liveness check (`kill(pid, 0)` probe), ERRNO-AWARE: success is the ALIVE
+    /// signal, and on failure ONLY `ESRCH` (no such process) means dead. `EPERM`
+    /// means the pid EXISTS but we are not permitted to signal it
+    /// (alive-but-unsignalable) and therefore counts as ALIVE.
+    ///
+    /// This previously conflated `EPERM` with death as a TS-parity limitation
+    /// (utils.ts:380-388 has the same shape), justified by "qd sessions are
+    /// same-uid by construction, so EPERM needs a foreign-uid pid reuse to
+    /// arise" (punch B5 item 13 doc). A SANDBOXED caller falsifies that premise:
+    /// a seatbelt/container policy denies signalling our OWN same-uid pids, so
+    /// EPERM arrives on the ordinary path and every live session reads as dead.
+    /// Never convert EPERM into "not found" — see [`kill0_alive`].
     fn is_alive(&self, pid: i32) -> bool;
     /// Best-effort list of running claude processes (stray discovery, spec §7).
     fn claude_procs(&self) -> io::Result<Vec<ProcInfo>>;
@@ -254,12 +257,9 @@ impl<E: Exec> ProcessTable for RealProcessTable<E> {
     }
 
     fn is_alive(&self, pid: i32) -> bool {
-        if pid <= 0 {
-            return false;
-        }
-        // kill -0: probe without signaling (src/utils.ts:380-388). 0 → alive;
-        // nonzero → dead (EPERM conflated, per the trait doc).
-        unsafe { libc::kill(pid, 0) == 0 }
+        // kill -0: probe without signaling (src/utils.ts:380-388). Errno-aware:
+        // only ESRCH is death; EPERM is alive-but-unsignalable (trait doc).
+        kill0_alive(pid)
     }
 
     fn claude_procs(&self) -> io::Result<Vec<ProcInfo>> {
@@ -853,12 +853,32 @@ fn parse_subcmd_and_name(rest: &str) -> Option<String> {
 /// an errno-aware probe (see relay_server's `pid_alive`, which treats only
 /// ESRCH as provably dead).
 pub fn is_pid_alive(pid: i32) -> bool {
+    // process.kill(pid, 0): probe-only signal, errno-aware — only ESRCH is
+    // death. See [`kill0_alive`].
+    kill0_alive(pid)
+}
+
+/// THE `kill(pid, 0)` liveness probe, errno-aware. The single place the
+/// alive/dead decision is made, so the EPERM rule cannot drift between the
+/// [`ProcessTable::is_alive`] seam and the free [`is_pid_alive`] helper.
+///
+/// - success        → ALIVE (we may signal it, so it exists)
+/// - `ESRCH`        → DEAD (no such process — the ONLY death signal)
+/// - anything else  → ALIVE (`EPERM`: the pid exists but policy forbids
+///   signalling it — a foreign-uid pid, or ANY pid when the caller runs under a
+///   sandbox that denies process access)
+///
+/// Failing toward ALIVE is the safe direction: a session wrongly reported dead
+/// is silently dropped from every carrier/liveness decision, whereas a session
+/// wrongly reported alive fails loudly at its next real operation.
+pub fn kill0_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }
-    // process.kill(pid, 0): probe-only signal. 0 → alive; nonzero (ESRCH, and
-    // EPERM by the documented conflation above) → treated dead.
-    unsafe { libc::kill(pid, 0) == 0 }
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 /// Kill a single PID: SIGTERM, wait, then SIGKILL (port of `killPid`,
@@ -1125,6 +1145,48 @@ impl ProcessTable for FixtureProcessTable {
     }
 }
 
+/// A process table whose reads are REFUSED — the sandboxed `ps` a real host
+/// produces. Kept as its OWN type rather than a flag on
+/// [`FixtureProcessTable`] so no existing fixture construction changes: a
+/// refused read is a different KIND of table, not a variation of a working one.
+///
+/// `is_alive` answers `true`, matching the errno-aware [`kill0_alive`]: under a
+/// sandbox, `kill(pid, 0)` fails with `EPERM`, which means alive-but-
+/// unsignalable, never dead.
+#[derive(Debug, Clone, Copy)]
+pub struct DeniedProcessTable {
+    pub errno: i32,
+}
+
+impl Default for DeniedProcessTable {
+    fn default() -> Self {
+        Self {
+            errno: libc::EPERM,
+        }
+    }
+}
+
+impl DeniedProcessTable {
+    fn err<T>(&self) -> io::Result<T> {
+        Err(io::Error::from_raw_os_error(self.errno))
+    }
+}
+
+impl ProcessTable for DeniedProcessTable {
+    fn ppid_map(&self) -> io::Result<HashMap<i32, i32>> {
+        self.err()
+    }
+    fn is_alive(&self, pid: i32) -> bool {
+        pid > 0
+    }
+    fn claude_procs(&self) -> io::Result<Vec<ProcInfo>> {
+        self.err()
+    }
+    fn cmdline(&self, _pid: i32) -> Option<String> {
+        None
+    }
+}
+
 /// Relay port-scan seam. The sidecar-file read is plain fs (relay.rs); this
 /// trait covers ONLY the HTTP `/health` port-scan fallback
 /// (src/session.ts:185-212), which is live-network and therefore A4's to
@@ -1148,6 +1210,76 @@ impl RelayProbe for FixtureRelayProbe {
 mod tests {
     use super::*;
     use crate::exec::ScriptedExec;
+
+    // --- kill0_alive: errno-aware liveness -------------------------------
+
+    /// Our own pid is trivially alive.
+    #[test]
+    fn kill0_alive_says_alive_for_a_signalable_process() {
+        assert!(kill0_alive(std::process::id() as i32));
+    }
+
+    /// Non-positive pids are not processes. `kill(0, …)` addresses the whole
+    /// process GROUP and `kill(-1, …)` every process we may signal, so these
+    /// must never reach the syscall.
+    #[test]
+    fn kill0_alive_rejects_non_positive_pids_without_signalling() {
+        assert!(!kill0_alive(0));
+        assert!(!kill0_alive(-1));
+        assert!(!kill0_alive(i32::MIN));
+    }
+
+    /// THE rule: only `ESRCH` is death. `pid 1` (launchd/init) is owned by root,
+    /// so an unprivileged `kill(1, 0)` fails with `EPERM` — and EPERM means the
+    /// process EXISTS but we may not signal it. Reporting it dead is exactly the
+    /// bug: under a sandbox that same EPERM arrives for our OWN sessions, and
+    /// every one of them reads as dead.
+    ///
+    /// Skipped when running as root, where the call succeeds outright and the
+    /// EPERM branch is unreachable.
+    #[test]
+    fn kill0_alive_never_converts_eperm_into_death() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        assert!(
+            kill0_alive(1),
+            "pid 1 exists; EPERM must never be read as 'no such process'"
+        );
+    }
+
+    /// A pid that genuinely does not exist IS dead — the fix must not make
+    /// everything unconditionally alive. `ESRCH` remains the one death signal.
+    #[test]
+    fn kill0_alive_still_reports_a_genuinely_absent_pid_as_dead() {
+        // Walk down from the max pid for an unused one. On any real host the
+        // high pid space is sparse, so this terminates immediately in practice.
+        let absent = (1..2000)
+            .map(|i| i32::MAX - i)
+            .find(|&pid| unsafe { libc::kill(pid, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH));
+        let Some(absent) = absent else {
+            return; // no ESRCH pid available; nothing to assert
+        };
+        assert!(
+            !kill0_alive(absent),
+            "ESRCH is the death signal and must still report dead"
+        );
+    }
+
+    /// Both liveness seams route through the same probe, so the EPERM rule
+    /// cannot drift between them.
+    #[test]
+    fn both_liveness_seams_agree() {
+        let table = RealProcessTable::new(crate::exec::RealExec);
+        for pid in [std::process::id() as i32, 1, 0, -5] {
+            assert_eq!(
+                table.is_alive(pid),
+                is_pid_alive(pid),
+                "the trait seam and the free helper must agree for pid {pid}"
+            );
+        }
+    }
 
     #[test]
     fn adopt_linux_cmdline_decoder_preserves_nul_delimited_argv() {

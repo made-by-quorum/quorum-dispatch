@@ -148,9 +148,10 @@ pub trait HarnessFacts: Send + Sync {
     ///
     /// Default [`AcceptanceSignal::BusyTransition`]: the session publishes a
     /// pollable busy/idle status and going busy after the CR proves the turn
-    /// started (claude, via its registry row). codex overrides to
-    /// [`AcceptanceSignal::Landing`] — it publishes no such status, but its
-    /// rollout records the user's message, so the LANDING is the acceptance proof.
+    /// started (claude, via its registry row). codex and pi override to
+    /// [`AcceptanceSignal::Landing`] — neither publishes such a status, but both
+    /// record the user's message in their transcript, so the LANDING is the
+    /// acceptance proof.
     fn acceptance_signal(&self) -> AcceptanceSignal {
         AcceptanceSignal::BusyTransition
     }
@@ -184,7 +185,7 @@ pub enum AcceptanceSignal {
     /// evidence that *something* started — the discipline pairs it with a
     /// content-verified remediation CR for the paste-absorbed case.
     BusyTransition,
-    /// The message appears in the TRANSCRIPT as a user record (codex).
+    /// The message appears in the TRANSCRIPT as a user record (codex, pi).
     ///
     /// STRICTLY STRONGER evidence than a busy transition: it identifies the exact
     /// bytes that landed, so it cannot be fooled by unrelated activity, and — the
@@ -474,6 +475,30 @@ impl HarnessFacts for PiFacts {
 
     fn composer_region(&self) -> ComposerRegion {
         ComposerRegion::BetweenLastTwo(PI_RULE)
+    }
+
+    /// pi publishes no pollable busy/idle status either, but — like codex — it
+    /// RECORDS THE SUBMITTED MESSAGE, so the landing is the acceptance proof.
+    ///
+    /// THIS CORRECTS A RECORDED FACT. The M5 observation held that pi's transcript
+    /// was "append-on-exit", which would make a live landing unobservable and is
+    /// why pi stayed gated when codex un-gated. Read at source (pi 0.80.2,
+    /// `dist/core/session-manager.js` `_persist`), it is not: persist runs on
+    /// EVERY appended entry and defers only until the buffer holds an assistant
+    /// message — after which each entry, including a user message, is
+    /// `appendFileSync`'d immediately. A session reopened from an existing file
+    /// (`setSessionFile` → `flushed = true`) appends from its very first entry.
+    ///
+    /// pi's user records are `{"type":"message","message":{"role":"user",…}}`,
+    /// which [`TranscriptLandingProbe`] already parses — the probe was broadened
+    /// for exactly this shape — so pi needs no probe of its own.
+    ///
+    /// THE RESIDUAL, stated honestly rather than papered over: a FRESH session
+    /// that has not yet had an assistant reply has no file on disk at all, so a
+    /// landing cannot be confirmed and the send reports non-delivery. That is the
+    /// truthful answer for that window, and it closes itself after one exchange.
+    fn acceptance_signal(&self) -> AcceptanceSignal {
+        AcceptanceSignal::Landing
     }
 
     fn clear_strategy(&self) -> ClearStrategy {
@@ -869,18 +894,25 @@ pub fn fire(
     //
     // M5/T6 UN-GATE: the gate asks whether acceptance is confirmable AT ALL, and a
     // missing busy/idle status is no longer the same question. A
-    // `AcceptanceSignal::Landing` harness (codex) confirms acceptance from its
-    // TRANSCRIPT instead — strictly stronger evidence than a busy transition,
-    // since it identifies the exact bytes. So the gate now closes only on a
-    // harness with NEITHER signal.
+    // `AcceptanceSignal::Landing` harness (codex, and now pi) confirms acceptance
+    // from its TRANSCRIPT instead — strictly stronger evidence than a busy
+    // transition, since it identifies the exact bytes. So the gate closes only on
+    // a harness with NEITHER signal.
+    //
+    // pi-interactive: with pi moved to Landing, NO HARNESS SHIPPED TODAY CLOSES
+    // THIS GATE — claude has a status source, codex and pi have landings. That is
+    // worth stating plainly rather than leaving the reader to infer it from three
+    // files. The gate stays because it is the FLOOR, not because it currently
+    // fires: it is what a future carrier with neither signal falls to, and the
+    // alternative to keeping it is injecting turns we can never observe accepted.
+    // `gate_closes_on_a_harness_with_neither_signal` covers it deliberately.
     if !effects.acceptance_confirmable() && facts.acceptance_signal() != AcceptanceSignal::Landing {
         // M5 observability nicety (M4-noted): a DISTINCT reason from the QS-5
         // plain-composer `verify-blocked` below. Both are honest non-deliveries with
         // the composer untouched, but this one means "the harness has no confirmable
-        // acceptance signal" (codex/pi none_source — the Q7 busy-state residual),
-        // NOT "a modal/unknown composer blocked the type". Distinguishing them lets a
-        // stranger reading the ledger see codex/pi are blocked on acceptance-
-        // confirmability specifically (now reachable via T5), not a composer modal.
+        // acceptance signal", NOT "a modal/unknown composer blocked the type" —
+        // so a stranger reading the ledger can tell a carrier blocked on
+        // acceptance-confirmability from one blocked by a composer modal.
         // Still `send-failed` (the leaf KIND is unchanged; only the free reason
         // detail differs — no minted kind string).
         return FireOutcome::Terminal(Payload::SendFailed {
@@ -2024,94 +2056,101 @@ mod tests {
             "the default harness keeps the busy-transition signal"
         );
         assert_eq!(
-            PiFacts.acceptance_signal(),
-            AcceptanceSignal::BusyTransition,
-            "pi has no live-readable landing, so it stays gated rather than un-gated wrongly"
+            CodexFacts.acceptance_signal(),
+            AcceptanceSignal::Landing,
+            "codex confirms from its rollout"
         );
-        assert_eq!(CodexFacts.acceptance_signal(), AcceptanceSignal::Landing);
+        assert_eq!(
+            PiFacts.acceptance_signal(),
+            AcceptanceSignal::Landing,
+            "pi confirms from its session transcript — append-per-entry once flushed, \
+             NOT the append-on-exit the M5 note recorded"
+        );
     }
 
-    // ---- F1: acceptance UNCONFIRMABLE (none_source) ⇒ NO clear/inject, composer
-    //          UNTOUCHED, honest non-delivery terminal (never a false delivery) ---
+    // ---- F1: NEITHER acceptance signal ⇒ NO clear/inject, composer UNTOUCHED,
+    //          honest non-delivery terminal (never a false delivery) -------------
 
+    /// A harness with NEITHER acceptance signal is gated OFF before any
+    /// clear/inject: composer UNTOUCHED, honest non-delivery, never a false
+    /// delivery and never a dangling Pending.
+    ///
+    /// pi-interactive: SCOPED TO A SYNTHETIC HARNESS, and deliberately so. This
+    /// test ran over codex, then over pi alone; both have since been shown to
+    /// record the submitted message and moved to [`AcceptanceSignal::Landing`], so
+    /// NO SHIPPED HARNESS closes this gate today. Deleting the coverage would
+    /// leave the gate — the thing standing between us and injecting turns we can
+    /// never observe accepted — completely untested, so the subject is now an
+    /// explicit stand-in for the next carrier that arrives with neither signal:
+    /// claude-shaped composer facts, no status source.
+    ///
+    /// MUTATION EVIDENCE: dropping the `!effects.acceptance_confirmable()` half of
+    /// the gate reds this — the fire proceeds to clear + inject + CR.
     #[test]
-    fn none_source_harness_never_injects_and_reports_honest_nondelivery() {
-        // M5/T6: SCOPED TO pi. codex used to be here too, but it now confirms
-        // acceptance from its rollout (`AcceptanceSignal::Landing`) and is
-        // deliberately un-gated — see
-        // `landing_harness_fires_and_confirms_from_the_transcript` below. pi has
-        // NEITHER signal (no pollable status, and its transcript is append-on-exit
-        // so a LIVE landing is unobservable), so the gate is still the honest
-        // answer for it, and this keeps that path covered.
-        //
-        // For pi: a LIVE-SHAPED PLAIN composer (composer_is_plain → Some(true), so
-        // the pre-F1 fire WOULD proceed to clear+inject+CR-submit), but the harness
-        // has no confirmable acceptance signal (none_source).
-        // F1: the fire is gated OFF at the top — NO clear-chord, NO inject bytes,
-        // NO CR; the composer is UNTOUCHED; the terminal is an honest non-delivery
-        // (SendFailed), never a MessageSeen and never a dangling Pending — even
-        // though the (unreachable) probe is scripted Landed.
-        let codex_plain = "gpt-5.6-sol default \u{00b7} ~/work\n\u{203a} hello";
-        let pi_rule: String = std::iter::repeat('\u{2500}').take(60).collect();
-        let pi_plain = format!("{pi_rule}\nhello\n{pi_rule}\n~/work $0 gpt-5.5\n");
-
-        let _ = codex_plain; // codex is no longer gated; see the Landing test.
-        for (label, facts, screen) in [("pi", &PiFacts as &dyn HarnessFacts, pi_plain)] {
-            // Sanity: the composer IS classified plain (so the gate — not the
-            // plain-verify — is what stops the fire).
-            assert_eq!(
-                facts.composer_is_plain(&screen),
-                Some(true),
-                "{label}: live-shaped composer is plain (pre-F1 fire would proceed)"
-            );
-
-            let fx = FakeFx::new(vec![screen.as_str()], vec![Some("busy")]);
-            *fx.confirmable.lock().unwrap() = false; // none_source harness
-            let (_d, spool) = scratch_spool();
-            let lock = Mutex::new(InputLock::new());
-            let journal = Mutex::new(Journal::new());
-            // Seed a human draft: it must be preserved untouched (no clear/re-show).
-            let mut j = Journal::new();
-            j.on_human_input(b"human draft", 0, 11);
-            *journal.lock().unwrap() = j;
-
-            let out = fire(
-                &fx,
-                facts,
-                &FixedProbe(LandingScan::Landed),
-                &lock,
-                &journal,
-                &spool,
-                rec(),
-                "hello",
-                &cfg_fast(),
-            );
-
-            // Honest non-delivery terminal — NOT a false delivery, NOT dangling.
-            match out {
-                FireOutcome::Terminal(Payload::SendFailed { reason, send_id, .. }) => {
-                    // M5: the F1 gate's DISTINCT reason (acceptance-unconfirmable),
-                    // separate from the QS-5 plain-composer verify-blocked.
-                    assert_eq!(
-                        reason, "acceptance-unconfirmable",
-                        "{label}: honest non-delivery reason (F1 gate, not plain-verify)"
-                    );
-                    assert_eq!(send_id.as_deref(), Some("p-1"), "{label}: non-dangling, keyed");
-                }
-                other => panic!("{label}: expected honest SendFailed, got {other:?}"),
+    fn gate_closes_on_a_harness_with_neither_signal() {
+        // Neither signal = the default `BusyTransition` acceptance (no Landing
+        // override) AND `confirmable = false` (no status source to observe it on).
+        struct NeitherSignalFacts;
+        impl HarnessFacts for NeitherSignalFacts {
+            fn clear_chord(&self) -> Vec<u8> {
+                SafeDefaultFacts.clear_chord()
             }
-            // Composer UNTOUCHED: no clear-chord, no inject text, no CR.
-            assert!(fx.raw_writes().is_empty(), "{label}: no clear-chord / no re-show write");
-            assert!(fx.texts.lock().unwrap().is_empty(), "{label}: no inject bytes");
-            assert_eq!(fx.crs.load(Ordering::SeqCst), 0, "{label}: no CR submit");
-            // The input lock was never armed (no fire ran) → session not wedged.
-            assert!(!lock.lock().unwrap().is_locked(), "{label}: lock untouched");
-            // The human's journal draft is untouched (never cleared / re-shown).
-            assert_eq!(
-                journal.lock().unwrap().snapshot(),
-                b"human draft".to_vec(),
-                "{label}: draft preserved untouched"
-            );
+            fn composer_is_plain(&self, screen_text: &str) -> Option<bool> {
+                SafeDefaultFacts.composer_is_plain(screen_text)
+            }
+            // acceptance_signal(): the trait default, BusyTransition.
         }
+        assert_eq!(
+            NeitherSignalFacts.acceptance_signal(),
+            AcceptanceSignal::BusyTransition,
+            "the stand-in must have no Landing override — that is the point"
+        );
+
+        // A LIVE-SHAPED PLAIN composer, so it is the GATE and not the plain-verify
+        // that stops the fire.
+        let screen = "\u{276f} hello";
+        assert_eq!(
+            NeitherSignalFacts.composer_is_plain(screen),
+            Some(true),
+            "live-shaped composer is plain (the pre-gate fire would proceed to inject)"
+        );
+
+        let fx = FakeFx::new(vec![screen], vec![Some("busy")]);
+        *fx.confirmable.lock().unwrap() = false; // no status source
+        let (_d, spool) = scratch_spool();
+        let lock = Mutex::new(InputLock::new());
+        let journal = Mutex::new(Journal::new());
+        // Seed a human draft: it must be preserved untouched (no clear/re-show).
+        let mut j = Journal::new();
+        j.on_human_input(b"human draft", 0, 11);
+        *journal.lock().unwrap() = j;
+
+        let out = fire(
+            &fx,
+            &NeitherSignalFacts,
+            // Scripted Landed and STILL unreachable — the gate returns first.
+            &FixedProbe(LandingScan::Landed),
+            &lock,
+            &journal,
+            &spool,
+            rec(),
+            "hello",
+            &cfg_fast(),
+        );
+
+        match out {
+            FireOutcome::Terminal(Payload::SendFailed { reason, send_id, .. }) => {
+                assert_eq!(
+                    reason, "acceptance-unconfirmable",
+                    "the F1 gate's distinct reason, not the plain-verify's"
+                );
+                assert_eq!(send_id.as_deref(), Some("p-1"), "non-dangling, keyed");
+            }
+            other => panic!("expected honest SendFailed, got {other:?}"),
+        }
+        // Composer UNTOUCHED: no clear-chord, no inject text, no CR.
+        assert!(fx.raw_writes().is_empty(), "no clear-chord / no re-show write");
+        assert!(fx.texts.lock().unwrap().is_empty(), "no inject bytes");
+        assert_eq!(fx.crs.load(Ordering::SeqCst), 0, "no CR");
     }
 }

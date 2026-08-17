@@ -357,9 +357,57 @@ impl Provider for CodexProvider {
                 Err(e) => return Err(InjectError::Precondition(format!("send failed: {e}"))),
             }
         }
-        // believed IDLE → start a fresh turn.
-        rpc.turn_start(key.id, message)
-            .map_err(|e| InjectError::Precondition(format!("send failed: {e}")))
+        // believed IDLE → start a fresh turn — but the belief comes from the
+        // ROLLOUT TAIL, which LAGS: a turn that started microseconds ago has not
+        // flushed its `task_started`, so a genuinely BUSY thread reads as idle and
+        // this `turn/start` fires into an open turn. That is the mirror of the
+        // stale fence above, and it was previously unhandled — the believed-busy
+        // direction self-corrected, the believed-idle direction did not.
+        //
+        // A refusal carrying the invalid-request code is read as "the belief was
+        // wrong, the thread is busy": re-read the tail (by now the server has told
+        // us a turn is active, so the record it lagged on is far likelier to be
+        // present) and STEER the turn we should have steered in the first place.
+        // Classification is on the CODE, never the message text — the same churn
+        // posture as `INVALID_REQUEST_CODE`'s own doc, and equally
+        // self-correcting: a non-busy -32600 fails the steer and the ORIGINAL
+        // server error is what surfaces.
+        match rpc.turn_start(key.id, message) {
+            Ok(turn_id) => Ok(turn_id),
+            Err(RpcError::Protocol(e)) if e.code == INVALID_REQUEST_CODE => {
+                let refused = InjectError::Precondition(format!(
+                    "send failed: protocol error {}: {}",
+                    e.code, e.message
+                ));
+                let Some(open) = self.reread_open_turn_id(fx, key) else {
+                    // No open turn recoverable from the tail — nothing to steer;
+                    // surface the server's own refusal unchanged.
+                    return Err(refused);
+                };
+                match rpc.turn_steer(key.id, &open, message) {
+                    Ok(SteerOutcome::Steered(turn_id)) => Ok(turn_id),
+                    // The re-read turn ALSO moved on. Two refusals in a row is a
+                    // racing thread, not a recoverable belief — refuse loudly with
+                    // the original error rather than looping the ladder.
+                    Ok(SteerOutcome::StaleTurn(_)) => Err(refused),
+                    Err(e2) => Err(InjectError::Precondition(format!("send failed: {e2}"))),
+                }
+            }
+            Err(e) => Err(InjectError::Precondition(format!("send failed: {e}"))),
+        }
+    }
+}
+
+impl CodexProvider {
+    /// Re-resolve the thread's CURRENT open turn id from its rollout tail, for the
+    /// believed-idle→actually-busy arm of the send ladder. Reuses the verb layer's
+    /// own resolution (`transcript_root` + `transcript_path` + [`open_turn_id`]) so
+    /// the two channels cannot disagree. Permissive: an unresolvable/absent/torn
+    /// rollout is `None`, never an error.
+    fn reread_open_turn_id(&self, fx: &ProviderFx, key: &SessionKey) -> Option<String> {
+        let root = self.transcript_root(fx);
+        let path = self.transcript_path(&root, key)?;
+        open_turn_id(&read_lines(&path))
     }
 }
 
@@ -422,5 +470,242 @@ impl crate::create::BootWaiter for InitializeWaiter<'_> {
                 detail: format!("codex session \"{name}\" initialize handshake failed: {e}"),
             }),
         }
+    }
+}
+
+// ===========================================================================
+// The believed-idle→actually-busy arm of the send ladder (the qd-drops-messages-
+// to-busy-sessions fix). The believed-BUSY direction was always self-correcting
+// via the stale fence; this pins the mirror.
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::effects::MapEnv;
+    use std::cell::RefCell;
+
+    const THREAD: &str = "019fdc88-c071-7431-a7c1-bec41028b3f8";
+    const OPEN_TURN: &str = "T-9";
+
+    /// An AppServerRpc whose `turn/start` returns a programmed error and whose
+    /// `turn/steer` returns a programmed outcome, recording every call.
+    struct LadderRpc {
+        start: RefCell<Option<Result<String, RpcError>>>,
+        steer: RefCell<Option<Result<SteerOutcome, RpcError>>>,
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl LadderRpc {
+        fn new(start: Result<String, RpcError>, steer: Result<SteerOutcome, RpcError>) -> Self {
+            Self {
+                start: RefCell::new(Some(start)),
+                steer: RefCell::new(Some(steer)),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl AppServerRpc for LadderRpc {
+        fn initialize(&self, _c: &ClientInfo) -> Result<InitializeResult, RpcError> {
+            Err(RpcError::Closed)
+        }
+        fn initialized(&self) -> Result<(), RpcError> {
+            Ok(())
+        }
+        fn thread_start(&self, _c: &str, _a: &str, _s: &str) -> Result<String, RpcError> {
+            Err(RpcError::Closed)
+        }
+        fn thread_resume(&self, _t: &str) -> Result<(), RpcError> {
+            Err(RpcError::Closed)
+        }
+        fn turn_start(&self, _t: &str, _x: &str) -> Result<String, RpcError> {
+            self.calls.borrow_mut().push("turn/start".into());
+            self.start
+                .borrow_mut()
+                .take()
+                .unwrap_or(Err(RpcError::Closed))
+        }
+        fn turn_steer(&self, _t: &str, expected: &str, _x: &str) -> Result<SteerOutcome, RpcError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("turn/steer[{expected}]"));
+            self.steer
+                .borrow_mut()
+                .take()
+                .unwrap_or(Err(RpcError::Closed))
+        }
+        fn turn_interrupt(&self, _t: &str, _u: &str) -> Result<(), RpcError> {
+            Ok(())
+        }
+        fn next_notification(
+            &self,
+            _timeout: std::time::Duration,
+        ) -> Result<Option<Notification>, RpcError> {
+            Ok(None)
+        }
+        fn close(&self) -> Result<(), RpcError> {
+            Ok(())
+        }
+    }
+
+    fn busy_refusal() -> RpcError {
+        RpcError::Protocol(ServerError {
+            code: INVALID_REQUEST_CODE,
+            message: "a turn is already active for this thread".to_string(),
+        })
+    }
+
+    /// A CODEX_HOME whose rollout for THREAD carries an OPEN turn (`task_started`
+    /// with no matching `task_complete`) — the record the lagging tail had not yet
+    /// flushed at send time, and which the re-read finds.
+    fn codex_home_with_open_turn(open: bool) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let day = tmp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("08")
+            .join("10");
+        std::fs::create_dir_all(&day).unwrap();
+        let mut jsonl = String::from(
+            r#"{"type":"session_meta","payload":{"id":"019fdc88-c071-7431-a7c1-bec41028b3f8"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"T-9"}}
+"#,
+        );
+        if !open {
+            jsonl.push_str(
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"T-9\"}}\n",
+            );
+        }
+        std::fs::write(
+            day.join(format!("rollout-2026-08-10T10-00-00-{THREAD}.jsonl")),
+            jsonl,
+        )
+        .unwrap();
+        tmp
+    }
+
+    fn inject_believed_idle(
+        rpc: &LadderRpc,
+        home: &tempfile::TempDir,
+    ) -> Result<String, InjectError> {
+        let mut env = MapEnv::default();
+        env.vars.insert(
+            CODEX_HOME_ENV.to_string(),
+            home.path().to_string_lossy().into_owned(),
+        );
+        let paths = crate::paths::QdPaths::from_home(home.path());
+        let rpc_ref: &dyn AppServerRpc = rpc;
+        let fx = ProviderFx {
+            await_relay: None,
+            env: &env,
+            paths: &paths,
+            socket_dir: paths.sessions_dir.clone(),
+            mux: None,
+            clock: None,
+            sleeper: None,
+            relay: None,
+            relay_port: None,
+            app_server: Some(rpc_ref),
+            // BELIEVED IDLE — the lagging tail showed no open turn.
+            codex_expected_turn_id: None,
+            acp_client: None,
+            pi_rpc: None,
+            acp_pre_dispatch: None,
+        };
+        let key = SessionKey {
+            id: THREAD,
+            name: Some("codex-1"),
+            cwd: None,
+            pid: Some(4242),
+        };
+        CodexProvider.inject(&fx, &key, "the message", "from")
+    }
+
+    /// THE FIX: believed idle, `turn/start` refused with the invalid-request code,
+    /// the re-read tail now shows the open turn → STEER it. The send lands instead
+    /// of failing.
+    #[test]
+    fn believed_idle_busy_refusal_rereads_and_steers() {
+        let home = codex_home_with_open_turn(true);
+        let rpc = LadderRpc::new(
+            Err(busy_refusal()),
+            Ok(SteerOutcome::Steered("T-9".to_string())),
+        );
+        assert_eq!(inject_believed_idle(&rpc, &home).unwrap(), "T-9");
+        assert_eq!(
+            *rpc.calls.borrow(),
+            vec!["turn/start".to_string(), format!("turn/steer[{OPEN_TURN}]")],
+            "the ladder re-reads the tail and steers the turn it should have steered"
+        );
+    }
+
+    /// A clean `turn/start` is untouched by the new arm — no re-read, no steer.
+    #[test]
+    fn believed_idle_clean_start_does_not_reread() {
+        let home = codex_home_with_open_turn(false);
+        let rpc = LadderRpc::new(Ok("T-NEW".to_string()), Err(RpcError::Closed));
+        assert_eq!(inject_believed_idle(&rpc, &home).unwrap(), "T-NEW");
+        assert_eq!(*rpc.calls.borrow(), vec!["turn/start".to_string()]);
+    }
+
+    /// A refusal with NO recoverable open turn in the tail surfaces the server's
+    /// own error — the arm never invents a turn to steer.
+    #[test]
+    fn busy_refusal_without_a_recoverable_turn_surfaces_the_refusal() {
+        let home = codex_home_with_open_turn(false); // balanced tail → no open turn
+        let rpc = LadderRpc::new(Err(busy_refusal()), Err(RpcError::Closed));
+        let err = inject_believed_idle(&rpc, &home).unwrap_err();
+        match err {
+            InjectError::Precondition(s) => assert!(
+                s.contains("already active"),
+                "the ORIGINAL server refusal is what surfaces: {s}"
+            ),
+            other => panic!("expected Precondition, got {other:?}"),
+        }
+        assert_eq!(
+            *rpc.calls.borrow(),
+            vec!["turn/start".to_string()],
+            "no steer attempted"
+        );
+    }
+
+    /// The re-read turn ALSO moved on: two refusals in a row is a racing thread,
+    /// not a recoverable belief. Refuse with the ORIGINAL error rather than
+    /// looping the ladder.
+    #[test]
+    fn double_stale_refuses_with_the_original_error() {
+        let home = codex_home_with_open_turn(true);
+        let rpc = LadderRpc::new(
+            Err(busy_refusal()),
+            Ok(SteerOutcome::StaleTurn(ServerError {
+                code: INVALID_REQUEST_CODE,
+                message: "expected active turn id T-9 but found T-10".to_string(),
+            })),
+        );
+        match inject_believed_idle(&rpc, &home).unwrap_err() {
+            InjectError::Precondition(s) => assert!(s.contains("already active"), "{s}"),
+            other => panic!("expected Precondition, got {other:?}"),
+        }
+        assert_eq!(
+            rpc.calls.borrow().len(),
+            2,
+            "exactly one retry, never a loop"
+        );
+    }
+
+    /// A NON-fence error from `turn/start` (transport, close, timeout) is NOT read
+    /// as busy — it fails straight through, unchanged.
+    #[test]
+    fn non_fence_start_error_is_not_treated_as_busy() {
+        let home = codex_home_with_open_turn(true);
+        let rpc = LadderRpc::new(Err(RpcError::Timeout), Err(RpcError::Closed));
+        assert!(inject_believed_idle(&rpc, &home).is_err());
+        assert_eq!(
+            *rpc.calls.borrow(),
+            vec!["turn/start".to_string()],
+            "no re-read on a non-fence error"
+        );
     }
 }

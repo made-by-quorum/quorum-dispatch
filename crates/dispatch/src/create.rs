@@ -1709,9 +1709,9 @@ Commands:
         let exec2 = ok_exec();
         // Model an in-flight create by occupying the create-path claim
         // out-of-band BEFORE the second run_new for the same name. The holder
-        // pid must be genuinely ALIVE (and OURS — kill(pid,0) on a foreign pid
-        // is EPERM = "dead" to is_pid_alive): P0 redfix F2 reaps dead-holder
-        // claims, so a made-up pid would be reaped instead of refused.
+        // pid must be genuinely ALIVE: P0 redfix F2 reaps dead-holder claims,
+        // so a made-up pid would be reaped instead of refused. (Our own pid is
+        // unambiguously alive under the errno-aware probe.)
         let claims_dir = deps(&fix, &exec1, &FixtureMux::new(), &OkBootWaiter).claims_dir();
         let own_pid = std::process::id();
         let payload = format!("{{\"pid\":{own_pid},\"timestamp\":0,\"name\":\"sess\"}}");

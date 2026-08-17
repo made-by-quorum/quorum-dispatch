@@ -364,8 +364,40 @@ fn run_send_pty_resolved(
         .map(PathBuf::from)
         .filter(|p| p.exists())
         .or_else(|| {
+            // pi-interactive: resolve the root through the PROVIDER, not the
+            // claude `projects_dir`.
+            //
+            // This fallback was written when send:pty served claude alone, so the
+            // claude root was the only root there was; the provider-routed
+            // `transcript_path` then arrived above it and inherited the hard-coded
+            // argument. For claude it is still exactly `paths.projects_dir`
+            // (`ClaudeProvider::transcript_root` returns it), so nothing about the
+            // incumbent path moves — but a codex or pi row reaching here was being
+            // asked to find its transcript under claude's tree, where it can never
+            // be. The answer was always `None`, which reads as "no transcript yet"
+            // and is indistinguishable from the genuine pre-first-turn case.
+            //
+            // It matters now because the PTY lane's landing verify is what proves
+            // a `qd send` was accepted, and a transcript it cannot locate makes
+            // every send an honest-but-wrong non-delivery.
+            let fx = dispatch::provider::ProviderFx {
+                await_relay: None,
+                env: &env,
+                paths: &paths,
+                socket_dir: PathBuf::new(),
+                mux: None,
+                clock: None,
+                sleeper: None,
+                relay: None,
+                relay_port: None,
+                app_server: None,
+                codex_expected_turn_id: None,
+                acp_client: None,
+                pi_rpc: None,
+                acp_pre_dispatch: None,
+            };
             provider.transcript_path(
-                &paths.projects_dir,
+                &provider.transcript_root(&fx),
                 &dispatch::provider::SessionKey {
                     id: &session.session_id,
                     name: session.name.as_deref(),

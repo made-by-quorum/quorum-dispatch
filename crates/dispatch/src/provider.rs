@@ -75,6 +75,30 @@ impl Hosting {
     }
 }
 
+/// Resolve a directory to its canonical form for comparison, falling back to the
+/// input unchanged when it cannot be resolved (a dir that has since been removed,
+/// or a permission failure).
+///
+/// WHY THIS IS PROVIDER-NEUTRAL AND NOT A per-provider helper. Every provider that
+/// attributes an on-disk session to a registry row compares two spellings of the
+/// SAME directory recorded from different vantage points: the row carries what the
+/// create path was GIVEN (`--cwd /tmp/foo`, stored verbatim), while the harness
+/// records what ITS process RESOLVED (`/private/tmp/foo` on macOS, where /tmp is a
+/// symlink). An exact string compare then never matches and the session stays
+/// unattributed forever — silently, since "not yet" and "never" look identical
+/// from outside. codex hit exactly this in end-to-end validation; pi encodes the
+/// resolved cwd into its session DIRECTORY NAME, so it would hit it too. One
+/// canonicalizer, so the next provider inherits the fix instead of rediscovering
+/// the defect.
+///
+/// The unchanged-input fallback is what makes this safe to apply to BOTH sides:
+/// two unresolvable paths still compare as the plain strings they were.
+pub fn canonical_dir(dir: &str) -> String {
+    std::fs::canonicalize(dir)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| dir.to_string())
+}
+
 /// Permissive parse of a registry row's `hosting` token. An unknown/garbage
 /// string maps to `None` — the caller then falls back to the provider's
 /// structural hosting, so a corrupt field degrades to today's behavior instead of

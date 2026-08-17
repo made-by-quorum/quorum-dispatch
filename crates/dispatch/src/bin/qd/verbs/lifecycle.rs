@@ -507,12 +507,17 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // protocols to a dispatch-owned adapter, not a screen. Silently ignoring the
     // flag would promise an attachable session and deliver a daemon, so refuse
     // BEFORE anything is claimed or spawned and name the lane that does exist.
-    if interactive_flag && (provider_id.starts_with("acp/") || provider_id == "pi") {
+    //
+    // pi-interactive: pi is no longer in this refusal. It has a real TUI (a bare
+    // `pi`, the mode `--mode rpc` opts OUT of), so `--interactive` now means for
+    // pi exactly what it means for claude and codex. acp/* keeps the refusal: an
+    // ACP bridge is a protocol adapter with no terminal of its own at all.
+    if interactive_flag && provider_id.starts_with("acp/") {
         eprintln!(
             "qd start: --interactive is not supported with --provider {provider_id} — it is \
              daemon-hosted and has no terminal to attach. Start it without --interactive \
              and drive it with \"qd send {name} <text>\". (--interactive is available for \
-             claude-code and codex.)"
+             claude-code, codex and pi.)"
         );
         return 1;
     }
@@ -626,6 +631,16 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // a dispatch-OWNED adapter (pi speaks stdio, has no --listen) — so it takes its
     // OWN create path (run_new_pi_daemon), NOT the codex app-server daemon arm below.
     // Branch it BEFORE the codex daemon arm (both are Hosting::Daemon).
+    // pi-interactive: `--provider pi --interactive` takes the MUX-PANE lane rather
+    // than the resident-adapter arm below — the real `pi` TUI in a pane a human
+    // drives with `qd attach`.
+    //
+    // Placed BEFORE the pi daemon arm and gated on the EXPLICIT flag only, the
+    // codex-interactive routing call: a bare `qd start --provider pi` still spawns
+    // the resident adapter for every caller, human or agent, exactly as today.
+    if provider_impl.id() == "pi" && interactive_flag {
+        return run_new_pi_tui(&env, &home, &paths, &name, &cwd, render, prompt.clone());
+    }
     if provider_impl.id() == "pi" {
         return run_new_pi_daemon(&env, &home, &paths, &name, &cwd, prompt.clone());
     }
@@ -1806,6 +1821,418 @@ pub fn revive_codex_tui(
     })
 }
 
+// ===========================================================================
+// pi-interactive — the mux-pane pi TUI lane (`--provider pi --interactive`).
+// ===========================================================================
+
+/// pi-interactive: the shared MUX-PANE create choreography for a pi TUI — driven
+/// by `qd start --interactive` (fresh) and by the revive seam (`qd resume` /
+/// `qd attach` on a stopped row).
+///
+/// THE SAME REUSE ARGUMENT AS [`create_codex_tui`], for the same reason: the
+/// mux-pane create pipeline is provider-generic (it builds its launch command
+/// through `provider.launch_plan` and drives an injected `BootWaiter`), so hosting
+/// a pi TUI needs no new pipeline, only a different argv. The atomic name claim,
+/// the scan-under-claim, the zmx preflight, the I6 attachability verify, the
+/// socket-dir-split detection and the stale-ended-pane reap are therefore the SAME
+/// code claude and codex sessions have been hardened on.
+///
+/// WHERE THIS DIVERGES FROM CODEX, AND WHY IT IS SIMPLER. codex forced identity to
+/// be discovered after the fact — its TUI opens no rollout until a human types, so
+/// `create_codex_tui` writes a row with NO `sessionId` and the gather step binds
+/// one later by attribution. pi's `--session-id` NAMES the session at launch
+/// ("creating it if missing"), so this path knows the id BEFORE it spawns
+/// anything:
+///
+///   - `session_id = None` (fresh start) — mint a v4 UUID and pass it. The row is
+///     identified from its first instant: no unidentified window, no backfill, and
+///     structurally no way to adopt a stranger's conversation.
+///   - `session_id = Some(id)` (revive) — pass the row's recorded id back, and pi
+///     reopens that exact conversation.
+///
+/// Both are the same argv, so unlike codex there is no fresh-vs-revive branch in
+/// the launch at all — only in where the id comes from.
+///
+/// BOOT DOES NOT WAIT FOR A TRANSCRIPT, and must not. pi writes no session file
+/// until the first assistant reply (the persist law recorded in
+/// [`dispatch::provider::pi::tui`]), so waiting for one would mean blocking `qd
+/// start` until a human typed AND a model answered. The pane is usable the instant
+/// it is up, and `create::run_new` has already verified it is registered and
+/// ATTACHABLE (its I6 step) before the boot waiter runs — which is why the waiter
+/// here is the trivial [`dispatch::create::OkBootWaiter`]. Identity does not
+/// depend on the transcript either way; only transcript-derived surfaces (turns,
+/// preview) are blank until that first reply, and they say so honestly.
+///
+/// THE ONE THING THE PIPELINE CANNOT DO FOR US is the registry row: claude writes
+/// its own, the pi TUI knows nothing about qd, so this writes it.
+#[allow(clippy::too_many_arguments)]
+fn create_pi_tui(
+    env: &RealEnv,
+    home: &std::path::Path,
+    paths: &dispatch::paths::QdPaths,
+    name: &str,
+    cwd: &std::path::Path,
+    render: dispatch::launch::RenderMode,
+    session_id: Option<&str>,
+    verb: &str,
+) -> Result<PiTuiOutcome, i32> {
+    use dispatch::provider::pi::tui;
+
+    let clock = RealClock;
+    let exec = RealExec;
+    let since_ms = clock.now_ms();
+
+    // CAPABILITY PREFLIGHT, before a name is claimed or a pane is spawned.
+    //
+    // The whole lane rides `pi --session-id`, and that flag is not ancient: pi
+    // 0.74.2 answers `Error: Unknown option: --session-id` and exits. Without this
+    // check that failure happens INSIDE a freshly-spawned pane nobody is attached
+    // to — pi dies instantly, the pane dies with it, and `qd start` reports
+    // whatever its attachability verify happened to see, which says nothing about
+    // the actual cause. Refusing here turns a mysterious dead pane into a sentence
+    // naming the binary, its version, and the fix.
+    //
+    // Reported verbatim when we cannot TELL (missing/unrunnable binary), rather
+    // than guessing in either direction: blessing an unknown binary would restore
+    // the dead-pane failure, and refusing one would block a working setup we
+    // simply could not probe.
+    let bin = dispatch::provider::pi::pi_bin(env);
+    match dispatch::provider::pi::tui::supports_session_id(std::path::Path::new(&bin)) {
+        Ok(true) => {}
+        Ok(false) => {
+            let found = dispatch::provider::pi::tui::probe_version(std::path::Path::new(&bin))
+                .map(|v| format!(" (reports version {v})"))
+                .unwrap_or_default();
+            eprintln!(
+                "qd {verb}: the pi binary {bin:?}{found} does not support --session-id, which \
+                 this lane needs to name and re-open the session. qd pins {}. Nothing was \
+                 created.\n  \
+                 If a newer pi is installed elsewhere, an older one is earlier on PATH — point \
+                 qd at the right one with QD_PI_BIN=/path/to/pi, or fix the PATH order.",
+                dispatch::provider::pi::pin::PIN_SPEC
+            );
+            return Err(1);
+        }
+        Err(why) => {
+            eprintln!(
+                "qd {verb}: could not check the pi binary {bin:?} before starting a session: \
+                 {why}. Nothing was created. Install pi ({}) and make sure it is on PATH, or \
+                 set QD_PI_BIN=/path/to/pi.",
+                dispatch::provider::pi::pin::PIN_SPEC
+            );
+            return Err(1);
+        }
+    }
+
+    // CANONICALIZE THE CWD ONCE, and use the SAME string for the launch and the
+    // row. pi encodes the cwd its process resolved into the session DIRECTORY NAME
+    // (`--private-tmp-foo--`), so a row storing the caller's spelling (`/tmp/foo`)
+    // would send every later transcript lookup into a directory that does not
+    // exist — not a mismatch that degrades, a lookup that can never succeed. codex
+    // hit the string-compare form of this in end-to-end validation; pi's encoding
+    // makes it structural.
+    let cwd_str = dispatch::provider::canonical_dir(&cwd.to_string_lossy());
+    let cwd = PathBuf::from(&cwd_str);
+
+    // The id: carried on a revive, minted on a fresh start. `is_fresh` is captured
+    // here because the anti-adoption guard below applies to a MINTED id only.
+    let is_fresh = session_id.is_none();
+    let session_id = match session_id {
+        Some(id) => id.to_string(),
+        None => tui::mint_session_id(),
+    };
+    if !tui::is_valid_session_id(&session_id) {
+        // Only reachable from a revive carrying a row written by something else —
+        // a fresh mint is valid by construction (unit-pinned). pi would
+        // `process.exit(1)` on this argv inside the new pane, so the pane would
+        // flash and die and the failure would name nothing useful.
+        eprintln!(
+            "qd {verb}: \"{name}\" records the session id {session_id:?}, which pi will not \
+             accept (ids must be alphanumeric with '.', '_' or '-' inside, and start and end \
+             alphanumeric). Start a fresh session with \"qd start <name> --provider pi \
+             --interactive\"."
+        );
+        return Err(1);
+    }
+
+    // THE ANTI-ADOPTION GUARD, and it only applies to a FRESH id. `--session-id`
+    // OPENS an existing session of that id rather than failing, so launching onto
+    // one we did not create would silently point this row's transcript, turns and
+    // `qd stop` at another conversation. A v4 UUID makes that essentially
+    // impossible; this makes it impossible. On a REVIVE the id being present is
+    // the entire point, so the check is deliberately not run there.
+    if is_fresh {
+        if let Some(root) = dispatch::provider::pi::sessions_root(env) {
+            if tui::session_id_is_taken(&root, &cwd_str, &session_id) {
+                eprintln!(
+                    "qd {verb}: refusing to start \"{name}\" — the freshly minted session id \
+                     {session_id} already exists under {}. Nothing was created; retrying \
+                     mints a different id.",
+                    root.display()
+                );
+                return Err(1);
+            }
+        }
+    }
+
+    let backend = common::select_backend(env)?;
+    let (canonical, legacy) = resolve_create_dirs(backend, home, env)?;
+    let mux = common::build_mux(backend, home, env)?;
+
+    // Pre-mint the stable id, bound to the pi session id we already know. Unlike
+    // codex's fresh lane there is no `mint_unbound` case: pi identity exists
+    // before the pane does, so the row and the pane env agree from the first
+    // instant on BOTH ids.
+    let ids_path = common::ids_store_path(env)?;
+    let qd_session_id = match dispatch::idstore::mint_or_get(
+        &ids_path,
+        &session_id,
+        Some(name),
+        &clock,
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("qd {verb}: could not mint a stable session id: {e}. Nothing was created.");
+            return Err(1);
+        }
+    };
+
+    // Readiness IS the I6 attachability verify that runs before this waiter.
+    let boot_waiter = dispatch::create::OkBootWaiter;
+
+    let deps = NewDeps {
+        mux: mux.as_ref(),
+        exec: &exec,
+        env,
+        clock: &clock,
+        paths,
+        canonical_dir: canonical.clone(),
+        legacy_dirs: legacy,
+        boot_waiter: &boot_waiter,
+        provider: &dispatch::provider::pi::PI_PROVIDER,
+        backend,
+    };
+    let params = NewParams {
+        name: name.to_string(),
+        agent: None,
+        // `resume` is how the id reaches `PiProvider::launch_plan`, on BOTH lanes
+        // — pi's `--session-id` creates-or-opens, so "the id this launch binds to"
+        // is one concept with one flag. See that method's doc.
+        resume: Some(session_id.clone()),
+        // pi's `--fork` forks an EXISTING session into a new one, which is a
+        // different verb's job; this lane never forks.
+        fork: false,
+        claude_args: vec![],
+        model: None,
+        cwd: cwd.to_path_buf(),
+        // No F1 backend-env capture on this lane: those pairs are claude-backend
+        // credentials (`--via` profiles), meaningless to pi. The env file is still
+        // written, carrying QD_SESSION_ID + the render birth property.
+        backend_env: vec![],
+        backend_env_unset: vec![],
+        qd_session_id: Some(qd_session_id.clone()),
+        render,
+        interactive: true,
+    };
+
+    // Claim → scan-under-claim → preflight → launch the pane → I6 verify. A live
+    // pane already holding this name fails HERE, loudly, which is also the guard
+    // that keeps a revive from starting a second process on one session.
+    let out = match create_run_new(&deps, &params) {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("{e}");
+            return Err(e.exit_code());
+        }
+    };
+
+    // Key the row by the LIVE pane's pid: the pane process IS the session's process
+    // here (no daemon, no self-registering child), and everything downstream —
+    // liveness, `qd stop`, the ls join — reads pid.
+    let Some(pane) = mux
+        .list(&canonical)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|z| z.name == name)
+    else {
+        eprintln!(
+            "qd {verb}: pi session \"{name}\" booted but its pane vanished from {} before the \
+             registry row could be written. Nothing is tracked; retrying is safe.",
+            canonical.display()
+        );
+        return Err(1);
+    };
+
+    // The row. `hosting: "mux-pane"` is the load-bearing field — it tells attach to
+    // hand over the terminal instead of printing the daemon redirect, stop to reap
+    // the pane instead of group-killing a resident that was never spawned, and send
+    // to use the pane's PTY instead of a ws endpoint. NO endpoint (an interactive
+    // pane has no resident front). `sessionId` is present from birth — the whole
+    // point of the `--session-id` lane.
+    let entry = dispatch::registry::RegistryEntry {
+        pid: Some(pane.pid as i64),
+        session_id: Some(session_id.clone()),
+        cwd: Some(cwd_str),
+        started_at: Some(since_ms),
+        updated_at: Some(clock.now_ms()),
+        status: Some("idle".to_string()),
+        name: Some(name.to_string()),
+        version: None,
+        kind: None,
+        entrypoint: None,
+        backend: None,
+        spawned_by: None,
+        provider: Some("pi".to_string()),
+        endpoint: None,
+        transport: None,
+        structured_send_issued: None,
+        hosting: Some(dispatch::provider::Hosting::MuxPane.as_str().to_string()),
+    };
+    if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
+        eprintln!(
+            "qd {verb}: pi session \"{name}\" is running but its registry row could not be \
+             written ({e}), so qd cannot track it. Attach with \"qd attach {name}\" or stop \
+             the pane and retry."
+        );
+        return Err(1);
+    }
+
+    Ok(PiTuiOutcome {
+        name: out.name,
+        zmx_name: name.to_string(),
+        socket_dir: canonical,
+        session_id,
+    })
+}
+
+/// What [`create_pi_tui`] produced. `session_id` is ALWAYS present — a pi row is
+/// identified from birth on both the fresh and the revive lane (contrast
+/// [`CodexTuiOutcome::thread_id`], which is `None` until a codex rollout appears).
+pub struct PiTuiOutcome {
+    pub name: String,
+    pub zmx_name: String,
+    pub socket_dir: PathBuf,
+    pub session_id: String,
+}
+
+/// pi-interactive: `qd start <name> --provider pi --interactive` — a FRESH pane.
+fn run_new_pi_tui(
+    env: &RealEnv,
+    home: &std::path::Path,
+    paths: &dispatch::paths::QdPaths,
+    name: &str,
+    cwd: &std::path::Path,
+    render: dispatch::launch::RenderMode,
+    prompt: Option<String>,
+) -> i32 {
+    // A create-time prompt would have to be typed into the TUI's composer, and this
+    // lane's first message is exactly the one the attended-send path cannot yet
+    // confirm: pi writes no session file until its first assistant reply, so there
+    // is nothing on disk to verify a landing against. Claiming `-p` worked would be
+    // precisely that unverifiable claim, so say plainly it was not delivered — the
+    // session itself is still created.
+    if prompt.as_deref().is_some_and(|s| !s.is_empty()) {
+        eprintln!(
+            "qd start: --provider pi --interactive ignores -p at create (pi writes no \
+             transcript until its first assistant reply, so a create-time submit cannot be \
+             verified). The session is created; type the prompt after \"qd attach {name}\"."
+        );
+    }
+    match create_pi_tui(env, home, paths, name, cwd, render, None, "start") {
+        Ok(out) => {
+            println!(
+                "Started pi session \"{}\" (session {}) — attach with \"qd attach {name}\"",
+                out.name, out.session_id
+            );
+            0
+        }
+        Err(code) => code,
+    }
+}
+
+/// pi-interactive: revive a STOPPED pane-hosted pi session into the SAME session,
+/// detached — the pi twin of [`revive_codex_tui`], and deliberately the same shape
+/// so `attach`'s cold arm can call either.
+///
+/// Identity is carried, not rediscovered: the row's recorded id becomes `pi
+/// --session-id <id>`, which reopens that conversation.
+///
+/// WHY THIS HAS NO "never used" REFUSAL, unlike the codex twin. `revive_codex_tui`
+/// must refuse a session that was never used, because codex only mints a thread id
+/// once someone types — an unused codex row has NO id, and launching a bare `codex`
+/// would silently hand back a different conversation under the old name. A pi row
+/// has had its id since birth, so reviving an unused one is well defined: pi
+/// recreates a session under that same id (its file having never been written), and
+/// the row keeps addressing the same thing it always did. There is nothing to
+/// refuse.
+///
+/// The old tombstone is consumed on success, so one session never leaves two rows
+/// behind (the `run_acp_resume` precedent).
+pub fn revive_pi_tui(
+    session: &Session,
+    render: dispatch::launch::RenderMode,
+    verb: &str,
+) -> Result<super::resume::ReviveHandle, i32> {
+    let env = RealEnv;
+    let name = match session.name.as_deref().filter(|n| !n.is_empty()) {
+        Some(n) => n.to_string(),
+        None => {
+            eprintln!(
+                "qd {verb}: this pi session has no name, so there is nothing to revive it \
+                 under. Start a fresh one with \"qd start <name> --provider pi --interactive\"."
+            );
+            return Err(1);
+        }
+    };
+    if session.session_id.is_empty() {
+        // Not reachable through this lane's own create path (which always writes an
+        // id), so this is a row from somewhere else. Refuse rather than mint a new
+        // id and pretend it is the old session.
+        eprintln!(
+            "qd {verb}: \"{name}\" has no recorded pi session id, so there is no conversation \
+             to reopen. Start a fresh session with \"qd start {name} --provider pi \
+             --interactive\"."
+        );
+        return Err(1);
+    }
+    let home = match env.var("HOME").filter(|s| !s.is_empty()) {
+        Some(h) => PathBuf::from(h),
+        None => {
+            eprintln!("qd {verb}: HOME is not set — cannot resolve the session state dir.");
+            return Err(1);
+        }
+    };
+    let paths = dispatch::paths::QdPaths::from_home(&home);
+    let cwd = session
+        .cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let out = create_pi_tui(
+        &env,
+        &home,
+        &paths,
+        &name,
+        &cwd,
+        render,
+        Some(&session.session_id),
+        verb,
+    )?;
+
+    // Consume the prior tombstone (`<old_pid>.json.tombstoned`) so one session does
+    // not leave a dangling second row. Best-effort: a missing tombstone is fine (a
+    // session stopped a different way), and the new live row is authoritative.
+    if let Some(old_pid) = session.pid.filter(|&p| p != 0) {
+        let _ = std::fs::remove_file(paths.sessions_dir.join(format!("{old_pid}.json.tombstoned")));
+    }
+
+    Ok(super::resume::ReviveHandle {
+        socket_dir: out.socket_dir,
+        zmx_name: out.zmx_name,
+    })
+}
+
 /// codex P2 W4 (codex-p2-spec §7.2): the daemon-hosted `qd new` arm. Assembles
 /// the REAL [`dispatch::create_daemon::DaemonDeps`] seams (the daemon analog of how the
 /// claude arm assembles `NewDeps`) and drives the lib-side
@@ -2600,7 +3027,9 @@ pub fn run_info(m: &ArgMatches) -> i32 {
     // LIST for the qdId shortest-unique prefix below — exactly as ls does. As a READ
     // verb it never rejects a tombstone: showing info about a stopped session is its
     // job (the cap axes stay hardcoded in the sealed entry, so info stays uncapped).
-    let (session, sessions) = match common::resolve_session_uncapped_in_list(query, true) {
+    let (session, sessions, health) = match common::resolve_session_uncapped_in_list_with_health(
+        query, true,
+    ) {
         Ok(pair) => pair,
         Err(code) => return code,
     };
@@ -2628,7 +3057,7 @@ pub fn run_info(m: &ArgMatches) -> i32 {
     let fold_ref = if fold.is_empty() { None } else { Some(&fold) };
     print!(
         "{}",
-        dispatch::render::info_text_with_fold(session, now, fold_ref)
+        dispatch::render::info_text_full(session, now, fold_ref, &health)
     );
     0
 }

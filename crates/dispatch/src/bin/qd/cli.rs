@@ -349,16 +349,17 @@ fn cmd_start() -> Command {
             )
             .conflicts_with("interactive"),
         )
-        // codex-interactive: for `--provider codex` this flag does not merely
-        // override the auto-detect (which never routed codex anyway) — it selects
-        // a different TOPOLOGY: the codex TUI in an attachable mux pane instead of
-        // the `codex app-server` daemon. Explicit-only by design, so a bare
-        // `qd start --provider codex` keeps spawning the daemon for every caller.
+        // codex-interactive / pi-interactive: for `--provider codex` and
+        // `--provider pi` this flag does not merely override the auto-detect
+        // (which never routed either) — it selects a different TOPOLOGY: that
+        // harness's own TUI in an attachable mux pane instead of its daemon.
+        // Explicit-only by design, so a bare `qd start --provider codex|pi` keeps
+        // spawning the daemon for every caller.
         .arg(long_flag(
             "interactive",
             "Force the interactive native-TUI launch (override the driver auto-detect). \
-             With --provider codex, runs the codex TUI in an attachable pane instead of \
-             the app-server daemon",
+             With --provider codex or pi, runs that harness's TUI in an attachable pane \
+             instead of its daemon",
         ))
         // Lifecycle-collapse A-1 (spec D4): machine-readable identity output.
         // Exit 0 with --json guarantees the printed id is BOUND (A-2); on a

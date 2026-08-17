@@ -165,10 +165,10 @@ Options:
   --interactive          Force the interactive native-TUI launch (agent-marked
                          callers must pass it: QD_SESSION_ID in the caller's env
                          routes the auto-detect headless otherwise).
-                         With --provider codex this selects a different
-                         TOPOLOGY: the codex TUI in an attachable pane
-                         (`qd attach <name>`) instead of the app-server daemon.
-                         Not supported for --provider pi / acp/* (daemon-hosted,
+                         With --provider codex or pi this selects a different
+                         TOPOLOGY: that harness's own TUI in an attachable pane
+                         (`qd attach <name>`) instead of its daemon.
+                         Not supported for --provider acp/* (a protocol adapter,
                          no terminal to attach)
   --headless             Force a headless stream-json launch (override the
                          driver auto-detect)
@@ -182,10 +182,10 @@ Options:
   --model <model>        Set the model before sending the prompt
   --provider <provider>  Provider: claude-code (default), codex, pi,
                          opencode (= acp/opencode), or acp/claude-code.
-                         claude-code runs in an attachable pane; codex runs an
-                         app-server daemon by default and an attachable TUI pane
-                         with --interactive; the rest are daemon-hosted (drive
-                         them with `qd send`, not `qd attach`)
+                         claude-code runs in an attachable pane; codex and pi run
+                         a daemon by default and an attachable TUI pane with
+                         --interactive; acp/* is daemon-hosted only (drive it
+                         with `qd send`, not `qd attach`)
   --port <port>          Port for OpenCode server (default: auto-scan 4096-4106)
   --via <name>           Route through a backends.json profile (per-session backend)
   --alt-screen           Fullscreen (alt-screen) rendering for this session
@@ -231,6 +231,23 @@ Options:
 
 The selected path is never changed after an attempt starts. A target that is
 stopped, cold, ambiguous, self, or has no live receive path is refused.
+
+Exit codes:
+  0   delivered
+  1   generic failure, including a target that is live but CONFIRMED to
+      have no receive path (retrying will not help)
+  12  refused{<class>} - a door refusal, printed as
+      "qd send: refused{<class>}: <reason>". Classes include:
+        address, host, ambiguous, unknown, self-send, no-live-receive-path
+        receive-path-undetermined - the discovery read (e.g. `ps`) that
+          would have found a receive path was DENIED, so relay/mux state
+          is unknown, NOT absent. Unlike a confirmed absence, the remedy
+          is to retry with the access that read needs (outside a sandbox,
+          or with elevated permissions).
+
+qd never reports a denied read as an absence. When discovery is degraded it
+says so on stderr, prints the underlying OS error as its reason, and `qd info`
+renders the affected fields as "unknown (<source> unavailable)" instead of "-".
 "####;
 
 pub const SEND_PTY: &str = r####"Usage: qd send:pty [options] <session> <message>

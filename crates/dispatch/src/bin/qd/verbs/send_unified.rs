@@ -7,6 +7,7 @@
 
 use clap::ArgMatches;
 
+use dispatch::discovery::DiscoveryHealth;
 use dispatch::effects::{Env, RealEnv};
 use dispatch::idstore::IdMap;
 use dispatch::launch::RenderMode;
@@ -73,13 +74,11 @@ fn select_carrier(session: &Session) -> Result<UnifiedCarrier, SendRefusal> {
         // missing endpoint and blame the transport for a session that never had
         // one.
         //
-        // What the PTY carrier does for codex today is deliberately conservative:
-        // the attended-send machinery has landed codex composer facts
-        // (`qrmux::attended::fire::CodexFacts`) but codex still exposes no pollable
-        // busy/idle signal, so acceptance is not confirmable and the fire gates
-        // itself OFF before touching the composer — an honest non-delivery rather
-        // than an unverifiable claim. That is the correct answer to give here, and
-        // it improves on its own the day codex grows a confirmable signal.
+        // The PTY carrier DELIVERS for codex: `qrmux::attended::fire` carries codex
+        // composer facts, and although codex publishes no pollable busy/idle
+        // signal, its rollout records the submitted message — so acceptance is
+        // confirmed from the transcript (`AcceptanceSignal::Landing`) rather than
+        // from a status it never publishes.
         "codex"
             if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
                 == Some(dispatch::provider::Hosting::MuxPane) =>
@@ -92,6 +91,29 @@ fn select_carrier(session: &Session) -> Result<UnifiedCarrier, SendRefusal> {
         }
         "codex" => Ok(UnifiedCarrier::CodexDaemon),
         provider if provider.starts_with("acp/") => Ok(UnifiedCarrier::AcpDaemon),
+        // pi-interactive: the exact codex story one provider over. A pi row is only
+        // a resident-adapter row when it is DAEMON-hosted; the `--interactive` lane
+        // has no ws endpoint to reconnect to, and its receive path is the pane's
+        // PTY. Routing it to `PiDaemon` would fail on a missing endpoint and blame
+        // the transport for a session that never had one.
+        //
+        // The PTY carrier DELIVERS here too. pi's transcript is append-per-entry
+        // once flushed (see `dispatch::provider::pi::tui`), so a submitted message
+        // is observable on disk and acceptance is confirmed by the same
+        // landing-as-acceptance proof codex uses. The one gap is a session whose
+        // first assistant reply has not happened yet — pi has written nothing at
+        // all by then, so a landing cannot be confirmed and the send reports an
+        // honest non-delivery rather than an unverifiable claim.
+        "pi"
+            if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
+                == Some(dispatch::provider::Hosting::MuxPane) =>
+        {
+            if session.zmx_name.is_some() && session.socket_dir.is_some() {
+                Ok(UnifiedCarrier::MuxPty)
+            } else {
+                Err(SendRefusal::NoLiveReceivePath)
+            }
+        }
         "pi" => Ok(UnifiedCarrier::PiDaemon),
         // Relay precedence is structural: a recorded port selects relay before
         // mux state is considered. PTY can only be selected from a positive
@@ -287,8 +309,48 @@ fn resolve_self_session_id(env: &dyn Env) -> Result<Option<String>, i32> {
     Ok(dispatch::idstore::resolve_to_uuid(&ids, &raw))
 }
 
-fn report_refusal(query: &str, session: &Session, refusal: SendRefusal) -> i32 {
+/// Report a refusal.
+///
+/// `health` does NOT participate in SELECTION: [`select_carrier`] stays a pure
+/// function of the resolved row, exactly as its doc promises. What health
+/// changes is whether an absence may be ASSERTED. `relay_port: None` produced
+/// by a refused `ps` is not evidence of no relay — it is the absence of
+/// evidence — so that case is reported as a distinct refusal CLASS
+/// (`refused{receive-path-undetermined}`) carrying the underlying OS error,
+/// instead of the flat "has no live receive path" claim.
+///
+/// Exit codes follow the contract (`origin_send` §6): the pre-existing
+/// transport-shape refusals keep their generic `1` (pinned by `verbs_a4`), and
+/// the NEW undetermined class rides the shared [`Refusal`] door code
+/// [`EXIT_REFUSED`]. So a caller can separate the two cases on `$?` alone —
+/// `1` means retrying will not help, `12` means retry with the access the
+/// denied read needed — and on the machine-readable class token either way.
+fn report_refusal(
+    query: &str,
+    session: &Session,
+    refusal: SendRefusal,
+    health: &DiscoveryHealth,
+) -> i32 {
     let label = session.name.as_deref().unwrap_or(query);
+
+    // The one case health is allowed to change: an absence we never observed.
+    // Checked before the match so the codex-interactive Bare arm below keeps
+    // its specific wording (a bare codex pane is undetermined for its OWN
+    // reason, which a denied `ps` neither causes nor explains).
+    if refusal == SendRefusal::NoLiveReceivePath && health.receive_path_undetermined() {
+        let code = Refusal::refused(
+            "receive-path-undetermined",
+            format!(
+                "the discovery read that would have found a receive path for \"{label}\" was \
+                 refused, so relay and mux state are UNKNOWN — this is not the same as having \
+                 no receive path"
+            ),
+        )
+        .emit();
+        report_degradation(health);
+        return code;
+    }
+
     match refusal {
         // codex-interactive: an interactive codex pane is Bare for a SPECIFIC and
         // temporary reason — codex does not open its rollout (and so discloses no
@@ -317,6 +379,16 @@ fn report_refusal(query: &str, session: &Session, refusal: SendRefusal) -> i32 {
         ),
     }
     1
+}
+
+/// Print the evidence for a degraded gather, and the remedy when one applies.
+/// Evidence is the raw OS error, preserved — `qd` reports what it observed and
+/// lets the reader conclude what denied it.
+fn report_degradation(health: &DiscoveryHealth) {
+    eprintln!("qd send: reason: {}", health.evidence());
+    if let Some(hint) = health.hint() {
+        eprintln!("qd send: hint: {hint}");
+    }
 }
 
 pub fn run_send_unified(m: &ArgMatches) -> i32 {
@@ -507,7 +579,10 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
     // bare row has nothing to wake and nothing to receive, so we refuse before
     // logging any envelope (unchanged).
     if target.session_id.is_empty() {
-        return report_refusal(query, &target, SendRefusal::Bare);
+        // Bareness is read straight off the registry row, not from any process
+        // or mux probe, so no discovery failure can manufacture or mask it —
+        // a clean health is the honest thing to report against here.
+        return report_refusal(query, &target, SendRefusal::Bare, &DiscoveryHealth::default());
     }
 
     // The join intentionally deduplicates stale rows, so inspect the raw live
@@ -527,8 +602,13 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
     // resolve-to-attempt state changes (death, relay loss/appearance, mux loss)
     // without ever allowing a replacement name/prefix match to redirect the
     // message. The wake/selection below uses this current observable snapshot.
-    let current = match common::resolve_session_uncapped(&target.session_id) {
-        Ok(session) if session.session_id == target.session_id => session,
+    //
+    // Carried WITH its discovery health: selection runs on THIS snapshot, so a
+    // refusal must be explained by THIS gather's reads, not the resolve-time
+    // ones. Without it a `relay_port` nulled by a refused `ps` is
+    // indistinguishable from a session that genuinely has no relay.
+    let (current, health) = match common::resolve_session_uncapped_with_health(&target.session_id) {
+        Ok((session, health)) if session.session_id == target.session_id => (session, health),
         Ok(_) => {
             eprintln!("qd send: target identity changed before delivery — refusing to send.");
             return 1;
@@ -549,7 +629,7 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
     if is_live(&current) {
         let carrier = match select_carrier(&current) {
             Ok(carrier) => carrier,
-            Err(refusal) => return report_refusal(query, &current, refusal),
+            Err(refusal) => return report_refusal(query, &current, refusal, &health),
         };
         // qd–qf W3 part A: WRITE-THEN-DELIVER. Log the envelope BEFORE delivery
         // (hard-fail if the append errors), stamp `attempted`, deliver via the
@@ -1815,6 +1895,49 @@ mod tests {
         assert_eq!(select_carrier(&absent), Ok(UnifiedCarrier::CodexDaemon));
     }
 
+    // === pi-interactive: a pi row's carrier follows its HOSTING too ===
+    //
+    // Same disjoint-receive-path argument as codex, one provider over: the
+    // resident adapter has a ws front and no pane, the interactive lane has a pane
+    // and no front.
+
+    #[test]
+    fn pane_hosted_pi_selects_the_pty_carrier_not_the_daemon() {
+        let mut s = session("pi");
+        s.hosting = Some("mux-pane".into());
+        assert_eq!(
+            select_carrier(&s),
+            Ok(UnifiedCarrier::MuxPty),
+            "an --interactive pi row has no resident front; its receive path is the pane"
+        );
+    }
+
+    #[test]
+    fn daemon_hosted_pi_still_selects_the_daemon_carrier() {
+        // Both the explicit token and the absent field (every pre-existing pi row)
+        // must keep the resident lane — the regression guard for the pi fleet.
+        let mut explicit = session("pi");
+        explicit.hosting = Some("daemon".into());
+        assert_eq!(select_carrier(&explicit), Ok(UnifiedCarrier::PiDaemon));
+
+        let absent = session("pi");
+        assert_eq!(absent.hosting, None);
+        assert_eq!(select_carrier(&absent), Ok(UnifiedCarrier::PiDaemon));
+    }
+
+    #[test]
+    fn pane_hosted_pi_with_no_live_pane_refuses_as_no_receive_path() {
+        // The pane died but the row is still live-shaped. There is no ws front to
+        // fall back to, so the honest answer is "no live receive path" — not a
+        // route into the resident lane, which would fail on a missing endpoint and
+        // blame the transport.
+        let mut s = session("pi");
+        s.hosting = Some("mux-pane".into());
+        s.zmx_name = None;
+        s.socket_dir = None;
+        assert_eq!(select_carrier(&s), Err(SendRefusal::NoLiveReceivePath));
+    }
+
     #[test]
     fn unidentified_pane_hosted_codex_refuses_as_bare_not_as_a_daemon() {
         // The window between starting an interactive codex session and typing into
@@ -1878,6 +2001,133 @@ mod tests {
         assert_eq!(
             select_carrier(&claude),
             Err(SendRefusal::NoLiveReceivePath)
+        );
+    }
+
+    // --- refusal reporting: absence vs. undetermined ---------------------
+
+    fn eperm() -> std::io::Error {
+        std::io::Error::from_raw_os_error(libc::EPERM)
+    }
+
+    fn denied(source: &'static str) -> dispatch::discovery::AcquireFailure {
+        dispatch::discovery::AcquireFailure::new(source, &eperm())
+    }
+
+    /// Selection must NOT change when discovery is degraded — health explains a
+    /// refusal, it never causes or prevents one. This is the invariant that
+    /// keeps `select_carrier` a pure function of the resolved row.
+    #[test]
+    fn discovery_health_never_participates_in_selection() {
+        let mut claude = session("claude-code");
+        claude.relay_port = None;
+        claude.zmx_name = None;
+        claude.socket_dir = None;
+        // Same input row, same verdict, regardless of what the gather managed
+        // to read — the selector cannot see health at all.
+        assert_eq!(select_carrier(&claude), Err(SendRefusal::NoLiveReceivePath));
+    }
+
+    /// A clean gather still ASSERTS the absence, and keeps the pre-existing
+    /// transport-shape exit `1` that `verbs_a4` pins.
+    #[test]
+    fn clean_gather_reports_a_confirmed_absent_receive_path() {
+        let mut claude = session("claude-code");
+        claude.relay_port = None;
+        claude.zmx_name = None;
+        let code = report_refusal(
+            "target",
+            &claude,
+            SendRefusal::NoLiveReceivePath,
+            &DiscoveryHealth::default(),
+        );
+        assert_eq!(code, 1, "a confirmed absence keeps the generic transport exit");
+    }
+
+    /// THE regression this change exists for: a refused `ps` nulls `relay_port`
+    /// on every claude row, and the refusal must NOT report that as a confirmed
+    /// absence. It becomes its own refusal CLASS on the shared contract door
+    /// code, so a caller can separate "retrying will not help" (exit 1) from
+    /// "retry with the access that read needed" (EXIT_REFUSED) on `$?` alone.
+    #[test]
+    fn refused_process_table_downgrades_absence_to_undetermined() {
+        let mut claude = session("claude-code");
+        claude.relay_port = None;
+        claude.zmx_name = None;
+        let health = DiscoveryHealth {
+            process_table: Some(denied("ps")),
+            ..Default::default()
+        };
+        let code = report_refusal("target", &claude, SendRefusal::NoLiveReceivePath, &health);
+        assert_eq!(code, dispatch::origin_send::EXIT_REFUSED);
+        assert_ne!(code, 1, "undetermined must not look like a confirmed absence");
+    }
+
+    /// A refused mux list undetermines the PTY carrier the same way.
+    #[test]
+    fn refused_mux_list_also_downgrades_absence_to_undetermined() {
+        let mut claude = session("claude-code");
+        claude.relay_port = None;
+        claude.zmx_name = None;
+        let health = DiscoveryHealth {
+            mux_list: Some(denied("mux list")),
+            ..Default::default()
+        };
+        assert_eq!(
+            report_refusal("target", &claude, SendRefusal::NoLiveReceivePath, &health),
+            dispatch::origin_send::EXIT_REFUSED
+        );
+    }
+
+    /// A degraded census alone leaves the receive-path facts intact, so the
+    /// absence is still a real observation and keeps the confirmed exit.
+    #[test]
+    fn unrelated_degradation_does_not_downgrade_a_real_absence() {
+        let mut claude = session("claude-code");
+        claude.relay_port = None;
+        claude.zmx_name = None;
+        let health = DiscoveryHealth {
+            claude_procs: Some(denied("ps")),
+            ..Default::default()
+        };
+        assert!(health.is_degraded());
+        assert_eq!(
+            report_refusal("target", &claude, SendRefusal::NoLiveReceivePath, &health),
+            1
+        );
+    }
+
+    /// The undetermined class rides the shared `{class,reason}` refusal family,
+    /// so it renders in the same machine-readable shape as every other door
+    /// refusal rather than inventing a second vocabulary.
+    #[test]
+    fn undetermined_uses_the_shared_refusal_contract_shape() {
+        let line = dispatch::origin_send::Refusal::refused("receive-path-undetermined", "why")
+            .stderr_line();
+        assert!(
+            line.starts_with("qd send: refused{receive-path-undetermined}: "),
+            "{line}"
+        );
+    }
+
+    /// Health must never manufacture or mask a refusal for a target that is NOT
+    /// carrierless — degradation explains an existing refusal, it never creates
+    /// one. (Selection itself cannot see health at all; this pins the reporting
+    /// half of that same rule.)
+    #[test]
+    fn degradation_only_speaks_for_the_receive_path_refusal() {
+        let s = session("claude-code");
+        let degraded = DiscoveryHealth {
+            process_table: Some(denied("ps")),
+            ..Default::default()
+        };
+        // A bare row and an unknown provider are registry-derived facts: a
+        // denied process read neither causes nor explains them, so they keep
+        // their ordinary exit even under a degraded gather.
+        assert_eq!(report_refusal("t", &s, SendRefusal::Bare, &degraded), 1);
+        assert_eq!(
+            report_refusal("t", &s, SendRefusal::UnknownProvider("nope".into()), &degraded),
+            1
         );
     }
 

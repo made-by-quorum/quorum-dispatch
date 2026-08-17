@@ -111,7 +111,19 @@ pub fn run(m: &ArgMatches) -> i32 {
     // &-detached grandchildren together) via the same proven group ladder, gated on the
     // pi cmdline identity, then tombstone. Placed BEFORE refuse_unknown_provider (which
     // would otherwise refuse "pi" and leave the resident + pi alive — the live #8 leak).
-    if session.provider == "pi" {
+    //
+    // pi-interactive: SCOPED to DAEMON-hosted pi rows, exactly as the codex arm
+    // above is. An `--interactive` pi row has no resident at all — its pid is the
+    // mux pane — so the group-reap is not merely unnecessary, it LEAKS:
+    // `cmdline_is_our_pi_daemon` requires our `pi-daemon` cmdline, a TUI pane has
+    // none, the guard correctly refuses to signal, and the row would be tombstoned
+    // while the pane kept running. A pane-hosted pi row falls through to the
+    // claude-shaped dual-reap below, which is the machinery that actually reaps a
+    // pane (mux kill + pid-targeted kill, loud on partial).
+    if session.provider == "pi"
+        && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
+            == Some(dispatch::provider::Hosting::Daemon)
+    {
         return run_pi_kill(&paths, session);
     }
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.

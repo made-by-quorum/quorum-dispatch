@@ -166,8 +166,38 @@ pub fn run(m: &ArgMatches) -> i32 {
     // its durable identity). Placed BESIDE the codex/acp branches — BEFORE
     // refuse_unknown_provider (which would refuse "pi") and the must-be-cold gate (a
     // daemon-hosted row revives from any non-alive state, incl. a tombstoned stop).
-    if session.provider == "pi" {
+    //
+    // pi-interactive: SCOPED to DAEMON-hosted pi rows. `run_pi_resume` revives by
+    // booting a fresh resident and reloading the session over its front — machinery
+    // a pane-hosted row has none of (no resident, no endpoint). It is handled just
+    // below rather than here.
+    if session.provider == "pi"
+        && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
+            == Some(dispatch::provider::Hosting::Daemon)
+    {
         return run_pi_resume(&session);
+    }
+    // pi-interactive: a PANE-hosted pi row revives in place — relaunch `pi
+    // --session-id <id>` in a fresh pane, reopening the SAME conversation. This is
+    // the agent-facing verb, so it revives DETACHED (no interactive tail), exactly
+    // like the daemon arms above and the claude `--no-attach` shape; a human who
+    // wants to land inside uses `qd attach`, which revives and then hands over the
+    // terminal.
+    if session.provider == "pi" {
+        // Render mode is a launch-time birth property; resolve it here (the shared
+        // resolution below this branch runs too late for this arm).
+        let render = common::resolve_render_mode(m, &RealEnv);
+        return match lifecycle::revive_pi_tui(&session, render, "resume") {
+            Ok(handle) => {
+                println!(
+                    "Revived pi session \"{}\" — attach with \"qd attach {}\"",
+                    handle.zmx_name, handle.zmx_name
+                );
+                0
+            }
+            // revive_pi_tui already printed its own loud error.
+            Err(code) => code,
+        };
     }
     // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
     if let Some(code) = common::refuse_unknown_provider("resume", &session) {

@@ -456,9 +456,12 @@ fn emit_daemon_send_events_with_env(
 /// content_sha256}` (the FLOOR / record-presence reading) into the TARGET's log,
 /// best-effort. Used by the pi structured FLOOR (`run_pi_floor_send`, the dead-only
 /// sub-lane) once the sent bytes are confirmed present in the appended session
-/// record (content-keyed). The RESIDENT lanes emit their terminal at the
-/// wait/observe seam instead (never here). A reader recovers the floor-vs-strong
-/// reading from the paired send-initiated's send_path + D4's table.
+/// record (content-keyed). The RESIDENT lanes emit their terminal through the
+/// content-keyed observer (`wait::pi_observe_landed_sends`) instead, never here —
+/// driven from BOTH the wait seam and, since the busy-drop fix, the send seam's
+/// bounded landing check ([`pi_confirm_landing`]). A reader recovers the
+/// floor-vs-strong reading from the paired send-initiated's send_path + D4's
+/// table.
 fn emit_daemon_seen(
     target_name: &str,
     target_session: Option<&Session>,
@@ -1198,15 +1201,44 @@ pub(super) fn run_pi_send(session: &Session, message: &str) -> i32 {
         pid: session.pid,
     };
     let from = derive_from_session(&RealEnv);
+    // PRE-inject busy read, for the DISPOSITION of the post-send landing check
+    // below — NOT for routing (inject does its own, later, read: see
+    // `PiProvider::inject`). A busy resident means inject will route `FollowUp`,
+    // i.e. the message is QUEUED behind the open turn and legitimately lands
+    // minutes from now — polling the rollout for it would burn the window and
+    // prove nothing. An unreadable probe is treated as idle (we poll, and a
+    // no-show is reported as pending, which is the honest answer either way).
+    let queued = remote.get_state().map(|st| st.is_streaming);
+    let queued_behind_open_turn = queued.unwrap_or(false);
     let result = PiProvider.inject(&fx, &key, message, &from);
     // Best-effort close of our short-lived client (the resident daemon stays up).
     let _ = remote.close();
     match result {
         Ok(turn_id) => {
             // C5/C3: sent + delivered (turn-accepted) into the TARGET's log on the
-            // inject ACK; the content-keyed rollout terminal lands later at turn
-            // close (run_pi_wait observer). PENDING in the meantime — honest.
+            // inject ACK — NON-terminal.
             emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
+            // The terminal used to be reachable ONLY through the wait observer, so
+            // a plain fire-and-forget send left a turn-accepted with no terminal
+            // and nothing to contradict it — a dropped message was indistinguishable
+            // from a delivered one. Close the loop HERE, bounded, for the send that
+            // is expected to land NOW.
+            if queued_behind_open_turn {
+                eprintln!(
+                    "qd send:relay: \"{name}\": queued behind the open turn (follow-up); \
+                     delivery stays PENDING until it runs (qd wait {name} resolves it)."
+                );
+            } else if pi_confirm_landing(&env, &paths, session, message, PI_LANDING_WINDOW) {
+                eprintln!("qd send:relay: \"{name}\": landed (message-seen).");
+            } else {
+                // NO terminal — the send stays recoverable. Never a hard "didn't
+                // land": the rollout write may simply be slower than the window.
+                eprintln!(
+                    "qd send:relay: \"{name}\": accepted, but not yet present in the \
+                     rollout after {}ms — delivery PENDING, not confirmed.",
+                    PI_LANDING_WINDOW.as_millis()
+                );
+            }
             // The async-send analog: print the minted turn id, append invoked.
             println!("{turn_id}");
             invoked_send_relay(&name);
@@ -1220,6 +1252,55 @@ pub(super) fn run_pi_send(session: &Session, message: &str) -> i32 {
             1
         }
         Err(_) => not_reachable("daemon-unreachable"),
+    }
+}
+
+/// How long the SEND seam waits for a pi prompt to appear in the rollout before
+/// reporting the send as PENDING. Bounded and short: this is a confirmation
+/// window, not a wait — a message that has not been written as a user record by
+/// now is one the resident has not taken up, and saying so beats a silent
+/// turn-accepted. `qd wait` remains the unbounded resolver.
+const PI_LANDING_WINDOW: Duration = Duration::from_millis(2000);
+const PI_LANDING_POLL: Duration = Duration::from_millis(100);
+
+/// The SEND-seam half of the pi content-keyed observer: poll the resident's
+/// rollout for at most [`PI_LANDING_WINDOW`] for the sent bytes as a USER record
+/// (content-keyed on the send's `content_sha256`, the same key the wait observer
+/// and the dead-only floor sub-lane match on). On a hit, drive
+/// [`super::wait::pi_observe_landed_sends`] to emit the `message-seen` TERMINAL
+/// into the target's log and return true.
+///
+/// Returns false — and emits NOTHING — when the window closes with no record.
+/// That is deliberately NOT a `seen-failed`: an un-landed-yet send is
+/// indistinguishable from a slow rollout write, so it stays PENDING/recoverable,
+/// per the "never claim didn't-land" rule the recovery keys are built on.
+fn pi_confirm_landing(
+    env: &dyn Env,
+    paths: &dispatch::paths::QdPaths,
+    session: &Session,
+    message: &str,
+    window: Duration,
+) -> bool {
+    let Some(rollout_path) = session
+        .jsonl_path
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+    else {
+        return false;
+    };
+    let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
+    let deadline = std::time::Instant::now() + window;
+    loop {
+        let rollout = std::fs::read_to_string(&rollout_path).unwrap_or_default();
+        if dispatch::provider::pi::floor::rollout_landed(&rollout, &content_sha256) {
+            super::wait::pi_observe_landed_sends(env, paths, session);
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(PI_LANDING_POLL);
     }
 }
 
@@ -2609,5 +2690,165 @@ mod tests {
         assert_eq!(ms["event"], "message-seen");
         assert_eq!(ms["send_id"], "floor-send-1");
         assert_eq!(ms["content_sha256"].as_str().unwrap(), sha);
+    }
+
+    // === The SEND-seam landing check (the busy-drop fix, part 3) ===============
+
+    /// Build a pi target whose rollout is `<home>/rollout.jsonl`, with `records`
+    /// as its contents, and a `send-initiated` already in its delivery log for
+    /// `msg` (what `emit_daemon_send_events` writes on the inject ACK).
+    fn pi_landing_fixture(
+        home: &std::path::Path,
+        msg: &str,
+        rollout: &str,
+    ) -> (MapEnv, dispatch::paths::QdPaths, Session) {
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("HOME".to_string(), home.to_string_lossy().to_string());
+        let env = MapEnv { vars, uid: 501 };
+        let paths = dispatch::paths::QdPaths::from_home_env(home, &env);
+        let rollout_path = home.join("rollout.jsonl");
+        std::fs::write(&rollout_path, rollout).unwrap();
+        let target = Session {
+            name: Some("pi-resident-1".to_string()),
+            user_named: None,
+            session_id: "cdcdcdcd-0101-2323-4545-676767676767".to_string(),
+            code: None,
+            qd_id: None,
+            pid: Some(4242),
+            status: dispatch::model::SessionStatus::Idle,
+            zmx_name: None,
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: 0,
+            tokens: 0,
+            cwd: None,
+            last_active_ms: None,
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: Some(rollout_path.to_string_lossy().to_string()),
+            last_turns: None,
+            provider: "pi".to_string(),
+            hosting: None,
+            entrypoint: None,
+            lineage: None,
+            which_branch: dispatch::model::SessionBranch::LiveRegistry,
+        };
+        // The inject-ACK records the observer joins against.
+        emit_daemon_send_events_with_env(&env, "pi-resident-1", Some(&target), msg, "turn-1", "pi");
+        (env, paths, target)
+    }
+
+    fn pi_user_record(text: &str) -> String {
+        format!(
+            "{}\n",
+            serde_json::to_string(&serde_json::json!({
+                "type": "message",
+                "message": {"role": "user", "content": [{"type": "text", "text": text}]}
+            }))
+            .unwrap()
+        )
+    }
+
+    /// `pi_confirm_landing` with a ZERO window — the tests exercise the content
+    /// key and the emission, never the polling clock.
+    fn landed(env: &MapEnv, paths: &dispatch::paths::QdPaths, target: &Session, msg: &str) -> bool {
+        pi_confirm_landing(env, paths, target, msg, Duration::from_millis(0))
+    }
+
+    fn terminals_in_log(paths: &dispatch::paths::QdPaths, uuid: &str) -> Vec<String> {
+        let raw = std::fs::read_to_string(dispatch::events::events_path(&paths.state_dir, uuid))
+            .unwrap_or_default();
+        raw.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter_map(|v| v["event"].as_str().map(str::to_owned))
+            .filter(|e| dispatch::events::is_terminal(e))
+            .collect()
+    }
+
+    /// THE FIX: a plain fire-and-forget send now reaches its TERMINAL at the send
+    /// seam. Before, `message-seen` was reachable only through the wait observer,
+    /// so a delivered send and a dropped one left identical logs — a turn-accepted
+    /// and nothing else.
+    #[test]
+    fn send_seam_landing_check_emits_the_terminal() {
+        let home = tempfile::tempdir().unwrap();
+        let msg = "the message that must land";
+        let (env, paths, target) = pi_landing_fixture(home.path(), msg, &pi_user_record(msg));
+        assert!(
+            terminals_in_log(&paths, &target.session_id).is_empty(),
+            "the inject ACK alone is NON-terminal"
+        );
+        assert!(landed(&env, &paths, &target, msg));
+        assert_eq!(
+            terminals_in_log(&paths, &target.session_id),
+            vec!["message-seen".to_string()]
+        );
+    }
+
+    /// A send absent from the rollout emits NOTHING — no `seen-failed`, no
+    /// terminal of any kind. An un-landed-yet send is indistinguishable from a slow
+    /// rollout write, so it stays PENDING/recoverable: the recovery keys never
+    /// claim "didn't land."
+    #[test]
+    fn unlanded_send_emits_no_terminal_ever() {
+        let home = tempfile::tempdir().unwrap();
+        let msg = "the message that never lands";
+        let (env, paths, target) =
+            pi_landing_fixture(home.path(), msg, &pi_user_record("some other turn"));
+        assert!(!landed(&env, &paths, &target, msg));
+        assert!(
+            terminals_in_log(&paths, &target.session_id).is_empty(),
+            "no terminal — the send stays recoverable, never a hard didn't-land"
+        );
+    }
+
+    /// An assistant ECHO of the prompt is not a landing (the shared
+    /// `rollout_landed` false-positive guard, pinned at THIS seam too).
+    #[test]
+    fn assistant_echo_is_not_a_landing_at_the_send_seam() {
+        let home = tempfile::tempdir().unwrap();
+        let msg = "echoed but never accepted";
+        let echo = format!(
+            "{}\n",
+            serde_json::to_string(&serde_json::json!({
+                "type": "turn_end",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": msg}]}
+            }))
+            .unwrap()
+        );
+        let (env, paths, target) = pi_landing_fixture(home.path(), msg, &echo);
+        assert!(!landed(&env, &paths, &target, msg));
+        assert!(terminals_in_log(&paths, &target.session_id).is_empty());
+    }
+
+    /// Idempotent across the two seams: the send seam emits, and a later wait-seam
+    /// sweep over the same landed send adds NOTHING (first-terminal-wins).
+    #[test]
+    fn send_and_wait_seams_never_double_emit() {
+        let home = tempfile::tempdir().unwrap();
+        let msg = "landed exactly once";
+        let (env, paths, target) = pi_landing_fixture(home.path(), msg, &pi_user_record(msg));
+        assert!(landed(&env, &paths, &target, msg));
+        // The wait seam runs over the same rollout afterwards.
+        super::super::wait::pi_observe_landed_sends(&env, &paths, &target);
+        assert_eq!(
+            terminals_in_log(&paths, &target.session_id),
+            vec!["message-seen".to_string()],
+            "exactly one terminal, whichever seam gets there first"
+        );
+    }
+
+    /// A row with no recorded rollout path cannot be content-keyed: false, and no
+    /// terminal. Never a panic, never an invented landing.
+    #[test]
+    fn missing_rollout_path_is_pending_not_landed() {
+        let home = tempfile::tempdir().unwrap();
+        let msg = "no rollout on the row";
+        let (env, paths, mut target) = pi_landing_fixture(home.path(), msg, &pi_user_record(msg));
+        target.jsonl_path = None;
+        assert!(!landed(&env, &paths, &target, msg));
+        assert!(terminals_in_log(&paths, &target.session_id).is_empty());
     }
 }

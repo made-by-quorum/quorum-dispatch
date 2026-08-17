@@ -1776,8 +1776,8 @@ mod tests {
     fn pre_claimed_name_refuses_before_spawn_no_row() {
         let h = harness();
         // A pre-existing claim for "cdx" (a concurrent create already holds it).
-        // The holder pid must be genuinely ALIVE and OURS (P0 redfix F2 reaps
-        // dead-holder claims; kill(pid,0) on a foreign pid is EPERM = "dead").
+        // The holder pid must be genuinely ALIVE (P0 redfix F2 reaps
+        // dead-holder claims). Our own pid is unambiguously alive.
         let own_pid = std::process::id();
         registry::claim_name(
             &h.claims_dir,

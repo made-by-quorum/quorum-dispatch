@@ -18,6 +18,7 @@
 
 use serde_json::{json, Map, Value};
 
+use crate::discovery::DiscoveryHealth;
 use crate::model::{Session, SessionBranch, TurnPreview};
 use crate::stray::Stray;
 use crate::telemetry::SnapshotMap;
@@ -543,6 +544,26 @@ pub fn info_text(session: &Session, now_ms: i64) -> String {
 /// BYTE-IDENTICAL to [`info_text`] — the additive `Backend:` / `Spawned by:`
 /// lines appear ONLY when the fold yields values. The render fn stays pure.
 pub fn info_text_with_fold(session: &Session, now_ms: i64, fold: Option<&SnapshotMap>) -> String {
+    info_text_full(session, now_ms, fold, &DiscoveryHealth::default())
+}
+
+/// As [`info_text_with_fold`], but told WHICH discovery reads failed during the
+/// gather that produced `session`.
+///
+/// `qd info` renders a missing `zmx`/`Relay` as `-`, which reads as "this
+/// session has none". When the read that would have found one was refused, that
+/// is a claim `qd` never established — `zmx: -` and `Relay: -` are exactly the
+/// ambiguity that makes a denied `ps` look like a session with no carrier. With
+/// a degraded health those two lines render `unknown (ps unavailable)` instead.
+///
+/// A clean [`DiscoveryHealth`] (the default, and every non-sandboxed run) is
+/// BYTE-IDENTICAL to [`info_text_with_fold`] — the parity goldens are untouched.
+pub fn info_text_full(
+    session: &Session,
+    now_ms: i64,
+    fold: Option<&SnapshotMap>,
+    health: &DiscoveryHealth,
+) -> String {
     let mut out = String::new();
     let push = |out: &mut String, line: String| {
         out.push_str(&line);
@@ -606,7 +627,8 @@ pub fn info_text_with_fold(session: &Session, now_ms: i64, fold: Option<&Snapsho
                 if attached { "attached" } else { "detached" }
             )
         }
-        None => "-".to_string(),
+        // A refused mux list did not observe an absence — do not render one.
+        None => DiscoveryHealth::unknown_label(&health.mux_list).unwrap_or_else(|| "-".to_string()),
     };
     push(&mut out, format!("zmx:         {zmx_line}"));
 
@@ -618,7 +640,12 @@ pub fn info_text_with_fold(session: &Session, now_ms: i64, fold: Option<&Snapsho
     // Relay (status.ts:635).
     let relay_line = match session.relay_port {
         Some(port) => format!("localhost:{port}"),
-        None => "-".to_string(),
+        // `relay_port` is resolved by walking the `ps` ancestry from each relay
+        // sidecar. With no process table there is no walk, hence no answer —
+        // which is not the same answer as "no relay".
+        None => {
+            DiscoveryHealth::unknown_label(&health.process_table).unwrap_or_else(|| "-".to_string())
+        }
     };
     push(&mut out, format!("Relay:       {relay_line}"));
 
@@ -1101,6 +1128,91 @@ mod tests {
         assert!(text.contains("CWD:         -\n"));
         // No socketDir → no "zmx dir" line.
         assert!(!text.contains("zmx dir:"));
+    }
+
+    // --- info_text degraded-discovery rendering ---
+
+    fn denied_health() -> DiscoveryHealth {
+        DiscoveryHealth {
+            process_table: Some(crate::discovery::AcquireFailure::new(
+                "ps",
+                &std::io::Error::from_raw_os_error(libc::EPERM),
+            )),
+            ..Default::default()
+        }
+    }
+
+    /// A clean health is the existing behavior, byte for byte — the parity
+    /// goldens and every non-sandboxed run are untouched.
+    #[test]
+    fn info_text_full_with_clean_health_is_byte_identical() {
+        let mut s = base(SessionBranch::LiveRegistry);
+        s.name = Some("worker".into());
+        s.session_id = "sess-1".into();
+        s.relay_port = None;
+        s.zmx_name = None;
+        assert_eq!(
+            info_text_full(&s, 0, None, &DiscoveryHealth::default()),
+            info_text(&s, 0),
+            "clean health must not alter a single byte"
+        );
+    }
+
+    /// `Relay: -` asserts "this session has no relay". When the `ps` walk that
+    /// resolves the port was REFUSED, that claim was never established — so the
+    /// line must report the ambiguity instead of resolving it the wrong way.
+    #[test]
+    fn a_refused_process_table_renders_relay_as_unknown_not_absent() {
+        let mut s = base(SessionBranch::LiveRegistry);
+        s.name = Some("worker".into());
+        s.relay_port = None;
+        let text = info_text_full(&s, 0, None, &denied_health());
+        assert!(
+            text.contains("Relay:       unknown (ps unavailable)\n"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Relay:       -\n"),
+            "an unread field must never render as a confirmed absence: {text}"
+        );
+    }
+
+    /// The same rule for the mux read and the `zmx` line.
+    #[test]
+    fn a_refused_mux_list_renders_zmx_as_unknown_not_absent() {
+        let mut s = base(SessionBranch::LiveRegistry);
+        s.name = Some("worker".into());
+        s.zmx_name = None;
+        let health = DiscoveryHealth {
+            mux_list: Some(crate::discovery::AcquireFailure::new(
+                "mux list",
+                &std::io::Error::from_raw_os_error(libc::EPERM),
+            )),
+            ..Default::default()
+        };
+        let text = info_text_full(&s, 0, None, &health);
+        assert!(
+            text.contains("zmx:         unknown (mux list unavailable)\n"),
+            "{text}"
+        );
+    }
+
+    /// Degradation only rewrites the fields whose OWN read failed. A relay port
+    /// that WAS resolved still renders its value, and an unaffected field keeps
+    /// its ordinary absent rendering.
+    #[test]
+    fn degradation_only_rewrites_the_fields_whose_read_failed() {
+        let mut s = base(SessionBranch::LiveRegistry);
+        s.name = Some("worker".into());
+        s.relay_port = Some(4312);
+        s.zmx_name = None;
+        // Only the process table was refused; the mux read succeeded.
+        let text = info_text_full(&s, 0, None, &denied_health());
+        assert!(text.contains("Relay:       localhost:4312\n"), "{text}");
+        assert!(
+            text.contains("zmx:         -\n"),
+            "a successful read that found nothing still renders as absent: {text}"
+        );
     }
 
     #[test]
