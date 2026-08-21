@@ -23,7 +23,9 @@ pub(super) mod resume;
 mod send;
 mod send_relay;
 mod send_unified;
-mod setup;
+// `pub(crate)`: `main.rs` asks it whether this machine is set up before
+// printing the top-level help (the one state-dependent line in that surface).
+pub(crate) mod setup;
 mod stubs;
 mod update;
 mod wait;
@@ -98,7 +100,11 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         // names `setup` and says what it does, which is what the redirect was
         // reaching for. `qd ls` is one word away for anyone who wanted the list.
         None => {
-            println!("{}", crate::help::render_top(&crate::cli::build_cli(), false));
+            let incomplete = setup::install_is_incomplete();
+            println!(
+                "{}",
+                crate::help::render_top(&crate::cli::build_cli(), false, incomplete)
+            );
             0
         }
     }

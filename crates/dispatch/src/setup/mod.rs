@@ -685,6 +685,68 @@ mod tests {
         assert_eq!(status_of(&r, "placement"), Status::Skip);
     }
 
+    /// The invariant the top-level help's cheap probe rests on
+    /// (`bin/qd/verbs/setup.rs::install_is_incomplete`): a harness is never a
+    /// FAIL, so the exit code — and therefore the "is this machine set up"
+    /// answer — does not depend on the harness probes at all. That is what lets
+    /// `qd --help` answer the question without shelling out eight times.
+    ///
+    /// MUTATION EVIDENCE: making any `check_harness` arm return `Status::Fail`
+    /// reds this, and correctly so — the probe would then have to run.
+    #[test]
+    fn harness_checks_never_gate_the_exit_code() {
+        // Every presence/version/wiring shape a probe can produce, including the
+        // ones that carry a WARN.
+        let shapes = [
+            HarnessFacts {
+                id: HarnessId::ClaudeCode,
+                presence: Presence::Missing,
+                version: None,
+                pin_ok: None,
+                pin_note: String::new(),
+                wired: None,
+                wiring_note: String::new(),
+            },
+            HarnessFacts {
+                id: HarnessId::Codex,
+                presence: Presence::OnPath { path: None },
+                version: None,
+                pin_ok: Some(false),
+                pin_note: "breaking drift".into(),
+                wired: Some(false),
+                wiring_note: "not wired".into(),
+            },
+            HarnessFacts {
+                id: HarnessId::Pi,
+                presence: Presence::OffPath {
+                    path: "/usr/local/bin/pi".into(),
+                },
+                version: Some("0.1.0".into()),
+                pin_ok: Some(true),
+                pin_note: String::new(),
+                wired: Some(true),
+                wiring_note: "wired".into(),
+            },
+        ];
+        for h in &shapes {
+            let mut f = healthy();
+            f.harnesses = vec![h.clone()];
+            let r = assess(&f);
+            assert_eq!(r.exit_code(), 0, "{:?} gated the exit code:\n{}", h.id, r.render());
+        }
+        // ...and a machine with NO harness facts at all — what the help's probe
+        // assesses — reaches the same verdict as the fully probed one.
+        let mut none = healthy();
+        none.harnesses = vec![];
+        assert_eq!(assess(&none).exit_code(), assess(&healthy()).exit_code());
+        let mut broken = healthy();
+        broken.engine_dir_present = false;
+        let mut broken_unprobed = broken.clone();
+        broken_unprobed.harnesses = vec![];
+        assert_eq!(assess(&broken_unprobed).exit_code(), assess(&broken).exit_code());
+        assert_eq!(assess(&broken_unprobed).exit_code(), 1);
+    }
+
     #[test]
     fn every_check_id_is_unique_so_json_consumers_can_key_off_it() {
         let r = assess(&healthy());

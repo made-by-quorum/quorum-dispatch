@@ -18,14 +18,13 @@
 //! verb list — so hand-writing it bought nothing and cost drift.
 
 // `setup` has no TS-era corpus capture — it is net-new (FTUE punch R15 + C2),
-// the first-run entry a human reaches straight after `brew install`. It is
-// hand-written to the same commander layout as the rest of this file precisely
-// because it is one of the few verbs `qd --help` shows: a verb on the first-run
-// path that renders clap's default layout is the one place the CLI would look
-// unfinished.
+// the verb a human reaches straight after `brew install`. It is hand-written to
+// the same commander layout as the rest of this file precisely because it is
+// one of the few verbs `qd --help` shows: a verb on that path rendering clap's
+// default layout is the one place the CLI would look unfinished.
 pub const SETUP: &str = r####"Usage: qd setup [options]
 
-First run: set up qd's install layout and wire up your agent harnesses.
+Check this machine's qd install and wire up your agent harnesses.
 
 Run this once after installing qd. It checks everything qd needs and prints a
 verdict per check — the `~/.quorum` layout, that `qw` sits beside `qd` (qd
@@ -56,7 +55,7 @@ like an incomplete Homebrew install or a `~/.claude.json` that is not valid JSON
 // TS-era corpus capture (the same sanctioned shape as info's `--json` line).
 pub const LS: &str = r####"Usage: qd ls|list [options]
 
-List Claude Code sessions (use --json for scripting)
+List all sessions, on every provider (use --json for scripting)
 
 Options:
   -a, --all            Everything: all local sessions (uncapped, incl. killed)
@@ -89,11 +88,12 @@ bare/managed classification (`management` in JSON; `Mode` in the human table).
 // actually prints).
 pub const ATTACH: &str = r####"Usage: qd attach [options] <session>
 
-Get into a session — the one verb for "take me there".
+Connect your terminal to a running agent session's own TUI.
 
-For a live Claude session this opens an interactive terminal. A cold Claude
-session is revived and then opened. A codex session is
-daemon-hosted (no terminal): it points you at `qd send:relay` / `qd resume`.
+For a live Claude session this drops you straight into its interface. A cold
+Claude session is revived first and then opened. A codex session is
+daemon-hosted — there is no TUI to connect to, so it points you at
+`qd send:relay` / `qd resume` instead.
 
 Options:
   --no-attach   Revive a cold session to a persistent daemon and return 0
@@ -200,7 +200,7 @@ Options:
 //        longer one thing — a terminal is asked, everything else defaults.
 pub const START: &str = r####"Usage: qd start [options] <name> [claudeArgs...]
 
-Create a new session (claude-code, codex, pi, opencode)
+Create a new session (claude-code, codex, pi, acp/claude-code, opencode)
 
 start = new participant (fresh or forked) · resume = same participant wakes ·
 attach = enter live or cold session.
@@ -616,49 +616,65 @@ Options:
 // Top-level `qd --help` — GENERATED from the clap verb table (FTUE punch R4).
 // ===========================================================================
 
-/// The four SESSION verbs — the ENTIRE human-facing `qd` surface (FTUE punch
-/// R14, ruled in `doc/ftue/punch-list.md`, "Shipping shape").
+/// The verbs `qd --help` lists — the ENTIRE human-facing `qd` surface (FTUE
+/// punch R14, ruled in `doc/ftue/punch-list.md`, "Shipping shape").
 ///
-/// RULE: a verb appears in `qd --help` iff it is named here (or in
-/// [`FIRST_RUN_VERBS`]) **and** registered unhidden in `cli::subcommands`.
-/// Every other verb stays FULLY REGISTERED and FULLY WORKING — clap's
-/// `.hide(true)` suppresses the help row and NOTHING else, so parsing and
-/// dispatch are untouched. That is the C1 "hidden-but-working" resolution:
-/// humans get four verbs, agents and power users keep the whole surface and
-/// find it with `qd --help-all`.
-pub const SESSION_VERBS: [&str; 4] = ["ls", "start", "stop", "attach"];
+/// RULE: a verb appears in `qd --help` iff it is named here **and** registered
+/// unhidden in `cli::subcommands`. Every other verb stays FULLY REGISTERED and
+/// FULLY WORKING — clap's `.hide(true)` suppresses the help row and NOTHING
+/// else, so parsing and dispatch are untouched. That is the C1
+/// "hidden-but-working" resolution: humans get this list, agents and power
+/// users keep the whole surface and find it with `qd --help-all`.
+///
+/// `setup` used to sit in its own `First run:` section under a three-line note.
+/// It is a command like the others — you run it, it does a thing — and giving
+/// it a private section said the opposite: that a reader had to understand a
+/// second concept before the table made sense. It is the last row now, which is
+/// where a once-per-machine command belongs, and its own `--help` carries the
+/// detail the note used to.
+pub const HUMAN_VERBS: [&str; 5] = ["ls", "start", "stop", "attach", "setup"];
 
-/// The first-run entry — R14's one exception to the four-verb rule. `setup` is
-/// how a human gets from `brew install` to a working install, so it stays
-/// visible, but in its OWN section: it is a thing you run once, not a fifth
-/// session verb, and grouping it with the four would say otherwise.
-pub const FIRST_RUN_VERBS: [&str; 1] = ["setup"];
+/// The one-line notice a top-level help prints when this machine's install is
+/// not finished (FTUE punch: the help says so instead of announcing "first run"
+/// to everyone, including the thousandth run on a wired machine).
+///
+/// It is the ONLY state-dependent line in the help, and it is deliberately a
+/// pointer rather than a diagnosis: `qd setup` already reports check-by-check,
+/// and duplicating any of that here would be a second place to keep true.
+const SETUP_INCOMPLETE_NOTICE: &str =
+    "This machine is not fully set up — run `qd setup` to see what is missing.";
 
-/// What `qd setup` does, printed under the First-run row in `qd --help`.
+/// Every provider `qd start --provider` actually accepts, as the help prints
+/// them.
 ///
-/// A verb table can say a verb exists; it cannot say whether running it is safe,
-/// and that is the only question a person has about a setup command on a machine
-/// they care about. So this says the two things that decide it: it writes
-/// NOTHING without `--fix`, and it is re-runnable. The rest is what it inspects,
-/// named concretely enough that a reader can tell whether their problem is in
-/// scope.
-///
-/// This carries weight it did not used to: bare `qd` prints this help now, so
-/// for anyone following the brew formula's "run `qd`" line, these three lines
-/// ARE the first-run instructions.
-const SETUP_NOTE: &str =
-    "  Report-only by default: `qd setup` names what is missing — the ~/.quorum layout,
-  the relay pin in ~/.claude.json, and which of claude/codex/pi/opencode it can
-  find — and changes nothing. Re-run it as `qd setup --fix` to apply what it
-  listed. Safe to re-run either way.";
+/// DERIVED from `Harness::ALL`, never hand-listed: the accept-set lives in
+/// `Harness::from_provider_id` (which is also what `Lane::for_create` routes
+/// on), so a harness added there shows up in the help on the next build and a
+/// harness removed there stops being advertised. The `opencode` spelling is the
+/// CLI alias for the internal `acp/opencode` id — both parse, and the alias is
+/// what a person types.
+pub fn provider_list() -> String {
+    use quorum_qw::lane::Harness;
+    Harness::ALL
+        .iter()
+        .map(|h| match h {
+            Harness::Opencode => "opencode",
+            Harness::ClaudeCode | Harness::Codex | Harness::Pi | Harness::AcpClaudeCode => {
+                h.provider_id()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The `start` row's one-liner, and the first line of [`START`] — one string so
+/// the table and the verb's own `--help` can never name different providers.
+pub fn start_about() -> String {
+    format!("Create a new session ({})", provider_list())
+}
 
 /// Section header for the hidden surface, printed only by `qd --help-all`.
 const HIDDEN_HEADING: &str = "Hidden from `qd --help` (agent-facing, machinery, compat — all still working):";
-
-/// The `--help` trailer that makes the hidden surface discoverable (R4).
-const HELP_ALL_POINTER: &str = "\
-Only the session verbs and `setup` are listed here. Every other verb is still
-registered and working — `qd --help-all` prints the full surface.";
 
 /// Render the top-level help table by WALKING the clap command (FTUE punch R4).
 ///
@@ -671,47 +687,46 @@ registered and working — `qd --help-all` prints the full surface.";
 /// impossible: `cli::subcommands()` becomes the ONE place a verb is declared.
 ///
 /// The commander layout is preserved deliberately (`Usage: qd [options]
-/// [command]`, the `ls|list` alias style, the two-space table, `-h, --help
-/// display help for command`) — R4 changes where the bytes come from, not what
-/// they look like.
+/// [command]`, the `ls|list` alias style, the two-space table) — R4 changed
+/// where the bytes come from, not what they look like.
 ///
 /// `include_hidden` is the `qd --help-all` surface: the same table with one
 /// extra section listing the verbs `--help` suppresses.
-pub fn render_top(cmd: &clap::Command, include_hidden: bool) -> String {
+///
+/// `setup_incomplete` is the one fact the tree cannot answer: whether THIS
+/// machine's install is finished. It is a parameter rather than a probe because
+/// the help is also rendered from `cli::build_cli`, which every invocation
+/// builds — a filesystem probe in there would be paid by `qd send:relay` to
+/// print nothing. The print sites that can afford the probe pass it; the ones
+/// that cannot pass `false`.
+pub fn render_top(cmd: &clap::Command, include_hidden: bool, setup_incomplete: bool) -> String {
     let row = |sub: &clap::Command| (signature(sub), about_line(sub));
     let find = |name: &str| cmd.get_subcommands().find(|s| s.get_name() == name);
-    let classified = |name: &str| SESSION_VERBS.contains(&name) || FIRST_RUN_VERBS.contains(&name);
+    let classified = |name: &str| HUMAN_VERBS.contains(&name);
 
     // The Options rows are clap builtins (`-V/--version`, `-h/--help`), not verb
     // registrations, so they are the one hand-written pair in this function.
     let options: Vec<(String, String)> = vec![
         ("-V, --version".into(), "output the version number".into()),
-        ("-h, --help".into(), "display help for command".into()),
+        (
+            "-h, --help".into(),
+            "display help — append it to any command for that command's help".into(),
+        ),
     ];
 
     let mut sections: Vec<(&str, Vec<(String, String)>)> = Vec::new();
 
-    // The four session verbs, in the RULED order (ls/start/stop/attach) rather
-    // than registration order — the punch item names that sequence, and it reads
-    // as the lifecycle it is.
-    let session: Vec<_> = SESSION_VERBS
+    // The human verbs in the RULED order (the session lifecycle ls/start/stop/
+    // attach, then `setup`) rather than registration order — the punch item
+    // names that sequence, and it reads as the lifecycle it is.
+    let commands: Vec<_> = HUMAN_VERBS
         .iter()
         .filter_map(|n| find(n))
         .filter(|s| !s.is_hide_set())
         .map(row)
         .collect();
-    if !session.is_empty() {
-        sections.push(("Commands:", session));
-    }
-
-    let first_run: Vec<_> = FIRST_RUN_VERBS
-        .iter()
-        .filter_map(|n| find(n))
-        .filter(|s| !s.is_hide_set())
-        .map(row)
-        .collect();
-    if !first_run.is_empty() {
-        sections.push(("First run:", first_run));
+    if !commands.is_empty() {
+        sections.push(("Commands:", commands));
     }
 
     // Safety net, and the reason this is a walk and not a lookup: a verb that is
@@ -744,28 +759,22 @@ pub fn render_top(cmd: &clap::Command, include_hidden: bool) -> String {
 
     let mut out = String::new();
     out.push_str("Usage: qd [options] [command]\n\n");
-    out.push_str("Claude Sessions — manage Claude Code sessions\n\n");
-    // The STATE-21 model line (spec-w7-start-surface D1): the one piece of
-    // orientation the table itself cannot carry.
-    out.push_str(
-        "start = new participant (fresh or forked) · resume = same participant wakes ·\n\
-         attach = enter live or cold session.\n",
-    );
+    // qd is not a Claude tool that grew. It runs sessions on every harness it
+    // supports and carries messages BETWEEN them — `qd send:relay` is as much
+    // the product as `qd start` — and a summary line naming one vendor told a
+    // new reader the opposite.
+    out.push_str("Run coding-agent sessions across providers, and message the agents in them.\n");
     push_section(&mut out, "Options:", &options, width);
     for (heading, rows) in &sections {
         push_section(&mut out, heading, rows, width);
-        // The one section whose rows are not self-explanatory: `setup` is the
-        // verb a new reader is most likely to hesitate over, and bare `qd` lands
-        // them here (see `verbs::dispatch`).
-        if *heading == "First run:" {
-            out.push('\n');
-            out.push_str(SETUP_NOTE);
-            out.push('\n');
-        }
     }
-    if !include_hidden {
+    // The only line here that depends on the machine rather than the tree — and
+    // the reason the help no longer greets everyone with "First run": a wired
+    // machine says nothing, and an unwired one says the one thing that is true
+    // of it.
+    if setup_incomplete {
         out.push('\n');
-        out.push_str(HELP_ALL_POINTER);
+        out.push_str(SETUP_INCOMPLETE_NOTICE);
         out.push('\n');
     }
     out

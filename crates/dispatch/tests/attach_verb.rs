@@ -346,18 +346,22 @@ fn resume_help_documents_agent_facing_revive_to_drivable() {
 
 // === connect retirement: absent from TOP help, --help marks it renamed ===
 
-/// `connect` is absent from the top-level command table (`qd --help`), which now
-/// carries the start/resume/attach model line; `qd connect --help` still renders
-/// a migration pointer.
+/// `connect` is absent from the top-level command table (`qd --help`);
+/// `qd connect --help` still renders a migration pointer.
 ///
 /// FTUE punch R14/R4: the table is GENERATED from the clap tree and lists only
 /// the four session verbs plus `setup`, so `attach`'s row now carries the
 /// options it actually registers, and `connect` is absent because it is hidden
 /// rather than because someone remembered to leave it out of a string const.
 ///
+/// The overview used to repeat `start`/`attach` in a start/resume/attach gloss
+/// directly above the table that already lists both, so the two verbs a new
+/// reader sees first were each said twice, one line apart. The gloss is gone;
+/// it survives where it is not a repetition, in `qd start --help`.
+///
 /// MUTATION EVIDENCE: unhiding connect in `cli::subcommands` reds the absence
 /// assert; dropping the CONNECT-const renamed marker reds the pointer assert;
-/// dropping the model line from `help::render_top` reds the model-line assert.
+/// putting the model line back in `help::render_top` reds the no-repeat assert.
 #[test]
 fn connect_retired_from_top_help_and_help_marks_renamed() {
     let t = tempfile::tempdir().unwrap();
@@ -368,12 +372,19 @@ fn connect_retired_from_top_help_and_help_marks_renamed() {
         top.contains("attach [options] <session>"),
         "attach listed in the top help, got: {top}"
     );
-    // The STATE-21 model line (spec-w7-start-surface D1).
+    // The STATE-21 model line (spec-w7-start-surface D1) is NOT in the overview:
+    // it named `start` and `attach` one line above the rows that name them, and
+    // `resume`, which the human table does not carry at all.
     assert!(
-        top.contains("start = new participant (fresh or forked)")
-            && top.contains("resume = same participant wakes")
-            && top.contains("attach = enter live or cold session"),
-        "the start/resume/attach model line is in the overview, got: {top}"
+        !top.contains("start = new participant (fresh or forked)"),
+        "the model line repeats the table's own rows, got: {top}"
+    );
+    // It stays where it earns its place — the start verb's own help.
+    let (sc, shelp, _e4) = run_qd_empty(t.path(), &["start", "--help"]);
+    assert_eq!(sc, 0, "start --help exits 0");
+    assert!(
+        shelp.contains("start = new participant (fresh or forked)"),
+        "the model line survives on `qd start --help`, got: {shelp}"
     );
     // connect is gone: no `connect <session>` table row in the top help.
     assert!(

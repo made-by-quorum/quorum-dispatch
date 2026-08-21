@@ -191,6 +191,12 @@ const PINS: &[Pin] = &[
     },
     // ---- the qd binary ------------------------------------------------------
     Pin {
+        path: "bin/qd/help.rs",
+        literals: 1,
+        routing: 0,
+        reason: "`help::provider_list` renders `Harness::ALL` for the help table and spells                  Opencode with its CLI alias — the set comes from qw, only the spelling is here",
+    },
+    Pin {
         path: "bin/qd/main.rs",
         literals: 3,
         routing: 0,

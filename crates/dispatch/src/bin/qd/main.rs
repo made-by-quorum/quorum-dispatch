@@ -130,7 +130,19 @@ fn run(argv: &[String]) -> i32 {
         // help. A `--help`-shaped token can never be a session name, so there is
         // nothing here to shadow.
         Some("--help-all") => {
-            print!("{}", help::render_top(&cli::build_cli(), true));
+            let incomplete = verbs::setup::install_is_incomplete();
+            print!("{}", help::render_top(&cli::build_cli(), true, incomplete));
+            return 0;
+        }
+        // `qd --help` / `qd -h`: dispatched PRE-CLAP for one reason — the help
+        // clap would print is the string baked into `cli::build_cli`, and the
+        // setup-state line can only be true at PRINT time. Building it in
+        // `build_cli` would instead charge every `qd send:relay` a filesystem
+        // probe for a line it never prints. Only the bare form is taken here;
+        // `qd start --help` is clap's, unchanged.
+        Some("--help") | Some("-h") if rest.len() == 1 => {
+            let incomplete = verbs::setup::install_is_incomplete();
+            print!("{}", help::render_top(&cli::build_cli(), false, incomplete));
             return 0;
         }
         _ => {}

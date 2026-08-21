@@ -66,7 +66,10 @@ fn run_with(fix: bool, json: bool, yes: bool) -> i32 {
     // up the scrollback. And never under `--json`, where stdout is a document.
     if help_tail_follows(code, json) {
         println!("\n[setup] Setup is complete. Here is the whole session surface:");
-        print!("{}", crate::help::render_top(&crate::cli::build_cli(), false));
+        // `false`: this tail only follows an exit-0 run, which IS the finished
+        // install — re-probing to print "not fully set up" under a report that
+        // just said everything is in place would be the contradiction.
+        print!("{}", crate::help::render_top(&crate::cli::build_cli(), false, false));
     }
     code
 }
@@ -156,6 +159,38 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
 // ---------------------------------------------------------------------------
 
 fn gather(home: &Path, env: &impl Env, exec: &impl Exec) -> SetupFacts {
+    gather_inner(home, env, Some(exec))
+}
+
+/// Is this machine's install unfinished — i.e. would `qd setup` exit 1 right now?
+///
+/// This is what the top-level help asks before printing its one state-dependent
+/// line, so it has to be CHEAP: it runs the same pure [`assess`] over the same
+/// facts MINUS the harness probes, which are the only part of `gather` that
+/// shells out (four `command -v` + four `--version` runs, each with a 10s
+/// ceiling — fine for a verb a person waits on, absurd for `qd --help`).
+///
+/// Skipping them cannot change the answer, and that is a property of the
+/// decision table rather than a hope: no harness check ever returns
+/// [`Status::Fail`] (a harness you do not have is not a broken install), and
+/// `Fail` is the only status [`SetupReport::exit_code`] gates on. The checks
+/// that DO gate — layout, engine dir, qw sibling, placement, PATH, relay pin —
+/// are filesystem and env reads, and every one of them still runs here.
+pub fn install_is_incomplete() -> bool {
+    let env = RealEnv;
+    let Some(home) = env.var("HOME").filter(|h| !h.is_empty()).map(PathBuf::from) else {
+        // No HOME is exactly the machine that needs setup — but it is also a
+        // machine where we cannot resolve a single path to check, so say
+        // nothing rather than guess. `qd setup` itself reports it properly.
+        return false;
+    };
+    assess(&gather_inner::<RealEnv, RealExec>(&home, &env, None)).exit_code() != 0
+}
+
+/// The gather body. `exec: None` means "skip the harness probes" — see
+/// [`install_is_incomplete`] for why that is a sound shortcut and not a
+/// second, drifting definition of a finished install.
+fn gather_inner<E: Env, X: Exec>(home: &Path, env: &E, exec: Option<&X>) -> SetupFacts {
     let quorum = QuorumLayout::resolve(home, env.var("QD_HOME").as_deref());
     let dirs_missing = quorum.owned_dirs().into_iter().filter(|d| !d.exists()).collect();
     // `qd bootstrap`'s output: the engine data dir + its state subdir.
@@ -194,10 +229,13 @@ fn gather(home: &Path, env: &impl Env, exec: &impl Exec) -> SetupFacts {
     // "absent" on a fresh HOME that has a perfectly good file by the time the
     // verdict is printed. Probing first means the pin state we report is the
     // one that exists after everything setup itself caused.
-    let mut harnesses: Vec<HarnessFacts> = HarnessId::ALL
-        .iter()
-        .map(|id| probe_harness(*id, home, env, exec))
-        .collect();
+    let mut harnesses: Vec<HarnessFacts> = match exec {
+        Some(exec) => HarnessId::ALL
+            .iter()
+            .map(|id| probe_harness(*id, home, env, exec))
+            .collect(),
+        None => Vec::new(),
+    };
 
     let claude_json_path = home.join(".claude.json");
     let raw = std::fs::read_to_string(&claude_json_path).ok();

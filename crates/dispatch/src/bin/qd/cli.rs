@@ -46,7 +46,7 @@ pub fn version_line() -> String {
 /// error/exit by using `try_get_matches_from` at the call site.
 pub fn build_cli() -> Command {
     let cmd = Command::new("qd")
-        .about("Claude Sessions — manage Claude Code sessions")
+        .about("Run coding-agent sessions across providers, and message the agents in them")
         .version(VERSION)
         // We render version/help text but map exits ourselves.
         .disable_help_subcommand(true)
@@ -62,7 +62,12 @@ pub fn build_cli() -> Command {
     // (`dispositions`, `mark`, `delivery:recover`) were missing from it.
     // `subcommands()` below is now the one place a verb is declared, so that
     // drift cannot recur. See `help::render_top`.
-    let top = help::render_top(&cmd, false);
+    // `false` — NOT a claim that setup is finished, but the statement that this
+    // string is built on every invocation and therefore may not touch the disk.
+    // The surfaces that actually print the top-level help (bare `qd`, `qd
+    // --help`, `qd --help-all`) probe and pass the real answer; see
+    // `help::render_top`.
+    let top = help::render_top(&cmd, false, false);
     cmd.override_help(top)
 }
 
@@ -70,8 +75,8 @@ pub fn build_cli() -> Command {
 /// action (bare `qd` → ls) is handled in `verbs::dispatch` when no subcommand
 /// matched.
 ///
-/// FTUE punch R14 — the ONE hide site. The human CLI is four session verbs plus
-/// the first-run `setup` (`help::SESSION_VERBS` / `help::FIRST_RUN_VERBS`);
+/// FTUE punch R14 — the ONE hide site. The human CLI is the verbs named in
+/// `help::HUMAN_VERBS` (the four session verbs plus `setup`);
 /// everything else is `.hide(true)` HERE, in one pass over the list, rather
 /// than sprinkled across thirty builder functions where it would be one more
 /// thing to forget. `.hide(true)` is a HELP-ONLY property in clap: it drops the
@@ -80,9 +85,7 @@ pub fn build_cli() -> Command {
 /// resolution): `qd send:relay …` behaves exactly as before, and
 /// `qd --help-all` prints the whole surface.
 fn subcommands() -> Vec<Command> {
-    let human_facing = |name: &str| {
-        help::SESSION_VERBS.contains(&name) || help::FIRST_RUN_VERBS.contains(&name)
-    };
+    let human_facing = |name: &str| help::HUMAN_VERBS.contains(&name);
     let registrations = vec![
         cmd_ls(),
         cmd_attach(),
@@ -129,7 +132,7 @@ fn subcommands() -> Vec<Command> {
 fn cmd_ls() -> Command {
     Command::new("ls")
         .visible_alias("list")
-        .about("List Claude Code sessions (use --json for scripting)")
+        .about("List all sessions, on every provider (use --json for scripting)")
         .override_help(help::LS)
         .arg(flag(
             "all",
@@ -198,7 +201,7 @@ fn cmd_ls() -> Command {
 // Dispatches on provider hosting then liveness (verbs/attach.rs).
 fn cmd_attach() -> Command {
     Command::new("attach")
-        .about("Get into a session (live/cold Claude → terminal; codex → driving guidance)")
+        .about("Connect to a running agent session's TUI (a cold session is revived first)")
         .override_help(help::ATTACH)
         .arg(positional("session"))
         // Revive a cold session into a PERSISTENT, relay-serving daemon and return
@@ -313,7 +316,7 @@ fn cmd_kill() -> Command {
 // of the old cmd_new, including the claudeArgs trailing-var-arg semantics.
 fn cmd_start() -> Command {
     Command::new("start")
-        .about("Create a new session (claude-code, codex, pi, opencode)")
+        .about(help::start_about())
         .override_help(help::START)
         .arg(positional("name"))
         // claudeArgs...: variadic trailing positional. `trailing_var_arg(true)`
@@ -394,7 +397,7 @@ fn cmd_start() -> Command {
         .arg(long_val(
             "provider",
             "provider",
-            "Provider: claude-code (default) or opencode",
+            "Provider: claude-code (default), codex, pi, acp/claude-code or opencode",
         ))
         // FTUE punch R6: `--port` is GONE FROM THE HELP and STAYS IN THE PARSER,
         // and the split is the whole point. Help advertised it with a real-sounding
@@ -856,7 +859,7 @@ fn cmd_init() -> Command {
 // orchestrator). The banned-token list lives in the spec, never in this repo.
 fn cmd_setup() -> Command {
     Command::new("setup")
-        .about("First run: set up qd's install layout and wire up your agent harnesses")
+        .about("Check this machine's qd install and wire up your agent harnesses")
         .arg(long_flag("fix", "Apply the fixes for everything detected (non-interactive)"))
         .arg(long_flag("json", "Report the detected setup state as JSON"))
         .arg(flag("yes", 'y', "Assume yes for every prompt"))
@@ -1321,7 +1324,7 @@ mod tests {
         assert!(help::SEND_HTTP.contains("Compatibility/debug control"));
         // The carriers are off the human table now (R14) but still described in
         // the generated full surface, with the compat/debug label intact.
-        let all = help::render_top(&build_cli(), true);
+        let all = help::render_top(&build_cli(), true, false);
         assert!(all.contains("send [options] [session] [message]"));
         assert!(all.contains("(compatibility/debug) Force a PTY send"));
     }
@@ -1861,23 +1864,28 @@ mod tests {
         // the four session verbs plus `setup` are the whole of it. Both are still
         // registered, so both are on the `--help-all` surface.
         let cmd = build_cli();
-        let top = help::render_top(&cmd, false);
+        let top = help::render_top(&cmd, false, false);
         assert!(!top.contains("wrap ["), "wrap is off the human table: {top}");
         assert!(!top.contains("adopt ["), "adopt is off the human table: {top}");
-        let all = help::render_top(&cmd, true);
+        let all = help::render_top(&cmd, true, false);
         assert!(all.contains("wrap [options] <session>"));
         assert!(all.contains("adopt [options] <session>"));
     }
 
-    // === FTUE punch R14 / R4 — the generated, four-verb help surface ===
+    // === FTUE punch R14 / R4 — the generated, five-verb help surface ===
 
-    /// R14: `qd --help` shows EXACTLY the four session verbs plus the first-run
-    /// `setup`, and `setup` gets its own section so it never reads as a fifth
-    /// session verb. Everything else is hidden.
+    /// R14: `qd --help` shows EXACTLY the four session verbs plus `setup`, in
+    /// ONE `Commands:` table. Everything else is hidden.
+    ///
+    /// `setup` used to sit below the table in a `First run:` section of its own,
+    /// under a three-line note. Both are gone: it is a command like the others,
+    /// the section said otherwise, and "first run" was a greeting the surface
+    /// repeated to people on their five-hundredth run.
     ///
     /// MUTATION EVIDENCE: unhiding any other verb reds the "Other commands:"
     /// assert (the safety-net section it would land in); dropping a name from
-    /// `help::SESSION_VERBS` reds its row assert.
+    /// `help::HUMAN_VERBS` reds its row assert; reordering the list reds the
+    /// positional row asserts.
     #[test]
     fn visible_help_table_is_the_four_session_verbs_plus_setup() {
         use std::collections::BTreeSet;
@@ -1890,28 +1898,104 @@ mod tests {
         let expected: BTreeSet<&str> = ["ls", "start", "stop", "attach", "setup"].into();
         assert_eq!(visible, expected, "the human surface is R14's five rows");
 
-        let top = help::render_top(&cmd, false);
+        let top = help::render_top(&cmd, false, false);
         // Commander layout is preserved — only the source of the bytes changed.
         assert!(top.starts_with("Usage: qd [options] [command]\n"));
-        assert!(top.contains("  -h, --help"));
-        assert!(top.contains("display help for command"));
-        // The four session verbs, in the ruled order, with the `ls|list` alias style.
+        // `-h` says what it does AND that it works on every row below it — the
+        // one piece of navigation the table cannot show.
+        assert!(
+            top.contains("  -h, --help")
+                && top.contains("append it to any command for that command's help"),
+            "{top}"
+        );
+        // The five human verbs, in the ruled order, with the `ls|list` alias style.
         let commands = top.split("\nCommands:\n").nth(1).expect("a Commands: section");
         let rows: Vec<&str> = commands.lines().take_while(|l| l.starts_with("  ")).collect();
-        assert_eq!(rows.len(), 4, "exactly four session verbs: {rows:?}");
+        assert_eq!(rows.len(), 5, "the five human verbs, one table: {rows:?}");
         assert!(rows[0].starts_with("  ls|list [options]"), "{rows:?}");
         assert!(rows[1].starts_with("  start [options] <name> [claudeArgs...]"), "{rows:?}");
         assert!(rows[2].starts_with("  stop [options] <session>"), "{rows:?}");
         assert!(rows[3].starts_with("  attach [options] <session>"), "{rows:?}");
-        // setup is its own section, not a fifth command row.
-        assert!(top.contains("\nFirst run:\n  setup [options]"), "{top}");
+        assert!(rows[4].starts_with("  setup [options]"), "{rows:?}");
+        // No `First run:` section, no note under it, and no "first run" anywhere.
+        assert!(!top.contains("First run"), "{top}");
+        assert!(!top.to_lowercase().contains("first run"), "{top}");
         // No hidden verb leaks a row, and the safety-net section stays empty.
         for hidden in ["send:relay", "reconcile", "dispositions", "bootstrap", "gc ", "wrap ["] {
             assert!(!top.contains(hidden), "{hidden} must not be on the human table: {top}");
         }
         assert!(!top.contains("Other commands:"), "nothing unclassified is visible: {top}");
-        // The hidden surface is DISCOVERABLE (R4 trailer).
-        assert!(top.contains("qd --help-all"), "{top}");
+    }
+
+    /// The summary line describes the PRODUCT: sessions on any supported
+    /// harness, plus the messaging between them. It named one vendor for as
+    /// long as qd existed ("Claude Sessions — manage Claude Code sessions"),
+    /// which was wrong about the sessions it lists AND silent about the relay.
+    ///
+    /// MUTATION EVIDENCE: putting a single-provider summary back reds this.
+    #[test]
+    fn top_help_summary_is_cross_provider_and_names_the_messaging() {
+        let top = help::render_top(&build_cli(), false, false);
+        let summary = top.lines().nth(2).expect("summary line");
+        assert!(summary.contains("across providers"), "{summary:?}");
+        assert!(summary.contains("message"), "{summary:?}");
+        assert!(!top.contains("Claude Sessions"), "{top}");
+        // ...and `ls` no longer claims to list only one harness's sessions.
+        assert!(top.contains("List all sessions, on every provider"), "{top}");
+    }
+
+    /// `start`'s one-liner names the providers `Harness::from_provider_id`
+    /// ACTUALLY accepts, and it is DERIVED from that set rather than retyped —
+    /// the hand-written list had lost `acp/claude-code`.
+    ///
+    /// MUTATION EVIDENCE: adding a harness to `Harness::ALL` without touching
+    /// this file changes the row (and reds the START-const twin assert below);
+    /// hard-coding the row again reds the derivation assert.
+    #[test]
+    fn start_row_names_every_provider_the_engine_accepts() {
+        let top = help::render_top(&build_cli(), false, false);
+        for h in quorum_qw::lane::Harness::ALL {
+            let advertised = match h {
+                quorum_qw::lane::Harness::Opencode => "opencode",
+                other => other.provider_id(),
+            };
+            assert!(
+                top.contains(advertised),
+                "{h:?} is startable but not advertised: {top}"
+            );
+            assert!(
+                quorum_qw::lane::Harness::from_provider_id(advertised).is_some(),
+                "{advertised} is advertised but not accepted"
+            );
+        }
+        // The verb's own `--help` opens with the same sentence as its table row,
+        // so the two surfaces cannot name different providers.
+        assert_eq!(
+            help::START.lines().nth(2),
+            Some(help::start_about().as_str()),
+            "`qd start --help` and the table row disagree about providers"
+        );
+    }
+
+    /// The one state-dependent line in the help: an unfinished install says so,
+    /// a finished one says nothing at all. (The state itself is probed at the
+    /// print sites — see `verbs::setup::install_is_incomplete`.)
+    ///
+    /// MUTATION EVIDENCE: printing the notice unconditionally reds the
+    /// finished-install assert; dropping it reds the other.
+    #[test]
+    fn setup_notice_appears_only_when_the_install_is_unfinished() {
+        let cmd = build_cli();
+        let finished = help::render_top(&cmd, false, false);
+        assert!(!finished.to_lowercase().contains("not fully set up"), "{finished}");
+        let unfinished = help::render_top(&cmd, false, true);
+        assert!(unfinished.contains("not fully set up"), "{unfinished}");
+        assert!(unfinished.contains("`qd setup`"), "{unfinished}");
+        // It is a TRAILER: the table is intact and the notice follows it.
+        assert!(
+            unfinished.starts_with(finished.trim_end()),
+            "the notice must only ADD to the finished help:\n{unfinished}"
+        );
     }
 
     /// R14's load-bearing claim: `.hide(true)` is help-only. Every hidden verb
@@ -1976,7 +2060,7 @@ mod tests {
     #[test]
     fn help_all_lists_every_registered_verb() {
         let cmd = build_cli();
-        let all = help::render_top(&cmd, true);
+        let all = help::render_top(&cmd, true, false);
         for sub in cmd.get_subcommands() {
             let name = sub.get_name();
             assert!(
@@ -1996,7 +2080,7 @@ mod tests {
     /// parked flags are gone from the parser as well as from the help.
     #[test]
     fn zmx_is_gone_from_the_help_surface_and_the_resume_flags() {
-        let all = help::render_top(&build_cli(), true);
+        let all = help::render_top(&build_cli(), true, false);
         assert!(!all.to_lowercase().contains("zmx"), "{all}");
         for (surface, text) in [
             ("RESUME", help::RESUME),
