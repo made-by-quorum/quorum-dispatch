@@ -16,6 +16,15 @@ pub fn stdin_and_stdout_are_tty() -> bool {
     unsafe { libc::isatty(libc::STDIN_FILENO) == 1 && libc::isatty(libc::STDOUT_FILENO) == 1 }
 }
 
+/// Is STDOUT alone a TTY? The narrower question
+/// [`stdin_and_stdout_are_tty`] does not answer, and the right one for
+/// PRESENTATION: `qd setup > file` still reads its answers from a keyboard, but
+/// nothing it writes should carry SGR escapes.
+pub fn stdout_is_tty() -> bool {
+    // SAFETY: isatty on a valid fd is always safe.
+    unsafe { libc::isatty(libc::STDOUT_FILENO) == 1 }
+}
+
 /// Visible yes/no prompt, DEFAULT NO (port of the TS `promptYesNo`,
 /// bootstrap.ts:838-852): write the question, read a line from stdin, and treat
 /// ONLY an explicit `y`/`yes` (case-insensitive, trimmed) as yes. A bare Enter /

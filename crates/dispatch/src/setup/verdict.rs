@@ -13,6 +13,8 @@
 
 use std::path::PathBuf;
 
+use super::style::Style;
+
 /// One check's verdict.
 ///
 /// The split that matters is **`Fail` vs everything else**: `Fail` is the only
@@ -211,41 +213,109 @@ impl SetupReport {
             .collect()
     }
 
-    /// Is there anything for `--fix` to actually DO (as opposed to only
+    /// The subset of [`fixable`](Self::fixable) an apply pass can perform on
+    /// its own — everything except the `Manual` remedies, which no flag can
+    /// apply. The ONE definition of "a change setup would make": both
+    /// [`has_automatic_fixes`](Self::has_automatic_fixes) (may we prompt?) and
+    /// [`render_pending_changes`](Self::render_pending_changes) (what are we
+    /// prompting about?) read it, so the prompt and the list under it can never
+    /// disagree about what is pending.
+    pub fn automatic_fixes(&self) -> Vec<&Check> {
+        self.fixable()
+            .into_iter()
+            .filter(|c| c.remedy.as_ref().is_some_and(Remedy::is_automatic))
+            .collect()
+    }
+
+    /// Is there anything for an apply pass to actually DO (as opposed to only
     /// `Manual` remedies, which no flag can apply)?
     pub fn has_automatic_fixes(&self) -> bool {
-        self.fixable()
-            .iter()
-            .any(|c| c.remedy.as_ref().is_some_and(|r| r.is_automatic()))
+        !self.automatic_fixes().is_empty()
+    }
+
+    /// The changes an apply pass would MAKE, as their own section — nothing
+    /// else.
+    ///
+    /// The `→` lines in [`render`](Self::render) answer "what is wrong with
+    /// this check": they sit interleaved with a dozen `ok` rows, and they
+    /// include the `Manual` remedies, which setup will never perform itself. A
+    /// person deciding whether to say `y` is asking a different question — what
+    /// is about to be written to my machine — and this is the only place that
+    /// answers exactly that. `None` when nothing would be written, which is
+    /// also precisely when nothing prompts.
+    pub fn render_pending_changes(&self, style: Style) -> Option<String> {
+        let pending = self.automatic_fixes();
+        if pending.is_empty() {
+            return None;
+        }
+        let prefix = style.dim("[setup]");
+        let mut out = format!("{prefix}\n{prefix} {}\n", style.bold("Changes to apply:"));
+        for (i, c) in pending.iter().enumerate() {
+            out.push_str(&format!(
+                "{prefix}   {} {} {}\n",
+                style.dim(&format!("{}.", i + 1)),
+                style.bold(&format!("{:<14}", c.name)),
+                c.remedy.as_ref().expect("automatic_fixes filtered on it").describe()
+            ));
+        }
+        Some(out)
     }
 
     /// The `[setup]`-prefixed report, one line per check plus the remedy line
     /// under anything that needs one. Prefixed like `qd bootstrap`'s output so
     /// the two read as one first run.
-    pub fn render(&self) -> String {
+    ///
+    /// The verdict trailer is NOT part of this — see
+    /// [`render_verdict`](Self::render_verdict) for why they are separate.
+    pub fn render(&self, style: Style) -> String {
+        let prefix = style.dim("[setup]");
         let mut out = String::new();
         for c in &self.checks {
+            // PAD FIRST, then color: the `{:<14}` width has to count the name's
+            // characters, not the escape bytes wrapped around them, or every
+            // colored column drifts by the length of its own SGR sequence.
             out.push_str(&format!(
-                "[setup] [{}] {:<14} {}\n",
-                c.status.glyph(),
-                c.name,
+                "{prefix} [{}] {} {}\n",
+                style.status(c.status, c.status.glyph()),
+                style.bold(&format!("{:<14}", c.name)),
                 c.detail
             ));
             if c.status.wants_fix() {
                 if let Some(r) = &c.remedy {
-                    out.push_str(&format!("[setup]                        → {}\n", r.describe()));
+                    out.push_str(&format!(
+                        "{prefix}                        {} {}\n",
+                        style.cyan("→"),
+                        r.describe()
+                    ));
                 }
             }
         }
-        out.push_str(&format!(
-            "[setup] {}\n",
-            if self.exit_code() == 0 {
-                "setup: OK"
-            } else {
-                "setup: INCOMPLETE — re-run with `qd setup --fix`, or apply the → lines above"
-            }
-        ));
         out
+    }
+
+    /// The one-line verdict, with whatever the human must still do to finish.
+    ///
+    /// SEPARATE FROM [`render`](Self::render) because it is a statement about
+    /// how the run ENDED, and the check rows are printed before anyone knows
+    /// that. Telling a person "re-run with `--auto-apply-changes`" directly
+    /// above a prompt offering to make those very changes for them was the
+    /// defect: that advice is only true of a run that is not going to apply
+    /// anything — a non-TTY one, or one where the answer was `n`. So the caller
+    /// prints this at the point where that question has been settled.
+    ///
+    /// The instruction also matches what is actually left to do: a report whose
+    /// only remaining failures are `Manual` (a broken Homebrew install, an
+    /// unparsable `~/.claude.json`) names no flag, because no flag can apply
+    /// them.
+    pub fn render_verdict(&self, style: Style) -> String {
+        let line = if self.exit_code() == 0 {
+            style.bold_green("setup: OK")
+        } else if self.has_automatic_fixes() {
+            style.bold_red("setup: INCOMPLETE — re-run with `qd setup --auto-apply-changes`, or apply the → lines above")
+        } else {
+            style.bold_red("setup: INCOMPLETE — apply the → lines above")
+        };
+        format!("{} {line}\n", style.dim("[setup]"))
     }
 }
 
@@ -304,14 +374,80 @@ mod tests {
         let mut r = SetupReport::default();
         r.push(Check::new("a", "layout", Status::Ok, "fine").with_remedy(Remedy::RunBootstrap));
         r.push(Check::new("b", "relay", Status::Fail, "absent").with_remedy(Remedy::RunBootstrap));
-        let text = r.render();
+        let text = r.render(Style::PLAIN);
         for line in text.lines() {
             assert!(line.starts_with("[setup]"), "unprefixed line: {line}");
         }
         // Exactly one remedy line: the Ok check's remedy is not advertised.
         let arrows = text.lines().filter(|l| l.trim_start_matches("[setup]").trim_start().starts_with('→')).count();
         assert_eq!(arrows, 1, "{text}");
-        assert!(text.contains("INCOMPLETE"));
+        // The verdict is the caller's to print, at the point where it is known
+        // whether this run is going to apply anything.
+        assert!(!text.contains("INCOMPLETE"), "render() is the check rows: {text}");
+    }
+
+    /// The verdict names only what is ACTUALLY left to do. A report with an
+    /// applicable remedy points at the flag that applies it; one whose failures
+    /// are all `Manual` must not, because that flag would change nothing.
+    #[test]
+    fn the_verdict_only_names_a_flag_that_would_help() {
+        let mut ok = SetupReport::default();
+        ok.push(c(Status::Ok));
+        assert!(ok.render_verdict(Style::PLAIN).contains("setup: OK"));
+
+        let mut manual = SetupReport::default();
+        manual.push(c(Status::Fail).with_remedy(Remedy::Manual("brew reinstall".into())));
+        let text = manual.render_verdict(Style::PLAIN);
+        assert!(text.contains("INCOMPLETE"), "{text}");
+        assert!(
+            !text.contains("--auto-apply-changes"),
+            "nothing here is a change setup can apply: {text}"
+        );
+
+        let mut auto = SetupReport::default();
+        auto.push(c(Status::Fail).with_remedy(Remedy::RunBootstrap));
+        assert!(auto.render_verdict(Style::PLAIN).contains("--auto-apply-changes"));
+    }
+
+    /// The section under the prompt lists CHANGES, not checks: the `Ok` row
+    /// (nothing to do), the `Manual` row (setup cannot do it) and the
+    /// remedy-less `Fail` are all absent, and what is left is numbered in
+    /// report order. This is the list a person says `y` to, so anything in it
+    /// that setup will not actually write is a lie.
+    #[test]
+    fn pending_changes_lists_only_what_an_apply_pass_would_write() {
+        let mut r = SetupReport::default();
+        r.push(Check::new("a", "layout", Status::Ok, "fine").with_remedy(Remedy::RunBootstrap));
+        r.push(Check::new("b", "engine-dir", Status::Fail, "absent").with_remedy(Remedy::RunBootstrap));
+        r.push(Check::new("c", "brew", Status::Fail, "broken").with_remedy(Remedy::Manual("brew reinstall".into())));
+        r.push(Check::new("d", "mystery", Status::Fail, "no idea"));
+        r.push(
+            Check::new("e", "PATH", Status::Warn, "off PATH").with_remedy(Remedy::WriteRcBlock {
+                rc: PathBuf::from("/h/.zshrc"),
+                bin_dir: PathBuf::from("/h/.quorum/bin"),
+            }),
+        );
+
+        let text = r.render_pending_changes(Style::PLAIN).expect("two automatic remedies are pending");
+        for line in text.lines() {
+            assert!(line.starts_with("[setup]"), "unprefixed line: {line}");
+        }
+        assert!(text.contains("1. engine-dir"), "{text}");
+        assert!(text.contains("2. PATH"), "{text}");
+        assert!(!text.contains("layout"), "an Ok check is not a pending change: {text}");
+        assert!(!text.contains("brew"), "a Manual remedy is not something setup writes: {text}");
+        assert!(!text.contains("mystery"), "a Fail with no remedy has no change to show: {text}");
+    }
+
+    /// No section when there is nothing to write — which is exactly when there
+    /// is no prompt either. Both read `automatic_fixes`, so they agree by
+    /// construction.
+    #[test]
+    fn nothing_automatic_means_no_section_and_no_prompt() {
+        let mut r = SetupReport::default();
+        r.push(Check::new("c", "brew", Status::Fail, "broken").with_remedy(Remedy::Manual("brew reinstall".into())));
+        assert_eq!(r.render_pending_changes(Style::PLAIN), None);
+        assert!(!r.has_automatic_fixes());
     }
 
     #[test]

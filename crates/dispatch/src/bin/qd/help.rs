@@ -24,31 +24,22 @@
 // default layout is the one place the CLI would look unfinished.
 pub const SETUP: &str = r####"Usage: qd setup [options]
 
-Check this machine's qd install and wire up your agent harnesses.
+Integrate your agent harnesses with quorum.
 
-Run this once after installing qd. It checks everything qd needs and prints a
-verdict per check — the `~/.quorum` layout, that `qw` sits beside `qd` (qd
-resolves it as a sibling and never via PATH, so a missing one cannot open a
-session at all), that `qd` is on PATH, and the relay pin in `~/.claude.json`
-that lets Claude Code launch qd's agent-messaging server. It then reports which
-agent harnesses you have — Claude Code, codex, pi, opencode — with their
+Run this when you first install quorum-dispatch, whenever you install a new
+agent harness, and any time an existing integration needs repairing. It checks
+everything qd needs and prints a verdict per check — that `qd` is on PATH, and
+the `~/.quorum` layout, where quorum keeps its configuration. It then reports
+which agent harnesses you have — Claude Code, codex, pi, opencode — with their
 versions, and wires up the ones that are present.
 
-Without --fix it changes NOTHING: it reports what is wrong and, under each
-failing check, the exact thing that would fix it. On a terminal it offers to
-apply them; run non-interactively it just reports. Safe to re-run — every step
-is idempotent, and a second run on a wired machine is a no-op.
+By default it changes NOTHING: it reports what is wrong and, under each failing
+check, the exact thing that would fix it. On a terminal it offers to apply them;
+run non-interactively it just reports. Safe to re-run — every step is
+idempotent, and a second run on a wired machine is a no-op.
 
 Options:
-  --fix       Apply every fix it can, without asking
-  --json      Report the detected state as JSON and exit (never writes anything)
-  -y, --yes   Assume yes for every prompt (same effect as --fix)
   -h, --help  display help for command
-
-Exit code: 0 when everything needed is in place (or was fixed this run), 1 when
-something required is still missing — including what --fix cannot do for you,
-like an incomplete Homebrew install or a `~/.claude.json` that is not valid JSON
-(setup will not rewrite a file it cannot parse).
 "####;
 
 // B5 item 2 (additive, orc-ruled C1+D): `--live` + the trailer note extend the

@@ -44,6 +44,7 @@ pub mod harness;
 pub mod layout;
 pub mod rc_block;
 pub mod relay_pin;
+pub mod style;
 pub mod verdict;
 
 use std::path::PathBuf;
@@ -411,8 +412,8 @@ fn check_relay_pin(f: &SetupFacts) -> Check {
             format!("{path} is not valid JSON ({e}) — refusing to rewrite it"),
         )
         .with_remedy(Remedy::Manual(format!(
-            "fix the JSON in {path} by hand, then re-run `qd setup --fix`; setup will not \
-             clobber a file it cannot parse"
+            "fix the JSON in {path} by hand, then re-run `qd setup --auto-apply-changes`; setup \
+             will not clobber a file it cannot parse"
         ))),
         PinState::NoEntry => Check::new(
             "relay-pin",
@@ -623,6 +624,8 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    use style::Style;
+
     /// A machine where absolutely everything is already right. Individual tests
     /// break ONE thing, so each assertion is about one decision.
     fn healthy() -> SetupFacts {
@@ -675,7 +678,7 @@ mod tests {
     #[test]
     fn a_fully_wired_machine_is_green_and_exits_zero() {
         let r = assess(&healthy());
-        assert_eq!(r.exit_code(), 0, "{}", r.render());
+        assert_eq!(r.exit_code(), 0, "{}", r.render(Style::PLAIN));
         assert_eq!(status_of(&r, "layout"), Status::Ok);
         assert_eq!(status_of(&r, "engine-dir"), Status::Ok);
         assert_eq!(status_of(&r, "qw-sibling"), Status::Ok);
@@ -732,7 +735,7 @@ mod tests {
             let mut f = healthy();
             f.harnesses = vec![h.clone()];
             let r = assess(&f);
-            assert_eq!(r.exit_code(), 0, "{:?} gated the exit code:\n{}", h.id, r.render());
+            assert_eq!(r.exit_code(), 0, "{:?} gated the exit code:\n{}", h.id, r.render(Style::PLAIN));
         }
         // ...and a machine with NO harness facts at all — what the help's probe
         // assesses — reaches the same verdict as the fully probed one.

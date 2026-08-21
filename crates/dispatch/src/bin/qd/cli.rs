@@ -859,10 +859,22 @@ fn cmd_init() -> Command {
 // orchestrator). The banned-token list lives in the spec, never in this repo.
 fn cmd_setup() -> Command {
     Command::new("setup")
-        .about("Check this machine's qd install and wire up your agent harnesses")
-        .arg(long_flag("fix", "Apply the fixes for everything detected (non-interactive)"))
-        .arg(long_flag("json", "Report the detected setup state as JSON"))
-        .arg(flag("yes", 'y', "Assume yes for every prompt"))
+        .about("Integrate your agent harnesses with quorum")
+        // Renamed from `--fix`, which survives as a hidden alias so the older
+        // spelling in scripts and CI keeps working. Hidden from help on both
+        // spellings (help::SETUP documents neither, nor --json/-y): the flag is
+        // the non-interactive escape hatch, not the path a human is pointed down.
+        .arg(
+            long_flag(
+                "fix",
+                "Apply the fixes for everything detected (non-interactive)",
+            )
+            .long("auto-apply-changes")
+            .alias("fix")
+            .hide(true),
+        )
+        .arg(long_flag("json", "Report the detected setup state as JSON").hide(true))
+        .arg(flag("yes", 'y', "Assume yes for every prompt").hide(true))
         .override_help(help::SETUP)
 }
 

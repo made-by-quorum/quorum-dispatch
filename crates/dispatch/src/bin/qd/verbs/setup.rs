@@ -33,6 +33,7 @@ use dispatch::exec::{Exec, RealExec};
 use dispatch::setup::harness::{self, HarnessFacts, HarnessId, Presence};
 use dispatch::setup::layout::{self, InstallChannel, QuorumLayout, COLOCATED_INTERNAL, SIBLING_ANCHOR};
 use dispatch::setup::relay_pin;
+use dispatch::setup::style::Style;
 use dispatch::setup::verdict::{Remedy, SetupReport, Status};
 use dispatch::setup::{assess, to_json, SetupFacts};
 use dispatch::shell_init::{rc_path, Shell};
@@ -97,7 +98,21 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
         }
     };
 
-    let facts = gather(&home, &env, &exec);
+    // One styling decision for the whole run, made here because this is the
+    // only layer that can see the real process. `--json` is unconditionally
+    // plain: that stdout is a document, and an escape sequence in it is
+    // corruption, not decoration.
+    let style = if json {
+        Style::PLAIN
+    } else {
+        Style::detect(
+            tty::stdout_is_tty(),
+            env.var("NO_COLOR").as_deref(),
+            env.var("TERM").as_deref(),
+        )
+    };
+
+    let facts = scan(&home, &env, &exec, (!json).then_some(style));
     let report = assess(&facts);
 
     // --json is REPORT-ONLY, deliberately. `qd bootstrap` (which the engine-dir
@@ -110,31 +125,59 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
         return report.exit_code();
     }
 
-    print!("{}", report.render());
+    print!("{}", report.render(style));
 
     if report.fixable().is_empty() {
+        // Nothing to offer, so the run is over right here and the verdict is
+        // the last word.
+        print!("{}", report.render_verdict(style));
         return report.exit_code();
     }
 
-    // Decide whether to apply. --fix / -y say yes outright; otherwise a TTY is
-    // asked once, and a non-TTY is told what to run and exits.
+    // The pending changes as their own section, before anything decides what to
+    // do with them. The check list above says what setup LOOKED at — a dozen
+    // rows, most of them green, remedies interleaved — and a person about to
+    // type `y` is asking the narrower question: what gets written to my
+    // machine. Printed on every run that has something to write, including the
+    // non-interactive one that will not write it, so "what would this do here"
+    // has one answer regardless of how setup was invoked.
+    if let Some(changes) = report.render_pending_changes(style) {
+        print!("{changes}");
+    }
+
+    // Decide whether to apply. --auto-apply-changes / -y say yes outright;
+    // otherwise a TTY is asked once, and a non-TTY is told what to run and exits.
     let interactive = tty::stdin_and_stdout_are_tty();
     let apply = if fix || yes {
         true
     } else if interactive && report.has_automatic_fixes() {
-        tty::prompt_yes_no_default_no("[setup] Apply the fixes above now? [y/N] ")
+        tty::prompt_yes_no_default_no(&format!(
+            "{} {} {} ",
+            style.dim("[setup]"),
+            style.bold("Apply the changes above now?"),
+            style.dim("[y/N]")
+        ))
     } else {
         false
     };
 
     if !apply {
+        // Nothing will be written on this run — which is the only state in
+        // which the verdict's "re-run with …" instruction is true, so this is
+        // where it prints. A declined prompt reaches it as well as a non-TTY
+        // run; the non-TTY case additionally says WHY nothing happened, since
+        // no one saw the question that was never asked.
         if !fix && !yes && !interactive && report.has_automatic_fixes() {
-            println!("[setup] non-interactive: nothing was changed. Re-run `qd setup --fix`.");
+            println!(
+                "{} non-interactive: nothing was changed.",
+                style.dim("[setup]")
+            );
         }
+        print!("{}", report.render_verdict(style));
         return report.exit_code();
     }
 
-    let applied = apply_fixes(&report);
+    let applied = apply_fixes(&report, style);
     for line in &applied {
         println!("{line}");
     }
@@ -142,10 +185,11 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
     // Re-gather and re-assess against the real machine rather than assuming the
     // fixes worked. This is also what makes `qd setup --fix` idempotent: the
     // second verdict is the one that rules the exit code.
-    println!("[setup] --- after fixes ---");
-    let facts = gather(&home, &env, &exec);
+    println!("{} {}", style.dim("[setup]"), style.bold("--- after fixes ---"));
+    let facts = scan(&home, &env, &exec, Some(style));
     let report = assess(&facts);
-    print!("{}", report.render());
+    print!("{}", report.render(style));
+    print!("{}", report.render_verdict(style));
     report.exit_code()
 }
 
@@ -154,9 +198,31 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
 // Gather — every real-world probe, in one place.
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Gather — every real-world probe, in one place.
-// ---------------------------------------------------------------------------
+/// [`gather`] with a line saying it is happening.
+///
+/// The probe pass is the slow part of `qd setup` and it is silent: eight
+/// subprocesses (`command -v` + `--version` for each harness), each allowed
+/// [`PROBE_TIMEOUT_MS`], with one wedged harness able to hold the whole run for
+/// ten seconds. Before this line a person typed `qd setup` and watched a blank
+/// terminal, with nothing to distinguish "probing codex" from "hung".
+///
+/// `announce` is `None` in exactly one place — under `--json`, where stdout is a
+/// document and a status line would corrupt it. The re-scan after fixes DOES
+/// announce: it re-runs the same eight probes, so it has the same silent pause,
+/// and `--- after fixes ---` says what is coming rather than that it is under
+/// way. Rust's stdout is line-buffered, so the line lands before the probes
+/// start rather than with the report.
+///
+/// Dim, because it is the one line here that goes stale the moment it is true.
+fn scan(home: &Path, env: &impl Env, exec: &impl Exec, announce: Option<Style>) -> SetupFacts {
+    if let Some(style) = announce {
+        println!(
+            "{}",
+            style.dim("[setup] Scanning this machine — install layout, PATH, and agent harnesses…")
+        );
+    }
+    gather(home, env, exec)
+}
 
 fn gather(home: &Path, env: &impl Env, exec: &impl Exec) -> SetupFacts {
     gather_inner(home, env, Some(exec))
@@ -472,7 +538,7 @@ fn qc_plugin_registered(home: &Path) -> Option<bool> {
 /// Returns the `[setup]` lines to print. `Manual` remedies are skipped (the
 /// report already printed them) — which is exactly why a `Fail` carrying one
 /// survives the re-assess and keeps the exit code non-zero.
-fn apply_fixes(report: &SetupReport) -> Vec<String> {
+fn apply_fixes(report: &SetupReport, style: Style) -> Vec<String> {
     let mut lines = Vec::new();
     for c in report.fixable() {
         let remedy = match &c.remedy {
@@ -490,9 +556,19 @@ fn apply_fixes(report: &SetupReport) -> Vec<String> {
                 .map(|()| format!("relay pin written to {}", path.display())),
             Remedy::Manual(_) => unreachable!("filtered by is_automatic above"),
         };
+        // Same column shape as the report rows (pad first, then color), so the
+        // applied lines line up with the check list they came from.
+        let row = |status: Status, text: &str| {
+            format!(
+                "{} [{}] {} {text}",
+                style.dim("[setup]"),
+                style.status(status, status.glyph()),
+                style.bold(&format!("{:<14}", c.name))
+            )
+        };
         lines.push(match outcome {
-            Ok(msg) => format!("[setup] [{}] {:<14} {msg}", Status::Fixed.glyph(), c.name),
-            Err(e) => format!("[setup] [{}] {:<14} {e}", Status::Fail.glyph(), c.name),
+            Ok(msg) => row(Status::Fixed, &msg),
+            Err(e) => row(Status::Fail, &e),
         });
     }
     lines
