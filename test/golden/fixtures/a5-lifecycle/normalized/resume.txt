@@ -2,9 +2,6 @@
 $ qd resume qdrg-nope (no such session)
 No session matching "qdrg-<RUNID>-nope"
 exit=1
-$ qd resume coldsess-rec --zmx-name '../evil' (cold session, unsafe zmx-name)
-ERROR: Session name "../evil" contains unsafe characters. Names may only contain letters, digits, hyphens, underscores, and dots.
-exit=1
 $ qd resume gonecwd-rec (recorded cwd missing, no --cwd)
 ERROR: Session's recorded directory no longer exists: <TMPDIR>/this-dir-was-deleted
   The project may have been moved, renamed, or deleted.

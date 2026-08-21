@@ -60,6 +60,15 @@ clap = { version = "4", default-features = false, features = ["std", "help", "us
 # lazily-init current-thread tokio runtime + block_on, so we bring tokio + anyhow
 # in alongside it.
 qrmux = { path = "../qrmux" }
+# quorum-qw: SESSION MANAGEMENT — the package qd delegates to for everything
+# about running an agent session. The dependency direction is load-bearing: qd
+# depends on qw, NEVER the reverse. qw absorbed the former `quorum-lane` crate,
+# which existed only because qrmux could not depend on dispatch; under the split
+# qrmux moves INTO qw, so the separate crate was transitional scaffolding.
+quorum-qw = { path = "../quorum-qw" }
+# quorum-core: infrastructure BOTH qd and qw need (exec/effects/model/paths/
+# zmx_dir), owned by neither. Re-exported from lib.rs so existing paths resolve.
+quorum-core = { path = "../quorum-core" }
 # The shared delivery-event VOCABULARY (vocab-extract): the `Payload` enum,
 # `Envelope`/`Anchor`, the terminal set, and the byte-exact wire serializer
 # (`build_record_line`) live in this LEAF crate so `qrmux` can emit the same vocab
@@ -129,7 +138,7 @@ json-insertion-order = ["serde_json/preserve_order"]
 
 # Negative-control evidence: deliberately-wrong decider outputs that the parity
 # tests MUST catch (gate item 6). Never enabled in normal builds.
-mutation-evidence = []
+mutation-evidence = ["quorum-qw/mutation-evidence"]
 
 # --- WS-R R3a-Step-0 fault-injection harness (gated, never in normal builds) ---
 # `faultinj` gates BOTH the RED-gate tests in tests/faultinj.rs AND the

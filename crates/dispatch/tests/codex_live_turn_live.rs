@@ -359,6 +359,7 @@ fn spawn_jailed(jail: &Path, env: &JailEnv, name: &str) -> Spawned {
         agent: None,
         passthrough: vec![],
         prompt: None,
+            hosting: None,
     };
     let out = run_new_daemon(&deps, &params).expect("live daemon create succeeds");
     let codex_home = PathBuf::from(

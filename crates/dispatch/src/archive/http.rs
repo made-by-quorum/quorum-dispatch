@@ -407,9 +407,8 @@ mod tests {
 
     #[test]
     fn parses_status_and_content_length_body() {
-        let addr = one_shot_server(|_req| {
-            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec()
-        });
+        let addr =
+            one_shot_server(|_req| b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec());
         let resp = request(&addr, "GET", "/bucket/key", &[], &[]).unwrap();
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, b"hello");
@@ -417,9 +416,8 @@ mod tests {
 
     #[test]
     fn parses_404_with_empty_body() {
-        let addr = one_shot_server(|_req| {
-            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
-        });
+        let addr =
+            one_shot_server(|_req| b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec());
         let resp = request(&addr, "GET", "/bucket/missing", &[], &[]).unwrap();
         assert_eq!(resp.status, 404);
         assert!(resp.body.is_empty());
@@ -447,9 +445,8 @@ mod tests {
 
     #[test]
     fn head_404_is_a_clean_absent_not_an_error() {
-        let addr = one_shot_server(|_req| {
-            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
-        });
+        let addr =
+            one_shot_server(|_req| b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec());
         let resp = request(&addr, "HEAD", "/bucket/missing", &[], &[]).unwrap();
         assert_eq!(resp.status, 404);
         assert!(resp.body.is_empty());
@@ -522,9 +519,8 @@ mod tests {
 
     #[test]
     fn stream_get_reports_status_without_reading_body() {
-        let addr = one_shot_server(|_req| {
-            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
-        });
+        let addr =
+            one_shot_server(|_req| b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec());
         let s = request_stream_on(&addr, None, "/b/missing", &[]).unwrap();
         assert_eq!(s.status, 404);
         assert_eq!(s.content_length, Some(0));

@@ -329,11 +329,7 @@ impl LadderOwner {
 /// May `my_incarnation` acquire/hold the ladder lease now? Yes if unowned, if the
 /// current lease is EXPIRED (steal), or if I already own it (re-entrant). A LIVE
 /// lease owned by a DIFFERENT coordinator fences me out (no two live coordinators).
-pub fn can_acquire_lease(
-    current: Option<&LadderOwner>,
-    my_incarnation: u64,
-    now_ms: i64,
-) -> bool {
+pub fn can_acquire_lease(current: Option<&LadderOwner>, my_incarnation: u64, now_ms: i64) -> bool {
     match current {
         None => true,
         Some(o) => o.is_expired(now_ms) || o.coordinator_incarnation == my_incarnation,
@@ -424,7 +420,11 @@ pub fn write_recovery_row(state_dir: &Path, row: &RecoveryRow) -> io::Result<()>
     let dir = state_dir.join("recovery");
     std::fs::create_dir_all(&dir)?;
     let final_path = dir.join(format!("{}.json", row.session_id));
-    let tmp = dir.join(format!(".{}.json.tmp.{}", row.session_id, std::process::id()));
+    let tmp = dir.join(format!(
+        ".{}.json.tmp.{}",
+        row.session_id,
+        std::process::id()
+    ));
     let bytes = serde_json::to_vec(row).map_err(io::Error::other)?;
     std::fs::write(&tmp, &bytes)?;
     std::fs::rename(&tmp, &final_path)?;
@@ -753,9 +753,7 @@ pub fn execute_rung4(
 
 /// The coordinator heartbeat path (`<state_dir>/recovery/coordinator.heartbeat`).
 pub fn coordinator_heartbeat_path(state_dir: &Path) -> PathBuf {
-    state_dir
-        .join("recovery")
-        .join("coordinator.heartbeat")
+    state_dir.join("recovery").join("coordinator.heartbeat")
 }
 
 /// Bump the coordinator heartbeat COUNTER on every epoll wake that actually processes
@@ -946,7 +944,12 @@ pub fn coordinator_pass(
         if row.consecutive_failures >= CRIT_CONSECUTIVE_FAILURES {
             report.crit += 1;
             if row.ladder_state != LadderState::Crit {
-                let writer = crate::events::EventWriter::for_key(
+                // qd's INTENT log, not qw's delivery log (`09-ledger-split.md`):
+                // `recovery-crit` is qd's own forensic record of its own recovery
+                // ladder giving up. Nothing in it is a delivery or a terminal, and
+                // qw neither writes it nor reads it — it was only ever in the
+                // shared file because there was only one file.
+                let writer = crate::events::EventWriter::for_intent(
                     state_dir,
                     session_id,
                     Some(session_id.to_string()),
@@ -1228,7 +1231,10 @@ mod tests {
     fn non_destructive_rung_re_arms() {
         let mut row = RecoveryRow::cold("s");
         row.ladder_state = LadderState::Running(Rung::PtyInject);
-        assert_eq!(resume_action(&row, false), ResumeAction::ReArm(Rung::PtyInject));
+        assert_eq!(
+            resume_action(&row, false),
+            ResumeAction::ReArm(Rung::PtyInject)
+        );
     }
 
     // --- Strike counter (RF-3) ----------------------------------------------
@@ -1326,7 +1332,11 @@ mod tests {
             /* signal_b_stale */ false,
             true,
         ));
-        assert_eq!(d, LadderDecision::NoAction, "a healthy streaming long turn must not arm");
+        assert_eq!(
+            d,
+            LadderDecision::NoAction,
+            "a healthy streaming long turn must not arm"
+        );
     }
 
     // --- Rung IO seam -------------------------------------------------------
@@ -1373,11 +1383,19 @@ mod tests {
         )
         .unwrap();
 
-        let report = coordinator_pass(dir.path(), /*my_incarnation*/ 5, /*prev_hb*/ 0, 1_000)
-            .expect("pass");
+        let report = coordinator_pass(
+            dir.path(),
+            /*my_incarnation*/ 5,
+            /*prev_hb*/ 0,
+            1_000,
+        )
+        .expect("pass");
 
         assert_eq!(report.heartbeat, 1, "heartbeat advanced");
-        assert_eq!(report.successors_cleared, 1, "healthy successor cleared, not re-killed");
+        assert_eq!(
+            report.successors_cleared, 1,
+            "healthy successor cleared, not re-killed"
+        );
         assert_eq!(report.crit, 1, "CRIT row flagged");
         assert_eq!(report.corrupt_skipped, 1, "corrupt row treated as cold");
 
@@ -1398,7 +1416,10 @@ mod tests {
 
         let report = coordinator_pass(dir.path(), /*me*/ 5, 0, 1_000).expect("pass");
         assert_eq!(report.fenced_out, 1, "a live foreign lease fences me out");
-        assert_eq!(report.resumed, 0, "I must not touch a row I am fenced out of");
+        assert_eq!(
+            report.resumed, 0,
+            "I must not touch a row I am fenced out of"
+        );
     }
 
     #[test]
@@ -1408,13 +1429,23 @@ mod tests {
         bump_heartbeat(dir.path(), 1).unwrap();
         assert_eq!(read_heartbeat(dir.path()), Some(1));
         bump_heartbeat(dir.path(), 42).unwrap();
-        assert_eq!(read_heartbeat(dir.path()), Some(42), "watcher sees the advance");
+        assert_eq!(
+            read_heartbeat(dir.path()),
+            Some(42),
+            "watcher sees the advance"
+        );
     }
 
     #[test]
     fn dead_dangling_enters_at_respawn_but_cap_still_applies() {
         // dead-dangling + live signal-B → enter at Rung 4.
-        let mut o = obs(LifecycleState::Gone, SessionStatus::Idle, false, false, true);
+        let mut o = obs(
+            LifecycleState::Gone,
+            SessionStatus::Idle,
+            false,
+            false,
+            true,
+        );
         o.is_dead_dangling = true;
         assert_eq!(
             evaluate_session(&o),
@@ -1458,7 +1489,11 @@ mod tests {
         let sd = dir.path();
         let (pid, started) = (31001_i32, 1_000_000_i64);
         busy_row(sd, pid as i64, started);
-        let old = Identity { pid, start_ms: started, incarnation: 1 };
+        let old = Identity {
+            pid,
+            start_ms: started,
+            incarnation: 1,
+        };
         let killed = std::cell::Cell::new(false);
         let io = Rung4Io {
             kill: &|_p| {
@@ -1509,7 +1544,11 @@ mod tests {
         let sd = dir.path();
         let (pid, recorded, reused) = (31002_i32, 1_000_000_i64, 2_000_000_i64);
         busy_row(sd, pid as i64, reused); // a NEW incarnation reused the PID's row
-        let old = Identity { pid, start_ms: recorded, incarnation: 1 };
+        let old = Identity {
+            pid,
+            start_ms: recorded,
+            incarnation: 1,
+        };
         let io = Rung4Io {
             kill: &|_p| Ok(()),
             current_start_ms: &|_p| Some(recorded),
@@ -1549,7 +1588,11 @@ mod tests {
         let sd = dir.path();
         let (pid, started) = (31003_i32, 1_000_000_i64);
         busy_row(sd, pid as i64, started);
-        let old = Identity { pid, start_ms: started, incarnation: 1 };
+        let old = Identity {
+            pid,
+            start_ms: started,
+            incarnation: 1,
+        };
         let io = Rung4Io {
             kill: &|_p| Ok(()),
             current_start_ms: &|_p| Some(started),

@@ -75,6 +75,10 @@ struct Jail {
     convo: PathBuf,
     uuid: String,
     created: std::cell::RefCell<Vec<String>>,
+    /// Has `teardown` already run? Makes teardown idempotent so the explicit
+    /// `jail.teardown()` at the end of a test body and the `Drop` safety net
+    /// below can both fire without reaping twice.
+    torn: std::cell::Cell<bool>,
 }
 
 impl Jail {
@@ -109,6 +113,7 @@ impl Jail {
             convo,
             uuid,
             created: std::cell::RefCell::new(Vec::new()),
+            torn: std::cell::Cell::new(false),
         }
     }
 
@@ -129,6 +134,34 @@ impl Jail {
         std::fs::read_to_string(self.ev_dir.join(format!("{}.events.jsonl", self.uuid)))
             .unwrap_or_default()
     }
+    /// qd's INTENT tree — the other half of the two-log ledger
+    /// (`09-ledger-split.md`). Read by glob rather than by key because a send made
+    /// before its session id resolved is filed under `byname-<name>`, and the
+    /// split is a property of the whole tree, not of one file.
+    fn intent_dir(&self) -> PathBuf {
+        self.qd_home.join("state").join("intent")
+    }
+    fn intent_records(&self) -> Vec<EventRecord> {
+        let mut out = Vec::new();
+        let Ok(entries) = std::fs::read_dir(self.intent_dir()) else {
+            return out;
+        };
+        for e in entries.flatten() {
+            let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+            out.extend(parse_events(&text).records);
+        }
+        out
+    }
+    fn intent_text(&self) -> String {
+        let mut out = String::new();
+        if let Ok(entries) = std::fs::read_dir(self.intent_dir()) {
+            for e in entries.flatten() {
+                out.push_str(&format!("--- {}\n", e.path().display()));
+                out.push_str(&std::fs::read_to_string(e.path()).unwrap_or_default());
+            }
+        }
+        out
+    }
     fn engine_records(&self) -> Vec<EventRecord> {
         parse_events(&self.events_text()).records
     }
@@ -136,12 +169,39 @@ impl Jail {
         std::fs::read_to_string(&self.convo).unwrap_or_default()
     }
     fn teardown(&self) {
+        // Idempotent (first call wins): the explicit `jail.teardown()` that ends a
+        // test body AND the `Drop` safety net below both land here, and a test that
+        // tears down mid-body then keeps going must not be reaped a second time.
+        if self.torn.replace(true) {
+            return;
+        }
         let names: Vec<String> = self.created.borrow().clone();
         for name in names {
             let _ = run_qd(self, &["stop", "--force", &name], &[]);
         }
         let _ = std::fs::remove_dir_all(&self.root);
         let _ = std::fs::remove_dir_all(&self.xdg);
+    }
+}
+
+/// Panic-path safety net. Every test body ends with an explicit `jail.teardown()`,
+/// but a test that PANICS never reaches it — the unwind skips teardown outright, so
+/// the jail's embedded `qrmux-server` is orphaned and its `/tmp/qd-*` tree is left
+/// on disk. Not theoretical: a failing test leaked on EVERY run, and ~500 orphaned
+/// servers (the oldest 7 days old) had accumulated on one dev box. Past a few
+/// hundred they contend for resources and the suite starts failing in a pattern
+/// INDISTINGUISHABLE from a code regression — failure count climbing run over run
+/// while runtime collapses. That cost one false regression alarm; anyone bisecting
+/// would have chased a ghost. `teardown` is idempotent, so this never double-reaps
+/// the explicit call sites, and it keeps their per-target `qd stop --force` reap
+/// (never a destructive sweep).
+impl Drop for Jail {
+    fn drop(&mut self) {
+        // Best-effort, and deliberately panic-proof: a panic raised while already
+        // unwinding ABORTS the process, which is strictly worse than the leak this
+        // exists to prevent. `teardown` itself is unchanged for the explicit call
+        // sites — only this path swallows.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.teardown()));
     }
 }
 
@@ -367,5 +427,125 @@ fn embedded_send_pty_wait_detects_truncation_as_mismatch() {
         jail.events_text()
     );
     assert_ne!(code, 0, "--wait maps a mismatch terminal to an HONEST failure exit; stderr={err}");
+    jail.teardown();
+}
+
+// ===========================================================================
+// The ledger split (`09-ledger-split.md`) — asserted, not assumed
+// ===========================================================================
+
+/// A REAL send writes to BOTH logs, and neither holds the other's facts.
+///
+/// The ruling is two logs and qd never reads qw's. Two mechanical properties make
+/// that true rather than merely intended, and both are checked here against a
+/// send that actually happened rather than a planted fixture:
+///
+///  1. **qd's intent log holds intent and nothing else.** Every record in it is a
+///     `send-initiated` — no `chunks-delivered`, no terminal. A terminal appearing
+///     here would mean qd had closed out a send, which is the single-writer
+///     violation the split exists to make impossible.
+///  2. **qw's delivery log holds no intent record.** qd's records are marked
+///     `send_path: "intent"` (qd observed no send path; see
+///     `verbs/intent.rs::SEND_PATH_INTENT`), and that marker must not appear in
+///     qw's tree.
+///
+/// And the join that makes two logs usable at all: the `send_id` qd minted BEFORE
+/// the wire is the `send_id` qw's own `send-initiated` and its terminal carry. If
+/// that failed, the two files would be two unrelated stories about one send and
+/// `qd delivery:recover` could never address anything.
+#[test]
+fn the_two_logs_hold_disjoint_facts_about_one_real_send() {
+    let jail = Jail::establish("split");
+    let name = "s";
+    let env = jail.fakerepl_env(name);
+    let marker = "M3E2E_SPLIT_MARKER";
+
+    let (cb, _o, _e) = run_qd(&jail, &["start", name, "-p", "seed"], &env);
+    assert_eq!(cb, 0, "start booted");
+    std::thread::sleep(Duration::from_millis(1000));
+
+    let (code, _out, err) = run_qd(&jail, &["send:pty", name, marker], &env);
+    assert_eq!(code, 0, "send:pty exits 0; stderr={err}");
+
+    // --- both files exist and both were written -------------------------
+    let intent = jail.intent_records();
+    let delivery = jail.engine_records();
+    assert!(
+        !intent.is_empty(),
+        "qd wrote NO intent record for a real send — write-then-deliver is the \
+         discipline `qd delivery:recover` depends on. intent tree:\n{}",
+        jail.intent_text()
+    );
+    assert!(
+        !delivery.is_empty(),
+        "qw wrote no delivery record; ledger:\n{}",
+        jail.events_text()
+    );
+
+    // --- property 1: intent holds ONLY intent ---------------------------
+    let strays: Vec<&str> = intent
+        .iter()
+        .map(|r| r.event.as_str())
+        .filter(|e| *e != "send-initiated")
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "qd's intent log carries records that are not intent: {strays:?}. A terminal \
+         or a delivery record here means qd closed out a send it does not own \
+         (single-writer violation). intent tree:\n{}",
+        jail.intent_text()
+    );
+
+    // --- property 2: no intent record leaked into qw's log --------------
+    let leaked: Vec<String> = delivery
+        .iter()
+        .filter(|r| r.str_field("send_path").as_deref() == Some("intent"))
+        .filter_map(|r| r.send_id())
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "qd intent record(s) {leaked:?} were written into qw's DELIVERY log — the \
+         two logs are one log again. ledger:\n{}",
+        jail.events_text()
+    );
+
+    // --- the join: qd minted the id qw resolved against -----------------
+    let pty_intent = intent
+        .iter()
+        .filter(|r| r.str_field("verb").as_deref() == Some("send:pty"))
+        .next_back()
+        .unwrap_or_else(|| {
+            panic!(
+                "no `send:pty` intent record for the send just made; intent tree:\n{}",
+                jail.intent_text()
+            )
+        });
+    let send_id = pty_intent.send_id().expect("an intent record is keyed");
+    assert!(
+        pty_intent.obj.get("transcript").is_none(),
+        "qd's intent record must carry NO recovery keys — resolving a transcript is \
+         session-artifact access qd does not have. Got: {}",
+        serde_json::Value::Object(pty_intent.obj.clone())
+    );
+    assert!(
+        delivery
+            .iter()
+            .any(|r| r.event == "send-initiated" && r.send_id().as_deref() == Some(&send_id)),
+        "qw's log has no `send-initiated` under the id qd minted ({send_id}) — the two \
+         halves of one send do not correlate. ledger:\n{}",
+        jail.events_text()
+    );
+    let term = poll_terminal(&jail, &send_id, Duration::from_secs(20)).unwrap_or_else(|| {
+        panic!(
+            "no terminal for the qd-minted send_id={send_id} within 20s; ledger:\n{}",
+            jail.events_text()
+        )
+    });
+    assert!(
+        dispatch::events::is_terminal(&term.event),
+        "the resolved record is a terminal; got {}",
+        term.event
+    );
+
     jail.teardown();
 }

@@ -264,6 +264,7 @@ fn codex_send_wait_live_jailed_e2e() {
         passthrough: vec![],
         // NO prompt at create — the SEND path drives the one live turn below.
         prompt: None,
+            hosting: None,
     };
 
     let out = run_new_daemon(&deps, &params).expect("live daemon create succeeds");

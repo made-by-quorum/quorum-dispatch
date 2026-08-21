@@ -120,9 +120,7 @@ pub fn run_bind_phase(
                 match idstore::bind(ids_path, qd_session_id, &sid, clock) {
                     Ok(idstore::BindOutcome::Bound)
                     | Ok(idstore::BindOutcome::AlreadyBoundSameId) => {
-                        let status = live_named
-                            .first()
-                            .and_then(|r| r.entry.status.clone());
+                        let status = live_named.first().and_then(|r| r.entry.status.clone());
                         return Ok(BindPhaseOk {
                             session_id: sid,
                             pid: seen_pid,
@@ -212,7 +210,6 @@ mod tests {
         )
         .unwrap();
     }
-
 
     /// Pre-mint a KNOWN unbound id (production mints via `mint_unbound` before
     /// the bind phase runs; tests need a deterministic id).
@@ -447,7 +444,10 @@ mod tests {
             }
             other => panic!("wrong arm: {other:?}"),
         }
-        assert!(sleeper.calls.get() > 0, "the Err arm retried before failing");
+        assert!(
+            sleeper.calls.get() > 0,
+            "the Err arm retried before failing"
+        );
     }
 
     #[test]

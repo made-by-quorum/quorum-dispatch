@@ -99,18 +99,10 @@ fi
 exit 0
 EOF
 chmod +x "$STUB_DIR/claude"
-# Capable zmx shim (Usage: + `send <target>`) so the macOS+brew zmx-install
-# prompt NEVER fires under the PTY — this gate exercises ONLY the relay + shell
-# offers (the 2026-06-05 CI macOS leg ground ~52min on a real `brew install`).
-cat > "$STUB_DIR/zmx" <<'EOF'
-#!/usr/bin/env bash
-echo "Usage: zmx <command>"
-echo "Commands:"
-echo "  run <name>     run a session"
-echo "  send <target>  send keys"
-exit 0
-EOF
-chmod +x "$STUB_DIR/zmx"
+# R1: there is NO zmx shim here any more. This gate used to stage a capable one
+# purely to keep bootstrap's zmx-install prompt from firing a real `brew install`
+# under the PTY (the 2026-06-05 CI macOS leg ground ~52min on exactly that). The
+# zmx step is now gone from bootstrap, so there is nothing left to suppress.
 
 # Most arms run with the stubs on PATH (claude PRESENT). PATH is inherited by
 # the qd child through jail_qd. Save the original for the claude-missing arm.
@@ -161,10 +153,10 @@ else
 fi
 
 # G-B3: non-TTY → relay NOT offered, NOT registered, register-later pointer.
-if grep -qi 'relay: not configured' "$OUT1"; then
+if grep -qi 'relay: registration — not configured' "$OUT1"; then
     ok "G-B3/relay-not-configured-reported"
 else
-    bad "G-B3/relay-not-configured-reported — expected 'relay: not configured'"
+    bad "G-B3/relay-not-configured-reported — expected 'relay: registration — not configured'"
 fi
 if grep -qi 'qd relay:register' "$OUT1"; then
     ok "G-B3/relay-register-later-pointer"
@@ -315,10 +307,10 @@ PYEOF
     jail_qd bootstrap </dev/null >"$OUT5" 2>&1
     RC5=$?
     [ "$RC5" = "0" ] && ok "G-B4/configured-rerun-exit-0" || bad "G-B4/configured-rerun-exit-0 (rc=$RC5)"
-    if grep -qi 'relay: configured' "$OUT5"; then
+    if grep -qi 'relay: registration — configured' "$OUT5"; then
         ok "G-B4/configured-reported"
     else
-        bad "G-B4/configured-reported — expected 'relay: configured' in rerun"
+        bad "G-B4/configured-reported — expected 'relay: registration — configured' in rerun"
     fi
     if grep -qi 'shell: integration configured' "$OUT5"; then
         ok "G-B4/shell-configured-reported"
@@ -350,10 +342,10 @@ OUT6="$JAIL_ROOT/run6.out"
 jail_qd bootstrap </dev/null >"$OUT6" 2>&1
 RC6=$?
 [ "$RC6" = "0" ] && ok "health/seeded-run-exit-0" || bad "health/seeded-run-exit-0 (rc=$RC6)"
-if grep -qi 'server is up' "$OUT6"; then
+if grep -qi 'relay: running now — a relay server process is up' "$OUT6"; then
     ok "health/fyi-line-reported"
 else
-    bad "health/fyi-line-reported — expected a 'server is up' FYI line"
+    bad "health/fyi-line-reported — expected a 'relay: running now —' FYI line"
 fi
 
 # Quiet the unused-var linter for ORIG_PATH on shells that warn (kept for clarity).

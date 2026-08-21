@@ -1,48 +1,63 @@
 //! REAL `qd resume` backend (spec §5.3; TS `commands/lifecycle.ts:408-530`).
 //!
-//! Relaunch a COLD session in zmx (by default). The pure preflight deciders live
-//! in `dispatch::resume`; this verb drives the live effects:
+//! Relaunch a COLD session under the embedded mux. The pure preflight deciders
+//! live in `dispatch::resume`; this verb drives the live effects:
 //!   - OC refusal (server-managed) → must-be-cold,
 //!   - F3 cwd reality-check (clean error, never raw ENOENT),
-//!   - F1 env-file capture (the launch.rs mechanism) + S2 zmx-name validation,
-//!   - kill a stale same-name zmx (destructive sub-step),
-//!   - launch: --no-zmx bare / --no-attach detached + ready-wait / default attach.
+//!   - F1 env-file capture (the launch.rs mechanism) + S2 mux-name validation,
+//!   - kill a stale same-name mux session (destructive sub-step),
+//!   - launch: --no-attach detached + ready-wait / default attach.
 //!
 //! The claude relaunch flag is `--resume <session-id>` exactly as TS's
 //! `buildClaudeCmd(["--resume", session.sessionId])` does at the resume call-site
 //! (lifecycle.ts:474). Ready-wait keys on the PID-file/busy EVENT (ADR 0005 —
 //! zero blind keystrokes), reusing the A2 EventBootWaiter. Exit inherits the
 //! child / 1 on a preflight error.
+//!
+//! # The lane
+//!
+//! The verb resolves the target with qd's fuzzy resolver, derives the
+//! [`Lane`](quorum_qw::lane::Lane) from the row's provider + hosting, and revives
+//! through [`LaneOps::wake`] — the shape `qd attach` established. That replaced
+//! FIVE guarded provider if-chains dispatching into SIX revive routes (claude
+//! pane, codex pane, codex daemon, pi pane, pi daemon, and the two acp lanes'
+//! shared core), whose relative ORDER was load-bearing and enforced by comment.
+//!
+//! # What deliberately stays here
+//!
+//! - **Every success and failure line**, including the `qd send:relay` pointers.
+//!   Six routes collapsed; eight lines did not, and must not — each names a
+//!   different drive channel and they are pinned as prose.
+//! - **The claude-lane preflights**: the id-collision pair, the must-be-cold gate,
+//!   the "no session ID" refusal and the F3 cwd reality-check. They were reachable
+//!   only from the claude arm and they stay scoped to it.
+//! - **The codex / pi PANE preconditions**, ahead of the lane, because their
+//!   position relative to dep resolution is user-visible (see the call).
+//! - The `ColdJsonl` fallback: a claude transcript with no registry row cannot be
+//!   addressed by [`SessionId`], and resume is THE verb for one.
+//!
+//! `run_codex_resume` / `run_pi_resume` / `run_acp_resume` used to be listed here
+//! as "no longer reached from `run`, still the seam `send_unified`'s wake revives
+//! through". That seam is gone — `qd send` delivers through
+//! [`LaneOps::deliver`], which performs its own wake — so the three had no caller
+//! left and are DELETED. See the tombstone where they lived.
 
 use std::path::{Path, PathBuf};
 
 use clap::ArgMatches;
 
-use dispatch::boot::{EventBootWaiter, RealSleeper};
-use dispatch::create::BootWaiter;
 use dispatch::effects::{Env, RealClock, RealEnv};
-use dispatch::exec::RealExec;
-use dispatch::launch::{
-    build_claude_cmd, capture_backend_env, claude_bin, claude_flags, launch_env_pairs,
-    session_env_prefix, write_session_env_file_with_unsets, RenderMode,
-};
+use dispatch::launch::RenderMode;
 use dispatch::model::SessionStatus;
-use dispatch::mux::Mux;
 use dispatch::paths::QdPaths;
-use dispatch::resume::{derive_zmx_name, resolve_resume_cwd, validate_session_name, ResumeCwd};
+use dispatch::resume::{resolve_resume_cwd, ResumeCwd};
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
+
+use quorum_qw::contract::{LaneError, LaneOps, SessionId, WakeOutcome, WakeState};
+use quorum_qw::lane::{Harness, Lane, Mode};
 
 use super::common;
 use super::lifecycle;
-
-/// The `--no-attach` boot-confirm-failure stderr line (NAMED DIVERGENCE, ADD-9a).
-/// Factored so the EXACT wording is pinned by a unit test: m-4 (ack3-spec §8)
-/// retyped `wait_ready` to return a typed `BootFailure`, and this line must stay
-/// byte-identical to the pre-m-4 form (it printed the waiter's `String` directly;
-/// now it prints `failure.detail`). The contract: prefix + the waiter detail.
-fn resume_boot_unconfirmed_line(detail: &str) -> String {
-    format!("qd resume: session launched but did not confirm ready: {detail}")
-}
 
 /// W2 send-pointer: the codex-resume success lines point the agent at the WORKING
 /// channel, `qd send:relay` (bare `qd send` is a moved stub; `send:pty` has no pane
@@ -75,13 +90,36 @@ fn acp_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
     )
 }
 
+/// WS-A.2 RESUME (pi) — the AlreadyRunning no-op line. Factored for symmetry with
+/// the codex/acp pairs above (it was inline in the verb body until the revive core
+/// moved to `dispatch::provider::pi::resume`).
+///
+/// NAMED INCONSISTENCY, PRESERVED DELIBERATELY: the pi pair points at
+/// "wait/stop it by name", NOT at `qd send:relay <name> <text>` the way the codex
+/// and acp pairs do. That predates this split and is NOT normalised here — a pi
+/// resident's drive channel is a separate question from where its revive code
+/// lives, and silently rewriting a user-facing line during a code move is exactly
+/// the kind of change that goes unnoticed. Change it on purpose or not at all.
+fn pi_already_running_line(name: &str) -> String {
+    format!("session \"{name}\" is already alive (pi resident live); wait/stop it by name.")
+}
+
+/// WS-A.2 RESUME (pi) — the revived line. The resident was re-spawned in LOAD mode
+/// on the SAME durable session id (new pid + endpoint, new row). See
+/// `pi_already_running_line` on the "wait/stop it by name" pointer.
+fn pi_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
+    format!("resumed pi session \"{name}\" (daemon pid {pid}, {endpoint}); wait/stop it by name.")
+}
+
 /// `qd resume <session>` — cold-session relaunch.
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
-    // P4DB Phase A: `--no-zmx` / `--no-attach` / `--zmx-name` are the dropped
-    // interactive/PTY escapes — they stay PARSE-ACCEPTED in cli.rs so scripted
-    // callers don't break, but `qd resume` now revives DETACHED through the shared
-    // `revive_claude` seam (which derives its own zmx name), so they are inert here.
+    // P4DB Phase A: `--no-attach` is a dropped interactive/PTY escape — it stays
+    // PARSE-ACCEPTED in cli.rs so scripted callers don't break, but `qd resume`
+    // now revives DETACHED through the shared `revive_claude` seam, so it is
+    // inert here. Its two former siblings, `--no-zmx` and `--zmx-name`, were
+    // REMOVED from the parser by FTUE punch R1 (zmx retirement): a parked flag
+    // that is documented and does nothing is worse than no flag at all.
     // `--alt-screen`/`--inline` (render) ARE consulted: the seam launches a native
     // claude pane whose render mode is a launch-time birth property, resolved via the
     // shared `common::resolve_render_mode` below (identical to `qd attach`/`qd start`).
@@ -106,468 +144,421 @@ pub fn run(m: &ArgMatches) -> i32 {
         Err(code) => return code,
     };
 
-    // A-OC.1: opencode is un-parked — an `acp/opencode` row is daemon-hosted and reaches the
-    // acp/ revive arm below (session.provider.starts_with("acp/") → run_acp_resume), which
-    // re-spawns the resident in LOAD mode with the opencode bridge re-derived from the row's
-    // provider. No by-name opencode refusal branch remains.
-    // codex P2 W7 (codex-p2-spec §7.6; ADD-26(2)): a codex row is DAEMON-hosted —
-    // resume is a first-class AGENT verb = thread/resume revive-to-DRIVABLE with NO
-    // interactive-attach tail (agents have no TTY; attach/--remote is SEVERED). This
-    // THIN dispatch branch routes to the NEW resume_daemon module and RETURNS before
-    // ANY claude attach/resume internals (the R-a hot-file discipline). Placed BEFORE
-    // refuse_unknown_provider (which would otherwise refuse "codex" as unknown) and
-    // before the must-be-cold gate (codex revive is drivable from any non-alive state,
-    // not just Cold).
+    // --- THE LANE, from the ROW's provider + hosting -------------------------
     //
-    // codex-interactive: SCOPED to DAEMON-hosted codex rows. `run_codex_resume`
-    // revives by re-spawning an app-server and issuing `thread/resume` over ws —
-    // machinery a pane-hosted row has none of (no daemon, no endpoint). It is
-    // handled just below rather than here.
-    if session.provider == "codex"
-        && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
-            == Some(dispatch::provider::Hosting::Daemon)
-    {
-        return run_codex_resume(&session);
-    }
-    // codex-interactive: a PANE-hosted codex row revives in place — relaunch
-    // `codex resume <thread-id>` in a fresh pane, carrying the SAME thread. This is
-    // the agent-facing verb, so it revives DETACHED (no interactive tail), exactly
-    // like the codex daemon arm above and the claude `--no-attach` shape; a human
-    // who wants to land inside uses `qd attach`, which revives and then hands over
-    // the terminal.
-    if session.provider == "codex" {
-        // Render mode is a launch-time birth property; resolve it here (the
-        // shared resolution below this branch runs too late for this arm).
-        let render = common::resolve_render_mode(m, &RealEnv);
-        return match lifecycle::revive_codex_tui(&session, render, "resume") {
-            Ok(handle) => {
-                println!(
-                    "Revived codex session \"{}\" — attach with \"qd attach {}\"",
-                    handle.zmx_name, handle.zmx_name
-                );
-                0
-            }
-            // revive_codex_tui already printed its own loud error.
-            Err(code) => code,
-        };
-    }
-    // scoped-ACP-CC Item 3 (RESUME): an acp/* row is ALSO daemon-hosted (the resident
-    // `qd acp-daemon` adapter + its bridge). Resume re-establishes the SAME CC session
-    // via real `session/load` (Component-0-proven faithful), mirroring the codex revive.
-    // Placed BESIDE the codex branch — BEFORE refuse_unknown_provider (which would
-    // refuse "acp/claude-code" as unknown) and before the must-be-cold gate (a
-    // daemon-hosted row is revivable from any non-alive state, incl. a tombstoned stop).
-    if session.provider.starts_with("acp/") {
-        return run_acp_resume(&session);
-    }
-    // WS-A.2 pi RESUME: a pi row is ALSO daemon-hosted (the `qd pi-daemon` resident +
-    // its `pi --mode rpc` child). Resume re-establishes the SAME pi session via a fresh
-    // resident booted with `--load-session <sessionId>` (pi's get_state session_id IS
-    // its durable identity). Placed BESIDE the codex/acp branches — BEFORE
-    // refuse_unknown_provider (which would refuse "pi") and the must-be-cold gate (a
-    // daemon-hosted row revives from any non-alive state, incl. a tombstoned stop).
+    // ONE call, in place of the five guarded if-chains that used to stand here:
+    // codex+Daemon, codex-pane, `starts_with("acp/")`, pi+Daemon, pi-pane. Each
+    // returned early into its own revive, and their ORDER — every daemon and TUI
+    // arm ahead of `refuse_unknown_provider`, ahead of the id preflights, ahead of
+    // the must-be-cold gate — was load-bearing and enforced by comment alone.
+    // [`LaneOps::wake`] routes all six revives on `(harness, mode)` itself, so the
+    // chain is one call and the routing is a total match rather than an ordering.
     //
-    // pi-interactive: SCOPED to DAEMON-hosted pi rows. `run_pi_resume` revives by
-    // booting a fresh resident and reloading the session over its front — machinery
-    // a pane-hosted row has none of (no resident, no endpoint). It is handled just
-    // below rather than here.
-    if session.provider == "pi"
-        && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
-            == Some(dispatch::provider::Hosting::Daemon)
-    {
-        return run_pi_resume(&session);
-    }
-    // pi-interactive: a PANE-hosted pi row revives in place — relaunch `pi
-    // --session-id <id>` in a fresh pane, reopening the SAME conversation. This is
-    // the agent-facing verb, so it revives DETACHED (no interactive tail), exactly
-    // like the daemon arms above and the claude `--no-attach` shape; a human who
-    // wants to land inside uses `qd attach`, which revives and then hands over the
-    // terminal.
-    if session.provider == "pi" {
-        // Render mode is a launch-time birth property; resolve it here (the shared
-        // resolution below this branch runs too late for this arm).
-        let render = common::resolve_render_mode(m, &RealEnv);
-        return match lifecycle::revive_pi_tui(&session, render, "resume") {
-            Ok(handle) => {
-                println!(
-                    "Revived pi session \"{}\" — attach with \"qd attach {}\"",
-                    handle.zmx_name, handle.zmx_name
-                );
-                0
-            }
-            // revive_pi_tui already printed its own loud error.
-            Err(code) => code,
+    // `None` ⇒ a genuinely unknown provider ⇒ the pre-existing loud refusal, fired
+    // from the position it always fired from: after the provider branches, before
+    // the collision preflights.
+    //
+    // NAMED USER-VISIBLE CHANGE — bare `opencode`. `refuse_unknown_provider` waves
+    // "opencode" through, and `row_hosting("opencode", None)` answers `Daemon`, so a
+    // row carrying that bare provider used to fall PAST every branch above into the
+    // CLAUDE arm and be revived by `revive_claude` — a `claude … --resume <ses_…>`
+    // argv, the wrong harness against an id it cannot read. `lane_for` accepts
+    // `opencode` as the CLI alias it is and resolves it to the acp/opencode DAEMON
+    // lane, which is what such a row has always been. In practice these rows come
+    // from the opencode store's cold scan (`join.rs`'s opencode branch: no registry
+    // record, no pid), so the visible change is that qd now says it cannot revive
+    // one in place instead of launching claude at it.
+    let Some(lane) = quorum_qw::lane_for(&session.provider, session.hosting.as_deref()) else {
+        return common::refuse_unknown_provider("resume", &session).unwrap_or(1);
+    };
+
+    // Render mode is a launch-time BIRTH property — flag > `render-default` config >
+    // inline, the same `common::resolve_render_mode` `qd attach` and `qd start` use.
+    // It is THREADED into `wake`, never defaulted: all three pane arms resolved it
+    // correctly before this rewire, and handing the lane `RenderMode::default()`
+    // instead would silently discard a user's `--alt-screen` / `--inline` /
+    // `render-default` — the exact defect the contract revision that added the
+    // parameter exists to prevent. Resolved ONCE, where three arms each resolved
+    // their own. The four daemon lanes ignore it: a resident has no pane to build.
+    let render = common::resolve_render_mode(m, &env);
+
+    // codex-interactive / pi-interactive: the TWO PANE PRECONDITIONS, kept HERE —
+    // a qd-side ORDER pin, the same kind as `qd attach`'s codex viewer.
+    //
+    // Both cores re-check these, so this is not the gate; what this call pins is the
+    // gate's POSITION. `revive_{codex,pi}_tui`'s verb wrappers ran them BEFORE any
+    // dep resolution so that a nameless / never-used row says so even when HOME is
+    // unset or `QD_MUX` is bogus, and the lane's arms resolve the mux and the socket
+    // dirs first. That ordering is user-visible, it predates the lane, and it is
+    // this verb's to keep.
+    if lane.mode == Mode::Pane {
+        let precondition_failure = match lane.harness {
+            Harness::Codex => dispatch::provider::codex::pane::revive_preconditions(
+                session.name.as_deref(),
+                &session.session_id,
+            )
+            .err()
+            .map(|e| (lifecycle::codex_tui_failure_line("resume", &e), e.exit_code())),
+            Harness::Pi => dispatch::provider::pi::pane::revive_preconditions(
+                session.name.as_deref(),
+                &session.session_id,
+            )
+            .err()
+            .map(|e| (lifecycle::pi_tui_failure_line("resume", &e), e.exit_code())),
+            // claude's own preconditions are the gates below, and the two ACP
+            // harnesses have no pane lane at all.
+            _ => None,
         };
-    }
-    // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
-    if let Some(code) = common::refuse_unknown_provider("resume", &session) {
-        return code;
+        if let Some((line, code)) = precondition_failure {
+            eprintln!("{line}");
+            return code;
+        }
     }
 
-    // Pete feedback #6 — live-id-collision preflight over the RAW registry. The
-    // deduped join collapses two same-id LIVE rows to one (hiding a genuine
-    // duplicate-id collision) and can report the survivor Cold via dedup of a stale
-    // row. We check the unmerged truth (raw rows + is_pid_alive) BEFORE the must-be-
-    // cold gate so a collision is surfaced even when the join reports the survivor
-    // busy/idle, and so a Cold-MISREAD of an actually-live session is refused (it
-    // would otherwise spawn a SECOND process on the same id — the orchestrator
-    // revival-ladder hazard). SHARED with attach via `common::refuse_id_collision`.
-    if let Some(code) =
-        common::refuse_id_collision("resume", &session.session_id, &paths.sessions_dir)
-    {
-        return code;
-    }
-    if let Some(pid) = common::alive_pid_for_id(&paths.sessions_dir, &session.session_id) {
-        eprintln!(
-            "qd resume: session \"{}\" is already alive (PID {pid}). Use \"qd attach\" instead.",
-            session.name.as_deref().unwrap_or(&session.session_id)
-        );
-        return 1;
-    }
-
-    // Must be cold (lifecycle.ts:437-441). Retained as the byte-stable fast-path +
-    // the stale-status edge the pid-based preflight above does not cover (a row with
-    // a non-Cold status STRING whose pid is already dead → 0 alive rows above).
-    if session.status != SessionStatus::Cold {
-        // P0 qafix R3 (orc ruling 2026-06-10): a tombstoned (Killed) row that is
-        // NOT resumable (no provider session id, or no transcript) has NOTHING to
-        // resume — "still alive" would be a false statement of fact. The gate's
-        // LOGIC is unchanged (anything non-Cold refuses, exit 1); only this arm's
-        // message states the true condition. Genuinely-alive statuses keep the
-        // byte-pinned pointer to the human attach verb.
-        // (Join structure note: a killed session WHOSE
-        // TRANSCRIPT EXISTS surfaces as a ColdJsonl row — Cold, resumable, never
-        // here; the Killed branch emits only sids no transcript row claimed. The
-        // jsonl_path guard keeps this arm honest if that ever drifts.)
-        if session.status == SessionStatus::Killed
-            && (session.session_id.is_empty() || session.jsonl_path.is_none())
+    // --- The CLAUDE-lane preflights. They stay in qd, and they stay claude's. ---
+    //
+    // Every gate below was reachable only by a row that had fallen through all five
+    // provider branches above — which is to say a claude row (and, until this
+    // rewire, a bare-opencode one; see the `lane_for` note). The daemon and TUI
+    // revives deliberately ran AHEAD of them, because a daemon-hosted row is
+    // revivable from any non-alive state including a tombstoned stop, and a codex /
+    // pi pane's own refusals are what its user must hear first. Scoping the block to
+    // the claude lane keeps every one of those orders exactly as it was, and states
+    // the scope that used to be implied by five early returns.
+    if lane.harness == Harness::ClaudeCode {
+        // Pete feedback #6 — live-id-collision preflight over the RAW registry. The
+        // deduped join collapses two same-id LIVE rows to one (hiding a genuine
+        // duplicate-id collision) and can report the survivor Cold via dedup of a stale
+        // row. We check the unmerged truth (raw rows + is_pid_alive) BEFORE the must-be-
+        // cold gate so a collision is surfaced even when the join reports the survivor
+        // busy/idle, and so a Cold-MISREAD of an actually-live session is refused (it
+        // would otherwise spawn a SECOND process on the same id — the orchestrator
+        // revival-ladder hazard). SHARED with attach via `common::refuse_id_collision`.
+        if let Some(code) =
+            common::refuse_id_collision("resume", &session.session_id, &paths.sessions_dir)
         {
+            return code;
+        }
+        if let Some(pid) = common::alive_pid_for_id(&paths.sessions_dir, &session.session_id) {
             eprintln!(
-                "qd resume: session \"{}\" was stopped and has no resumable transcript — \
-                 nothing to resume.",
-                session.name.as_deref().unwrap_or(query)
+                "qd resume: session \"{}\" is already alive (PID {pid}). \
+                 Use \"qd attach\" instead.",
+                session.name.as_deref().unwrap_or(&session.session_id)
             );
             return 1;
         }
-        eprintln!(
-            "Session is still alive (status: {}). Use \"qd attach\" instead.",
-            session.status.as_str()
-        );
-        return 1;
+
+        // Must be cold (lifecycle.ts:437-441). Retained as the byte-stable fast-path +
+        // the stale-status edge the pid-based preflight above does not cover (a row with
+        // a non-Cold status STRING whose pid is already dead → 0 alive rows above).
+        if session.status != SessionStatus::Cold {
+            // P0 qafix R3 (orc ruling 2026-06-10): a tombstoned (Killed) row that is
+            // NOT resumable (no provider session id, or no transcript) has NOTHING to
+            // resume — "still alive" would be a false statement of fact. The gate's
+            // LOGIC is unchanged (anything non-Cold refuses, exit 1); only this arm's
+            // message states the true condition. Genuinely-alive statuses keep the
+            // byte-pinned pointer to the human attach verb.
+            // (Join structure note: a killed session WHOSE
+            // TRANSCRIPT EXISTS surfaces as a ColdJsonl row — Cold, resumable, never
+            // here; the Killed branch emits only sids no transcript row claimed. The
+            // jsonl_path guard keeps this arm honest if that ever drifts.)
+            if session.status == SessionStatus::Killed
+                && (session.session_id.is_empty() || session.jsonl_path.is_none())
+            {
+                eprintln!(
+                    "qd resume: session \"{}\" was stopped and has no resumable transcript — \
+                     nothing to resume.",
+                    session.name.as_deref().unwrap_or(query)
+                );
+                return 1;
+            }
+            eprintln!(
+                "Session is still alive (status: {}). Use \"qd attach\" instead.",
+                session.status.as_str()
+            );
+            return 1;
+        }
+
+        if session.session_id.is_empty() {
+            eprintln!("Cannot resume: no session ID found.");
+            return 1;
+        }
+
+        // F3: cwd reality-check BEFORE any spawn (lifecycle.ts:451-462). A
+        // renamed/deleted project dir → clean actionable error, never raw ENOENT.
+        let fallback = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".to_string());
+        let exists = |p: &str| Path::new(p).exists();
+        // D3 (headless): the recorded cwd is still validated (refuse a vanished project
+        // dir — keep the F3 safety), but the resumed headless session inherits the
+        // daemon's cwd; per-session cwd threading into LaunchHeadless is daemon-side
+        // (deferred + flagged), so the validated value itself is not consumed here.
+        if let ResumeCwd::Error(e) =
+            resolve_resume_cwd(session.cwd.as_deref(), cwd_override, &exists, &fallback)
+        {
+            eprintln!("ERROR: {e}");
+            return 1;
+        }
     }
 
-    if session.session_id.is_empty() {
-        eprintln!("Cannot resume: no session ID found.");
-        return 1;
-    }
+    // --- THE REVIVE, through the lane ---------------------------------------
+    //
+    // `cwd_override` is `qd resume --cwd <dir>` — the F3 escape for a project that
+    // moved — and it is THREADED, not dropped: it reaches `plan_claude_revive`,
+    // which resolves it against the recorded cwd and carries the result all the way
+    // to the detached launch. The other six arms do not consult it (a resident
+    // resolves its own cwd; the two TUI revives take the row's recorded one), which
+    // is the lane's answer, not this verb's omission.
+    let ops = dispatch::lane::open(lane, &env, paths);
+    let id = SessionId(session.session_id.clone());
+    match ops.wake(&id, render, cwd_override.map(str::to_string)) {
+        Ok(out) => resumed(&session, lane, &out),
 
-    // F3: cwd reality-check BEFORE any spawn (lifecycle.ts:451-462). A
-    // renamed/deleted project dir → clean actionable error, never raw ENOENT.
-    let fallback = std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| ".".to_string());
-    let exists = |p: &str| Path::new(p).exists();
-    // D3 (headless): the recorded cwd is still validated (refuse a vanished project
-    // dir — keep the F3 safety), but the resumed headless session inherits the
-    // daemon's cwd; per-session cwd threading into LaunchHeadless is daemon-side
-    // (deferred + flagged), so the validated value itself is not consumed here.
-    if let ResumeCwd::Error(e) =
-        resolve_resume_cwd(session.cwd.as_deref(), cwd_override, &exists, &fallback)
-    {
-        eprintln!("ERROR: {e}");
-        return 1;
-    }
+        // A row qd RESOLVED that the lane cannot ADDRESS. `row_for_id` is
+        // registry-keyed — tombstone-aware, but still registry-keyed — while the
+        // join also emits `ColdJsonl` rows: a claude transcript with no registry
+        // record behind it (a session run outside qd, or one whose row was removed).
+        // Resume is THE verb for those; refusing one with "no such session" would be
+        // a capability regression, not a cleanup. Same precedent, same guard, same
+        // wording as `qd attach`'s arm.
+        Err(LaneError::NotFound { .. }) if session.provider == "claude-code" => {
+            match revive_claude(&session, cwd_override, render, false, "resume") {
+                Ok(handle) => {
+                    println!(
+                        "Resumed session \"{}\" from {} (detached); attach with \"qd attach {}\".",
+                        handle.zmx_name,
+                        dispatch::fmt::truncate_id_default(&session.session_id),
+                        handle.zmx_name
+                    );
+                    0
+                }
+                // revive_claude already printed its own loud `qd resume:` error.
+                Err(code) => code,
+            }
+        }
 
-    // --- P4DB Phase A: RE-POINT qd resume onto the shared long-lived revive seam. ---
-    // Re-home off the one-off `-p` stream-json drive (`launch_headless_embedded` with
-    // prompt `""` + cwd `None`) ONTO `revive_claude`, the SAME seam `qd attach`'s
-    // cold arm (attach.rs) and WP-B-CS-2's `revive_to_drive` (lifecycle.rs:371)
-    // already ride. It relaunches a native-TUI `claude --resume <id>` (provider seam,
-    // NO `-p`/stream-json), detached + ready-gated (EventBootWaiter::wait_ready) so a
-    // boot that never confirms FAILS LOUD (nonzero + actionable) — the silent-success
-    // bug is closed by construction, and the fail-loud already lives inside the seam.
-    //
-    // REVIVE DETACHED (A3 §4 clause 5): `qd resume` does NOT attach a TTY — `qd
-    // attach` is the attach path. The seam returns a `ReviveHandle`; resume reports
-    // the addressable session and leaves attach to the human (do NOT mux.attach here).
-    //
-    // cwd (A3 clause 4): pass the parsed `--cwd` override; the seam resolves the
-    // recorded `session.cwd` + the override via `resolve_resume_cwd` and threads the
-    // result all the way to `mux.run_detached` — fixing the old `-p` path's cwd `None`
-    // (which silently inherited the daemon cwd). render: the shared `resolve_render_mode`
-    // (flag > config > inline), identical to `qd attach`/`qd start`.
-    //
-    // The always-headless policy (`driver::resume_is_headless`, driver.rs:169) is no
-    // longer a router to the drive; its removal is gated to a later phase, so it is
-    // simply no longer consulted here.
-    let render = common::resolve_render_mode(m, &env);
-    match revive_claude(&session, cwd_override, render, false) {
-        Ok(handle) => {
+        // Same shape for a NON-claude row: `revive_claude` builds a `claude …
+        // --resume <sid>` argv, so feeding it a foreign session id would launch the
+        // wrong harness against an id it cannot read.
+        Err(LaneError::NotFound { .. }) => {
+            eprintln!(
+                "qd resume: \"{}\" is a stopped {} session and qd cannot revive it in \
+                 place. Start a fresh one with \"qd start <name> --provider {}\".",
+                session.name.as_deref().unwrap_or(&session.session_id),
+                session.provider,
+                session.provider
+            );
+            1
+        }
+
+        // ATTRIBUTION, and the CORE's exit code. The lane's revives return typed
+        // errors and do not print; `self_attributed` says whether `detail` is
+        // already a complete line (a resident's `qd resume: …` Display, an
+        // `ERROR: …` refusal) or a body this verb must stamp its own name onto —
+        // which is exactly what `line("resume")` / `codex_tui_failure_line` /
+        // `pi_tui_failure_line` did for the six arms this replaced. `exit_code` is
+        // the core's, because every one of those arms returned the core's rather
+        // than a flattened 1.
+        Err(LaneError::WakeFailed {
+            detail,
+            exit_code,
+            self_attributed,
+        }) => {
+            if self_attributed {
+                eprintln!("{detail}");
+            } else {
+                eprintln!("qd resume: {detail}");
+            }
+            exit_code
+        }
+
+        // Transport / Refused / the rest: the lane's own words, exit 1.
+        Err(e) => {
+            eprintln!("qd resume: {e}");
+            1
+        }
+    }
+}
+
+/// Report ONE successful revive — the eight success lines, unchanged.
+///
+/// The six revive ROUTES collapsed into [`LaneOps::wake`]; the lines did not, and
+/// must not: each names a different drive channel (`qd send:relay` for codex and
+/// acp, "wait/stop it by name" for pi, `qd attach` for the two TUIs) and they are
+/// pinned as prose. What the lane made possible is that this is a rendering match
+/// on data, with no control flow in it — and that the `AlreadyRunning` / `Revived`
+/// verdict is the CORE's, taken at the instant it made the decision, rather than
+/// re-derived here by comparing pids.
+fn resumed(session: &dispatch::model::Session, lane: Lane, out: &WakeOutcome) -> i32 {
+    let name = session
+        .name
+        .clone()
+        .unwrap_or_else(|| session.session_id.clone());
+    // The pane a PANE revive built. Its `zmx_name` is derived inside the revive
+    // plan and is NOT the row's name — it is what the success line and its `qd
+    // attach <…>` pointer must both name, which is why the lane reports it.
+    let pane = out.pane.as_ref().map(|p| p.zmx_name.clone()).unwrap_or_default();
+    match (lane.harness, lane.mode) {
+        (Harness::ClaudeCode, _) => {
             println!(
                 "Resumed session \"{}\" from {} (detached); attach with \"qd attach {}\".",
-                handle.zmx_name,
+                pane,
                 dispatch::fmt::truncate_id_default(&session.session_id),
-                handle.zmx_name
+                pane
             );
             0
         }
-        Err(code) => code,
-    }
-}
-
-/// P0 wave-2 (spec-w2-env D1+D4) — the SHARED resume/revive env prep, the exact
-/// same sequence on both paths (`run`'s claude path and attach's
-/// [`revive_claude`]): resolve the ids store ONCE; run the D4 same-name guard
-/// BEFORE any side effect (the spike hazard — the stale-kill must never destroy
-/// a DIFFERENT live session's pane; the target's own stale pane keeps the
-/// kill-then-relaunch flow); D1 mint/fetch the stable id (the UUID is known
-/// here, so `mint_or_get` keys it directly — lazy-mints for pre-stable-id
-/// sessions; fail-closed: never relaunch a session whose env would silently
-/// miss its identity); write the UNCONDITIONAL self-deleting env file
-/// (lifecycle.ts:483-485) carrying `export QD_SESSION_ID='<id>'` (an explicit
-/// set, overriding anything inherited through the caller's subtree) plus the
-/// captured backend pairs — so the env file + dot-source prefix are
-/// unconditional on every resume/revive branch (`--no-zmx` bare, `--no-attach`
-/// detached, default attach, and attach's revive all share the one
-/// `claude_cmd` this returns). `verb` keys the per-path error wording
-/// ("resume" / "attach"); every `Err(code)` has already printed its error.
-#[allow(clippy::too_many_arguments)]
-fn prepare_claude_resume_env(
-    verb: &str,
-    env: &dyn Env,
-    home: &Path,
-    paths: &QdPaths,
-    zmx_name: &str,
-    session_id: &str,
-    session_name: Option<&str>,
-    backend_env: Vec<(String, String)>,
-    render: RenderMode,
-    base_claude_cmd: &str,
-) -> Result<String, i32> {
-    let ids_path = common::ids_store_path(env)?;
-    if let Some(code) =
-        common::refuse_held_zmx_name(verb, &paths.sessions_dir, &ids_path, zmx_name, session_id)
-    {
-        return Err(code);
-    }
-    let qd_id =
-        match dispatch::idstore::mint_or_get(&ids_path, session_id, session_name, &RealClock) {
-            Ok(id) => id,
-            Err(e) => {
-                eprintln!("qd {verb}: could not mint a stable session id: {e}");
-                return Err(1);
-            }
-        };
-    // punch item 7: the render-mode birth property rides the SAME shared
-    // assembly as create's path (launch_env_pairs — one assembly point, every
-    // launch site). R2 (override-never-inherit): an --alt-screen revive must
-    // EXPLICITLY `unset -v` the inline var — omitting the export alone leaves
-    // the child inheriting it from an inline parent env — so the unset list
-    // rides this path too (the with-unsets writer; empty for inline, whose
-    // export clobbers anything inherited).
-    let env_pairs = launch_env_pairs(backend_env, Some(qd_id), render);
-    let env_unsets = dispatch::launch::render_env_unsets(render);
-    if let Err(e) = write_session_env_file_with_unsets(home, zmx_name, &env_pairs, &env_unsets) {
-        eprintln!("qd {verb}: failed to write session env file: {e}");
-        return Err(1);
-    }
-    let env_prefix = session_env_prefix(home, zmx_name, &env_pairs, &env_unsets);
-    Ok(format!("{env_prefix}{base_claude_cmd}"))
-}
-
-/// The SHARED detached-revive seam (W1 phase 2): `run_detached` + the ADR-0005
-/// EVENT ready-wait, factored out of resume's `--no-attach` branch so `attach`
-/// can reuse the EXACT same revive-to-drivable mechanics before its TTY attach.
-/// Returns `Ok(())` when the session is detached + confirmed ready, or `Err(code)`
-/// (already printed) on a launch / boot-confirm failure. The caller owns any
-/// success stdout line (resume's "Resumed detached…" stays at its call site).
-/// punch item 6: the revive launch-failure stderr lines, factored so the EXACT
-/// wording is pinned by unit tests (the resume_boot_unconfirmed_line pattern).
-/// A nonzero `zmx run` carries zmx's stderr; a spawn-level Err is the
-/// missing-binary guidance. BOTH fail immediately — the boot waiter never runs
-/// on a failed launch (the no-swallow-into-boot-timeout contract).
-fn revive_launch_failed_line(stderr: &str) -> String {
-    format!("Failed to resume session: {}", stderr.trim())
-}
-
-fn revive_zmx_missing_line() -> String {
-    "qd resume: could not launch zmx (is it installed and on PATH?).".to_string()
-}
-
-fn run_detached_revive(
-    mux: &dyn Mux,
-    canonical: &Path,
-    zmx_name: &str,
-    claude_cmd: &str,
-    cwd_path: &Path,
-    paths: &QdPaths,
-) -> Result<(), i32> {
-    match mux.run_detached(canonical, zmx_name, claude_cmd, cwd_path) {
-        Ok(r) if r.status == Some(0) => {}
-        Ok(r) => {
-            eprintln!("{}", revive_launch_failed_line(&r.stderr));
-            return Err(1);
+        (Harness::Codex, Mode::Pane) => {
+            println!("Revived codex session \"{pane}\" — attach with \"qd attach {pane}\"");
+            0
         }
-        Err(_) => {
-            eprintln!("{}", revive_zmx_missing_line());
-            return Err(1);
+        (Harness::Pi, Mode::Pane) => {
+            println!("Revived pi session \"{pane}\" — attach with \"qd attach {pane}\"");
+            0
+        }
+        // The extension lane names BOTH channels, because it is the one lane
+        // that has both: a human attaches to the pane, and the agent drives the
+        // same session over its control channel without attaching to anything.
+        // A line naming only `qd attach` would read as "this is the pi TUI
+        // lane", which is exactly the confusion the lane exists to resolve.
+        (Harness::Pi, Mode::Extension) => {
+            println!(
+                "Revived pi session \"{pane}\" — attach with \"qd attach {pane}\", \
+                 or drive it with \"qd send {pane}\""
+            );
+            0
+        }
+        // Not lanes; `Lane::new` refuses them. Unreachable except by hand.
+        (Harness::Codex, Mode::Extension) => {
+            println!("Revived session \"{name}\"");
+            0
+        }
+        (Harness::Codex, Mode::Daemon) => {
+            println!("{}", daemon_line(out, &name, codex_already_running_line, codex_revived_line));
+            0
+        }
+        // The one daemon lane with an attach to point at. Everything else about
+        // the revive is `codex/daemon`'s, so the verdict line is too — what
+        // differs is the follow-on, and telling a user to `qd send` to a session
+        // they could also be WATCHING is the whole affordance going unmentioned.
+        (Harness::Codex, Mode::AppServer) => {
+            println!("{}", daemon_line(out, &name, codex_already_running_line, codex_revived_line));
+            println!("Open a terminal on it with \"qd attach {name}\".");
+            0
+        }
+        // pi has no app-server residence; unreachable through `lane_for`. An arm
+        // rather than a wildcard so the compiler keeps forcing this decision.
+        (Harness::Pi, Mode::AppServer) => {
+            eprintln!("qd resume: pi has no app-server residence");
+            1
+        }
+        (Harness::Pi, Mode::Daemon) => {
+            println!("{}", daemon_line(out, &name, pi_already_running_line, pi_revived_line));
+            0
+        }
+        (Harness::AcpClaudeCode | Harness::Opencode, _) => {
+            println!("{}", daemon_line(out, &name, acp_already_running_line, acp_revived_line));
+            0
         }
     }
-    // Ready-wait keys on the PID-file/busy EVENT (ADR 0005 — zero blind
-    // keystrokes), reusing the A2 boot waiter.
-    let clock = RealClock;
-    let sleeper = RealSleeper;
-    let waiter = EventBootWaiter::new(
-        mux,
-        canonical.to_path_buf(),
-        paths.sessions_dir.clone(),
-        &clock,
-        &sleeper,
-    );
-    if let Err(failure) = waiter.wait_ready(zmx_name) {
-        // NAMED DIVERGENCE (loud>silent, ADD-9a): see the historical note at the
-        // resume `--no-attach` call site. The Rust ready-wait is the ADR-0005 EVENT
-        // waiter, so a timeout genuinely means "boot did not confirm" → exit 1.
-        // Pinned byte-identical by `resume_boot_unconfirmed_line`'s unit test.
-        eprintln!("{}", resume_boot_unconfirmed_line(&failure.detail));
-        return Err(1);
+}
+
+/// The two-arm daemon line, shared by the three daemon renderers above. The pair of
+/// formatters differs per lane; the SHAPE — already-running is a success no-op,
+/// revived names the new pid and endpoint — does not.
+///
+/// A `Revived` with no resident cannot happen (the four daemon cores return both
+/// fields with the verdict) and is rendered as the already-running line rather than
+/// with an invented pid: a fabricated endpoint in a success line is worse than a
+/// slightly-wrong one, and there is nothing honest to print.
+fn daemon_line(
+    out: &WakeOutcome,
+    name: &str,
+    already: fn(&str) -> String,
+    revived: fn(&str, i64, &str) -> String,
+) -> String {
+    match (out.state, out.resident.as_ref()) {
+        (WakeState::Revived, Some(r)) => revived(name, r.pid, &r.endpoint),
+        _ => already(name),
     }
-    Ok(())
 }
 
 /// A revived claude session's attach coordinates (W1 phase 2): the socket dir +
-/// zmx name a caller (`attach`) attaches to AFTER `revive_claude` brings the
+/// zmx name a caller (`attach`) attaches to AFTER [`revive_claude`] brings the
 /// session up detached + drivable.
-pub struct ReviveHandle {
-    pub socket_dir: PathBuf,
-    pub zmx_name: String,
-}
-
-/// WP-B5-ii-b (PROOF 1) — the resume argv fragment a cold-row revive passes to
-/// claude, built from the row's RECORDED `session_id` (`model::Session::session_id`
-/// — the durable identity the daemon minted onto the child-pid-keyed row). The
-/// attach→Cold→revive durability proof pins THIS wiring: the recorded id flows
-/// into `--resume <id>` so revive resumes the SAME claude session, never a fresh
-/// one. Factored pure (no spawn) so the wiring is unit-testable on the default
-/// floor — the cheap mirror of the `#[ignore]` end-to-end seed
-/// (`headless_revive_recorded_id.rs`).
 ///
-/// FIX-SHAPED MUTATION (PROOF 1 red-before): replace `id: &session.session_id`
-/// with `id: ""` → the fragment loses `--resume <recorded-id>` → revive starts a
-/// FRESH claude session → the recorded-id resume proof reds.
-fn revive_resume_args(
-    provider: &dyn dispatch::provider::Provider,
-    session: &dispatch::model::Session,
-) -> Vec<String> {
-    let resume_key = dispatch::provider::SessionKey {
-        id: &session.session_id,
-        name: session.name.as_deref(),
-        cwd: session.cwd.as_deref(),
-        pid: session.pid,
-    };
-    provider.resume_args(&resume_key, false)
-}
+/// Re-exported from `dispatch::lanes` rather than redeclared: the lane seam and
+/// this verb had two field-for-field identical structs, and the conversions
+/// between them were pure noise.
+pub use quorum_qw::lanes::ReviveHandle;
 
 /// W1 phase 2 — the SHARED cold→drivable claude revive, callable by `attach` for
-/// the human "just works" auto-revive-then-attach path. This factors resume's
-/// claude relaunch PREP (cwd reality-check, claude_cmd build via the provider
-/// seam, env-file capture, zmx-name derive/validate, backend + canonical-dir
-/// resolution, stale-same-name kill) and then drives the SHARED
-/// [`run_detached_revive`] seam (run_detached + ADR-0005 ready-wait). On success it
-/// returns the [`ReviveHandle`] so the caller can attach the live pane with a plain
-/// `mux.attach` (NO fused `zmx attach … bash -lc`). On any failure it has ALREADY
-/// printed a loud error and returns `Err(code)`.
+/// the human "just works" auto-revive-then-attach path, by `send`'s wake path, by
+/// the adoption relaunch and by the lane seam.
 ///
-/// SCOPE: this is the ZMX/embedded detached revive — it deliberately does NOT carry
-/// resume's `--no-zmx` bare-exec branch nor resume's fused-default `zmx attach`
-/// path (those stay byte-stable in `run`). `attach` always wants detached-then-
-/// attach, which is exactly this seam + a follow-up `mux.attach`.
+/// Verb-layer adapter only. The revive itself — the cwd reality-check, the argv
+/// build through the provider seam, the D4 same-name guard, the identity mint, the
+/// env-file write, the stale-pane clear, the detached launch and the ADR-0005
+/// ready-wait — lives in [`dispatch::provider::claude::revive`]. What is here is
+/// what a library cannot own: HOME, the process cwd fallback, the mux backend and
+/// socket dirs, and stamping the caller's verb onto every failure line.
+///
+/// THE PHASE ORDER IS THE POINT OF THIS FUNCTION. `plan_claude_revive` runs FIRST,
+/// before the backend / dirs / mux are resolved, because its refusals — the
+/// same-name guard above all — must be what the user hears about even when
+/// `QD_MUX` is also wrong, and because no env file should be written for a launch
+/// that guard was going to refuse. That interleave is only expressible here, which
+/// is why the core exposes the two phases instead of one call.
+///
+/// `verb` NAMES THE COMMAND THE USER TYPED, and it is no longer guessed. The
+/// pre-split body hard-coded `qd attach:` on its own lines and `qd resume:` on its
+/// helpers' lines regardless of caller; `ReviveClaudeError::line(verb)` ends that.
+/// See the core's module docs.
 pub fn revive_claude(
     session: &dispatch::model::Session,
     cwd_override: Option<&str>,
     render: RenderMode,
     fresh: bool,
+    verb: &str,
 ) -> Result<ReviveHandle, i32> {
+    use dispatch::provider::claude::revive::{
+        plan_claude_revive, run_claude_revive, ClaudeLaunchDeps, ClaudePlanDeps, ClaudeReviveParams,
+    };
+
     let env = RealEnv;
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => {
-            eprintln!("qd attach: HOME is not set — cannot resolve the session state dir.");
+            eprintln!("qd {verb}: HOME is not set — cannot resolve the session state dir.");
             return Err(1);
         }
     };
     let paths = QdPaths::from_home(&home);
-
-    if session.session_id.is_empty() {
-        eprintln!("Cannot resume: no session ID found.");
-        return Err(1);
-    }
-
-    // F3: cwd reality-check BEFORE any spawn (lifecycle.ts:451-462).
-    let fallback = std::env::current_dir()
+    let ids_path = common::ids_store_path(&env)?;
+    let clock = RealClock;
+    let fallback_cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_string());
-    let exists = |p: &str| Path::new(p).exists();
-    let cwd = match resolve_resume_cwd(session.cwd.as_deref(), cwd_override, &exists, &fallback) {
-        ResumeCwd::Cwd(c) => c,
-        ResumeCwd::Error(e) => {
-            eprintln!("ERROR: {e}");
-            return Err(1);
-        }
-    };
 
-    // The claude relaunch argv via the provider seam (fork=false), identical to
-    // resume's claude path.
-    let config_toml = home.join(".quorum").join("dispatch").join("config.toml");
-    let bin = claude_bin(&env);
-    let flags = claude_flags(&env, &config_toml);
-    let Some(provider_impl) = dispatch::provider::provider_for(&session.provider) else {
-        eprintln!(
-            "qd attach: unknown provider \"{}\" — this engine supports: claude-code.",
-            session.provider
-        );
-        return Err(1);
+    let plan_deps = ClaudePlanDeps {
+        env: &env,
+        home: &home,
+        paths: &paths,
+        ids_path,
+        clock: &clock,
+        fallback_cwd,
     };
-    // adoption:relaunch for zero-turn sessions: no JSONL exists, so --resume
-    // fails with "No conversation found". Use --session-id to start fresh under
-    // the same UUID. Also pass --name so claude writes the name into its new
-    // registry row; without it, the row's name is None and the adopt identity
-    // check (which requires the relaunched session to carry the requested name)
-    // fails with "resume identity mismatch".
-    let extra = if fresh {
-        let mut args = vec!["--session-id".to_string(), session.session_id.clone()];
-        if let Some(name) = session.name.as_deref().filter(|n| !n.is_empty()) {
-            args.push("--name".to_string());
-            args.push(name.to_string());
-        }
-        args
-    } else {
-        revive_resume_args(provider_impl, session)
-    };
-    let base_claude_cmd = build_claude_cmd(&bin, &flags, &extra);
-
-    // F1: capture backend env + write the self-deleting env file (lifecycle.ts:466-485).
-    let backend_env = capture_backend_env(&env);
-    let zmx_name = derive_zmx_name(None, session.name.as_deref(), &session.session_id);
-    if let Some(err) = validate_session_name(&zmx_name) {
-        eprintln!("ERROR: {err}");
-        return Err(1);
-    }
-
-    // P0 wave-2 (spec-w2-env D1+D4) — IDENTICAL to resume's claude path, via the
-    // shared prepare_claude_resume_env ("attach" keys the error wording).
-    let claude_cmd = prepare_claude_resume_env(
-        "attach",
-        &env,
-        &home,
-        &paths,
-        &zmx_name,
-        &session.session_id,
-        session.name.as_deref(),
-        backend_env,
+    let params = ClaudeReviveParams {
+        session,
+        cwd_override,
         render,
-        &base_claude_cmd,
-    )?;
+        fresh,
+    };
+    let plan = plan_claude_revive(&plan_deps, &params).map_err(|e| {
+        eprintln!("{}", e.line(verb));
+        e.exit_code()
+    })?;
 
     // Backend + canonical dir (C1 D2/D3).
     let backend = common::select_backend(&env)?;
@@ -577,13 +568,12 @@ pub fn revive_claude(
             match dispatch::qrmux_dir::resolve_qrmux_dir(&home, &env) {
                 Ok(d) => d,
                 Err(msg) => {
-                    eprintln!("qd attach: {msg}");
+                    eprintln!("qd {verb}: {msg}");
                     return Err(1);
                 }
             }
         }
     };
-    let cwd_path = PathBuf::from(&cwd);
 
     // Kill a stale same-name session so we get a fresh one (lifecycle.ts:500-505).
     let legacy = match backend {
@@ -595,850 +585,119 @@ pub fn revive_claude(
         dispatch::mux_selector::Backend::Embedded => Vec::new(),
     };
     let mux_box = common::build_mux(backend, &home, &env)?;
-    let mux: &dyn Mux = mux_box.as_ref();
-    let mut dirs = vec![canonical.clone()];
-    dirs.extend(legacy);
-    // r6 F1: the SAFE stale-pane clear (see `run`'s twin call; same contract).
-    common::clear_stale_panes("attach", mux, &dirs, &zmx_name)?;
+    let mut scan_dirs = vec![canonical.clone()];
+    scan_dirs.extend(legacy);
 
-    // Detached revive + ready-wait via the SHARED seam.
-    run_detached_revive(mux, &canonical, &zmx_name, &claude_cmd, &cwd_path, &paths)?;
-
-    Ok(ReviveHandle {
-        socket_dir: canonical,
-        zmx_name,
+    let launch_deps = ClaudeLaunchDeps {
+        mux: mux_box.as_ref(),
+        canonical_dir: canonical,
+        scan_dirs,
+        paths: &paths,
+    };
+    run_claude_revive(&launch_deps, &clock, &plan).map_err(|e| {
+        eprintln!("{}", e.line(verb));
+        e.exit_code()
     })
 }
 
-/// codex P2 W7 (codex-p2-spec §7.6; ADD-26(2)) — the codex RESUME path at the verb
-/// layer. A codex row is a daemon-hosted protocol thread; `qd resume` for it is
-/// revive-to-DRIVABLE with NO interactive-attach tail (agents have no TTY — attach
-/// is SEVERED). ALL revive logic lives in [`dispatch::resume_daemon`]; this is the thin
-/// glue: resolve the row's CURRENT pid/endpoint (endpoint is NOT on the
-/// `Session`/`--json` surface — re-read by pid), build the production seams, call
-/// [`dispatch::resume_daemon::resume_codex`], map the outcome to an agent-facing message.
-///
-/// `pub(crate)` (behavior UNCHANGED) so the unified-send wake path
-/// (`send_unified::wake_to_deliverable`, qd–qf W3b) can revive a stopped
-/// daemon-hosted codex target before delivering — the same revive `qd resume`
-/// runs, reused verbatim (it prints its own "resumed …" line and returns an exit
-/// code the wake helper reads).
-pub(crate) fn run_codex_resume(session: &dispatch::model::Session) -> i32 {
-    use dispatch::create_daemon::{real_alloc_port, real_cmdline_probe, RealDaemonSpawner};
-    use dispatch::provider::codex::{AppServerRpc, RpcError, WsAppServer};
-    use dispatch::resume_daemon::{resume_codex, ResumeOutcome, ResumeParams, ReviveDeps};
-
-    let name = session
-        .name
-        .clone()
-        .unwrap_or_else(|| session.session_id.clone());
-
-    let env = RealEnv;
-    let paths = match common::paths_from_home(&env) {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    // The revived daemon's stdout/stderr log root: `<qd_home>/.quorum/dispatch/log` (codex-p2-spec
-    // §3.2), resolved off the injected home so a jailed HOME points the log into the
-    // jail (L9a) — identical to the W4 create path's resolution.
-    let log_dir = paths.home.join(".quorum").join("dispatch").join("log");
-
-    // The current pid/endpoint (the alive-check inputs). endpoint is re-read off the
-    // registry row by pid (it is NOT on the Session surface). A row whose pid is dead
-    // / absent has no live endpoint → revive.
-    let current_endpoint = session
-        .pid
-        .filter(|&p| p != 0)
-        .and_then(|pid| dispatch::registry::read_entry(&paths.sessions_dir, pid))
-        .and_then(|e| e.endpoint)
-        .filter(|s| !s.is_empty());
-
-    let exec = RealExec;
-    let clock = RealClock;
-    let spawner = RealDaemonSpawner;
-    let connect = |url: &str| -> Result<Box<dyn AppServerRpc>, RpcError> {
-        WsAppServer::connect(url, std::time::Duration::from_secs(5)).map(|c| {
-            let b: Box<dyn AppServerRpc> = Box::new(c);
-            b
-        })
-    };
-    let alloc = real_alloc_port;
-    // W9 FIX Mo-2: the cmdline-identity guard — the AlreadyRunning gate reports
-    // "running" ONLY when the live recorded pid's command line is OUR codex daemon
-    // (never a false AlreadyRunning against a reused foreign pid). The probe reads
-    // one pid's cmdline via the existing `ps` seam.
-    let probe = real_cmdline_probe;
-
-    // P0 wave-2: the ids store for the revived daemon's QD_SESSION_ID injection.
-    let ids_path = match common::ids_store_path(&env) {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-
-    let deps = ReviveDeps {
-        provider: &dispatch::provider::codex::CODEX_PROVIDER,
-        env: &env,
-        exec: &exec,
-        clock: &clock,
-        sessions_dir: paths.sessions_dir.clone(),
-        log_dir,
-        spawner: &spawner,
-        connect: &connect,
-        alloc_port: &alloc,
-        cmdline_probe: &probe,
-        ids_path,
-    };
-    let params = ResumeParams {
-        name: name.clone(),
-        thread_id: session.session_id.clone(),
-        cwd: session.cwd.clone(),
-        current_pid: session.pid,
-        current_endpoint,
-    };
-
-    match resume_codex(&deps, &params) {
-        Ok(ResumeOutcome::AlreadyRunning) => {
-            // Drivable RIGHT NOW — a success no-op. NO attach (severed): tell the
-            // agent to send to it. (Do NOT print "use qd attach".) W2: the pointer
-            // is `qd send:relay` — bare `qd send` is a moved stub and `send:pty` has
-            // no pane for a codex daemon; `send:relay` is the working agent channel.
-            println!("{}", codex_already_running_line(&name));
-            0
-        }
-        Ok(ResumeOutcome::Revived { pid, endpoint }) => {
-            // Revived to drivable — NO attach. Report the new daemon + how to drive it.
-            println!("{}", codex_revived_line(&name, pid, &endpoint));
-            0
-        }
-        Err(e) => {
-            eprintln!("qd resume: \"{name}\": {e}");
-            e.exit_code()
-        }
-    }
-}
-
-/// WS-A.2 pi RESUME — the pi analog of [`run_acp_resume`]/[`run_codex_resume`]. A
-/// stopped/dead pi row revives to DRIVABLE (no interactive attach): re-spawn the
-/// resident via [`create_pi_session`] with `load_session = <sessionId>`, so the fresh
-/// resident boots pi in LOAD mode on the SAME durable session id, then writes a NEW row
-/// (new pid + endpoint, SAME session id). An ALREADY-ALIVE resident (pid alive ∧
-/// our-pi-daemon cmdline) is a clean no-op — the load-bearing double-spawn guard, since a
-/// fresh `create_pi_session` would claim the (now-free) name and spawn a DUPLICATE
-/// resident. The resident OUTLIVES this verb (residence holds again).
-///
-/// `pub(crate)` (behavior UNCHANGED) — reused by `send_unified::wake_to_deliverable`
-/// (qd–qf W3b) to revive a stopped pi target before delivering.
-pub(crate) fn run_pi_resume(session: &dispatch::model::Session) -> i32 {
-    use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
-    use dispatch::effects::Clock;
-    use dispatch::provider::pi::daemon::{
-        create_pi_session, pi_daemon_is_alive, PiCreateDeps, PiCreateParams,
-    };
-
-    let name = session
-        .name
-        .clone()
-        .unwrap_or_else(|| session.session_id.clone());
-
-    // Resumability gate: pi's session_id (the get_state birth-id) IS its durable
-    // identity — with none there is nothing to load.
-    if session.session_id.is_empty() {
-        eprintln!("qd resume: session \"{name}\" has no pi session id — nothing to resume.");
-        return 1;
-    }
-
-    let env = RealEnv;
-    let home = match env.var("HOME").filter(|s| !s.is_empty()) {
-        Some(h) => PathBuf::from(h),
-        None => {
-            eprintln!("qd resume: HOME is not set — cannot resolve the session state dir.");
-            return 1;
-        }
-    };
-    let paths = QdPaths::from_home(&home);
-
-    // The current endpoint (alive-check input) — re-read off the row by pid (it is NOT on
-    // the Session surface), mirroring run_acp_resume/run_codex_resume.
-    let current_endpoint = session
-        .pid
-        .filter(|&p| p != 0)
-        .and_then(|pid| dispatch::registry::read_entry(&paths.sessions_dir, pid))
-        .and_then(|e| e.endpoint)
-        .filter(|s| !s.is_empty());
-
-    // ALREADY ALIVE → clean no-op, NO second resident. pid-alive ∧ identity (the cmdline
-    // carries the recorded `--listen <endpoint>`), the double-spawn guard.
-    let is_alive = |pid: i64| dispatch::effects::is_pid_alive(pid as i32);
-    let probe = real_cmdline_probe;
-    if pi_daemon_is_alive(
-        session.pid.unwrap_or(0),
-        current_endpoint.as_deref(),
-        &is_alive,
-        &probe,
-    ) {
-        println!("session \"{name}\" is already alive (pi resident live); wait/stop it by name.");
-        return 0;
-    }
-
-    // REVIVE: re-spawn the resident in LOAD mode via the SAME create choreography with
-    // load_session set (name-claim → spawn `pi-daemon --load-session <id>` DETACHED →
-    // connect_ready → read birth-id → write the NEW row).
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("qd resume: \"{name}\": cannot resolve own executable for pi adapter: {e}");
-            return 1;
-        }
-    };
-    let clock = RealClock;
-    let now_ms = || clock.now_ms();
-    let spawner = RealDaemonSpawner;
-    let claims_dir = paths
-        .sessions_dir
-        .parent()
-        .map(|p| p.join("claims"))
-        .unwrap_or_else(|| home.join(".claude").join("claims"));
-    let cwd = PathBuf::from(
-        session
-            .cwd
-            .clone()
-            .filter(|c| !c.is_empty())
-            .unwrap_or_else(|| ".".to_string()),
-    );
-
-    // WS-A.2 identity parity on RESUME (mirrors resume_daemon.rs ~647/802): pi's
-    // durable id is KNOWN here (session.session_id, the birth-id preserved across
-    // load mode), so `mint_or_get` keys it directly — returning the id minted at
-    // create (the SAME id across every resume; lazy-mints for a pre-stable-id
-    // session). Injected as `QD_SESSION_ID` so the resumed resident self-identifies
-    // rather than inheriting the commissioner's env. `bind` inside create_pi_session
-    // is then idempotent (birth-id already maps to this id). Fail-closed on a mint
-    // error (nothing respawned).
-    let ids_path = dispatch::idstore::ids_path(&paths.state_dir);
-    let qd_session_id =
-        match dispatch::idstore::mint_or_get(&ids_path, &session.session_id, Some(&name), &clock) {
-            Ok(id) => Some(id),
-            Err(e) => {
-                eprintln!("qd resume: \"{name}\": could not resolve stable id: {e}");
-                return 1;
-            }
-        };
-
-    let deps = PiCreateDeps {
-        exe,
-        pi_bin: env.var("QD_PI_BIN").filter(|s| !s.is_empty()),
-        session_dir: env.var("PI_CODING_AGENT_SESSION_DIR").filter(|s| !s.is_empty()),
-        sessions_dir: paths.sessions_dir.clone(),
-        claims_dir,
-        log_dir: home.join(".quorum").join("dispatch").join("log"),
-        spawner: &spawner,
-        now_ms: &now_ms,
-        ids_path,
-    };
-    let params = PiCreateParams {
-        name: name.clone(),
-        cwd,
-        load_session: Some(session.session_id.clone()),
-        qd_session_id,
-    };
-    match create_pi_session(&deps, &params) {
-        Ok(out) => {
-            println!(
-                "resumed pi session \"{}\" (daemon pid {}, {}); wait/stop it by name.",
-                out.name, out.pid, out.endpoint
-            );
-            0
-        }
-        Err(e) => {
-            eprintln!("qd resume: \"{name}\": {e}");
-            e.exit_code()
-        }
-    }
-}
-
-/// R4-1 (conformance round 4, confirmed real): read the PRE-resume row's
-/// `structured_send_issued` bit so a resume can carry it forward — a session's
-/// send-history is a fact about its whole life, not the connection that just
-/// died, so it must survive `qd resume`. (Under Child D the loss disposition no
-/// longer branches on it — pre- and post-send loss both refuse — but the marker
-/// stays the durable wire-history truth, and losing it on resume would leave a
-/// false "never sent" record for any consumer, present or future.)
-///
-/// Checks the LIVE row first (the crash-path shape: the process died but its
-/// `<pid>.json` was never renamed), falling back to the TOMBSTONED row (the
-/// ordinary `qd stop` shape: `<pid>.json` renamed to `<pid>.json.tombstoned`) —
-/// `qd stop` is the common case, so the fallback is load-bearing, not a rare
-/// edge. `None` (no `pid`, no row either way, or the row never dispatched a
-/// structured send) means "no history to carry" — a genuinely fresh row.
-fn carry_forward_structured_send_issued(
-    sessions_dir: &std::path::Path,
-    pid: Option<i64>,
-) -> Option<bool> {
-    pid.and_then(|pid| {
-        dispatch::registry::read_entry(sessions_dir, pid)
-            .or_else(|| dispatch::registry::read_tombstoned_entry(sessions_dir, pid))
-            .and_then(|e| e.structured_send_issued)
-    })
-}
-
-/// scoped-ACP-CC Item 3 — the acp RESUME path at the verb layer. An acp/* row is a
-/// daemon-hosted resident adapter (+ its `claude-code-acp` bridge); `qd resume` for it
-/// is revive-to-DRIVABLE with NO interactive attach (agents have no TTY). Mirrors
-/// [`run_codex_resume`] 1:1, substituting `session/load` (the ACP resume primitive,
-/// driven by the load-mode adapter) for `thread/resume`:
-///   - resumability gate (no sessionId / no jsonl → nothing to resume),
-///   - ALIVE acp row (pid alive ∧ OUR cmdline carries the recorded `--listen`) →
-///     AlreadyRunning no-op, ZERO mutation, NO second adapter (the (R-c) seam),
-///   - else REVIVE: spawn a fresh resident adapter in LOAD mode (`--load-session <id>`,
-///     detached `process_group(0)`, the SAME create spawn path), confirm it re-loaded
-///     the SAME sessionId, then rewrite the row (NEW pid + NEW endpoint, SAME sessionId)
-///     and consume the prior tombstone. A later `send`/`wait` round-trips on the SAME
-///     sessionId; the CC JSONL continues (Component-0-proven faithful).
-///
-/// `pub(crate)` (behavior UNCHANGED) — reused by `send_unified::wake_to_deliverable`
-/// (qd–qf W3b) to revive a stopped acp/* target before delivering.
-pub(crate) fn run_acp_resume(session: &dispatch::model::Session) -> i32 {
-    use dispatch::acp_residence::{build_adapter_argv, connect_ready};
-    use dispatch::create_daemon::{real_alloc_port, real_cmdline_probe, DaemonSpawner, RealDaemonSpawner};
-    use dispatch::effects::Clock;
-    use dispatch::resume_daemon::acp_resume_is_alive;
-    use std::time::Duration;
-
-    let name = session
-        .name
-        .clone()
-        .unwrap_or_else(|| session.session_id.clone());
-
-    let env = RealEnv;
-    let home = match env.var("HOME").filter(|s| !s.is_empty()) {
-        Some(h) => PathBuf::from(h),
-        None => {
-            eprintln!("qd resume: HOME is not set — cannot resolve the session state dir.");
-            return 1;
-        }
-    };
-    let paths = QdPaths::from_home(&home);
-
-    // Resumability gate (the acp analog of resume.rs's `no resumable transcript` arm):
-    // a stopped acp row always needs a sessionId (the ACP `session/load` handle). acp/claude-code
-    // ADDITIONALLY needs a jsonl_path — the CC store the bridge's load reads. A-OC.1: acp/opencode
-    // persists to opencode's OWN store (NOT the CC projects dir), so it has no jsonl_path; gate it
-    // on the sessionId alone (opencode advertises the `loadSession` capability). The provider
-    // check keeps acp/claude-code's gate BYTE-IDENTICAL.
-    let needs_cc_transcript = session.provider == "acp/claude-code";
-    if session.session_id.is_empty() || (needs_cc_transcript && session.jsonl_path.is_none()) {
-        eprintln!(
-            "qd resume: session \"{name}\" was stopped and has no resumable transcript — \
-             nothing to resume."
-        );
-        return 1;
-    }
-
-    // The CURRENT pid/endpoint (alive-check inputs). The endpoint is NOT on the Session
-    // surface — re-read it off the registry row by pid (mirrors run_codex_resume).
-    let current_endpoint = session
-        .pid
-        .filter(|&p| p != 0)
-        .and_then(|pid| dispatch::registry::read_entry(&paths.sessions_dir, pid))
-        .and_then(|e| e.endpoint)
-        .filter(|s| !s.is_empty());
-
-    // Case 1: ALREADY ALIVE → clean no-op, ZERO mutation, NO second adapter. pid-alive ∧
-    // identity (the cmdline carries the recorded `--listen <endpoint>`), mirroring the
-    // codex gate — NO reachability connect (it would misread a busy-but-alive adapter,
-    // camped in another client's wait, as dead and double-spawn). The (R-c) seam.
-    let probe = real_cmdline_probe;
-    if acp_resume_is_alive(session.pid, current_endpoint.as_deref(), probe) {
-        println!("{}", acp_already_running_line(&name));
-        return 0;
-    }
-
-    // R5-1 (red-team round 5, confirmed at source): the raw-registry preflights the
-    // non-acp resume path runs (Pete feedback #6, in `run` above) were structurally
-    // bypassed for acp/* rows — the acp arm dispatches BEFORE them, and this
-    // function had no equivalent (`acp_resume_is_alive` probes only the daemon's
-    // OWN pid/identity, never other live holders of the id). Consequence: `qd
-    // resume` of an acp session while another live process holds this SAME
-    // session_id/transcript (Child B's retired floor companion then; today a
-    // leftover dev companion row or a manually-launched `claude --resume`)
-    // would revive a fresh acp daemon (`session/load`, the same transcript
-    // re-opened) BESIDE the live holder — two live writers on one CC
-    // transcript, the precise collision these gates exist to prevent
-    // everywhere else — and silently clear any historical degradation latch
-    // (`transport: None`, below) under it.
-    //
-    // Placed AFTER the Case-1 gate above so the ratified already-running no-op
-    // (exit 0) is unchanged when the single live holder is this session's OWN
-    // identity-verified daemon; any OTHER live holder of the id (a plain twin
-    // on the same transcript, a reused pid on a stale row, a genuine duplicate)
-    // refuses here — recoverable by connecting to the holder, or killing the
-    // holder and resuming again. Both checks run on the RAW registry
-    // (pre-dedup), exactly like the non-acp path, because the join hides
-    // same-id rows.
-    if let Some(code) =
-        common::refuse_id_collision("resume", &session.session_id, &paths.sessions_dir)
-    {
-        return code;
-    }
-    if let Some(holder_pid) = common::alive_pid_for_id(&paths.sessions_dir, &session.session_id) {
-        eprintln!(
-            "qd resume: session \"{name}\" is already alive (PID {holder_pid}). \
-             Use \"qd attach\" instead."
-        );
-        return 1;
-    }
-
-    // FINDING #3 — CONCURRENT-RESUME ATOMIC CLAIM (acp-only): take an exclusive,
-    // self-healing flock on this sessionId BEFORE spawning, held across the whole
-    // spawn→row-write critical section. Two concurrent `qd resume` of the SAME stopped
-    // row → exactly ONE wins the claim and spawns; the LOSER refuses cleanly (no spawn,
-    // no mutation). flock auto-releases on holder death → a crashed holder NEVER bricks a
-    // later resume (self-healing; NOT a bare lock). NOTE: acp adds this concurrent-resume
-    // atomic guard that codex lacks — codex daemon-resume parity is a named follow-on.
-    let _resume_claim = match dispatch::resume_daemon::acquire_resume_claim(
-        &paths.sessions_dir,
-        &session.session_id,
-    ) {
-        Ok(Some(claim)) => claim, // WON — held until end of fn (drop releases the flock).
-        Ok(None) => {
-            eprintln!(
-                "qd resume: \"{name}\": another resume of this session is already in \
-                 progress — refusing (no double-spawn). Try again once it completes."
-            );
-            return 1;
-        }
-        Err(e) => {
-            eprintln!("qd resume: \"{name}\": could not take the resume claim lock: {e}");
-            return 1;
-        }
-    };
-
-    // Case 2/3: REVIVE — re-spawn the resident adapter in LOAD mode. Mirrors the create
-    // path `run_new_acp_daemon`, with `--load-session <sessionId>` substituted for the
-    // fresh `session/new`. The `_resume_claim` flock above serializes concurrent revives.
-    let port = match real_alloc_port() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("qd resume: \"{name}\": acp port allocation failed: {e}");
-            return 1;
-        }
-    };
-    let endpoint = format!("ws://127.0.0.1:{port}");
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("qd resume: \"{name}\": cannot resolve own executable for acp adapter: {e}");
-            return 1;
-        }
-    };
-    // The adapter's cwd = the row's cwd (faithful to the original session). A row with
-    // no cwd falls back to "." (the adapter must have a cwd; the bridge resolves the
-    // CC JSONL by encodeProjectPath(cwd), so this must match the create-time cwd).
-    let cwd_str = session.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| ".".to_string());
-    let cwd = PathBuf::from(&cwd_str);
-
-    // A-OC.1: re-derive THIS row's bridge from its provider so a RESUME re-spawns the SAME
-    // bridge the create path did (acp/claude-code → BRIDGE_BIN default via bridge_cmd None,
-    // byte-identical; acp/opencode → `opencode acp`). Without this a resumed opencode session
-    // would respawn `claude-code-acp` loading an opencode session — the verb-routing-arms trap.
-    let acp = dispatch::provider::acp::acp_provider_for(&session.provider);
-    let bridge_cmd = acp.and_then(|p| p.bridge_cmd());
-    let bridge_args: Vec<String> = acp
-        .map(|p| p.bridge_args().iter().map(|a| a.to_string()).collect())
-        .unwrap_or_default();
-    // LOAD MODE: `--load-session <sessionId>` → the adapter boots via real `session/load`.
-    let argv = build_adapter_argv(
-        &exe,
-        &endpoint,
-        &cwd,
-        bridge_cmd,
-        &bridge_args,
-        Some(&session.session_id),
-    );
-    let log_path = home
-        .join(".quorum")
-        .join("dispatch")
-        .join("log")
-        .join(format!("acp-{name}.log"));
-    // Get or mint the stable id for this ACP session. On resume the session UUID is
-    // already known → mint_or_get returns the existing id (no-op if already present).
-    // Mirrors the non-acp claude resume path (resume.rs common::ids_store_path arm).
-    // Fail-soft: a mint error is logged but does not abort the resume.
-    let acp_env = {
-        let ids_path = dispatch::idstore::ids_path(&paths.state_dir);
-        match dispatch::idstore::mint_or_get(
-            &ids_path,
-            &session.session_id,
-            Some(&name),
-            &RealClock,
-        ) {
-            Ok(id) => vec![("QD_SESSION_ID".to_string(), id)],
-            Err(e) => {
-                eprintln!("qd resume: could not get/mint stable id for acp session: {e}");
-                // Explicitly clear the value so the adapter cannot inherit the caller's id.
-                vec![("QD_SESSION_ID".to_string(), String::new())]
-            }
-        }
-    };
-    let spawner = RealDaemonSpawner;
-    let spawned = match spawner.spawn_detached(&argv, &acp_env, &cwd, &log_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("qd resume: \"{name}\": acp adapter spawn failed: {e}");
-            return 1;
-        }
-    };
-
-    // Readiness: poll connect+status until the resident session is re-established. On
-    // failure: group-kill the just-spawned adapter (no orphan).
-    let conn = match connect_ready(&endpoint, Duration::from_secs(30)) {
-        Ok(c) => c,
-        Err(e) => {
-            spawner.kill(spawned.pid);
-            eprintln!("qd resume: \"{name}\": {e} (see {})", log_path.display());
-            return 1;
-        }
-    };
-    // WRONG-ADAPTER GUARD (NOT a bridge-fork / FM-R1 guard — honest scope, red-team #2.1):
-    // confirm the resident we just connected to reports OUR sessionId. NOTE what this can
-    // and CANNOT catch: `AcpHost::load_session` CACHES the requested id on Ok and the ACP
-    // `session/load` reply carries NO sessionId, so on the SUCCESS path `status` echoes the
-    // id we asked for → `established == requested` ALWAYS; this check therefore does NOT
-    // detect a bridge-SIDE fork (the FM-R1 mirage). What it DOES catch: we connected to a
-    // DIFFERENT resident — a stale/reused endpoint/port now serving another acp session
-    // (a different cached id) — in which case we'd be about to bless the wrong adapter as
-    // this row; refuse instead. The real FM-R1 faithfulness (same CC conversation) is
-    // established out-of-band by Component-0 + the JSONL-continuation round-trip, not by
-    // this runtime echo. (A production post-resume JSONL-continuation check is a disclosed
-    // residual, red-team #2.2 — HELD.)
-    let established = conn.status_session_id().ok().flatten().unwrap_or_default();
-    if established != session.session_id {
-        drop(conn);
-        spawner.kill(spawned.pid);
-        eprintln!(
-            "qd resume: \"{name}\": the endpoint is serving a DIFFERENT acp session \
-             ({established:?} != {:?}) — refusing (wrong/stale adapter, not our row).",
-            session.session_id
-        );
-        return 1;
-    }
-    drop(conn); // the resident stays up; this was a short-lived readiness connection.
-
-    // Rewrite the registry row: NEW adapter pid + NEW endpoint, SAME sessionId (m2
-    // identity preserved), status live. The old dead-pid tombstone is consumed below.
-    let clock = RealClock;
-    let now = clock.now_ms();
-    let entry = dispatch::registry::RegistryEntry {
-        pid: Some(spawned.pid),
-        session_id: Some(session.session_id.clone()),
-        cwd: Some(cwd_str),
-        started_at: Some(now),
-        updated_at: Some(now),
-        status: Some("idle".to_string()),
-        name: Some(name.clone()),
-        version: None,
-        kind: None,
-        entrypoint: None,
-        backend: None,
-        spawned_by: None,
-        provider: Some(session.provider.clone()),
-        endpoint: Some(endpoint.clone()),
-        // A resumed healthy row carries NO degradation latch (tier is derived per verb).
-        transport: None,
-        // Child B (opencode D1), kept under Child D: a session's send-history
-        // bit must SURVIVE a resume — it is a fact about the whole session's
-        // life, not the old (now-dead) connection. Carry it forward from the
-        // pre-resume row (if any) rather than resetting it, or the resumed row
-        // carries a false "never sent" wire-history (no disposition branches on
-        // it anymore — every loss refuses — but the record is durable truth;
-        // see the R4-1 fn doc above and registry.rs's field doc).
-        //
-        // R4-1 (conformance round 4, confirmed real): the pre-resume row is
-        // almost always TOMBSTONED, not live — `qd stop` tombstones by RENAMING
-        // `<pid>.json` to `<pid>.json.tombstoned`, so a live-only `read_entry`
-        // finds nothing for the ordinary stop→resume path (only a crash, which
-        // leaves the live file in place with a dead pid, was actually covered).
-        // Read the live row first (the crash-path shape), falling back to the
-        // tombstoned row (the ordinary `qd stop` shape) when the live read misses.
-        structured_send_issued: carry_forward_structured_send_issued(
-            &paths.sessions_dir,
-            session.pid,
-        ),
-        // acp/* is daemon-hosted with no second topology — absent ⇒ the
-        // provider's structural hosting, which is the right answer here and
-        // keeps the revived row byte-identical to a freshly-created one.
-        hosting: None,
-    };
-    if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
-        spawner.kill(spawned.pid);
-        eprintln!(
-            "qd resume: \"{name}\": revived the acp adapter but its registry row could not \
-             be written ({e}); the adapter was stopped."
-        );
-        return 1;
-    }
-
-    // Consume the prior tombstone (`<old_pid>.json.tombstoned`) so no dangling tombstone
-    // / double live-row survives (R-b). Best-effort: a missing tombstone is fine (a row
-    // stopped a different way), and the new live row is already authoritative. Also drop
-    // any stale resume-verify marker keyed by the OLD pid (cleanup).
-    if let Some(old_pid) = session.pid.filter(|&p| p != 0) {
-        let tomb = paths.sessions_dir.join(format!("{old_pid}.json.tombstoned"));
-        let _ = std::fs::remove_file(&tomb);
-        let _ = std::fs::remove_file(dispatch::resume_daemon::resume_verify_marker_path(
-            &paths.sessions_dir,
-            old_pid,
-        ));
-    }
-
-    // FINDING #2 PART 2 — drop a VERIFY-THE-BRIDGE marker: record the requested JSONL's
-    // baseline (line count + the project dir's current session-file set) so the FIRST
-    // post-resume wait can confirm the turn CONTINUED the SAME bridge JSONL (fork-on-load
-    // detection) from PRIMARY source. Best-effort: a marker-write failure does not fail
-    // the resume (the turn still works; we just lose the one-time verification).
-    // A-OC.1: this is a claude-bridge fork-on-load check against the CC projects JSONL; it does
-    // NOT apply to acp/opencode (opencode persists to its own store, no CC JSONL to baseline), so
-    // skip it for non-claude bridges — otherwise the wait-side verify would always read
-    // Unconfirmed and emit a misleading degraded-confidence warning on every opencode resume.
-    if session.provider == "acp/claude-code" {
-        use dispatch::resume_daemon::{
-            resume_verify_marker_path, write_resume_verify_marker, ResumeVerifyMarker,
-        };
-        let requested = dispatch::jsonl::find_jsonl_path(
-            &paths.projects_dir,
-            &session.session_id,
-            session.cwd.as_deref(),
-        );
-        let baseline_lines = requested
-            .as_ref()
-            .map(|p| {
-                std::fs::read_to_string(p)
-                    .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0);
-        // The project dir's current *.jsonl basenames (the fork-detection baseline).
-        let baseline_files: Vec<String> = session
-            .cwd
-            .as_deref()
-            .map(|cwd| paths.projects_dir.join(dispatch::jsonl::cwd_to_project_path(cwd)))
-            .into_iter()
-            .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
-            .filter_map(|e| {
-                let n = e.file_name().to_string_lossy().into_owned();
-                (n.ends_with(".jsonl") && !n.starts_with("agent-")).then_some(n)
-            })
-            .collect();
-        let marker = ResumeVerifyMarker {
-            session_id: session.session_id.clone(),
-            cwd: session.cwd.clone(),
-            baseline_lines,
-            baseline_files,
-        };
-        let _ = write_resume_verify_marker(
-            &resume_verify_marker_path(&paths.sessions_dir, spawned.pid),
-            &marker,
-        );
-    }
-
-    println!("{}", acp_revived_line(&name, spawned.pid, &endpoint));
-    0
-}
+// `run_codex_resume`, `run_pi_resume` and `run_acp_resume` — the three
+// verb-layer daemon-revive adapters — lived HERE, and are DELETED rather than
+// left unused, on the `revive_pi_tui` precedent (`verbs/lifecycle.rs`). `qd
+// resume` stopped calling them when `run` moved onto
+// [`quorum_qw::contract::LaneOps::wake`]; `send_unified::RealWaker` was their
+// last caller, and it is gone with the rest of qd's duplicated routing. The
+// revives themselves did not move — `LaneOps::wake`'s three daemon arms drive
+// the SAME `dispatch::resume_daemon::resume_codex_real`,
+// `dispatch::provider::pi::resume::resume_pi` and
+// `dispatch::provider::acp::daemon::resume_acp` cores these wrapped, from the
+// one place that now routes them.
 
 #[cfg(test)]
 mod tests {
     use super::{
-        acp_already_running_line, acp_revived_line, carry_forward_structured_send_issued,
-        codex_already_running_line, codex_revived_line, resume_boot_unconfirmed_line,
-        revive_launch_failed_line, revive_resume_args, revive_zmx_missing_line,
-        run_detached_revive,
+        acp_already_running_line, acp_revived_line, codex_already_running_line,
+        codex_revived_line, daemon_line, pi_already_running_line, pi_revived_line,
     };
     use dispatch::launch::launch_env_pairs;
-    use dispatch::model::{Session, SessionBranch, SessionStatus};
-    use dispatch::registry::RegistryEntry;
+    use quorum_qw::contract::{Resident, SessionHandle, WakeOutcome, WakeState};
 
-    // R4-1 (conformance round 4, confirmed real by source): `structured_send_issued`
-    // was silently lost across the ORDINARY `qd stop` → `qd resume` cycle, because
-    // `qd stop` tombstones a row by RENAMING `<pid>.json` to
-    // `<pid>.json.tombstoned`, and the carry-forward read only ever consulted the
-    // live path. These pin `carry_forward_structured_send_issued` directly against
-    // real registry files (no process spawn needed — this is pure filesystem I/O),
-    // covering both shapes it must handle.
-
-    fn write_registry_row(
-        sessions_dir: &std::path::Path,
-        pid: i64,
-        structured_send_issued: Option<bool>,
-    ) {
-        let entry = RegistryEntry {
-            pid: Some(pid),
-            session_id: Some("sess-r4-1".to_string()),
-            provider: Some("acp/claude-code".to_string()),
-            structured_send_issued,
-            ..RegistryEntry::default()
-        };
-        dispatch::registry::write_entry(sessions_dir, &entry).unwrap();
-    }
-
-    #[test]
-    // R5-1 regression guard (red-team round 5, Child B era — still binding): `run_acp_resume`
-    // must run the SAME two raw-registry preflights the non-acp resume path runs
-    // (Pete feedback #6: `common::refuse_id_collision` + `common::alive_pid_for_id`)
-    // BEFORE its spawn section (`acquire_resume_claim` onward). The acp arm
-    // dispatches before `run`'s own preflights, so without in-body equivalents a
-    // `qd resume` of an acp session while ANOTHER live process holds the same
-    // session_id/transcript (historically Child B's floor companion; today a
-    // leftover dev companion row or a manually-launched `claude --resume`)
-    // revives a SECOND live writer onto one CC transcript. Structural
-    // (source-text), matching this build's established pattern (see send_relay.rs's
-    // F2/F3/R3-1 guards) for the same reason: exercising the real branch needs a
-    // live pid + real registry rows + a full verb-level Session against process
-    // state this file's test style deliberately avoids (the preflight helpers
-    // themselves are behaviorally unit-tested in common.rs against real registry
-    // files and live pids). MUTATION EVIDENCE: deleting the preflight block from
-    // `run_acp_resume` reds this test; so does moving it after the claim/spawn.
-    #[test]
-    fn acp_resume_runs_the_id_collision_preflights_before_any_spawn() {
-        let src = include_str!("resume.rs");
-        let fn_start = src
-            .find("fn run_acp_resume(session: &dispatch::model::Session) -> i32 {")
-            .expect("run_acp_resume must still exist verbatim");
-        let after_start = &src[fn_start..];
-        let fn_end = after_start
-            .find("\n#[cfg(test)]")
-            .expect("the tests module must still follow run_acp_resume");
-        let body = &after_start[..fn_end];
-
-        let collision = body
-            .find("common::refuse_id_collision(\"resume\", &session.session_id")
-            .expect("run_acp_resume must consult common::refuse_id_collision (R5-1)");
-        let already_alive = body
-            .find("common::alive_pid_for_id(&paths.sessions_dir, &session.session_id)")
-            .expect("run_acp_resume must consult common::alive_pid_for_id (R5-1)");
-        let spawn_section = body
-            .find("acquire_resume_claim")
-            .expect("the resume claim (spawn section start) must still exist");
-        assert!(
-            collision < spawn_section && already_alive < spawn_section,
-            "both R5-1 preflights must run BEFORE the claim/spawn section — a check \
-             after the spawn cannot prevent the second live writer"
-        );
-    }
-
-    #[test]
-    fn carries_forward_true_across_the_ordinary_stop_then_resume_tombstone_path() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let sessions_dir = tmp.path();
-        write_registry_row(sessions_dir, 4242, Some(true));
-        // `qd stop`'s tombstone mechanic: rename, don't leave the live file.
-        dispatch::registry::tombstone(sessions_dir, 4242);
-        assert!(
-            dispatch::registry::read_entry(sessions_dir, 4242).is_none(),
-            "the live file must be gone after tombstoning — this is the exact \
-             condition that made the pre-fix read silently miss"
-        );
-
-        assert_eq!(
-            carry_forward_structured_send_issued(sessions_dir, Some(4242)),
-            Some(true),
-            "the ordinary qd stop -> qd resume path must carry the bit forward"
-        );
-    }
-
-    #[test]
-    fn carries_forward_true_across_the_crash_path_live_row_still_present() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let sessions_dir = tmp.path();
-        write_registry_row(sessions_dir, 4242, Some(true));
-        // No tombstone — models a crash: the process died but its row was never
-        // renamed. This shape already worked before the R4-1 fix; pinned here as
-        // the non-regression control.
-        assert_eq!(
-            carry_forward_structured_send_issued(sessions_dir, Some(4242)),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn a_genuinely_fresh_row_carries_forward_none() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let sessions_dir = tmp.path();
-        write_registry_row(sessions_dir, 4242, None);
-        dispatch::registry::tombstone(sessions_dir, 4242);
-        assert_eq!(carry_forward_structured_send_issued(sessions_dir, Some(4242)), None);
-    }
-
-    #[test]
-    fn no_row_at_all_carries_forward_none() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        assert_eq!(
-            carry_forward_structured_send_issued(tmp.path(), Some(9999)),
-            None
-        );
-    }
-
-    #[test]
-    fn no_pid_carries_forward_none() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        assert_eq!(carry_forward_structured_send_issued(tmp.path(), None), None);
-    }
-
-    /// A cold claude registry row carrying a RECORDED `session_id` — the durable
-    /// identity the daemon minted onto the child-pid-keyed row (WP-B5-ii-b PROOF 1).
-    fn cold_claude_row(session_id: &str) -> Session {
-        Session {
-            name: Some("wk".to_string()),
-            user_named: Some(true),
-            session_id: session_id.to_string(),
-            code: None,
-            qd_id: None,
-            pid: None,
-            status: SessionStatus::Cold,
-            zmx_name: None,
-            zmx_clients: None,
-            socket_dir: None,
-            relay_port: None,
-            turns: 0,
-            tokens: 0,
-            cwd: None,
-            last_active_ms: None,
-            version: None,
-            started_at_ms: None,
-            git_branch: None,
-            jsonl_path: None,
-            last_turns: None,
-            provider: "claude-code".to_string(),
-            entrypoint: Some("headless".to_string()),
-            lineage: None,
-            hosting: None,
-            which_branch: SessionBranch::LiveRegistry,
+    fn outcome(state: WakeState, resident: Option<Resident>) -> WakeOutcome {
+        WakeOutcome {
+            state,
+            handle: SessionHandle {
+                id: None,
+                qd_id: None,
+                pid: None,
+                started_at_ms: None,
+                socket_dir: None,
+                notes: Vec::new(),
+            },
+            resident,
+            pane: None,
         }
     }
 
-    /// WP-B5-ii-b PROOF 1 (cheap default-floor mirror of the `#[ignore]`
-    /// end-to-end seed `headless_revive_recorded_id.rs`): a cold row's revive argv
-    /// fragment carries `--resume <recorded session_id>`. The recorded id is
-    /// LOAD-BEARING — revive resumes the SAME claude session, never a fresh one,
-    /// and never a fork (a fork would mint a new session id / lose continuity).
+    /// The `AlreadyRunning` / `Revived` distinction is the CORE's verdict, taken at
+    /// the instant it decided (`pid_alive && endpoint_recorded && cmdline_is_ours`),
+    /// and it SURVIVES the rewire onto [`quorum_qw::contract::LaneOps::wake`]. It
+    /// cannot be re-derived here — comparing pids is invented logic and re-probing
+    /// reimplements the gate and races it — so a lane that flattened both arms into
+    /// one answer would make this verb print "resumed …" for a session it never
+    /// revived, which is a false statement of fact.
     ///
-    /// FIX-SHAPED MUTATION (red-before): in `revive_resume_args`, replace
-    /// `id: &session.session_id` with `id: ""` → the fragment becomes
-    /// `["--resume", ""]` → the recorded-id equality assert reds (revive would
-    /// start a fresh claude session, not resume the recorded one).
+    /// All three daemon renderers share `daemon_line`, so all three are pinned by
+    /// driving it with each lane's own pair of formatters.
+    ///
+    /// MUTATION EVIDENCE: collapse `daemon_line`'s match to always take the
+    /// `revived` arm and the three `already` assertions red; always take `already`
+    /// and the three `revived` assertions red — each with the exact line the other
+    /// verdict prints.
     #[test]
-    fn revive_resumes_via_recorded_session_id() {
-        let provider = dispatch::provider::provider_for("claude-code").unwrap();
-        let sid = "fa4ec110-0000-4000-8000-000000000001";
-        let args = revive_resume_args(provider, &cold_claude_row(sid));
-        assert_eq!(
-            args,
-            vec!["--resume".to_string(), sid.to_string()],
-            "revive must pass the recorded session_id as `--resume <id>` (resumed, not fresh)"
+    fn already_running_and_revived_stay_two_different_answers() {
+        let running = outcome(WakeState::AlreadyRunning, None);
+        let revived = outcome(
+            WakeState::Revived,
+            Some(Resident {
+                pid: 4242,
+                endpoint: "ws://127.0.0.1:18951".to_string(),
+            }),
         );
-        assert!(
-            !args.iter().any(|a| a == "--fork-session"),
-            "revive resumes the recorded session, never forks a fresh one: {args:?}"
+        for (already, revived_line) in [
+            (
+                codex_already_running_line as fn(&str) -> String,
+                codex_revived_line as fn(&str, i64, &str) -> String,
+            ),
+            (acp_already_running_line, acp_revived_line),
+            (pi_already_running_line, pi_revived_line),
+        ] {
+            assert_eq!(
+                daemon_line(&running, "wk", already, revived_line),
+                already("wk"),
+                "an already-running resident is a success NO-OP; nothing was revived"
+            );
+            assert_eq!(
+                daemon_line(&revived, "wk", already, revived_line),
+                revived_line("wk", 4242, "ws://127.0.0.1:18951"),
+                "a revive names the NEW pid and endpoint — the core's own answer, \
+                 not a re-read of the row"
+            );
+        }
+    }
+
+    /// A `Revived` verdict that carries no resident cannot be produced by any of the
+    /// four daemon cores (each returns both fields WITH the verdict). If one ever
+    /// did, the line must not carry an invented pid: a fabricated endpoint in a
+    /// success line is worse than the conservative already-running wording.
+    #[test]
+    fn a_residentless_revive_never_invents_a_pid() {
+        let line = daemon_line(
+            &outcome(WakeState::Revived, None),
+            "wk",
+            codex_already_running_line,
+            codex_revived_line,
         );
+        assert_eq!(line, codex_already_running_line("wk"));
+        assert!(!line.contains("pid"), "no invented pid: {line}");
     }
 
     /// P0 wave-2 (spec-w2-env D1 site 2): the resume env-pair set ALWAYS
@@ -1446,82 +705,6 @@ mod tests {
     /// a backend capture — so the env file + dot-source prefix are
     /// unconditional on every resume/revive branch. (The pair-set builder is
     /// the hoisted `dispatch::launch::launch_env_pairs`; resume always passes `Some`.)
-    /// R2 (override-never-inherit, the D1-site-4 pattern on the REVIVE path):
-    /// an --alt-screen resume/attach-revive writes an env file carrying the
-    /// EXPLICIT `unset -v CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` (omitting the
-    /// export alone would leave the child inheriting the var from an inline
-    /// parent env), the unset PRECEDES the identity export, and the claude cmd
-    /// dot-sources the file. An inline revive carries the export and NO unset.
-    #[test]
-    fn alt_screen_revive_env_file_carries_explicit_unset() {
-        use dispatch::effects::MapEnv;
-        use dispatch::launch::RenderMode;
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().to_path_buf();
-        let paths = dispatch::paths::QdPaths::from_home(&home);
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("HOME".to_string(), home.to_string_lossy().into_owned());
-        let env = MapEnv { vars, uid: 501 };
-
-        // AltScreen revive: unset-first file, identity export still rides.
-        let cmd = super::prepare_claude_resume_env(
-            "resume",
-            &env,
-            &home,
-            &paths,
-            "wk",
-            "uuid-1",
-            Some("wk"),
-            vec![],
-            RenderMode::AltScreen,
-            "command 'claude'",
-        )
-        .expect("alt-screen revive prep");
-        let body =
-            std::fs::read_to_string(dispatch::launch::session_env_file_path(&home, "wk")).unwrap();
-        let unset_pos = body
-            .find("unset -v CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
-            .unwrap_or_else(|| panic!("explicit unset must ride the revive file: {body}"));
-        let id_pos = body
-            .find("export QD_SESSION_ID=")
-            .unwrap_or_else(|| panic!("identity export must still ride: {body}"));
-        assert!(unset_pos < id_pos, "unset precedes the exports: {body}");
-        assert!(
-            !body.contains("export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
-            "alt-screen never exports the inline var: {body}"
-        );
-        assert!(
-            cmd.contains(".quorum/dispatch/session-env/wk.env")
-                && cmd.ends_with("command 'claude'"),
-            "the cmd dot-sources the file then runs claude: {cmd}"
-        );
-
-        // Inline revive: export (explicit set clobbers inherited), NO unset.
-        super::prepare_claude_resume_env(
-            "resume",
-            &env,
-            &home,
-            &paths,
-            "wk2",
-            "uuid-2",
-            Some("wk2"),
-            vec![],
-            RenderMode::Inline,
-            "command 'claude'",
-        )
-        .expect("inline revive prep");
-        let body2 =
-            std::fs::read_to_string(dispatch::launch::session_env_file_path(&home, "wk2")).unwrap();
-        assert!(
-            body2.contains("export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'"),
-            "{body2}"
-        );
-        assert!(
-            !body2.contains("unset -v"),
-            "inline needs no unset: {body2}"
-        );
-    }
-
     #[test]
     fn resume_env_pairs_always_carry_qd_session_id() {
         use dispatch::launch::RenderMode;
@@ -1672,136 +855,4 @@ mod tests {
         );
     }
 
-    // --- punch item 6: revive launch failures fail IMMEDIATELY (never a
-    // boot-wait timeout) and carry zmx's stderr. The mux below panics on any
-    // boot-waiter verb (history/list/send), so a swallow-into-boot-wait
-    // regression panics the test instead of passing slowly.
-
-    struct FailingMux {
-        /// Ok(nonzero+stderr) models a failed `zmx run`; Err models a spawn
-        /// failure (zmx not on PATH).
-        spawn_err: bool,
-    }
-    impl dispatch::mux::Mux for FailingMux {
-        fn run_detached(
-            &self,
-            _d: &std::path::Path,
-            _n: &str,
-            _c: &str,
-            _w: &std::path::Path,
-        ) -> std::io::Result<dispatch::exec::ExecResult> {
-            if self.spawn_err {
-                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "ENOENT"))
-            } else {
-                Ok(dispatch::exec::ExecResult {
-                    status: Some(1),
-                    stdout: String::new(),
-                    stderr: "zmx: cannot create session: boom\n".to_string(),
-                    timed_out: false,
-                })
-            }
-        }
-        fn list(&self, _d: &std::path::Path) -> std::io::Result<Vec<dispatch::mux::MuxSession>> {
-            unreachable!("a failed launch must NEVER reach the boot waiter")
-        }
-        fn list_raw(
-            &self,
-            _d: &std::path::Path,
-        ) -> std::io::Result<Vec<dispatch::mux::MuxSession>> {
-            unreachable!("a failed launch must NEVER reach the boot waiter")
-        }
-        fn send(
-            &self,
-            _d: &std::path::Path,
-            _n: &str,
-            _t: &str,
-        ) -> std::io::Result<dispatch::exec::ExecResult> {
-            unreachable!("a failed launch must NEVER reach the boot waiter")
-        }
-        fn kill(&self, _d: &std::path::Path, _n: &str) -> std::io::Result<i32> {
-            unreachable!()
-        }
-        fn history(&self, _d: &std::path::Path, _n: &str) -> std::io::Result<String> {
-            unreachable!("a failed launch must NEVER reach the boot waiter")
-        }
-        fn wait(&self, _d: &std::path::Path, _n: &[String]) -> std::io::Result<i32> {
-            unreachable!()
-        }
-        fn attach(&self, _d: &std::path::Path, _n: &str) -> std::io::Result<i32> {
-            unreachable!()
-        }
-    }
-
-    #[test]
-    fn revive_nonzero_zmx_run_fails_immediately_with_stderr() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let mux = FailingMux { spawn_err: false };
-        let code = run_detached_revive(
-            &mux,
-            tmp.path(),
-            "wk",
-            "command 'claude'",
-            tmp.path(),
-            &paths,
-        )
-        .unwrap_err();
-        assert_eq!(code, 1);
-        // (The FailingMux's unreachable!() boot-waiter verbs are the proof the
-        // failure never degraded into a boot wait.)
-    }
-
-    #[test]
-    fn revive_spawn_err_fails_immediately() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let mux = FailingMux { spawn_err: true };
-        let code = run_detached_revive(
-            &mux,
-            tmp.path(),
-            "wk",
-            "command 'claude'",
-            tmp.path(),
-            &paths,
-        )
-        .unwrap_err();
-        assert_eq!(code, 1);
-    }
-
-    /// Wording pins: the nonzero-exit line carries zmx's (trimmed) stderr; the
-    /// spawn-failure line is the missing-binary guidance.
-    #[test]
-    fn revive_failure_lines_are_pinned() {
-        assert_eq!(
-            revive_launch_failed_line("zmx: cannot create session: boom\n"),
-            "Failed to resume session: zmx: cannot create session: boom"
-        );
-        assert_eq!(
-            revive_zmx_missing_line(),
-            "qd resume: could not launch zmx (is it installed and on PATH?)."
-        );
-    }
-
-    /// ORC CONDITION (i), ack3-spec §8: the `--no-attach` boot-confirm-failure
-    /// stderr line is a NAMED ADD-9a divergence contract — m-4's retype of
-    /// `wait_ready` to a typed `BootFailure` must NOT drift this wording. Pins the
-    /// EXACT pre-m-4 strings for both boot phases' detail forms (the phase is NOT
-    /// in this line — only the waiter detail is, exactly as before).
-    #[test]
-    fn resume_boot_unconfirmed_line_is_byte_identical_both_phases() {
-        // Idle-phase detail (boot.rs run_idle_phase wording).
-        assert_eq!(
-            resume_boot_unconfirmed_line("session \"wk\" did not reach idle status within timeout"),
-            "qd resume: session launched but did not confirm ready: \
-             session \"wk\" did not reach idle status within timeout"
-        );
-        // PID-file-phase detail (boot.rs run_pid_phase wording).
-        assert_eq!(
-            resume_boot_unconfirmed_line(
-                "PID file for \"wk\" did not appear within 40000ms — qd attach wk to inspect"
-            ),
-            "qd resume: session launched but did not confirm ready: \
-             PID file for \"wk\" did not appear within 40000ms — qd attach wk to inspect"
-        );
-    }
 }

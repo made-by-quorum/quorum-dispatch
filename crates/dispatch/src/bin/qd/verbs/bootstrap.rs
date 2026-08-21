@@ -2,7 +2,7 @@
 //! library: resolve HOME → engine paths, wire the real seams (fs / `RealExec` /
 //! TTY prompt / relay probe / native relay registration / shell-integration
 //! offer), run, and print the `[bootstrap]` report. Exit 0/1 ONLY (ADR 0008):
-//! 1 only if a state-dir mkdir failed; the zmx + relay + shell steps are
+//! 1 only if a state-dir mkdir failed; the relay + shell + extension steps are
 //! consent-gated notices and never fail bootstrap.
 //!
 //! 2026-06-10 ruling (ADR 0017): the relay step REGISTERS the native
@@ -16,8 +16,8 @@
 use std::path::Path;
 
 use dispatch::bootstrap::{
-    discover_relays, real_command_exists, real_zmx_has_send, resolve_bootstrap_paths,
-    run_bootstrap, BootstrapFs, ExtensionsDeps, RelayDeps, WrapperDeps, ZmxDeps,
+    discover_relays, real_command_exists, resolve_bootstrap_paths, run_bootstrap, BootstrapFs,
+    ExtensionsDeps, RelayDeps, WrapperDeps,
 };
 use dispatch::effects::{Env, RealEnv};
 use dispatch::exec::{Exec, RealExec};
@@ -28,10 +28,10 @@ use dispatch::shell_init::{init_line, rc_path, Shell};
 
 use super::super::tty;
 
-/// `qd bootstrap` — set up the engine's local data dir (`~/.quorum/dispatch` + `~/.quorum/dispatch/state`),
-/// run the zmx capability notice, the native relay-registration offer, and the
-/// shell-integration offer. Idempotent: a re-run on an existing `~/.quorum/dispatch` is a
-/// no-op apart from re-checks.
+/// `qd bootstrap` — set up the engine's local data dir (`~/.quorum/dispatch` +
+/// `~/.quorum/dispatch/state`), then run the native relay-registration offer,
+/// the shell-integration offer, and the extension-install offer. Idempotent: a
+/// re-run on an existing `~/.quorum/dispatch` is a no-op apart from re-checks.
 pub fn run() -> i32 {
     let env = RealEnv;
     let exec = RealExec;
@@ -55,34 +55,9 @@ pub fn run() -> i32 {
         mkdir_p: &mkdir_p,
     };
 
-    // zmx step seams (real probes / TTY prompt / brew install).
+    // Every consent-gated step below keys off ONE interactivity answer: a
+    // non-TTY run must never prompt (ADR 0008 — bootstrap can be run headlessly).
     let interactive = tty::stdin_and_stdout_are_tty();
-    let command_exists = |name: &str| real_command_exists(&exec, name);
-    let zmx_has_send = || real_zmx_has_send(&exec);
-    let prompt_yes_no = |q: &str| tty::prompt_yes_no_default_no(q);
-    let install_zmx = || {
-        // `brew install <formula>`, inherit stdio. Only called on an explicit yes.
-        matches!(
-            exec.spawn_inherit(
-                "brew",
-                &[
-                    "install".to_string(),
-                    dispatch::bootstrap::ZMX_BREW_FORMULA.to_string(),
-                ],
-                &[],
-                None,
-            ),
-            Ok(0)
-        )
-    };
-    let zmx_deps = ZmxDeps {
-        command_exists: &command_exists,
-        zmx_has_send: &zmx_has_send,
-        platform: std::env::consts::OS.to_string(),
-        interactive,
-        prompt_yes_no: &prompt_yes_no,
-        install_zmx: &install_zmx,
-    };
 
     // Relay step: health discovery via A4's sidecar path (FYI line), registration
     // state + the register closure via `claude mcp` (register.rs).
@@ -231,7 +206,6 @@ pub fn run() -> i32 {
     match run_bootstrap(
         paths,
         &bfs,
-        &zmx_deps,
         &relays,
         &relay_deps,
         &wrapper_deps,

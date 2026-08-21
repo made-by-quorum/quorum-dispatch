@@ -32,8 +32,8 @@ use serde::{Deserialize, Serialize};
 use super::attribution::{resolve_heads, AttributionRecord, Disposition};
 use super::evidence::{CellResolution, Outcome, RunArtifact, RunMode};
 use super::ids::{
-    AggregationVersion, ArtifactDigest, CellId, JournalOrdinal, Lane, ManifestDigest, ObservationId,
-    RunId, RunKind, RunSequence,
+    AggregationVersion, ArtifactDigest, CellId, JournalOrdinal, Lane, ManifestDigest,
+    ObservationId, RunId, RunKind, RunSequence,
 };
 use super::journal::{
     AuthorityJournal, DesignationBasisKind, DesignationEvent, DesignationKind, JournalBody,
@@ -340,7 +340,13 @@ pub fn compute_tier(
     // ---- STAGE 1: cutoff-independent invariants (R5-O2 step 1) --------------
     // Designation replay is computed here so v6 can check its legality; the
     // result is reused by stages 2/3 (the caller picks nothing).
-    let replay = replay_designations(&corpus.journal, lane, &manifest_digest, &agg_version, params);
+    let replay = replay_designations(
+        &corpus.journal,
+        lane,
+        &manifest_digest,
+        &agg_version,
+        params,
+    );
     let mut failed = Vec::new();
     failed.extend(v0_id_wellformedness(corpus));
     failed.extend(v1_journal_integrity(&corpus.journal));
@@ -446,18 +452,11 @@ pub fn compute_tier(
     // eligibility == candidacy (the same named rules; completeness now proven
     // through the cutoff). Order by (run_sequence, run_id) — F-3, NEVER timestamp.
     let mut window_all = candidates;
-    window_all.sort_by(|a, b| {
-        (a.sequence.get(), &a.run.0).cmp(&(b.sequence.get(), &b.run.0))
-    });
+    window_all.sort_by(|a, b| (a.sequence.get(), &a.run.0).cmp(&(b.sequence.get(), &b.run.0)));
     if window_all.len() < params.window {
         return experimental(lane, citation, &replay, "window not accumulated");
     }
-    let window: Vec<&Candidate> = window_all
-        .iter()
-        .rev()
-        .take(params.window)
-        .rev()
-        .collect();
+    let window: Vec<&Candidate> = window_all.iter().rev().take(params.window).rev().collect();
     let evrun = *window.last().unwrap();
     let window_ids: Vec<RunId> = window.iter().map(|c| c.run.clone()).collect();
 
@@ -775,7 +774,9 @@ fn v1_journal_integrity(journal: &AuthorityJournal) -> Vec<String> {
 /// apply to attribution, A8).
 fn seat_is_independent(journal: &AuthorityJournal, run: &RunId, seat: &str) -> bool {
     let executor = journal.start_event(run).map(|s| s.runner_identity.as_str());
-    let coordinator = journal.run_entry(run).map(|r| r.commissioning_identity.as_str());
+    let coordinator = journal
+        .run_entry(run)
+        .map(|r| r.commissioning_identity.as_str());
     Some(seat) != executor && Some(seat) != coordinator
 }
 
@@ -1030,7 +1031,10 @@ fn v5_exact_observation_domain(corpus: &Corpus, battery: &Battery) -> Vec<String
             let (lane, cell) = match parse_cell_key(key) {
                 Some(x) => x,
                 None => {
-                    errs.push(format!("v5: run {:?} has an unparseable grid key {key:?}", art.header.tuple.run.0));
+                    errs.push(format!(
+                        "v5: run {:?} has an unparseable grid key {key:?}",
+                        art.header.tuple.run.0
+                    ));
                     continue;
                 }
             };
@@ -1116,7 +1120,10 @@ fn v5_exact_observation_domain(corpus: &Corpus, battery: &Battery) -> Vec<String
                     // corpus-wide: an empty why-not-here / re-entry / authority is an
                     // undeclared gap (QS-2), parallel to the observation check above.
                     if let Err(e) = cov.well_formed() {
-                        errs.push(format!("v5: run {:?} coverage record at {key:?} is malformed: {e} (QS-2)", run.0));
+                        errs.push(format!(
+                            "v5: run {:?} coverage record at {key:?} is malformed: {e} (QS-2)",
+                            run.0
+                        ));
                     }
                     if &cov.run != run {
                         errs.push(format!(
@@ -1257,7 +1264,9 @@ fn v7_publication_anchoring(corpus: &Corpus) -> Vec<String> {
     let mut errs = Vec::new();
     let journal = &corpus.journal;
     match journal.latest_snapshot() {
-        None => errs.push("v7: corpus is not anchored at any publication-snapshot event (R6-5)".into()),
+        None => {
+            errs.push("v7: corpus is not anchored at any publication-snapshot event (R6-5)".into())
+        }
         Some((ord, snap)) => {
             let hw = journal
                 .entries()
@@ -1426,9 +1435,11 @@ impl DesignationReplay {
 fn withdrawal_kind_ok(kind: Option<DesignationBasisKind>) -> bool {
     matches!(
         kind,
-        Some(DesignationBasisKind::Decommissioned
-            | DesignationBasisKind::DurablyUnreachable
-            | DesignationBasisKind::RunnabilityReduced)
+        Some(
+            DesignationBasisKind::Decommissioned
+                | DesignationBasisKind::DurablyUnreachable
+                | DesignationBasisKind::RunnabilityReduced
+        )
     )
 }
 
@@ -1439,10 +1450,12 @@ fn withdrawal_kind_ok(kind: Option<DesignationBasisKind>) -> bool {
 fn redesignation_kind_ok(kind: Option<DesignationBasisKind>) -> bool {
     matches!(
         kind,
-        Some(DesignationBasisKind::Decommissioned
-            | DesignationBasisKind::DurablyUnreachable
-            | DesignationBasisKind::RunnabilityReduced
-            | DesignationBasisKind::GreaterRunnability)
+        Some(
+            DesignationBasisKind::Decommissioned
+                | DesignationBasisKind::DurablyUnreachable
+                | DesignationBasisKind::RunnabilityReduced
+                | DesignationBasisKind::GreaterRunnability
+        )
     )
 }
 
@@ -1562,7 +1575,8 @@ fn replay_designations(
                         ));
                     }
                 }
-                if r.pending_box.is_none() && r.promotion_ordinal.map(|p| *ord < p).unwrap_or(true) {
+                if r.pending_box.is_none() && r.promotion_ordinal.map(|p| *ord < p).unwrap_or(true)
+                {
                     r.legality_errors.push(format!(
                         "designation replay: a Withdrawal at ordinal {ord} with no outstanding pending replacement (A9)"
                     ));
@@ -2002,7 +2016,13 @@ fn authority_valid(corpus: &Corpus, rec: &AttributionRecord, lane: Lane) -> bool
         }
     }
     // The affected lane's owner + cell authors.
-    if corpus.roles.lane_owners.get(&lane).map(|o| o == issuer).unwrap_or(false) {
+    if corpus
+        .roles
+        .lane_owners
+        .get(&lane)
+        .map(|o| o == issuer)
+        .unwrap_or(false)
+    {
         return false;
     }
     if corpus
@@ -2086,8 +2106,9 @@ fn evaluate_gating(
     heads: &BTreeMap<ObservationId, Disposition>,
 ) -> bool {
     // gating_measured + every gating cell PASS on the evidence run.
-    let ev_classes: BTreeMap<CellId, ObsClass> =
-        classify_lane(&evrun.artifact, lane, heads).into_iter().collect();
+    let ev_classes: BTreeMap<CellId, ObsClass> = classify_lane(&evrun.artifact, lane, heads)
+        .into_iter()
+        .collect();
     for cell in gating_cells {
         match ev_classes.get(cell) {
             Some(ObsClass::Pass) => {}
@@ -2153,7 +2174,12 @@ fn beta_point_in_time(evrun: &Candidate, lane: Lane, battery: &Battery) -> bool 
 /// A4/A7 GA point-in-time: every applicable cell in the evidence run is PASS (only
 /// PASS is green — harness-removed there is unmeasured, not green), every gating
 /// cell automated-pass (A7), and evrun.commit == release_commit.
-fn ga_point_in_time(evrun: &Candidate, lane: Lane, battery: &Battery, release_commit: &str) -> bool {
+fn ga_point_in_time(
+    evrun: &Candidate,
+    lane: Lane,
+    battery: &Battery,
+    release_commit: &str,
+) -> bool {
     if evrun.artifact.header.tuple.release_commit != release_commit {
         return false; // T2 evidence currency (the PARAMETER, F-3).
     }

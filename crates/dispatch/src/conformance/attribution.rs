@@ -210,7 +210,10 @@ pub fn resolve_heads(records: &[AttributionRecord]) -> ChainResolution {
                 }
                 None => {
                     // supersedes an id that is not any observation's current head.
-                    bad = Some(format!("fork: supersedes {:?}, which is not a current head", sup.0));
+                    bad = Some(format!(
+                        "fork: supersedes {:?}, which is not a current head",
+                        sup.0
+                    ));
                     break;
                 }
                 _ => {}
@@ -251,7 +254,10 @@ pub fn resolve_heads(records: &[AttributionRecord]) -> ChainResolution {
         if let Some(extra) = s.difference(&required).next() {
             res.invalid.push(InvalidRecord {
                 id: r.id.clone(),
-                reason: format!("fork: supersedes {:?}, which is not a current head of any covered observation", extra),
+                reason: format!(
+                    "fork: supersedes {:?}, which is not a current head of any covered observation",
+                    extra
+                ),
             });
             continue;
         }
@@ -324,7 +330,9 @@ mod tests {
         let res = resolve_heads(&[bad]);
         assert!(res.heads.is_empty());
         assert!(
-            res.invalid.iter().any(|i| i.id.0 == "rec-bad" && i.reason.contains("malformed")),
+            res.invalid
+                .iter()
+                .any(|i| i.id.0 == "rec-bad" && i.reason.contains("malformed")),
             "{:?}",
             res.invalid
         );
@@ -347,7 +355,9 @@ mod tests {
         let res = resolve_heads(&[r1, r2]);
         assert_eq!(res.head_of(&obs("O1")).unwrap().0, "rec-1");
         assert!(
-            res.invalid.iter().any(|i| i.id.0 == "rec-2" && i.reason.contains("second root")),
+            res.invalid
+                .iter()
+                .any(|i| i.id.0 == "rec-2" && i.reason.contains("second root")),
             "{:?}",
             res.invalid
         );
@@ -361,7 +371,9 @@ mod tests {
         let res = resolve_heads(&[r1, r2]);
         assert_eq!(res.head_of(&obs("O1")).unwrap().0, "rec-1");
         assert!(
-            res.invalid.iter().any(|i| i.id.0 == "rec-2" && i.reason.contains("fork")),
+            res.invalid
+                .iter()
+                .any(|i| i.id.0 == "rec-2" && i.reason.contains("fork")),
             "{:?}",
             res.invalid
         );

@@ -1,0 +1,30 @@
+[package]
+# quorum-core — the infrastructure BOTH qd and qw need.
+#
+# The qd/qw split cuts through a layer neither side owns: qd needs it to resolve
+# targets and render, qw needs it to run sessions. Rather than pick a side (which
+# would force a dependency in one direction and a duplicate in the other), it
+# lives here and both depend on it. Same idiom as quorum-delivery-events /
+# quorum-submit-discipline / quorum-dispositions.
+#
+# A true LEAF: no dependency on dispatch, qrmux, or quorum-qw. The set is closed —
+# exec depends on nothing, effects -> exec, paths -> effects, zmx_dir -> effects,
+# model standalone — so nothing here reaches back into the code being split.
+name = "quorum-core"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared infrastructure for qd and qw: process/exec effects, path layout, the session model, and zmx dir resolution. Leaf crate."
+
+[lib]
+name = "quorum_core"
+
+[dependencies]
+libc = "0.2"
+# idstore's mint ledger is JSONL; the fold parses it back.
+serde_json = { version = "1" }
+
+[dev-dependencies]
+tempfile = "3"

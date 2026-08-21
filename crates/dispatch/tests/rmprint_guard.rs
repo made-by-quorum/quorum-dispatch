@@ -264,6 +264,7 @@ fn cf_argv_golden_strips_forbidden_from_env() {
         model: None,
         passthrough: vec![],
         interactive: false,
+        control_socket: None,
     };
     let plan = ClaudeProvider.launch_plan(&fx, &req);
 
@@ -290,6 +291,9 @@ fn cf_argv_golden_strips_forbidden_from_env() {
 // --- §5 structural source-canary (regression-pin on the 3 forward/source sites) -
 
 fn crate_src(rel: &str) -> String {
+    // qd/qw split: some canaried sources now live in the sibling `quorum-qw`
+    // crate, so `rel` may reach across with `../quorum-qw/…`. The guard still
+    // anchors on THIS crate's manifest dir; only the relative path changed.
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {p:?}: {e}"))
 }
@@ -329,7 +333,7 @@ fn structural_canary_surviving_sites_reference_shared_predicate() {
 
     // CF: launch.rs claude_flags — `strip_forbidden(` before the return, inside the
     // claude_flags body (above the split-out resolver).
-    let lf = crate_src("src/launch.rs");
+    let lf = crate_src("../quorum-qw/src/launch.rs");
     let cf_at = lf
         .find("pub fn claude_flags(")
         .expect("the claude_flags resolver");
@@ -355,7 +359,7 @@ fn structural_canary_surviving_sites_reference_shared_predicate() {
 /// from an unguarded base reds here.
 #[test]
 fn structural_canary_interactive_appender_base_flags_are_cf_guarded() {
-    let lf = crate_src("src/launch.rs");
+    let lf = crate_src("../quorum-qw/src/launch.rs");
     // The appender body (between its `fn` and the next `pub fn`) carries NO own
     // matcher reference — it is guarded transitively by E2 (passthrough) + CF (base).
     let app_at = lf
@@ -372,7 +376,7 @@ fn structural_canary_interactive_appender_base_flags_are_cf_guarded() {
         "the interactive appender must rely on upstream E2/CF, not carry its own guard"
     );
     // Its production caller resolves base flags through the CF-guarded resolver.
-    let prov = crate_src("src/provider.rs");
+    let prov = crate_src("../quorum-qw/src/provider.rs");
     let plan_at = prov.find("fn launch_plan(").expect("ClaudeProvider launch_plan");
     let plan_tail = &prov[plan_at..];
     let claude_flags_at = plan_tail
@@ -392,7 +396,7 @@ fn structural_canary_interactive_appender_base_flags_are_cf_guarded() {
 /// forbids.
 #[test]
 fn structural_canary_single_home_for_forbidden_set() {
-    let lf = crate_src("src/launch.rs");
+    let lf = crate_src("../quorum-qw/src/launch.rs");
     let defs = lf.matches("const FORBIDDEN_LONG").count();
     assert_eq!(defs, 1, "exactly one FORBIDDEN_LONG definition (single source of truth)");
 }

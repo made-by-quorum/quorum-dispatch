@@ -10,6 +10,47 @@
 //! "where templates can't reproduce a byte, hand-write the help string
 //! verbatim from the corpus"). config/survey help live in their own hand-parsed
 //! modules (already byte-GREEN) and are not duplicated here.
+//!
+//! The TOP-LEVEL help is the exception, and deliberately so: [`render_top`] at
+//! the bottom of this file GENERATES it by walking the clap tree (FTUE punch
+//! R4). Per-verb strings are hand-written because they carry prose a builder
+//! cannot reproduce; the top-level TABLE carries no prose at all — it is the
+//! verb list — so hand-writing it bought nothing and cost drift.
+
+// `setup` has no TS-era corpus capture — it is net-new (FTUE punch R15 + C2),
+// the first-run entry a human reaches straight after `brew install`. It is
+// hand-written to the same commander layout as the rest of this file precisely
+// because it is one of the few verbs `qd --help` shows: a verb on the first-run
+// path that renders clap's default layout is the one place the CLI would look
+// unfinished.
+pub const SETUP: &str = r####"Usage: qd setup [options]
+
+First run: set up qd's install layout and wire up your agent harnesses.
+
+Run this once after installing qd. It checks everything qd needs and prints a
+verdict per check — the `~/.quorum` layout, that `qw` sits beside `qd` (qd
+resolves it as a sibling and never via PATH, so a missing one cannot open a
+session at all), that `qd` is on PATH, and the relay pin in `~/.claude.json`
+that lets Claude Code launch qd's agent-messaging server. It then reports which
+agent harnesses you have — Claude Code, codex, pi, opencode — with their
+versions, and wires up the ones that are present.
+
+Without --fix it changes NOTHING: it reports what is wrong and, under each
+failing check, the exact thing that would fix it. On a terminal it offers to
+apply them; run non-interactively it just reports. Safe to re-run — every step
+is idempotent, and a second run on a wired machine is a no-op.
+
+Options:
+  --fix       Apply every fix it can, without asking
+  --json      Report the detected state as JSON and exit (never writes anything)
+  -y, --yes   Assume yes for every prompt (same effect as --fix)
+  -h, --help  display help for command
+
+Exit code: 0 when everything needed is in place (or was fixed this run), 1 when
+something required is still missing — including what --fix cannot do for you,
+like an incomplete Homebrew install or a `~/.claude.json` that is not valid JSON
+(setup will not rewrite a file it cannot parse).
+"####;
 
 // B5 item 2 (additive, orc-ruled C1+D): `--live` + the trailer note extend the
 // TS-era corpus capture (the same sanctioned shape as info's `--json` line).
@@ -43,7 +84,7 @@ bare/managed classification (`management` in JSON; `Mode` in the human table).
 "####;
 
 // `attach` is the human "get me into this session" verb. The help
-// text describes the provider/liveness matrix in human terms (no `zmx`/mux
+// text describes the provider/liveness matrix in human terms (no mux
 // internals leak to the user — the daemon/cold wording matches what the verb
 // actually prints).
 pub const ATTACH: &str = r####"Usage: qd attach [options] <session>
@@ -84,13 +125,11 @@ background without taking over your terminal. Humans who want to land inside a
 session interactively should use `qd attach <session>` instead.
 
 Options:
-  --no-zmx           Don't wrap in a zmx session
-  --no-attach        Start detached (background) — revive to drivable, no tail
-  --zmx-name <name>  Custom zmx session name
-  --alt-screen       Fullscreen (alt-screen) rendering for this session
-                     (default: inline, so phone/SSH attach can scroll)
-  --inline           Force inline rendering (overrides `render-default = alt-screen`)
-  -h, --help         display help for command
+  --no-attach   Start detached (background) — revive to drivable, no tail
+  --alt-screen  Fullscreen (alt-screen) rendering for this session (default:
+                inline, so phone/SSH attach can scroll)
+  --inline      Force inline rendering (overrides `render-default = alt-screen`)
+  -h, --help    display help for command
 "####;
 
 pub const WRAP: &str = r####"Usage: qd wrap [options] <session>
@@ -150,7 +189,7 @@ Options:
 // from an existing transcript. The model line below is the ruled wording.
 pub const START: &str = r####"Usage: qd start [options] <name> [claudeArgs...]
 
-Create a new session (Claude Code in zmx, or OpenCode server)
+Create a new session (claude-code by default; also codex, pi, opencode)
 
 start = new participant (fresh or forked) · resume = same participant wakes ·
 attach = enter live or cold session.
@@ -166,10 +205,35 @@ Options:
                          callers must pass it: QD_SESSION_ID in the caller's env
                          routes the auto-detect headless otherwise).
                          With --provider codex or pi this selects a different
-                         TOPOLOGY: that harness's own TUI in an attachable pane
-                         (`qd attach <name>`) instead of its daemon.
+                         TOPOLOGY: that harness's plain TUI in an attachable
+                         pane (`qd attach <name>`) — for codex instead of the
+                         app server, for pi instead of the extension-carrying
+                         pane, i.e. the same pane WITHOUT a control channel.
                          Not supported for --provider acp/* (a protocol adapter,
                          no terminal to attach)
+  --extension            pi only, and pi's DEFAULT lane: run pi's TUI in an
+                         attachable pane WITH the quorum control channel, so
+                         `qd send` drives the same session a human is typing
+                         into. Redundant since the default moved, and kept so
+                         existing scripts keep working and the lane can still be
+                         named explicitly
+  --app-server           codex only, and codex's DEFAULT lane: run the app
+                         server (`codex app-server --listen ws://…`), a headless
+                         resident a human can still open a viewer onto with
+                         `qd attach <name>`. Redundant since the default moved,
+                         and kept for the same reason --extension is: so a
+                         script can name the lane instead of relying on which
+                         way the default currently points
+  --daemon               codex/pi only: run the headless daemon (codex/daemon,
+                         pi/daemon) instead of the default lane — no mux pane,
+                         no TTY, nothing to attach. The escape hatch for CI, ssh
+                         and any no-mux context, and the only way to reach those
+                         two lanes now that a bare start makes codex/app-server
+                         and pi/extension. Conflicts with --interactive,
+                         --extension and --app-server. Not supported for
+                         --provider claude-code
+                         (it has no daemon lane); a no-op for acp/*, whose only
+                         lane is already a daemon
   --headless             Force a headless stream-json launch (override the
                          driver auto-detect)
   --json                 Emit the started session's identity as JSON on stdout:
@@ -182,10 +246,14 @@ Options:
   --model <model>        Set the model before sending the prompt
   --provider <provider>  Provider: claude-code (default), codex, pi,
                          opencode (= acp/opencode), or acp/claude-code.
-                         claude-code runs in an attachable pane; codex and pi run
-                         a daemon by default and an attachable TUI pane with
-                         --interactive; acp/* is daemon-hosted only (drive it
-                         with `qd send`, not `qd attach`)
+                         Default lanes: claude-code runs its TUI in an
+                         attachable pane; codex runs an app server you can also
+                         open a terminal on (`qd attach`); pi runs its TUI in an
+                         attachable pane carrying the quorum control channel;
+                         acp/* is daemon-hosted only (drive it with `qd send`,
+                         not `qd attach`). Use --interactive for a plain TUI
+                         pane (codex, pi) or --daemon for the headless resident
+                         (codex, pi)
   --port <port>          Port for OpenCode server (default: auto-scan 4096-4106)
   --via <name>           Route through a backends.json profile (per-session backend)
   --alt-screen           Fullscreen (alt-screen) rendering for this session
@@ -214,7 +282,7 @@ Options:
 
 pub const RECONCILE: &str = r####"Usage: qd reconcile [options]
 
-Detect and repair drift across registry / zmx / process (idempotent)
+Detect and repair drift across registry / mux / process (idempotent)
 
 Options:
   --dry-run   Show what would be repaired without changing anything
@@ -252,7 +320,7 @@ renders the affected fields as "unknown (<source> unavailable)" instead of "-".
 
 pub const SEND_PTY: &str = r####"Usage: qd send:pty [options] <session> <message>
 
-(Compatibility/debug control) Force a message through the zmx PTY.
+(Compatibility/debug control) Force a message through the session's PTY.
 
 Options:
   --timeout <seconds>  Max wait time (default: "120")
@@ -262,7 +330,7 @@ Options:
   -h, --help           display help for command
 
 How it works:
-  Types the message into the session's zmx terminal as if a human typed it,
+  Types the message into the session's mux pane as if a human typed it,
   then presses Enter. The session processes it like normal user input.
 
 Behavior:
@@ -270,14 +338,14 @@ Behavior:
   - --wait anchors on the JSONL: it waits for your message to surface as a user
     record (the session taking it up), then reads the assistant response that
     follows, completing when the session returns to idle.
-  - Messages are sent as a single zmx send call with Enter appended.
+  - Messages are sent as a single mux send call with Enter appended.
   - Busy sessions are NOT refused: the TUI buffers input typed while busy and
     queues the submitted message, so it is queued and prints "Message queued ...
     (session busy)". The acceptance verify-then-CR is skipped on this path
     (never CR a busy session).
 
 Requirements:
-  - Session must be in zmx (has a zmx terminal).
+  - Session must be hosted in a mux pane (it has a terminal to type into).
   - --wait works on busy sessions too: it queues the message, then waits — the
     latency just includes the current turn finishing before yours runs. It
     anchors on the JSONL user record, so the response is always attributed to
@@ -454,11 +522,19 @@ Options:
 // carries one stable line, so the wrapper can never drift from what `qd new`
 // accepts (the retired TS bootstrap baked the wrapper into rc files, and the
 // baked copies fossilized when the engine's CLI moved).
+//
+// FTUE punch R1 (zmx retirement), boundary note: the PROSE here no longer names
+// zmx, but the two `*_NO_ZMX` rows below keep it — those are the LITERAL env-var
+// names `dispatch::shell_init` still emits into the wrapper bodies, so a user who
+// wants the passthrough escape hatch has to type them exactly. RULE: help never
+// documents a variable the code does not read, and never hides one it does.
+// Renaming the variables belongs to whoever owns `shell_init.rs`; this const
+// follows them, it does not lead them.
 pub const INIT: &str = r####"Usage: qd init [options] <shell>
 
 Print shell integration for <shell> (bash, zsh, or fish): `claude` and `codex`
 wrappers that route a bare interactive launch into a tracked qd session, plus
-the ZMX_DIR pin. Evaluate it from your shell's rc file:
+the mux socket-dir pin. Evaluate it from your shell's rc file:
 
   bash   ~/.bashrc:                     eval "$(qd init bash)"
   zsh    ~/.zshrc:                      eval "$(qd init zsh)"
@@ -477,10 +553,10 @@ the real binary instead of losing what you typed. Escape hatch:
 Environment (read by the emitted wrappers at call time):
   QD_CLAUDE_WRAPPER_FLAGS  Extra flags (whitespace-split) injected on
                            passthrough REAL launches (headless / non-TTY /
-                           inside-zmx) — never on management subcommands or
-                           --version/--help. qd-routed launches take their
-                           flags from the engine launcher (QD_CLAUDE_FLAGS /
-                           config / defaults) instead.
+                           already inside a mux pane) — never on management
+                           subcommands or --version/--help. qd-routed launches
+                           take their flags from the engine launcher
+                           (QD_CLAUDE_FLAGS / config / defaults) instead.
   QD_CODEX_WRAPPER_FLAGS   The same, for the codex wrapper.
   CLAUDE_NO_ZMX            Set to disable claude routing (always passthrough).
   CODEX_NO_ZMX             Set to disable codex routing (always passthrough).
@@ -515,48 +591,203 @@ Options:
   -h, --help         display help for command
 "####;
 
-/// Top-level `qd --help` (rows 01/02). Built from corpus 01 with the spawn
-/// line removed (sanctioned divergence — qb, parked) and the bootstrap
-/// description replaced with the engine-only one-liner (spec §3 row 17; the
-/// harness normalizes this line per the orc bootstrap-help ruling). config +
-/// survey ARE listed (they dispatch pre-clap but appear in the command list).
-/// P0 start-surface rework (STATE 21 ruling): the start/resume/attach model
-/// line is a further sanctioned divergence (spec-w7-start-surface D1).
-pub const TOP: &str = r####"Usage: qd [options] [command]
+// ===========================================================================
+// Top-level `qd --help` — GENERATED from the clap verb table (FTUE punch R4).
+// ===========================================================================
 
-Claude Sessions — manage Claude Code sessions
+/// The four SESSION verbs — the ENTIRE human-facing `qd` surface (FTUE punch
+/// R14, ruled in `doc/ftue/punch-list.md`, "Shipping shape").
+///
+/// RULE: a verb appears in `qd --help` iff it is named here (or in
+/// [`FIRST_RUN_VERBS`]) **and** registered unhidden in `cli::subcommands`.
+/// Every other verb stays FULLY REGISTERED and FULLY WORKING — clap's
+/// `.hide(true)` suppresses the help row and NOTHING else, so parsing and
+/// dispatch are untouched. That is the C1 "hidden-but-working" resolution:
+/// humans get four verbs, agents and power users keep the whole surface and
+/// find it with `qd --help-all`.
+pub const SESSION_VERBS: [&str; 4] = ["ls", "start", "stop", "attach"];
 
-start = new participant (fresh or forked) · resume = same participant wakes ·
-attach = enter live or cold session.
+/// The first-run entry — R14's one exception to the four-verb rule. `setup` is
+/// how a human gets from `brew install` to a working install, so it stays
+/// visible, but in its OWN section: it is a thing you run once, not a fifth
+/// session verb, and grouping it with the four would say otherwise.
+pub const FIRST_RUN_VERBS: [&str; 1] = ["setup"];
 
-Options:
-  -V, --version                             output the version number
-  -h, --help                                display help for command
+/// Section header for the hidden surface, printed only by `qd --help-all`.
+const HIDDEN_HEADING: &str = "Hidden from `qd --help` (agent-facing, machinery, compat — all still working):";
 
-Commands:
-  ls|list [options]                         List Claude Code sessions (use --json for scripting)
-  attach <session>                          Get into a session (live/cold Claude → terminal; codex → driving guidance)
-  resume [options] <session>                Resume a dead session (wraps in zmx by default)
-  wrap <session>                            Prepare this bare Claude session for a manual qrmux relaunch
-  start [options] <name> [claudeArgs...]    Create a new session (Claude Code in zmx, or OpenCode server)
-  stop [options] <session>                  Stop a session
-  kill [options]                            (retired — use qd stop)
-  new [options]                             (retired — use qd start)
-  reconcile [options]                       Detect and repair drift across registry / zmx / process (idempotent)
-  send <session> <message>                  Send a message (delivery path selected automatically)
-  send:pty [options] <session> <message>    (compatibility/debug) Force a zmx PTY send
-  send:relay [options] <session> <message>  (compatibility/debug) Force relay/daemon send routing
-  send:http [options] <session> <message>   (compatibility/debug) Force the OpenCode HTTP path
-  relay                                     (moved) Use send:relay instead
-  whoami|name [options]                     Print the current session's name and ID
-  wait [options] <session>                  Block until a session transitions from busy to idle
-  live [options]                            Live-updating session list — type a 3-char code to attach
-  info <session>                            Detailed view of a single session
-  gc [options]                              Prune stale sessions and sidecars to recoverable trash
-  init <shell>                              Print shell integration (claude + codex wrappers) — add `eval "$(qd init bash)"` to your rc file
-  bootstrap                                 Set up qd's local data directory under ~/.quorum/dispatch (idempotent)
-  update                                    Self-update qd via the detected install channel (Homebrew or cargo).
-  ping [options] [session]                  Classify session liveness (drop-in for the legacy monitor.sh): exit 0=done 1=stuck 2=active 3=error 4=ambiguous. Use --prefix to sweep all sessions by name prefix.
-  survey                                    Fan an artifact out to a panel of LLMs via OpenRouter and collect responses (the panel-review / panel-ideate mechanic). Requires OPENROUTER_API_KEY.
-  config                                    Manage stored secrets (e.g. `qd config set openrouter-key`). Tiered backend: macOS Keychain when available, else a chmod-600 ~/.quorum/dispatch/config.toml. Env var overrides.
-"####;
+/// The `--help` trailer that makes the hidden surface discoverable (R4).
+const HELP_ALL_POINTER: &str = "\
+Only the session verbs and `setup` are listed here. Every other verb is still
+registered and working — `qd --help-all` prints the full surface.";
+
+/// Render the top-level help table by WALKING the clap command (FTUE punch R4).
+///
+/// RULE: the verb table is never written by hand. Its predecessor — a
+/// `help::TOP` string const — had already drifted: `dispositions`, `mark` and
+/// `delivery:recover` were live, unhidden verbs it never listed, and `attach`
+/// was listed without the options it takes. Reading every row back off the
+/// registration (`get_subcommands` → `get_visible_aliases` / `get_about` /
+/// `get_positionals` / `is_hide_set`) makes that class of drift structurally
+/// impossible: `cli::subcommands()` becomes the ONE place a verb is declared.
+///
+/// The commander layout is preserved deliberately (`Usage: qd [options]
+/// [command]`, the `ls|list` alias style, the two-space table, `-h, --help
+/// display help for command`) — R4 changes where the bytes come from, not what
+/// they look like.
+///
+/// `include_hidden` is the `qd --help-all` surface: the same table with one
+/// extra section listing the verbs `--help` suppresses.
+pub fn render_top(cmd: &clap::Command, include_hidden: bool) -> String {
+    let row = |sub: &clap::Command| (signature(sub), about_line(sub));
+    let find = |name: &str| cmd.get_subcommands().find(|s| s.get_name() == name);
+    let classified = |name: &str| SESSION_VERBS.contains(&name) || FIRST_RUN_VERBS.contains(&name);
+
+    // The Options rows are clap builtins (`-V/--version`, `-h/--help`), not verb
+    // registrations, so they are the one hand-written pair in this function.
+    let options: Vec<(String, String)> = vec![
+        ("-V, --version".into(), "output the version number".into()),
+        ("-h, --help".into(), "display help for command".into()),
+    ];
+
+    let mut sections: Vec<(&str, Vec<(String, String)>)> = Vec::new();
+
+    // The four session verbs, in the RULED order (ls/start/stop/attach) rather
+    // than registration order — the punch item names that sequence, and it reads
+    // as the lifecycle it is.
+    let session: Vec<_> = SESSION_VERBS
+        .iter()
+        .filter_map(|n| find(n))
+        .filter(|s| !s.is_hide_set())
+        .map(row)
+        .collect();
+    if !session.is_empty() {
+        sections.push(("Commands:", session));
+    }
+
+    let first_run: Vec<_> = FIRST_RUN_VERBS
+        .iter()
+        .filter_map(|n| find(n))
+        .filter(|s| !s.is_hide_set())
+        .map(row)
+        .collect();
+    if !first_run.is_empty() {
+        sections.push(("First run:", first_run));
+    }
+
+    // Safety net, and the reason this is a walk and not a lookup: a verb that is
+    // registered unhidden but named by NEITHER list still gets a row. Unhiding a
+    // verb can make the help wrong-looking; it can never make the verb invisible.
+    let other: Vec<_> = cmd
+        .get_subcommands()
+        .filter(|s| !s.is_hide_set() && !classified(s.get_name()))
+        .map(row)
+        .collect();
+    if !other.is_empty() {
+        sections.push(("Other commands:", other));
+    }
+
+    if include_hidden {
+        let hidden: Vec<_> = cmd.get_subcommands().filter(|s| s.is_hide_set()).map(row).collect();
+        if !hidden.is_empty() {
+            sections.push((HIDDEN_HEADING, hidden));
+        }
+    }
+
+    // Commander aligns every term — options and commands alike — to one column,
+    // two spaces past the longest.
+    let width = options
+        .iter()
+        .chain(sections.iter().flat_map(|(_, rows)| rows.iter()))
+        .map(|(term, _)| term.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut out = String::new();
+    out.push_str("Usage: qd [options] [command]\n\n");
+    out.push_str("Claude Sessions — manage Claude Code sessions\n\n");
+    // The STATE-21 model line (spec-w7-start-surface D1): the one piece of
+    // orientation the table itself cannot carry.
+    out.push_str(
+        "start = new participant (fresh or forked) · resume = same participant wakes ·\n\
+         attach = enter live or cold session.\n",
+    );
+    push_section(&mut out, "Options:", &options, width);
+    for (heading, rows) in &sections {
+        push_section(&mut out, heading, rows, width);
+    }
+    if !include_hidden {
+        out.push('\n');
+        out.push_str(HELP_ALL_POINTER);
+        out.push('\n');
+    }
+    out
+}
+
+/// One `Heading:` block of aligned `  term  description` rows.
+fn push_section(out: &mut String, heading: &str, rows: &[(String, String)], width: usize) {
+    out.push('\n');
+    out.push_str(heading);
+    out.push('\n');
+    for (term, desc) in rows {
+        let pad = width.saturating_sub(term.chars().count());
+        out.push_str("  ");
+        out.push_str(term);
+        for _ in 0..pad {
+            out.push(' ');
+        }
+        out.push_str("  ");
+        out.push_str(desc);
+        out.push('\n');
+    }
+}
+
+/// The commander invocation signature for one verb, derived from its clap
+/// registration: `name|alias [options] <required> [optional] [variadic...]`.
+/// Nothing here is hand-written, so a flag or positional added to a verb shows
+/// up in the table on the next build.
+fn signature(sub: &clap::Command) -> String {
+    let mut sig = sub.get_name().to_string();
+    for alias in sub.get_visible_aliases() {
+        sig.push('|');
+        sig.push_str(alias);
+    }
+    // `[options]` iff the verb registers a flag of its own. clap's auto
+    // `help`/`version` args don't count — every verb has those, so listing them
+    // would put `[options]` on every row and mean nothing.
+    let has_options = sub.get_arguments().any(|a| {
+        !a.is_positional() && !matches!(a.get_id().as_str(), "help" | "version")
+    });
+    if has_options {
+        sig.push_str(" [options]");
+    }
+    for arg in sub.get_positionals() {
+        let name = arg
+            .get_value_names()
+            .and_then(|names| names.first())
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| arg.get_id().as_str().to_string());
+        let variadic = arg.get_num_args().is_some_and(|r| r.max_values() > 1);
+        let name = if variadic { format!("{name}...") } else { name };
+        sig.push(' ');
+        if arg.is_required_set() {
+            sig.push_str(&format!("<{name}>"));
+        } else {
+            sig.push_str(&format!("[{name}]"));
+        }
+    }
+    sig
+}
+
+/// A verb's `about` as ONE table line. Descriptions are written as Rust string
+/// continuations, so they arrive with embedded newlines/indentation; the table
+/// is a single-line-per-verb layout, so collapse the whitespace rather than let
+/// a continuation break the column.
+fn about_line(sub: &clap::Command) -> String {
+    sub.get_about()
+        .map(|a| a.to_string())
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}

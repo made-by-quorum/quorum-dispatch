@@ -444,6 +444,7 @@ fn conformance(p: &dyn Provider, fix: &Fixture) {
         model: None,
         passthrough: vec![],
         interactive: false,
+        control_socket: None,
     };
     let plan = p.launch_plan(&fx, &req);
     assert!(
@@ -906,6 +907,7 @@ fn claude_launch_plan_matches_launch_rs_helpers() {
         model: None,
         passthrough: vec!["--model".to_string(), "opus".to_string()],
         interactive: false,
+        control_socket: None,
     };
     let plan = ClaudeProvider.launch_plan(&fx, &req);
 

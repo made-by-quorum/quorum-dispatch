@@ -61,10 +61,7 @@ pub fn sign(p: &SignParams) -> SignedHeaders {
     }
     headers.sort_by_key(|(k, _)| *k);
 
-    let canonical_headers: String = headers
-        .iter()
-        .map(|(k, v)| format!("{k}:{v}\n"))
-        .collect();
+    let canonical_headers: String = headers.iter().map(|(k, v)| format!("{k}:{v}\n")).collect();
     let signed_headers = headers
         .iter()
         .map(|(k, _)| *k)

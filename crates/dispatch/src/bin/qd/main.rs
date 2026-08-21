@@ -22,7 +22,6 @@
 
 mod cli;
 mod config;
-mod daemon;
 mod driver;
 mod help;
 mod survey;
@@ -47,14 +46,21 @@ fn run(argv: &[String]) -> i32 {
     //
     // qrmux-server: the HIDDEN embedded-daemon entry (C1 M4fix). The qd binary IS
     // the embedded qrmux daemon — it links qrmux — so the client launcher re-execs
-    // `qd qrmux-server [--socket-dir DIR]` (NOT `qd server`, which has no verb).
-    // Dispatched PRE-CLAP so it never enters the user-facing clap surface: the a3
-    // help/exit-byte surface stays byte-unchanged and the daemon entry can't be
-    // commander-error-mangled. Internal-only; not advertised in help.
+    // `<exe> qrmux-server [--socket-dir DIR]` (NOT `<exe> server`, which has no
+    // verb). Dispatched PRE-CLAP so it never enters the user-facing clap surface:
+    // the a3 help/exit-byte surface stays byte-unchanged and the daemon entry can't
+    // be commander-error-mangled. Internal-only; not advertised in help.
+    //
+    // The BODY lives in `quorum_qw::qrmux_server` and `qw` dispatches it too (ruling
+    // D6): the launcher re-execs `current_exe()`, and inside the qw subprocess that
+    // is `qw`. qd keeps the verb because daemons already running in the wild were
+    // spawned as `qd qrmux-server`.
     match rest.first().map(String::as_str) {
         Some("config") => return config::dispatch(&rest[1..]),
         Some("survey") => return survey::dispatch(&rest[1..]),
-        Some("qrmux-server") => return daemon::run_qrmux_server(&rest[1..]),
+        Some("qrmux-server") => {
+            return quorum_qw::qrmux_server::run_qrmux_server("qd qrmux-server", &rest[1..])
+        }
         // relay:serve: machine-spawned hidden operational verb (MCP config spawns
         // it). Dispatched pre-clap so it never enters the user-facing clap surface
         // and cannot be commander-error-mangled. Not advertised in help. §2.
@@ -107,6 +113,22 @@ fn run(argv: &[String]) -> i32 {
         // bin dir; see dispatch/doc/DEPLOY.md.
         Some("build-profile") => {
             println!("{}", if cfg!(debug_assertions) { "debug" } else { "release" });
+            return 0;
+        }
+        // --help-all: the FULL verb surface (FTUE punch R4). `qd --help` lists
+        // the four session verbs plus `setup` (R14) and hides the rest — hidden,
+        // not removed: every one of them still parses and dispatches. Agents and
+        // power users need a way to SEE that surface, so this flag prints the
+        // same generated table with the hidden rows included, exit 0.
+        //
+        // Dispatched PRE-CLAP for the same reason `build-profile` and
+        // `relay:serve` are: clap's top-level parse would have to be taught a
+        // flag whose only job is to print a different help, and any mistake in
+        // that teaching comes back as a commander-mangled parse error instead of
+        // help. A `--help`-shaped token can never be a session name, so there is
+        // nothing here to shadow.
+        Some("--help-all") => {
+            print!("{}", help::render_top(&cli::build_cli(), true));
             return 0;
         }
         _ => {}
@@ -269,7 +291,11 @@ fn run_adoption_relaunch(args: &[String]) -> i32 {
     };
 
     use dispatch::launch::RenderMode;
-    match verbs::resume::revive_claude(&session, None, RenderMode::Inline, fresh) {
+    // The verb the user actually invoked. This is the hidden `adoption:relaunch`
+    // entry point, so that is what its failure lines name — not `attach`, which is
+    // what the pre-split revive hard-coded from every caller.
+    match verbs::resume::revive_claude(&session, None, RenderMode::Inline, fresh, "adoption:relaunch")
+    {
         Ok(handle) => {
             println!(
                 "Resumed session \"{}\" from {} (detached); attach with \"qd attach {}\".",

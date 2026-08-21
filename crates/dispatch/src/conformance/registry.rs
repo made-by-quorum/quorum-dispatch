@@ -725,7 +725,11 @@ pub fn conformance_battery() -> Battery {
                 );
             }
             _ => {
-                put(lane, "d6.bridge-death-detection-no-false-positive", Required);
+                put(
+                    lane,
+                    "d6.bridge-death-detection-no-false-positive",
+                    Required,
+                );
                 put(lane, "d6.cancel-maps-to-truthful-terminal", Required);
             }
         }
@@ -813,8 +817,24 @@ pub fn conformance_battery() -> Battery {
             "d7.cross-size-reattach-both-directions",
             "d7.zellij-nested-render-coverage",
         ];
+        // codex-interactive / pi-interactive: this arm USED to read
+        // `Lane::ClaudeCode => Required, _ => NaPermitted`, on the stated grounds
+        // that every other lane is `Hosting::Daemon`. That stopped being true when
+        // codex and pi grew `--interactive` mux-pane lanes: a pane-hosted codex or
+        // pi has a real terminal, so the d7 attach/render property DOES have a
+        // referent there and NaPermitted was over-claiming.
+        //
+        // The honest key is whether the harness has a pane lane AT ALL, which
+        // `quorum_qw::lane` answers structurally. (This grid still indexes by provider
+        // id, so it cannot yet say "codex/mux-pane Required, codex/daemon
+        // NaPermitted" — that needs the hosting axis on `Lane` itself. Until then,
+        // keying on "has a pane lane" is strictly closer to the truth than
+        // assuming everything non-claude is daemon-only.)
+        let has_pane_lane = quorum_qw::lane::Harness::from_provider_id(lane.provider_id())
+            .is_some_and(|h| h.supports(quorum_qw::lane::Mode::Pane));
+
         match lane {
-            Lane::ClaudeCode => {
+            _ if has_pane_lane => {
                 for id in d7_cells {
                     put(lane, id, Required);
                 }
@@ -826,7 +846,7 @@ pub fn conformance_battery() -> Battery {
                         id,
                         NaPermitted {
                             reason: format!(
-                                "{} is Hosting::Daemon — a provider-owned daemon thread with no qd-owned mux pane and no terminal to attach (lifecycle.rs:68), so the qrmux attach-client env-matrix / nested-render property has no referent on this lane",
+                                "{} has NO mux-pane lane at all — an ACP bridge is a protocol adapter with no terminal of its own (lifecycle.rs:504-521 refuses --interactive for acp/*), so the qrmux attach-client env-matrix / nested-render property has no referent on this lane",
                                 lane.provider_id()
                             ),
                         },

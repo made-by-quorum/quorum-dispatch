@@ -242,7 +242,10 @@ mod tests {
     fn progress_stale_at_n_boundary() {
         let n = 1000;
         let now = 10_000;
-        assert!(!progress_stale(Some(now - (n - 1)), now, n), "below N: fresh");
+        assert!(
+            !progress_stale(Some(now - (n - 1)), now, n),
+            "below N: fresh"
+        );
         assert!(
             !progress_stale(Some(now - n), now, n),
             "exactly N: not yet stale (strict >)"
@@ -270,8 +273,14 @@ mod tests {
         // 200ms ago; silent last emitted 5s ago.
         let streaming_last = Some(now - 200);
         let silent_last = Some(now - 5000);
-        assert!(!progress_stale(streaming_last, now, n), "streaming → fresh → Busy");
-        assert!(progress_stale(silent_last, now, n), "silent → stale → Wedged");
+        assert!(
+            !progress_stale(streaming_last, now, n),
+            "streaming → fresh → Busy"
+        );
+        assert!(
+            progress_stale(silent_last, now, n),
+            "silent → stale → Wedged"
+        );
     }
 
     /// Recorder advances monotonically and never moves backward on a stale tick.
@@ -333,7 +342,11 @@ mod tests {
         assert_eq!(r.since_turn_start_ms("s", 6_000), Some(5_000));
         // First-start-wins: a re-Ready at t=4000 does NOT reset the anchor.
         r.turn_started("s", 4_000);
-        assert_eq!(r.since_turn_start_ms("s", 6_000), Some(5_000), "anchor unchanged");
+        assert_eq!(
+            r.since_turn_start_ms("s", 6_000),
+            Some(5_000),
+            "anchor unchanged"
+        );
         // Turn ends → no anchor → None.
         r.turn_ended("s");
         assert_eq!(r.since_turn_start_ms("s", 6_000), None);

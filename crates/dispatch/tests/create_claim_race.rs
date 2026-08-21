@@ -145,6 +145,7 @@ fn child_body() -> ! {
         qd_session_id: None,
         render: dispatch::launch::RenderMode::Inline,
         interactive: false,
+        control_socket: None,
     };
     let marker = match run_new(&deps, &params) {
         // The claim winner gets PAST the claim and reaches the create+I6 steps.

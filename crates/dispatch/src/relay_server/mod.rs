@@ -1216,7 +1216,7 @@ fn sidecar_path(paths: &QdPaths, pid: u32) -> PathBuf {
 /// `epoch_ms_to_iso`, the verified-vs-bun `toISOString` port).
 fn write_sidecar(paths: &QdPaths, port: u16, pid: u32, session_id: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(&paths.relay_dir)?;
-    let started_at = crate::render::epoch_ms_to_iso(now_ms());
+    let started_at = quorum_core::timefmt::epoch_ms_to_iso(now_ms());
     let record = serde_json::json!({
         "port": port,
         "pid": pid,
@@ -1507,7 +1507,16 @@ mod tests {
         assert!(
             exec.ran(
                 "claude",
-                &["mcp", "add", "-s", "user", "relay", "--", "qd", "relay:serve"]
+                &[
+                    "mcp",
+                    "add",
+                    "-s",
+                    "user",
+                    "relay",
+                    "--",
+                    "qd",
+                    "relay:serve"
+                ]
             ),
             "legacy bare `dispatch` must be re-pointed to bare `qd`: {:?}",
             exec.log()

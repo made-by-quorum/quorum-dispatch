@@ -96,7 +96,10 @@ pub struct GridVerdict {
 impl GridVerdict {
     /// The rows that block certification (empty iff `certified`).
     pub fn uncertifiable(&self) -> Vec<&GridRow> {
-        self.rows.iter().filter(|r| !r.status.is_certifiable()).collect()
+        self.rows
+            .iter()
+            .filter(|r| !r.status.is_certifiable())
+            .collect()
     }
 
     /// A deterministic, human- and machine-readable rendering: a top-line
@@ -112,7 +115,10 @@ impl GridVerdict {
         out.push_str(&format!(
             "manifest cells: {}  certifiable: {}  blocking: {}\n\n",
             self.rows.len(),
-            self.rows.iter().filter(|r| r.status.is_certifiable()).count(),
+            self.rows
+                .iter()
+                .filter(|r| r.status.is_certifiable())
+                .count(),
             self.uncertifiable().len(),
         ));
         for r in &self.rows {
@@ -225,7 +231,13 @@ pub fn persist_artifact(dir: &Path, artifact: &RunArtifact) -> std::io::Result<(
         .run
         .0
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let path = dir.join(format!("{stem}.artifact.json"));
     let json = serde_json::to_string_pretty(artifact)
@@ -300,7 +312,9 @@ mod tests {
             )
             .unwrap();
         let nonce = journal
-            .start_run_at(&tuple.run, "runner-x (bbbb1111)", TS, &mut || format!("nonce-{run}"))
+            .start_run_at(&tuple.run, "runner-x (bbbb1111)", TS, &mut || {
+                format!("nonce-{run}")
+            })
             .unwrap();
         let header = CommissioningHeader::new(tuple, nonce);
         let mut b = RunArtifactBuilder::new(header, TS);
@@ -329,7 +343,14 @@ mod tests {
         let mut journal = AuthorityJournal::new();
         Lane::ALL
             .iter()
-            .map(|&lane| lane_artifact(&mut journal, lane, &format!("run-{}", lane.provider_id()), &[]))
+            .map(|&lane| {
+                lane_artifact(
+                    &mut journal,
+                    lane,
+                    &format!("run-{}", lane.provider_id()),
+                    &[],
+                )
+            })
             .collect()
     }
 
@@ -337,7 +358,11 @@ mod tests {
     fn complete_all_pass_is_certified() {
         let arts = all_lanes_pass();
         let grid = mint_grid(&conformance_battery(), &arts);
-        assert!(grid.certified, "a complete all-Pass corpus must certify:\n{}", grid.render());
+        assert!(
+            grid.certified,
+            "a complete all-Pass corpus must certify:\n{}",
+            grid.render()
+        );
         assert!(grid.uncertifiable().is_empty());
     }
 
@@ -345,8 +370,15 @@ mod tests {
     fn empty_evidence_is_invalid() {
         // The core fail-closed property: a box where NOTHING ran cannot certify.
         let grid = mint_grid(&conformance_battery(), &[]);
-        assert!(!grid.certified, "empty evidence must be INVALID (green from nothing):\n{}", grid.render());
-        assert!(grid.rows.iter().all(|r| matches!(r.status, CellStatus::Missing)));
+        assert!(
+            !grid.certified,
+            "empty evidence must be INVALID (green from nothing):\n{}",
+            grid.render()
+        );
+        assert!(grid
+            .rows
+            .iter()
+            .all(|r| matches!(r.status, CellStatus::Missing)));
         assert!(!grid.rows.is_empty(), "the manifest domain is non-empty");
     }
 
@@ -357,10 +389,21 @@ mod tests {
         let arts: Vec<RunArtifact> = Lane::ALL
             .iter()
             .filter(|&&l| l != Lane::Pi)
-            .map(|&lane| lane_artifact(&mut journal, lane, &format!("run-{}", lane.provider_id()), &[]))
+            .map(|&lane| {
+                lane_artifact(
+                    &mut journal,
+                    lane,
+                    &format!("run-{}", lane.provider_id()),
+                    &[],
+                )
+            })
             .collect();
         let grid = mint_grid(&conformance_battery(), &arts);
-        assert!(!grid.certified, "a missing lane must be INVALID:\n{}", grid.render());
+        assert!(
+            !grid.certified,
+            "a missing lane must be INVALID:\n{}",
+            grid.render()
+        );
         assert!(grid
             .uncertifiable()
             .iter()
@@ -376,20 +419,34 @@ mod tests {
         let target = battery
             .applicable_domain()
             .into_iter()
-            .find(|(l, c)| *l == Lane::Pi && matches!(battery.applicability(*l, c), Applicability::Required))
+            .find(|(l, c)| {
+                *l == Lane::Pi && matches!(battery.applicability(*l, c), Applicability::Required)
+            })
             .expect("Pi has at least one Required cell");
         let mut journal = AuthorityJournal::new();
         let mut arts = Vec::new();
         for &lane in &Lane::ALL {
             let ov: Vec<(&str, Outcome)> = if lane == Lane::Pi {
-                vec![(target.1 .0.as_str(), Outcome::blocked_gate_off("QD_PI_LIVE", "set QD_PI_LIVE=1"))]
+                vec![(
+                    target.1 .0.as_str(),
+                    Outcome::blocked_gate_off("QD_PI_LIVE", "set QD_PI_LIVE=1"),
+                )]
             } else {
                 vec![]
             };
-            arts.push(lane_artifact(&mut journal, lane, &format!("run-{}", lane.provider_id()), &ov));
+            arts.push(lane_artifact(
+                &mut journal,
+                lane,
+                &format!("run-{}", lane.provider_id()),
+                &ov,
+            ));
         }
         let grid = mint_grid(&battery, &arts);
-        assert!(!grid.certified, "a Blocked required cell must be INVALID:\n{}", grid.render());
+        assert!(
+            !grid.certified,
+            "a Blocked required cell must be INVALID:\n{}",
+            grid.render()
+        );
         assert!(grid
             .uncertifiable()
             .iter()
@@ -402,7 +459,9 @@ mod tests {
         let target = battery
             .applicable_domain()
             .into_iter()
-            .find(|(l, c)| *l == Lane::Pi && matches!(battery.applicability(*l, c), Applicability::Required))
+            .find(|(l, c)| {
+                *l == Lane::Pi && matches!(battery.applicability(*l, c), Applicability::Required)
+            })
             .expect("Pi has a Required cell");
         let mut journal = AuthorityJournal::new();
         // Build the target Pi artifact first so we can mint a Fail against its runner.
@@ -411,7 +470,12 @@ mod tests {
             if lane == Lane::Pi {
                 continue;
             }
-            arts.push(lane_artifact(&mut journal, lane, &format!("run-{}", lane.provider_id()), &[]));
+            arts.push(lane_artifact(
+                &mut journal,
+                lane,
+                &format!("run-{}", lane.provider_id()),
+                &[],
+            ));
         }
         // Pi lane with one Fail (minted against the lane's own runner inside the helper path
         // would need the runner; instead build the Pi artifact inline).
@@ -429,7 +493,9 @@ mod tests {
             )
             .unwrap();
         let nonce = journal
-            .start_run_at(&tuple.run, "runner-x (bbbb1111)", TS, &mut || "nonce-pi".to_string())
+            .start_run_at(&tuple.run, "runner-x (bbbb1111)", TS, &mut || {
+                "nonce-pi".to_string()
+            })
             .unwrap();
         let header = CommissioningHeader::new(tuple, nonce);
         let mut b = RunArtifactBuilder::new(header, TS);
@@ -442,7 +508,10 @@ mod tests {
             applicable.push((Lane::Pi, cell.id.clone()));
             let outcome = if cell.id == target.1 {
                 let proof = b.runner().proof(vec!["cmd".into()], "observed a red");
-                Outcome::Fail { proof, detail: "the claim did not hold".into() }
+                Outcome::Fail {
+                    proof,
+                    detail: "the claim did not hold".into(),
+                }
             } else if let Applicability::NaPermitted { reason } = app {
                 Outcome::not_applicable(reason.clone())
             } else {
@@ -452,7 +521,11 @@ mod tests {
         }
         arts.push(b.build(&applicable).unwrap());
         let grid = mint_grid(&battery, &arts);
-        assert!(!grid.certified, "a Failed cell must be INVALID:\n{}", grid.render());
+        assert!(
+            !grid.certified,
+            "a Failed cell must be INVALID:\n{}",
+            grid.render()
+        );
         assert!(grid
             .uncertifiable()
             .iter()
@@ -469,7 +542,11 @@ mod tests {
             persist_artifact(&dir, &art).unwrap();
         }
         let read_back = read_run_dir(&dir).unwrap();
-        assert_eq!(read_back.len(), Lane::ALL.len(), "one artifact per lane round-trips");
+        assert_eq!(
+            read_back.len(),
+            Lane::ALL.len(),
+            "one artifact per lane round-trips"
+        );
         let grid = mint_grid(&conformance_battery(), &read_back);
         assert!(
             grid.certified,
@@ -486,9 +563,19 @@ mod tests {
         let dir = std::env::temp_dir().join("qd-c4-grid-nonexistent-run");
         let _ = std::fs::remove_dir_all(&dir);
         let read_back = read_run_dir(&dir).unwrap();
-        assert!(read_back.is_empty(), "a missing run dir yields no artifacts");
+        assert!(
+            read_back.is_empty(),
+            "a missing run dir yields no artifacts"
+        );
         let grid = mint_grid(&conformance_battery(), &read_back);
-        assert!(!grid.certified, "an empty run dir must mint INVALID:\n{}", grid.render());
-        assert!(grid.rows.iter().all(|r| matches!(r.status, CellStatus::Missing)));
+        assert!(
+            !grid.certified,
+            "an empty run dir must mint INVALID:\n{}",
+            grid.render()
+        );
+        assert!(grid
+            .rows
+            .iter()
+            .all(|r| matches!(r.status, CellStatus::Missing)));
     }
 }

@@ -202,6 +202,7 @@ fn codex_daemon_create_live_jailed_end_to_end() {
         passthrough: vec![],
         // NO prompt → NO turn → NO model call (the brief's API-spend ban).
         prompt: None,
+            hosting: None,
     };
 
     let out = run_new_daemon(&deps, &params).expect("live daemon create succeeds");

@@ -23,6 +23,7 @@
       }
     ],
     "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
     "code": "z72"
   },
   {
@@ -66,6 +67,7 @@
       }
     ],
     "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
     "code": "109"
   },
   {
@@ -95,6 +97,7 @@
       }
     ],
     "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
     "code": "496"
   },
   {
@@ -121,6 +124,7 @@
       }
     ],
     "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
     "code": "1nw"
   },
   {

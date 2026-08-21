@@ -43,31 +43,65 @@ struct Jail {
     _root: tempfile::TempDir,
     home: PathBuf,
     qd_home: PathBuf,
+    /// **qw's** delivery log dir — every terminal this verb produces lands here,
+    /// and every assertion below reads it.
     sessions_dir: PathBuf,
+    /// **qd's** intent log dir — what the sweep enumerates.
+    intent_dir: PathBuf,
 }
 
 fn jail() -> Jail {
     let root = tempfile::tempdir().expect("tempdir");
     let home = root.path().join("home");
     let qd_home = root.path().join("qd");
-    // events live at <QD_HOME>/state/sessions/<key>.events.jsonl (events_path).
+    // The ledger is TWO files (`09-ledger-split.md`): qd's intent record lives at
+    // <QD_HOME>/state/intent/<key>.events.jsonl and qw's delivery/terminal records
+    // at <QD_HOME>/state/sessions/<key>.events.jsonl. The sweep reads the first;
+    // `recover` reads and writes the second. A fixture that planted only one of
+    // them would be testing a state production cannot reach.
     let sessions_dir = qd_home.join("state").join("sessions");
+    let intent_dir = qd_home.join("state").join("intent");
     std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::create_dir_all(&intent_dir).unwrap();
     std::fs::create_dir_all(&home).unwrap();
     Jail {
         _root: root,
         home,
         qd_home,
         sessions_dir,
+        intent_dir,
     }
 }
 
-/// Append a raw `send-initiated` line — raw so we control pid/ts/start_ms (an
-/// `EventWriter` would stamp the CURRENT pid/ts, which is exactly what these proofs
-/// must NOT do).
+/// Append one raw JSON line to `<dir>/<key>.events.jsonl`.
+fn append_line(dir: &Path, key: &str, line: &str) {
+    use std::io::Write;
+    let path = dir.join(format!("{key}.events.jsonl"));
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(f, "{line}").unwrap();
+}
+
+/// Plant ONE send across BOTH halves of the ledger, exactly as a real send leaves
+/// it — raw JSON so we control pid/ts/start_ms (an `EventWriter` would stamp the
+/// CURRENT pid/ts, which is exactly what these proofs must NOT do).
+///
+/// **qd's intent record** (`intent/<key>`) carries the envelope the dead-writer
+/// fence reads — `pid`, `start_ms`, `ts` — and NO recovery keys, because qd
+/// resolves no transcripts. **qw's delivery record** (`sessions/<key>`) carries
+/// the recovery keys `recover` searches from: `content_sha256`, `transcript`,
+/// `transcript_offset`. Same `send_id` in both; that correlation is the whole
+/// point of qd minting the id before the wire.
+///
+/// Splitting the fixture this way is not cosmetic — it is what proves the split:
+/// the fence is evaluated on a record with no transcript in it, and the search is
+/// run from a record whose pid the fence never saw.
 #[allow(clippy::too_many_arguments)]
 fn write_send_initiated(
-    sessions_dir: &Path,
+    j: &Jail,
     key: &str,
     sid: &str,
     send_id: &str,
@@ -78,37 +112,46 @@ fn write_send_initiated(
     content: &str,
     transcript: Option<&str>,
 ) {
-    use std::io::Write;
     let sha = dispatch::events::sha256_hex(content.as_bytes());
-    let mut o = serde_json::Map::new();
-    o.insert("v".into(), serde_json::json!(1));
-    o.insert("ts".into(), serde_json::json!(ts));
-    o.insert("pid".into(), serde_json::json!(pid));
-    o.insert("seq".into(), serde_json::json!(0));
-    o.insert("session".into(), serde_json::json!(sid));
-    if let Some(s) = start_ms {
-        o.insert("start_ms".into(), serde_json::json!(s));
-    }
-    o.insert("event".into(), serde_json::json!("send-initiated"));
-    o.insert("send_id".into(), serde_json::json!(send_id));
-    o.insert("verb".into(), serde_json::json!(verb));
-    o.insert("send_path".into(), serde_json::json!("idle"));
-    o.insert("content_sha256".into(), serde_json::json!(sha));
-    o.insert("content_len".into(), serde_json::json!(content.len()));
-    o.insert("chunks".into(), serde_json::json!(1));
-    o.insert("chunk_sha256s".into(), serde_json::json!([sha]));
+    let envelope = |send_path: &str| {
+        let mut o = serde_json::Map::new();
+        o.insert("v".into(), serde_json::json!(1));
+        o.insert("ts".into(), serde_json::json!(ts));
+        o.insert("pid".into(), serde_json::json!(pid));
+        o.insert("seq".into(), serde_json::json!(0));
+        o.insert("session".into(), serde_json::json!(sid));
+        if let Some(s) = start_ms {
+            o.insert("start_ms".into(), serde_json::json!(s));
+        }
+        o.insert("event".into(), serde_json::json!("send-initiated"));
+        o.insert("send_id".into(), serde_json::json!(send_id));
+        o.insert("verb".into(), serde_json::json!(verb));
+        o.insert("send_path".into(), serde_json::json!(send_path));
+        o.insert("content_sha256".into(), serde_json::json!(sha));
+        o.insert("content_len".into(), serde_json::json!(content.len()));
+        o.insert("chunks".into(), serde_json::json!(1));
+        o.insert("chunk_sha256s".into(), serde_json::json!([sha]));
+        o
+    };
+
+    // qd's half: the fence's inputs, no recovery keys.
+    append_line(
+        &j.intent_dir,
+        key,
+        &serde_json::Value::Object(envelope("intent")).to_string(),
+    );
+
+    // qw's half: the recovery keys.
+    let mut o = envelope("idle");
     if let Some(t) = transcript {
         o.insert("transcript".into(), serde_json::json!(t));
         o.insert("transcript_offset".into(), serde_json::json!(0));
     }
-    let line = serde_json::Value::Object(o).to_string();
-    let path = sessions_dir.join(format!("{key}.events.jsonl"));
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .unwrap();
-    writeln!(f, "{line}").unwrap();
+    append_line(
+        &j.sessions_dir,
+        key,
+        &serde_json::Value::Object(o).to_string(),
+    );
 }
 
 /// Run the compiled `qd delivery:recover` (optionally `--send-id`), jailed.
@@ -182,27 +225,23 @@ fn pending_abandoned_record(sessions_dir: &Path, key: &str) -> serde_json::Value
 /// Append a raw `send-initiated` line that LACKS `content_sha256` — the (d)
 /// unattributable shape (a legacy/foreign record with no recovery key). Mirrors
 /// `write_send_initiated` but omits the sha (and the chunk shas).
-fn write_send_initiated_no_sha(sessions_dir: &Path, key: &str, sid: &str, send_id: &str, pid: u32) {
-    use std::io::Write;
-    let mut o = serde_json::Map::new();
-    o.insert("v".into(), serde_json::json!(1));
-    o.insert("ts".into(), serde_json::json!(OLD_TS));
-    o.insert("pid".into(), serde_json::json!(pid));
-    o.insert("seq".into(), serde_json::json!(0));
-    o.insert("session".into(), serde_json::json!(sid));
-    o.insert("event".into(), serde_json::json!("send-initiated"));
-    o.insert("send_id".into(), serde_json::json!(send_id));
-    o.insert("verb".into(), serde_json::json!("send:pty"));
-    o.insert("send_path".into(), serde_json::json!("idle"));
-    // NO content_sha256 / chunk_sha256s — the legacy/foreign record.
-    let line = serde_json::Value::Object(o).to_string();
-    let path = sessions_dir.join(format!("{key}.events.jsonl"));
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .unwrap();
-    writeln!(f, "{line}").unwrap();
+fn write_send_initiated_no_sha(j: &Jail, key: &str, sid: &str, send_id: &str, pid: u32) {
+    let line = |send_path: &str| {
+        let mut o = serde_json::Map::new();
+        o.insert("v".into(), serde_json::json!(1));
+        o.insert("ts".into(), serde_json::json!(OLD_TS));
+        o.insert("pid".into(), serde_json::json!(pid));
+        o.insert("seq".into(), serde_json::json!(0));
+        o.insert("session".into(), serde_json::json!(sid));
+        o.insert("event".into(), serde_json::json!("send-initiated"));
+        o.insert("send_id".into(), serde_json::json!(send_id));
+        o.insert("verb".into(), serde_json::json!("send:pty"));
+        o.insert("send_path".into(), serde_json::json!(send_path));
+        // NO content_sha256 / chunk_sha256s — the legacy/foreign record.
+        serde_json::Value::Object(o).to_string()
+    };
+    append_line(&j.intent_dir, key, &line("intent"));
+    append_line(&j.sessions_dir, key, &line("idle"));
 }
 
 // =========================================================================
@@ -225,7 +264,7 @@ fn live_writer_send_is_refused() {
     // OLD ts → the §7 age gate passes; the ONLY thing that can refuse recovery is the
     // liveness check. A recent ts would give a false-pass via the age gate.
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-live",
         "sid-live",
         "live-1",
@@ -287,7 +326,7 @@ fn dead_writer_orphan_unresolvable_transcript_left_dangling() {
     // projects dir) → dead-dangling, and build_window's offset-absent resolve fails →
     // SourceUnavailable. The orphan is LEFT UNRESOLVED (no terminal), not abandoned.
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-dead-a",
         "sid-dead-a",
         "orphan-a",
@@ -347,7 +386,7 @@ fn dead_writer_orphan_readable_no_candidate_recovers_abandoned() {
     );
 
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-nr",
         "sid-nr",
         "nr-1",
@@ -418,7 +457,7 @@ fn attack_h_offset_present_unreadable_left_dangling_then_recovers() {
     chmod(&transcript, 0o000);
 
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-h1",
         "sid-h1",
         "h1-1",
@@ -474,7 +513,7 @@ fn attack_h_offset_absent_unresolvable_left_dangling_then_recovers() {
     // the jail's projects dir → build_window's resolve_transcript fails →
     // SourceUnavailable → NO terminal (must NOT foreclose).
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         sid,
         sid,
         "h2-1",
@@ -540,7 +579,7 @@ fn empty_window_left_dangling_then_recovers_when_window_grows() {
     // ZERO candidates past the anchor → (b) EmptyWindow → NO terminal.
     let transcript = write_empty_transcript(j._root.path(), "empty_window.jsonl");
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-ew",
         "sid-ew",
         "ew-1",
@@ -594,7 +633,7 @@ fn missing_content_sha_recovers_unattributable() {
     let j = jail();
     let dead_pid = known_dead_pid();
     // A dead-dangling send-initiated lacking content_sha256 (legacy/foreign record).
-    write_send_initiated_no_sha(&j.sessions_dir, "sid-un", "sid-un", "un-1", dead_pid);
+    write_send_initiated_no_sha(&j, "sid-un", "sid-un", "un-1", dead_pid);
 
     let (ok, stdout) = run_recover(&j, None);
     assert!(ok, "verb exits 0; stdout: {stdout}");
@@ -636,7 +675,7 @@ fn dead_writer_orphan_recovers_anchored_from_transcript() {
     let transcript = write_transcript(j._root.path(), "t2b.jsonl", msg);
 
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-dead-b",
         "sid-dead-b",
         "orphan-b",
@@ -693,7 +732,7 @@ fn targeted_send_id_only_recovers_that_send() {
         "an unrelated user turn that is not the targeted send",
     );
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-t",
         "sid-t",
         "want",
@@ -705,7 +744,7 @@ fn targeted_send_id_only_recovers_that_send() {
         Some(&want_transcript),
     );
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-t",
         "sid-t",
         "leave",
@@ -751,7 +790,7 @@ fn relay_send_is_not_swept() {
     // recovery-read would find no candidate and manufacture a false pending-abandoned;
     // the verb must SKIP it (relay sends resolve via their recipient observer, C5/C6).
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-relay",
         "sid-relay",
         "relay-1",
@@ -796,7 +835,7 @@ fn partial_write_that_landed_is_recovered_not_false_failed() {
     // Post-partial-write dead-dangling state: send-initiated (busy-queued), NO terminal
     // (the door minted none per R5), writer dead, old ts.
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-pw",
         "sid-pw",
         "pw-1",
@@ -859,7 +898,7 @@ fn watch_interrupted_that_landed_is_recovered_not_false_failed() {
     // submitted), NO terminal (the door minted none per rider 2), writer dead, old
     // ts. (send_path is immaterial to recovery — it keys on transcript+offset+sha.)
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-wi",
         "sid-wi",
         "wi-1",
@@ -928,7 +967,7 @@ fn watch_interrupted_with_no_candidate_recovers_abandoned() {
         "an unrelated user turn that is not the interrupted send at all",
     );
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-wi-nc",
         "sid-wi-nc",
         "wi-nc-1",
@@ -1005,7 +1044,7 @@ fn wait_died_that_landed_is_recovered_not_false_failed() {
     // Dead-dangling ledger the Died arm leaves: send-initiated (bytes acked, turn
     // submitted), NO terminal, dead writer, old ts.
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-died",
         "sid-died",
         "died-1",
@@ -1058,7 +1097,7 @@ fn wait_died_with_no_candidate_recovers_abandoned() {
         "an unrelated user turn that is not the sent message before the session died",
     );
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-died-nc",
         "sid-died-nc",
         "died-nc-1",
@@ -1117,7 +1156,7 @@ fn wait_timedout_that_landed_is_recovered_not_false_failed() {
     let msg = "a --wait send that anchored then merely timed out waiting for the reply";
     let transcript = write_transcript(j._root.path(), "timedout.jsonl", msg);
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-to",
         "sid-to",
         "to-1",
@@ -1164,7 +1203,7 @@ fn priming_stalled_that_landed_is_recovered_not_false_failed() {
     let transcript = write_transcript(j._root.path(), "stalled.jsonl", msg);
     // The priming ledger: send-initiated verb "new-p", NO terminal, dead writer.
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-stall",
         "sid-stall",
         "stall-1",
@@ -1212,7 +1251,7 @@ fn priming_pidfile_missing_that_landed_is_recovered_not_false_failed() {
     let msg = "a -p priming prompt whose bytes landed before the pid file vanished";
     let transcript = write_transcript(j._root.path(), "pidmiss.jsonl", msg);
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-pidm",
         "sid-pidm",
         "pidm-1",
@@ -1264,7 +1303,7 @@ fn priming_pidfile_missing_with_no_candidate_recovers_abandoned() {
         "an unrelated priming turn that is not the sent prompt before the pid file vanished",
     );
     write_send_initiated(
-        &j.sessions_dir,
+        &j,
         "sid-pidm-nc",
         "sid-pidm-nc",
         "pidm-nc-1",
@@ -1335,7 +1374,7 @@ fn concurrent_recover_emits_exactly_one_terminal() {
             "an unrelated user turn that is not the concurrently-recovered send",
         );
         write_send_initiated(
-            &j.sessions_dir,
+            &j,
             "sid-c",
             "sid-c",
             "conc-1",

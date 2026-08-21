@@ -8,7 +8,7 @@
 #   - a5_lifecycle_live.sh      G-L1..G-L6 (+ G-L6c sweep-belt bite) live-jail
 #   - bootstrap_output_audit.sh G-B1/G-B3/G-B4/G-B5/G-N2
 #   - a3_state_assertions.sh    A5-reconciled state assertions (G-R1)
-#   - run_selftests.sh          normalizers/jail/secret-scan/record-gate/fetch-zmx (G-R1)
+#   - run_selftests.sh          normalizers/jail/secret-scan/record-gate (G-R1)
 #   - a5rec_*.sh via verify.sh   G-REC corpus round-trip
 #
 # This driver ADDS the rows that have no standalone scenario:
@@ -271,7 +271,7 @@ if [ "${A5_GATE_SKIP_LIVE:-0}" != "1" ]; then
         bash "$HERE/a5_lifecycle_live.sh"
     invoke "G-R1.sa"  "a3_state_assertions (A5-reconciled)" \
         env A3_SKIP_BUILD=1 bash "$HERE/a3_state_assertions.sh"
-    invoke "G-R1.self" "run_selftests (normalize/jail/secret-scan/record-gate/fetch-zmx)" \
+    invoke "G-R1.self" "run_selftests (normalize/jail/secret-scan/record-gate)" \
         bash "$REPO_ROOT/test/golden/selftest/run_selftests.sh"
     # G-REC corpus round-trip via verify.sh (each a5rec_* scenario). Clean env per
     # the invoke() rationale — verify.sh establishes its own jail.

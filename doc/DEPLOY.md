@@ -35,10 +35,19 @@ Known live paths:
 
 ## Steps (machine-agnostic)
 
+> **`qd` does not deploy alone.** Since the qd/qw split, `qd` spawns a sibling
+> `qw` binary to do the session work, resolving it as a sibling of its OWN path
+> and never via `PATH` (ADR-0020). So a deploy that replaces `qd` and not `qw`
+> leaves a new `qd` next to an old `qw`, and the wire's version handshake will
+> refuse — loudly, by design, which is better than the silent skew it prevents,
+> but it is still a broken machine. **Deploy the pair, in the same directory,
+> from the same build.** Step 5b below is not optional.
+
 ```sh
-# 1. Build release from the merged main.
+# 1. Build release from the merged main — BOTH binaries, one commit.
 cd <repo> && git checkout main && git merge --ff-only origin/main
-./scripts/build-lock.sh cargo build --release -p quorum-dispatch     # -> target/release/qd
+./scripts/build-lock.sh cargo build --release -p quorum-dispatch -p quorum-qw
+#   -> target/release/qd  and  target/release/qw
 
 # 2. Resolve the live path and sanity-check the fresh binary against the LIVE fleet.
 LIVE="$(command -v qd)"
@@ -57,11 +66,24 @@ case "$(uname)" in Darwin) codesign --force --sign - "$LIVE.new" ;; esac
 # than the budget against your real, live ledger (read-only; ls never mutates). Only on
 # success does it `mv -f "$LIVE.new" "$LIVE"`.
 ./scripts/deploy-gate.sh "$LIVE.new" "$LIVE" --smoke-args ls --budget-secs 2
+
+# 5b. The sibling qw, into the SAME directory (ADR-0020). Same gate, same script:
+# it is generic by argument, and `qw build-profile` is both the profile check and
+# the smoke verb — qw's other verbs (`serve`, `attach`) are wire endpoints that
+# block on stdin, so there is nothing else to time. Half a gate, honestly labelled,
+# on the binary that now runs the session work the 2026-07-07 outage was about.
+QW="$(dirname "$LIVE")/qw"
+cp target/release/qw "$QW.new"
+case "$(uname)" in Darwin) codesign --force --sign - "$QW.new" ;; esac
+./scripts/deploy-gate.sh "$QW.new" "$QW" --smoke-args build-profile --budget-secs 2
+
 # macOS legacy only: keep ~/.local/bin/qdr in sync as the rollback-source rust binary.
 case "$(uname)" in Darwin) cp target/release/qd ~/.local/bin/qdr && codesign --force --sign - ~/.local/bin/qdr ;; esac
 
-# 6. Verify.
+# 6. Verify — including that the pair is a pair.
 qd --version && sha256sum "$LIVE" 2>/dev/null | cut -c1-16 || shasum -a 256 "$LIVE" | cut -c1-16
+ls -l "$(dirname "$LIVE")/qw"    # must exist, same mtime-ish as qd, same build
+qd ls >/dev/null && echo "lane opens OK"   # this is what actually exercises qd -> qw
 ```
 
 ## The deploy gate: `scripts/deploy-gate.sh`
@@ -99,6 +121,13 @@ reach `~/.quorum/bin` by — an exhaustive audit found two more:
   LIVE installed `~/.quorum/bin/{qd,qf}` for build-profile + real-scale latency and FAILs loud on
   either. This is the universal post-install backstop for any path that can't be pre-gated in code.
 
+`qw` (ADR-0020) rides the same three paths, with the profile half of the gate:
+`qrm`'s `place_colocated_binary` places it beside `qd` and refuses a debug build;
+`install.sh` builds and installs it alongside; and `qrm doctor` adds a **`sibling`**
+check — `qd` installed *without* `qw` beside it is a FAIL, not a warning, because
+that `qd` cannot open a lane at all. `qw` is deliberately absent from the `resolve`
+checks: it is not on `PATH` and must not be.
+
 ## Why NOT `cp` straight over the live binary
 
 `cp` writes **in place** into the live, possibly memory-mapped inode. On macOS the OS then SIGKILLs
@@ -110,7 +139,10 @@ signature (and changes its sha — expected); Linux needs no signing step.
 
 ## Rollback
 
-`mv` a kept backup (e.g. `"$LIVE.bak-YYYYMMDD-*"`) back over the live path. The deeper cutover
+`mv` a kept backup (e.g. `"$LIVE.bak-YYYYMMDD-*"`) back over the live path. **Roll
+back `qw` with it** — the two are version-locked at runtime, so rolling back `qd`
+alone reproduces the skew the handshake refuses on. Keep a `qw.bak-*` beside the
+`qd` one for exactly this. The deeper cutover
 rollback (the retired TS engine) is in the workspace runbook `exec/stage2-rollback-runbook.md`.
 
 ## Relay registration is a separate, per-machine step

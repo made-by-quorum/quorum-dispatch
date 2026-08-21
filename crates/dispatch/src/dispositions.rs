@@ -55,8 +55,8 @@ use crate::effects::Env;
 use crate::paths::QdPaths;
 
 pub use quorum_dispositions::{
-    has_delivered, parse_dispositions, parse_log, project_one, project_summary,
-    DispositionEvent, Envelope, EventKind, ReadResult, SummaryRecord, SummaryState,
+    has_delivered, parse_dispositions, parse_log, project_one, project_summary, DispositionEvent,
+    Envelope, EventKind, ReadResult, SummaryRecord, SummaryState,
 };
 
 // ===========================================================================
@@ -166,7 +166,10 @@ fn claim_lock_path(paths: &QdPaths, correlation_id: &str) -> std::path::PathBuf 
         use std::fmt::Write;
         let _ = write!(hex, "{byte:02x}");
     }
-    paths.dispatch_root.join("claims").join(format!("{hex}.lock"))
+    paths
+        .dispatch_root
+        .join("claims")
+        .join(format!("{hex}.lock"))
 }
 
 /// Acquire the exclusive per-`correlation_id` claim lock (BLOCKING `LOCK_EX`),
@@ -715,7 +718,11 @@ mod tests {
         append_envelope(&paths, &env("a", 1, 2)).unwrap();
         append_envelope(&paths, &env("b", 3, 4)).unwrap();
         let r = read_local_log(&paths);
-        let ids: Vec<&str> = r.records.iter().map(|e| e.correlation_id.as_str()).collect();
+        let ids: Vec<&str> = r
+            .records
+            .iter()
+            .map(|e| e.correlation_id.as_str())
+            .collect();
         assert_eq!(ids, vec!["a", "b"], "append order == file order");
     }
 
@@ -781,7 +788,11 @@ mod tests {
         // And every record parsed — none fused or lost (0 corrupt interior).
         let r = read_local_log(&paths);
         assert_eq!(r.corrupt_interior, 0, "no fused/lost records");
-        assert_eq!(r.records.len(), bodies.len(), "every appended record present");
+        assert_eq!(
+            r.records.len(),
+            bodies.len(),
+            "every appended record present"
+        );
     }
 
     #[test]
@@ -795,9 +806,7 @@ mod tests {
         // below proves the LEADING-newline effect; this proves the mechanism, since
         // a partial-write injection is not exercisable at this layer.)
         let src = include_str!("dispositions.rs");
-        let start = src
-            .find("fn append_line(")
-            .expect("append_line must exist");
+        let start = src.find("fn append_line(").expect("append_line must exist");
         // Scope to the fn body: it ends at the next top-level item boundary.
         let after = &src[start..];
         let end = after
@@ -875,7 +884,10 @@ mod tests {
              LOST; the leading-newline `\\n{{line}}\\n` self-delimiting write keeps it. got {ids:?}"
         );
         // Only the torn R2 fragment is lost — bounded to the torn record alone.
-        assert!(!ids.contains(&"R2"), "the torn R2 fragment is (correctly) the only loss");
+        assert!(
+            !ids.contains(&"R2"),
+            "the torn R2 fragment is (correctly) the only loss"
+        );
     }
 
     // ---- concurrent-append safety (validates the flock guard) --------------
@@ -950,9 +962,15 @@ mod tests {
     fn seed_remote(paths: &QdPaths, host: &str, envs: &[Envelope], events: &[DispositionEvent]) {
         let dir = paths.remote_dir().join(host);
         std::fs::create_dir_all(&dir).unwrap();
-        let log: String = envs.iter().map(|e| format!("{}\n", e.to_jsonl_line())).collect();
+        let log: String = envs
+            .iter()
+            .map(|e| format!("{}\n", e.to_jsonl_line()))
+            .collect();
         std::fs::write(paths.remote_log_path(host), log).unwrap();
-        let dp: String = events.iter().map(|d| format!("{}\n", d.to_jsonl_line())).collect();
+        let dp: String = events
+            .iter()
+            .map(|d| format!("{}\n", d.to_jsonl_line()))
+            .collect();
         std::fs::write(paths.remote_dispositions_path(host), dp).unwrap();
     }
 
@@ -994,11 +1012,18 @@ mod tests {
         let (_tmp, paths) = jailed_paths();
         for bad in ["../../etc", "/etc", "..", "a/b"] {
             let err = read_scoped(&paths, &Scope::Host(bad.to_string()), false).unwrap_err();
-            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?} refused at the read seam");
+            assert_eq!(
+                err.kind(),
+                io::ErrorKind::InvalidInput,
+                "{bad:?} refused at the read seam"
+            );
         }
         // A valid host still reads (empty here, but no error).
         let (envs, events) = read_scoped(&paths, &Scope::Host("peerbox".into()), false).unwrap();
-        assert!(envs.is_empty() && events.is_empty(), "a valid absent host is an empty read");
+        assert!(
+            envs.is_empty() && events.is_empty(),
+            "a valid absent host is an empty read"
+        );
     }
 
     #[test]
@@ -1052,13 +1077,21 @@ mod tests {
             // The flat event Vec is identical (sorted-host concatenation) …
             assert_eq!(ev, ev0, "read_scoped event order is invariant across reads");
             // … and so is the projection over it.
-            assert_eq!(project_summary(&[], &ev, 600), s0, "summary is order-invariant");
+            assert_eq!(
+                project_summary(&[], &ev, 600),
+                s0,
+                "summary is order-invariant"
+            );
         }
 
         // And the tie resolves to the SORTED-LAST host's event (hostB's attempted),
         // proving the order is sorted-host, not scan order.
         assert_eq!(ev0.len(), 2, "one event from each host");
-        assert_eq!(ev0[0].kind(), EventKind::DeliveryFailed, "hostA (sorted first)");
+        assert_eq!(
+            ev0[0].kind(),
+            EventKind::DeliveryFailed,
+            "hostA (sorted first)"
+        );
         assert_eq!(ev0[1].kind(), EventKind::Attempted, "hostB (sorted last)");
         assert_eq!(s0.len(), 1);
         assert_eq!(
@@ -1087,13 +1120,21 @@ mod tests {
         // archive=false: archive tier NOT read.
         let (envs, _) = read_scoped(&paths, &Scope::Local, false).unwrap();
         let ids: Vec<&str> = envs.iter().map(|e| e.correlation_id.as_str()).collect();
-        assert_eq!(ids, vec!["hot1"], "archive tier excluded when archive=false");
+        assert_eq!(
+            ids,
+            vec!["hot1"],
+            "archive tier excluded when archive=false"
+        );
 
         // archive=true: archive tier unioned in.
         let (envs, _) = read_scoped(&paths, &Scope::Local, true).unwrap();
         let mut ids: Vec<&str> = envs.iter().map(|e| e.correlation_id.as_str()).collect();
         ids.sort();
-        assert_eq!(ids, vec!["arch1", "hot1"], "archive tier unioned when archive=true");
+        assert_eq!(
+            ids,
+            vec!["arch1", "hot1"],
+            "archive tier unioned when archive=true"
+        );
     }
 
     #[test]
@@ -1107,7 +1148,11 @@ mod tests {
         // read_scoped must still return the one good record (best-effort).
         let (envs, _) = read_scoped(&paths, &Scope::Local, false).unwrap();
         let ids: Vec<&str> = envs.iter().map(|e| e.correlation_id.as_str()).collect();
-        assert_eq!(ids, vec!["good"], "good record survives torn+corrupt siblings");
+        assert_eq!(
+            ids,
+            vec!["good"],
+            "good record survives torn+corrupt siblings"
+        );
     }
 
     // ---- query_summary end-to-end -------------------------------------------
@@ -1129,7 +1174,11 @@ mod tests {
         assert_eq!(d.attempts, 1);
         assert_eq!(d.last_event, Some(EventKind::Delivered));
         // R14.2: origin/authored_at come ONLY from the joined envelope now.
-        assert_eq!(d.origin.as_deref(), Some("brano"), "from the joined envelope");
+        assert_eq!(
+            d.origin.as_deref(),
+            Some("brano"),
+            "from the joined envelope"
+        );
         assert_eq!(d.authored_at, Some(10), "from the joined envelope");
         assert_eq!(d.first_delivered_at, Some(500));
         let p = by_id("p").unwrap();
@@ -1218,12 +1267,18 @@ mod tests {
         let kinds: Vec<EventKind> = a_only.iter().map(|e| e.kind()).collect();
         assert_eq!(
             kinds,
-            vec![EventKind::Attempted, EventKind::DeliveryFailed, EventKind::Delivered]
+            vec![
+                EventKind::Attempted,
+                EventKind::DeliveryFailed,
+                EventKind::Delivered
+            ]
         );
         assert!(a_only.iter().all(|e| e.correlation_id() == "a"));
 
         // A miss is empty, not an error.
-        assert!(read_events(&paths, &Scope::Local, false, Some("zz")).unwrap().is_empty());
+        assert!(read_events(&paths, &Scope::Local, false, Some("zz"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1248,7 +1303,11 @@ mod tests {
         let s = query_summary(&paths, &Scope::Local, false, 100, Some("r"))
             .unwrap()
             .remove(0);
-        assert_eq!(s.state, SummaryState::Pending, "refused ≠ failed, pending-class");
+        assert_eq!(
+            s.state,
+            SummaryState::Pending,
+            "refused ≠ failed, pending-class"
+        );
         assert_eq!(s.last_event, Some(EventKind::Refused));
         assert_eq!(s.attempts, 0, "refused is not an attempt");
     }
@@ -1258,15 +1317,24 @@ mod tests {
     #[test]
     fn has_delivered_event_true_only_when_a_delivered_event_exists() {
         let (_tmp, paths) = jailed_paths();
-        assert!(!has_delivered_event(&paths, "x").unwrap(), "no file ⇒ false");
+        assert!(
+            !has_delivered_event(&paths, "x").unwrap(),
+            "no file ⇒ false"
+        );
         append_event(&paths, &attempted("x", 4)).unwrap();
         assert!(
             !has_delivered_event(&paths, "x").unwrap(),
             "attempted alone is not delivered"
         );
         append_event(&paths, &delivered("x", 5)).unwrap();
-        assert!(has_delivered_event(&paths, "x").unwrap(), "delivered event ⇒ true");
-        assert!(!has_delivered_event(&paths, "y").unwrap(), "other id ⇒ false");
+        assert!(
+            has_delivered_event(&paths, "x").unwrap(),
+            "delivered event ⇒ true"
+        );
+        assert!(
+            !has_delivered_event(&paths, "y").unwrap(),
+            "other id ⇒ false"
+        );
     }
 
     #[test]
@@ -1340,12 +1408,23 @@ mod tests {
         let (_tmp, paths) = jailed_paths();
         let claims_dir = paths.dispatch_root.join("claims");
         let p = claim_lock_path(&paths, "01ABC");
-        assert_eq!(p.parent().unwrap(), claims_dir, "lock files live under claims/");
+        assert_eq!(
+            p.parent().unwrap(),
+            claims_dir,
+            "lock files live under claims/"
+        );
         let name = p.file_name().unwrap().to_string_lossy();
-        assert!(name.ends_with(".lock") && name.len() == 64 + ".lock".len(), "got {name}");
+        assert!(
+            name.ends_with(".lock") && name.len() == 64 + ".lock".len(),
+            "got {name}"
+        );
         // The cid is HASHED (64 hex chars) — a path-unsafe cid can never traverse.
         let evil = claim_lock_path(&paths, "../../etc/passwd");
-        assert_eq!(evil.parent().unwrap(), claims_dir, "a slashy cid stays confined to claims/");
+        assert_eq!(
+            evil.parent().unwrap(),
+            claims_dir,
+            "a slashy cid stays confined to claims/"
+        );
         assert_eq!(
             evil.file_name().unwrap().to_string_lossy().len(),
             64 + ".lock".len(),
@@ -1353,7 +1432,10 @@ mod tests {
         );
         // Distinct ids ⇒ distinct lock files; the same id ⇒ the same file.
         assert_ne!(claim_lock_path(&paths, "a"), claim_lock_path(&paths, "b"));
-        assert_eq!(claim_lock_path(&paths, "same"), claim_lock_path(&paths, "same"));
+        assert_eq!(
+            claim_lock_path(&paths, "same"),
+            claim_lock_path(&paths, "same")
+        );
     }
 
     #[test]

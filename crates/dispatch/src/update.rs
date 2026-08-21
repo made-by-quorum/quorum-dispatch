@@ -287,7 +287,11 @@ mod tests {
         assert_eq!(out.exit_code, 0);
         assert_eq!(
             s.ran.borrow().as_deref(),
-            Some(["brew", "upgrade", "quorum-dispatch"].map(String::from).as_slice())
+            Some(
+                ["brew", "upgrade", "quorum-dispatch"]
+                    .map(String::from)
+                    .as_slice()
+            )
         );
         assert!(out.report.iter().any(|l| l.contains("Homebrew")));
     }

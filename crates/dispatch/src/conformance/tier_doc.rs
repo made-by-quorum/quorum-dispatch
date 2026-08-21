@@ -18,11 +18,11 @@
 use serde::{Deserialize, Serialize};
 
 use super::ids::{ArtifactDigest, Lane};
+use super::tier::Corpus;
 use super::tier::{
     compute_tier, provider_default_lanes, Citation, RateValue, Tier, TierComputation, TierParams,
     TierVerdict,
 };
-use super::tier::Corpus;
 
 /// The lanes T4 publishes, in a stable published order.
 const PUBLISHED_LANES: [Lane; 5] = [
@@ -34,7 +34,13 @@ const PUBLISHED_LANES: [Lane; 5] = [
 ];
 
 /// The providers T4 badges, in a stable order.
-const PUBLISHED_PROVIDERS: [&str; 5] = ["claude-code", "codex", "acp/claude-code", "acp/opencode", "pi"];
+const PUBLISHED_PROVIDERS: [&str; 5] = [
+    "claude-code",
+    "codex",
+    "acp/claude-code",
+    "acp/opencode",
+    "pi",
+];
 
 // ===========================================================================
 // The publication layer (A10 v7, the two obligations that are NOT per-corpus):
@@ -117,7 +123,10 @@ pub enum PublishError {
     /// NO-ROLLBACK: a CURRENT publication's snapshot ordinal is below a
     /// previously-published current row's — an earlier-anchored refresh is INVALID
     /// (R6-5), never merely "historical-by-accident".
-    RollBack { new_ordinal: u64, prior_ordinal: u64 },
+    RollBack {
+        new_ordinal: u64,
+        prior_ordinal: u64,
+    },
 }
 
 impl std::fmt::Display for PublishError {
@@ -430,7 +439,13 @@ fn designation_boxes(
             for h in &c.designation_history {
                 out.push_str(&format!(
                     "  - ordinal {}: {} → box `{}` — basis: {} — {} (by {}, {})\n",
-                    h.ordinal, h.kind, h.box_id, h.policy_basis, h.rationale, h.authorized_by, h.timestamp
+                    h.ordinal,
+                    h.kind,
+                    h.box_id,
+                    h.policy_basis,
+                    h.rationale,
+                    h.authorized_by,
+                    h.timestamp
                 ));
             }
         }
@@ -480,7 +495,9 @@ fn render_citation(out: &mut String, cit: &Citation) {
         (Some(o), Some(t)) => out.push_str(&format!(
             "- Anchoring publication-snapshot: ordinal {o}, attested {t}\n"
         )),
-        _ => out.push_str("- Anchoring publication-snapshot: — (not anchored — invalid evidence)\n"),
+        _ => {
+            out.push_str("- Anchoring publication-snapshot: — (not anchored — invalid evidence)\n")
+        }
     }
 }
 

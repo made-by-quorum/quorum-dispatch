@@ -48,9 +48,7 @@ pub use evidence::{
     BoxCoverageRecord, CellResolution, CommissioningHeader, CommissioningTuple, Gate, Observation,
     Outcome, ProofOfRun, RunArtifact, RunArtifactBuilder, RunMode, Runner,
 };
-pub use grid::{
-    mint_grid, persist_artifact, read_run_dir, CellStatus, GridRow, GridVerdict,
-};
+pub use grid::{mint_grid, persist_artifact, read_run_dir, CellStatus, GridRow, GridVerdict};
 pub use ids::{
     AggregationVersion, ArtifactDigest, AttributionSeq, BoxId, CellId, CommissionToken,
     JournalOrdinal, Lane, LaneScope, LaunchNonce, ManifestDigest, ObservationId, RecordId, RunId,

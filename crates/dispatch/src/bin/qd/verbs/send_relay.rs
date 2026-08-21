@@ -22,9 +22,10 @@ use dispatch::exec::RealExec;
 use dispatch::model::Session;
 use dispatch::relay::{self, PidEntryRef, RelayContract, RelayError, RelayReply};
 use dispatch::relay_http::CcRelay;
+use quorum_qw::delivery;
 
-use super::acp_loss;
 use super::common;
+use super::send_unified::CarrierOutcome;
 
 /// Default `--wait` timeout in seconds (send.ts:354, `"120"`).
 const DEFAULT_TIMEOUT_S: u64 = 120;
@@ -47,85 +48,24 @@ pub fn run(m: &ArgMatches) -> i32 {
     run_with_client(query, message, wait, timeout_s, &client)
 }
 
-/// Unified-send entry into the existing Claude relay injection path. The
-/// unified selector supplies the port captured from the already-resolved
-/// registry row, so this function performs no fast lookup or second target
-/// resolution. A failed POST is returned as a relay failure; this function has
-/// no PTY fallback branch.
-pub(super) fn run_claude_relay_unified(
-    session: &Session,
-    message: &str,
-    relay_port: u16,
-) -> i32 {
-    use dispatch::provider::{InjectError, ProviderFx, SessionKey};
-
-    let name = session
-        .name
-        .clone()
-        .unwrap_or_else(|| session.session_id.clone());
-    let Some(provider_impl) = dispatch::provider::provider_for("claude-code") else {
-        eprintln!(
-            "qd send: unknown provider \"claude-code\" — relay delivery is unavailable."
-        );
-        return 1;
-    };
-    let client = CcRelay::new();
-    let from_session = derive_from_session(&RealEnv);
-
-    // Build ProviderFx inline (same as inject_via_provider) so we can supply the
-    // resolved session UUID as SessionKey.id, keeping display name separate.
-    // inject_via_provider uses name as both id and name (send:relay fast path has
-    // no Session row); unified send always has the full resolved Session.
-    let env = RealEnv;
-    let home = env.var("HOME").filter(|s| !s.is_empty());
-    let paths = dispatch::paths::QdPaths::from_home(std::path::Path::new(
-        home.as_deref().unwrap_or("/"),
-    ));
-    let fx = ProviderFx {
-        await_relay: None,
-        env: &env,
-        paths: &paths,
-        socket_dir: paths.sessions_dir.clone(),
-        mux: None,
-        clock: None,
-        sleeper: None,
-        relay: Some(&client),
-        relay_port: Some(relay_port),
-        app_server: None,
-        codex_expected_turn_id: None,
-        acp_client: None,
-        pi_rpc: None,
-        acp_pre_dispatch: None,
-    };
-    // QS-2 identity: resolved UUID pins the injection identity; name is display only.
-    let key = SessionKey {
-        id: &session.session_id,
-        name: Some(&name),
-        cwd: None,
-        pid: None,
-    };
-    let message_id = match provider_impl.inject(&fx, &key, message, &from_session) {
-        Ok(id) => id,
-        Err(InjectError::RelayFailed(e)) => {
-            eprintln!("Failed to send message: {}", send_err_text(&e));
-            return 1;
-        }
-        Err(InjectError::NoTransport(_)) => {
-            return no_relay_exit(&name, message, None);
-        }
-        Err(InjectError::Precondition(reason)) => {
-            eprintln!("Failed to send message: {reason}");
-            return 1;
-        }
-    };
-
-    // Reuse the relay carrier's existing evidence and output semantics. A POST
-    // acknowledgement is represented as queued/delivered, never as a reply.
-    emit_relay_send_events(&name, Some(session), message, &message_id);
-    println!("{message_id}");
-    invoked_send_relay(&name);
-    0
-}
+// -- THE `claude_relay` CARRIER IS NOT HERE ANY MORE -----------------------
+//
+// `run_claude_relay_unified` lived here, as the unified send's entry into the
+// Claude relay injection path, and `LaneOps::deliver` called back UP into it
+// through `quorum_qw::Carriers`. Phase 3B moved the body to
+// `quorum_qw::delivery::relay::send_claude_relay` and the lane now calls it
+// directly, so the wrapper had exactly one caller left -- the lane -- and a
+// wrapper whose only caller is the thing it was written to avoid is not a
+// wrapper. It is deleted rather than left `#[allow(dead_code)]`.
+//
+// The explicit `qd send:relay` verb below never used it: it injects through
+// `inject_via_provider`, which is a different identity contract (name-as-id,
+// because the fast path has no `Session` row) and is pinned as such.
+//
+// The three daemon carriers' wrappers DO survive, further down -- `qd send:relay`
+// routes to them directly for a codex / `acp/*` / pi row -- and each is
+// `quorum_qw::delivery::render` over the core, the same one-line printing layer
+// `LaneOps::deliver` uses.
 
 /// The verb body, parameterized on the relay client so tests inject a fake.
 fn run_with_client(
@@ -177,7 +117,12 @@ fn run_with_client(
             // byname-keyed) then fail loud.
             return no_relay_exit(&session_name, message, None);
         };
-        return run_codex_send(&session, message);
+        // `.code` — the three daemon carriers answer a `CarrierOutcome` since
+        // stage-2 phase 4 so `LaneOps::deliver` can key a `Receipt` on the turn
+        // id they mint. `send:relay` is a verb, not a lane: it wants the exit
+        // code and nothing else, and the code is UNCHANGED by the widening. Same
+        // at the acp and pi arms below.
+        return run_codex_send(&session, message).code;
     }
 
     // scoped-ACP-CC (residence SEND): an `acp/*` row is a daemon-hosted ACP thread with
@@ -187,7 +132,7 @@ fn run_with_client(
         let Some(session) = session else {
             return no_relay_exit(&session_name, message, None);
         };
-        return run_acp_send(&session, message);
+        return run_acp_send(&session, message).code;
     }
 
     // WS-A.5: a pi row's SEND is a live model TURN — reconnect to the resident pi-daemon's
@@ -199,7 +144,7 @@ fn run_with_client(
         let Some(session) = session else {
             return no_relay_exit(&session_name, message, None);
         };
-        return run_pi_send(&session, message);
+        return run_pi_send(&session, message).code;
     }
 
     // No port on the resolved session → "has no relay." exit 1 (send.ts:406-409).
@@ -230,7 +175,7 @@ fn run_with_client(
         );
         return 1;
     };
-    let from_session = derive_from_session(&RealEnv);
+    let from_session = delivery::derive_from_session(&RealEnv);
 
     let message_id = match inject_via_provider(
         provider_impl,
@@ -252,7 +197,14 @@ fn run_with_client(
     // returned message_id above); this is purely the LOCAL event log — the wire
     // is byte-untouched and the one-way invariant holds (dispatch knows nothing of
     // its consumers; a consumer adopts these lines by content_sha256 + send_id). Best-effort.
-    emit_relay_send_events(&session_name, session.as_ref(), message, &message_id);
+    delivery::emit_relay_send_events(
+        &RealEnv,
+        &RealClock,
+        &session_name,
+        session.as_ref(),
+        message,
+        &message_id,
+    );
 
     if !wait {
         // Async: print the message_id and exit 0 (send.ts:437-440).
@@ -268,300 +220,6 @@ fn run_with_client(
         invoked_send_relay(&session_name);
     }
     code
-}
-
-/// §X (3-phase delivery) — relay on-sent + on-queued emission.
-///
-/// Writes `send-initiated` (the EXISTING `Payload::SendInitiated` constructed
-/// with relay values, §X.3.1 — NOT a bare 2-field record) and `relay-delivered`
-/// (§X.3.2, non-terminal) into the **TARGET's** delivery log, keyed to the target
-/// uuid when the full-scan path resolved a `Session` row, else the
-/// `byname-<target>` file (a consumer merges both, §1.4 G5). `send_id = message_id`;
-/// `content_sha256 = sha256(raw caller message bytes)` (§X.4 — the SAME bytes
-/// the consumer hashes into its own on-sent marker). The relay `send-initiated`
-/// carries NO prose (`content_preview` omitted — a privacy improvement, §X.7).
-///
-/// BEST-EFFORT: a write failure (or an unresolvable HOME) is logged by
-/// `warn_emit` and NEVER affects the send result — the message already left and
-/// the relay WIRE is untouched.
-fn emit_relay_send_events(
-    target_name: &str,
-    target_session: Option<&Session>,
-    message: &str,
-    message_id: &str,
-) {
-    // Production uses the real process env; the logic lives in the env-injected
-    // inner fn so the Tier-2 seam test can drive the REAL emit against an isolated
-    // tmp HOME with no process-env race (the I1 sender-side proof).
-    emit_relay_send_events_with_env(&RealEnv, target_name, target_session, message, message_id);
-}
-
-fn emit_relay_send_events_with_env(
-    env: &dyn Env,
-    target_name: &str,
-    target_session: Option<&Session>,
-    message: &str,
-    message_id: &str,
-) {
-    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
-        // No HOME → cannot resolve the state dir; emission is best-effort.
-        return;
-    };
-    let state_dir =
-        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
-
-    // Key to the TARGET (not the sender): full-scan → target uuid; fast path
-    // (Session unknown) → the `byname-<target>` file (session omitted, §X.3.1).
-    let writer = match target_session {
-        Some(s) => dispatch::events::EventWriter::for_key(
-            &state_dir,
-            &s.session_id,
-            Some(s.session_id.clone()),
-            s.name.clone(),
-        ),
-        None => dispatch::events::EventWriter::for_key(
-            &state_dir,
-            &dispatch::events::byname_key(target_name),
-            None,
-            Some(target_name.to_string()),
-        ),
-    };
-
-    let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
-    let clock = RealClock;
-
-    // on-sent — REUSE Payload::SendInitiated with the §X.3.1 relay values.
-    dispatch::events::warn_emit(
-        &writer,
-        &clock,
-        &dispatch::events::Payload::SendInitiated {
-            send_id: message_id.to_string(),
-            verb: "send:relay".to_string(),
-            send_path: "relay".to_string(),
-            content_sha256: content_sha256.clone(),
-            content_len: message.as_bytes().len() as u64,
-            chunks: 1,
-            chunk_sha256s: vec![content_sha256.clone()],
-            chunk_sha256s_capped: false,
-            transcript: None,
-            transcript_offset: None,
-            content_preview: None,
-        },
-    );
-    // on-queued — relay-delivered (§X.3.2), NON-terminal.
-    dispatch::events::warn_emit(
-        &writer,
-        &clock,
-        &dispatch::events::Payload::RelayDelivered {
-            send_id: message_id.to_string(),
-            content_sha256,
-        },
-    );
-}
-
-/// C5/C3 (3-phase delivery, DAEMON lanes) — emit the SENT + DELIVERED phases into
-/// the TARGET's log on inject-SUCCESS, for the codex / `acp/*` / pi resident arms.
-/// `send-initiated` (sent — the REUSED `Payload::SendInitiated` with daemon values:
-/// verb `send:relay`, `send_path` the lane, `send_id` the resident-minted turn id)
-/// + `turn-accepted` (delivered, NON-terminal — the resident took the prompt as a
-/// turn). The success TERMINAL lands later at the OBSERVATION seam (`run_acp_wait`
-/// StopReason-mapped; `run_pi_wait` content-keyed rollout observer), NEVER here —
-/// so between this and observation the send reads as non-terminal DELIVERED =
-/// PENDING (gate item 3), honest.
-///
-/// NO `transcript`/`transcript_offset` recovery keys are carried: a resident send
-/// is OBSERVER-closed, and `qd delivery:recover`'s sweep is verb-gated to
-/// {`send:pty`, `new-p`} (recover.rs) — so this `send-initiated` (verb `send:relay`)
-/// is out of that sweep by construction and can never be mistaken for a
-/// transcript-recoverable pty dangling. `content_sha256` = sha256(raw message),
-/// the SAME key the observer/consumer matches on. BEST-EFFORT: a write failure is
-/// logged by `warn_emit` and never affects the send result.
-fn emit_daemon_send_events(
-    target_name: &str,
-    target_session: Option<&Session>,
-    message: &str,
-    turn_id: &str,
-    send_path: &str,
-) {
-    emit_daemon_send_events_with_env(
-        &RealEnv,
-        target_name,
-        target_session,
-        message,
-        turn_id,
-        send_path,
-    );
-}
-
-fn emit_daemon_send_events_with_env(
-    env: &dyn Env,
-    target_name: &str,
-    target_session: Option<&Session>,
-    message: &str,
-    turn_id: &str,
-    send_path: &str,
-) {
-    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
-        return;
-    };
-    let state_dir =
-        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
-    // Key to the TARGET, exactly as the relay + door emitters do.
-    let writer = match target_session {
-        Some(s) => dispatch::events::EventWriter::for_key(
-            &state_dir,
-            &s.session_id,
-            Some(s.session_id.clone()),
-            s.name.clone(),
-        ),
-        None => dispatch::events::EventWriter::for_key(
-            &state_dir,
-            &dispatch::events::byname_key(target_name),
-            None,
-            Some(target_name.to_string()),
-        ),
-    };
-    let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
-    let clock = RealClock;
-    // sent — REUSE Payload::SendInitiated with daemon values (no recovery keys).
-    dispatch::events::warn_emit(
-        &writer,
-        &clock,
-        &dispatch::events::Payload::SendInitiated {
-            send_id: turn_id.to_string(),
-            verb: "send:relay".to_string(),
-            send_path: send_path.to_string(),
-            content_sha256: content_sha256.clone(),
-            content_len: message.as_bytes().len() as u64,
-            chunks: 1,
-            chunk_sha256s: vec![content_sha256.clone()],
-            chunk_sha256s_capped: false,
-            transcript: None,
-            transcript_offset: None,
-            content_preview: None,
-        },
-    );
-    // delivered — turn-accepted (NON-terminal): the resident accepted the turn.
-    dispatch::events::warn_emit(
-        &writer,
-        &clock,
-        &dispatch::events::Payload::TurnAccepted {
-            send_id: turn_id.to_string(),
-            content_sha256,
-        },
-    );
-}
-
-/// C5/C3 — emit the daemon-lane success TERMINAL `message-seen{send_id,
-/// content_sha256}` (the FLOOR / record-presence reading) into the TARGET's log,
-/// best-effort. Used by the pi structured FLOOR (`run_pi_floor_send`, the dead-only
-/// sub-lane) once the sent bytes are confirmed present in the appended session
-/// record (content-keyed). The RESIDENT lanes emit their terminal through the
-/// content-keyed observer (`wait::pi_observe_landed_sends`) instead, never here —
-/// driven from BOTH the wait seam and, since the busy-drop fix, the send seam's
-/// bounded landing check ([`pi_confirm_landing`]). A reader recovers the
-/// floor-vs-strong reading from the paired send-initiated's send_path + D4's
-/// table.
-fn emit_daemon_seen(
-    target_name: &str,
-    target_session: Option<&Session>,
-    send_id: &str,
-    content_sha256: &str,
-) {
-    emit_daemon_seen_with_env(&RealEnv, target_name, target_session, send_id, content_sha256);
-}
-
-fn emit_daemon_seen_with_env(
-    env: &dyn Env,
-    target_name: &str,
-    target_session: Option<&Session>,
-    send_id: &str,
-    content_sha256: &str,
-) {
-    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
-        return;
-    };
-    let state_dir =
-        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
-    let writer = match target_session {
-        Some(s) => dispatch::events::EventWriter::for_key(
-            &state_dir,
-            &s.session_id,
-            Some(s.session_id.clone()),
-            s.name.clone(),
-        ),
-        None => dispatch::events::EventWriter::for_key(
-            &state_dir,
-            &dispatch::events::byname_key(target_name),
-            None,
-            Some(target_name.to_string()),
-        ),
-    };
-    dispatch::events::warn_emit(
-        &writer,
-        &RealClock,
-        &dispatch::events::Payload::MessageSeen {
-            send_id: send_id.to_string(),
-            content_sha256: content_sha256.to_string(),
-        },
-    );
-}
-
-/// Concatenate every `*.jsonl` in the pi floor's dedicated `--session-dir` (pi
-/// writes ONE appended session file there under `-c`). The floor content-keys THIS
-/// (the appended record) for its success terminal — not the stdout, which need not
-/// carry the user prompt record.
-fn floor_session_jsonl(session_dir: &std::path::Path) -> String {
-    let mut out = String::new();
-    let Ok(entries) = std::fs::read_dir(session_dir) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|x| x.to_str()) == Some("jsonl") {
-            if let Ok(s) = std::fs::read_to_string(&p) {
-                out.push_str(&s);
-                out.push('\n');
-            }
-        }
-    }
-    out
-}
-
-/// B2 item 5 — derive the `from_session` channel-header identity. Ratified
-/// precedence (Q3; the from_session NAMESPACE is the claude session uuid —
-/// reply routing keys on it, so step 1 RESOLVES to a uuid, never emits the
-/// stable id itself):
-///
-///   1. ENGINE-ASSERTED: `QD_SESSION_ID` — the engine birth property,
-///      explicitly set at every launch (override-never-inherit, the D1 site-4
-///      lesson) — resolved through the idstore to the claude uuid.
-///   2. `CLAUDE_CODE_SESSION_ID` — only when NO engine identity resolves
-///      (bare-shell operator sends from inside a claude session; also the
-///      pre-fix inherited-env channel, now demoted so a leaked env var from a
-///      different session can no longer mis-attribute an engine session's
-///      sends — the punch_b2_item5_repro pin).
-///   3. `"cli"` — bare operator shell.
-///
-/// An QD_SESSION_ID that is malformed, unknown to the store, or still UNBOUND
-/// (mint without a session uuid yet) falls through to (2) — the derivation
-/// never invents an identity. Cost: one `ids.jsonl` read per send (accepted
-/// at the phase-2 checkpoint; `whoami` pays the same read).
-fn derive_from_session(env: &dyn Env) -> String {
-    if let Some(stable) = env.var("QD_SESSION_ID").filter(|s| !s.is_empty()) {
-        if let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) {
-            let paths = dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env);
-            let ids = dispatch::idstore::fold(&dispatch::idstore::ids_path(&paths.state_dir));
-            // The SHARED resolution chain (S4): whoami and attribution answer
-            // "what engine identity resolves?" identically by construction.
-            if let Some(uuid) = dispatch::idstore::resolve_to_uuid(&ids, &stable) {
-                return uuid;
-            }
-        }
-    }
-    env.var("CLAUDE_CODE_SESSION_ID")
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "cli".to_string())
 }
 
 /// Resolve the caller's session UUID via the QD identity chain: `QD_SESSION_ID`
@@ -592,12 +250,14 @@ fn fallback_target_uuid(session: &Session) -> Option<String> {
 /// path yields only a NAME (no sessionId), so we key the invoked line by name —
 /// the fold accepts either. Best-effort: a failure warns but NEVER changes the
 /// verb's exit code (spec §4.1).
+///
+/// The append itself is [`quorum_qw::delivery::append_send_invoked`] (telemetry is
+/// qw's); this is the printing half. The four moved carriers append it inside
+/// their cores and return the warning as a note — only `send:relay`'s OWN paths
+/// still reach it through here.
 fn invoked_send_relay(name: &str) {
-    use dispatch::effects::RealClock;
-    if let Err(e) =
-        dispatch::telemetry::append_invoked(&RealEnv, &RealClock, "send", None, Some(name))
-    {
-        eprintln!("WARNING: telemetry invoked append failed (non-fatal): {e}");
+    if let Some(note) = delivery::append_send_invoked(&RealEnv, &RealClock, name) {
+        eprintln!("{note}");
     }
 }
 
@@ -689,771 +349,128 @@ fn inject_via_provider(
     }
 }
 
-/// codex P2 W6 (codex-p2-spec section 7.5) — the codex SEND ladder at the verb
-/// layer. A codex row is a daemon-hosted protocol thread; `qd send:relay` for it:
+/// The `codex_daemon` carrier's qd half — see
+/// [`quorum_qw::delivery::codex::send_codex`] for the turn ladder itself.
 ///
-///   1. resolve endpoint (the row's recorded registry `endpoint`, re-read by pid —
-///      it is NOT on the human/agent `Session`/`--json` surface, §9.4), thread id
-///      (the row's sessionId, m2), and the rollout path (the row's `jsonl_path`,
-///      else `CodexProvider::transcript_path` under `transcript_root`);
-///   2. connect a `WsAppServer` to the endpoint, `initialize` + `initialized`
-///      (readiness — the same handshake the create path drives);
-///   3. read the rollout tail → `open_turn_id` → BELIEVED state (Some(T) = believed
-///      BUSY, steer T; None = believed IDLE, start fresh);
-///   4. hand the connected rpc + believed turn id to `CodexProvider::inject`, which
-///      drives turn/start | turn/steer{+stale-fence fallback} (the envelopes are
-///      PROVIDER-INTERNAL — this verb only speaks SEND).
+/// VERB-LAYER ADAPTER ONLY: resolve HOME (whose refusal line
+/// `common::paths_from_home` owns and has always printed unattributed as
+/// `qd: HOME is not set …`), then `map_err` + `eprintln!`.
 ///
-/// Returns the process exit code. On success the turn id is printed (the async
-/// `send:relay` prints the message id; the codex analog prints the turn id) and a
-/// invoked line is appended. EVERY user-facing string here is SEND-vocabulary — NO
-/// `turn/start`, `turn/steer`, or `expectedTurnId` ever appears (W2 enforces it in
-/// the rpc layer; the verb keeps it too).
-pub(super) fn run_codex_send(session: &Session, message: &str) -> i32 {
-    use dispatch::provider::codex::{
-        open_turn_id, read_lines, AppServerRpc, ClientInfo, WsAppServer,
-    };
-    use dispatch::provider::{InjectError, Provider, ProviderFx, SessionKey};
-
-    let name = session
-        .name
-        .clone()
-        .unwrap_or_else(|| session.session_id.clone());
-
-    // §C1 (door-inventory B1) — record-then-fail-loud for the codex door's
-    // "not reachable" exits: emit a `send-failed` terminal (best-effort, keyed to
-    // the TARGET session, `send_id` omitted pre-wire) BEFORE the loud exit, so no
-    // codex-door failure is stderr-only. Distinct-wording exits (no-thread-id,
-    // inject error) emit inline. The emit never alters the exit path.
-    let not_reachable = || {
-        emit_door_failure(&name, Some(session), message, "daemon-unreachable");
-        eprintln!(
-            "qd send:relay: \"{name}\": session daemon not reachable (try qd resume {name})"
-        );
-        1
-    };
-
+/// TWO CALLERS, ONE VERB STRING, and it is not obviously the right one. This
+/// wrapper is `qd send:relay <codex-row>`; the unified `qd send` reaches the
+/// same core through `LaneOps::deliver`'s codex/daemon arm, and BOTH stamp
+/// `send:relay`. That is what the pre-move body hard-coded, so it is preserved —
+/// a user who typed `qd send` still reads a line naming `send:relay`. Reported
+/// as a finding rather than fixed: correcting it moves bytes that a dozen pinned
+/// tests read, and it is the same class of bug `ReviveClaudeError` documents.
+pub(super) fn run_codex_send(session: &Session, message: &str) -> CarrierOutcome {
     let env = RealEnv;
+    let clock = RealClock;
+    // The caller mints the send id now that `SendParams` carries one (see
+    // `quorum_qw::contract::Message::id`). NO intent record is written for it:
+    // a resident carrier keys its `send-initiated` on the TURN id its resident
+    // answered with, so a qd record under this id would correlate with nothing,
+    // and `send:relay` is outside `qd delivery:recover`'s verb gate by
+    // construction anyway. The field is filled honestly rather than left blank
+    // so no carrier can be handed an id that is not one.
+    let send_id = dispatch::events::mint_send_id(&clock);
     let paths = match common::paths_from_home(&env) {
         Ok(p) => p,
-        Err(code) => return code,
+        Err(code) => return CarrierOutcome::unkeyed(code),
     };
-
-    // The thread id (m2 — the REAL uuid the daemon assigned) is the row's sessionId.
-    let thread_id = session.session_id.clone();
-    if thread_id.is_empty() {
-        // §C1: cold/dead session — no reachable daemon; record then fail loud.
-        emit_door_failure(&name, Some(session), message, "daemon-unreachable");
-        eprintln!("qd send:relay: \"{name}\": this codex session has no thread id (cold/dead).");
-        return 1;
-    }
-
-    // The endpoint is the registry row's recorded `endpoint` (NOT on the Session /
-    // --json surface — re-read the row by pid). A dead/cold row (no live pid) has
-    // no daemon to reach.
-    let Some(pid) = session.pid.filter(|&p| p != 0) else {
-        return not_reachable();
-    };
-    let endpoint = match dispatch::registry::read_entry(&paths.sessions_dir, pid)
-        .and_then(|e| e.endpoint)
-        .filter(|s| !s.is_empty())
-    {
-        Some(ep) => ep,
-        None => {
-            return not_reachable();
-        }
-    };
-
-    // Connect a fresh short-lived ws client → initialize handshake (readiness).
-    let rpc = match WsAppServer::connect(&endpoint, std::time::Duration::from_secs(5)) {
-        Ok(c) => c,
-        Err(_e) => {
-            // Daemon unreachable (connect failed): the same SEND-vocabulary surface
-            // as a missing endpoint (§7.5).
-            return not_reachable();
-        }
-    };
-    {
-        let client = ClientInfo {
-            name: "qd-manager".to_string(),
-            title: None,
-            version: "0".to_string(),
-        };
-        if rpc.initialize(&client).is_err() {
-            return not_reachable();
-        }
-        let _ = rpc.initialized();
-    }
-
-    // BELIEVED state from the rollout tail: the open turn id (Some ⇒ believed BUSY,
-    // steer it; None ⇒ believed IDLE, start fresh). The tail is the durable truth;
-    // unresolved/unreadable ⇒ None ⇒ believed IDLE (a fresh turn/start), which the
-    // server's own state corrects (a start against a busy thread is the same
-    // believed-idle→actually-busy case the stale-fence closes from the other side).
-    let provider = dispatch::provider::codex::CodexProvider;
-    let rollout_path = session
-        .jsonl_path
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.exists())
-        .or_else(|| {
-            let key = SessionKey {
-                id: &thread_id,
-                name: session.name.as_deref(),
-                cwd: session.cwd.as_deref(),
-                pid: session.pid,
-            };
-            let fx = codex_resolve_fx(&env, &paths);
-            let root = provider.transcript_root(&fx);
-            provider.transcript_path(&root, &key)
-        });
-    let expected_turn_id = rollout_path.and_then(|p| open_turn_id(&read_lines(&p)));
-
-    // Build the fx: the connected rpc + the believed turn id (the relay_port
-    // precedent — endpoint resolved at the verb, an already-connected rpc handed
-    // to inject; the trait never holds a transport handle / endpoint string).
-    let rpc_ref: &dyn AppServerRpc = &rpc;
-    let fx = ProviderFx {
-        await_relay: None,
+    let deps = delivery::SendDeps {
         env: &env,
         paths: &paths,
-        socket_dir: paths.sessions_dir.clone(),
-        mux: None,
-        clock: None,
-        sleeper: None,
-        relay: None,
-        relay_port: None,
-        app_server: Some(rpc_ref),
-        codex_expected_turn_id: expected_turn_id.as_deref(),
-        acp_client: None,
-        pi_rpc: None,
-        acp_pre_dispatch: None,
+        clock: &clock,
     };
-    let key = SessionKey {
-        id: &thread_id,
-        name: session.name.as_deref(),
-        cwd: session.cwd.as_deref(),
-        pid: session.pid,
-    };
-    // B2 item 5: the same engine-asserted derivation as the relay path — one
-    // attribution rule for the whole verb (declared extension; the codex
-    // `from` rides the same channel-header namespace).
-    let from = derive_from_session(&RealEnv);
-
-    let result = provider.inject(&fx, &key, message, &from);
-    // Best-effort close of our short-lived client (the daemon stays up).
-    let _ = rpc.close();
-
-    match result {
-        Ok(turn_id) => {
-            // C5/C3: sent + delivered (turn-accepted) into the TARGET's log on the
-            // inject ACK; the success terminal lands later at the observe seam.
-            emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
-            // The async-send analog: print the id (turn id here), append invoked.
-            println!("{turn_id}");
-            invoked_send_relay(&name);
-            0
-        }
-        Err(InjectError::NoTransport(_)) => {
-            // Structurally unreachable (we set app_server Some) — defensive.
-            not_reachable()
-        }
-        Err(e) => {
-            // A protocol/precondition failure. SEND-vocabulary only (InjectError's
-            // Display carries no start/steer tokens; the rpc-layer error text is
-            // W2-sanitized). §C1: record the door failure before the loud exit.
-            emit_door_failure(&name, Some(session), message, "inject-failed");
-            eprintln!("qd send:relay: \"{name}\": send failed ({e}).");
-            1
-        }
-    }
+    delivery::render(
+        delivery::codex::send_codex(&deps, &delivery::SendParams {
+            session,
+            message,
+            send_id: &send_id,
+        }),
+        "send:relay",
+    )
 }
 
-/// scoped-ACP-CC residence SEND path (S7). The ACP analog of [`run_codex_send`]:
-/// re-read the row's recorded `endpoint`, verify the resident adapter's IDENTITY
-/// (pid alive AND the live `/proc` cmdline carries our `acp-daemon --listen
-/// <endpoint>` — S6, defeats PID reuse), derive the tier from `(provider,
-/// transport-field, endpoint-alive)`.
+/// The `acp_daemon` carrier's qd half — BOTH acp lanes. See
+/// [`quorum_qw::delivery::acp::send_acp`] for the residence send path, the
+/// transport-loss disposition and the four identity-preservation sites.
 ///
-/// **Transport-loss disposition (Child D, opencode D1 — clerk-4's Arm-B
-/// ratification, bond note 01KX01BY7G): `acp/claude-code` is a NAMED DIVERGENCE.
-/// On ANY transport loss this verb REFUSES and surfaces (the same
-/// "not reachable (try qd resume …)" class as `codex`/`acp/opencode`, exit 1) —
-/// with the session's identity first preserved in the qd-owned tombstone store
-/// ([`dispatch::tombstone`]; `acp_loss::preserve_identity`). There is NO
-/// auto-deliver path: Child B's degrade+latch+companion-drive machinery was
-/// REMOVED (not gated), so unreachability is structural.** pi's auto-deliver
-/// floor (`provider/pi/floor.rs`, [`run_pi_send`]) is the deliberately separate,
-/// untouched realization of D1's graceful degrade.
-///
-/// Three refusal-relevant lanes:
-///   - **entry-lane dead** (no live pid, dead endpoint, or a historical
-///     `transport=="pty"` latch — anything but a healthy structured tier) →
-///     preserve identity + refuse. Pre-send vs post-send history no longer
-///     changes the disposition: both refuse (post-send always refused; pre-send
-///     joined it under Arm B).
-///   - **`AcpConnection::connect` fails** → RE-PROBE liveness+identity, then
-///     split (the round-1 TOCTOU fix; ladder's `classify_connect_failure`):
-///     still alive + verified ⇒ a genuine wedge, refuse with NO tombstone
-///     (live-pid row is not janitor-reapable); now dead / identity gone ⇒ the
-///     daemon died across the probe→connect boundary ⇒ preserve identity +
-///     refuse. See the `Err(_)` arm below and ladder.rs clause 3 (including
-///     the stated wedge-dies-later residual).
-///   - **mid-flight `NoTransport`** (a live connect, then the `session/prompt`
-///     dispatch itself fails) → preserve identity + refuse. The
-///     `acp_pre_dispatch` hook may have JUST durably marked
-///     `structured_send_issued=true` before the failure (the exactly-once
-///     dispatch-timing guard, kept intact) — that record is wire-history truth,
-///     it just no longer selects a different disposition.
-///
-/// `QD_ACP_PTY_FLOOR_DISABLE` is now a NO-OP: it gated only the retired floor
-/// drive, and refusal is the unconditional behavior it used to select.
-///
-/// **Scope of the tombstone: `acp/claude-code` only.** `acp_loss::preserve_identity`
-/// self-gates on the provider, so `acp/opencode` (which also routes through this
-/// fn) keeps its byte-identical plain refusal — no store write, no extra output.
-pub(super) fn run_acp_send(session: &Session, message: &str) -> i32 {
-    use dispatch::provider::acp::{
-        classify_connect_failure, derive_tier, AcpClient, AcpConnection, ConnectFailure, Tier,
-        ACP_CC_PROVIDER,
-    };
-    use dispatch::provider::{InjectError, Provider, ProviderFx, SessionKey};
-
-    let name = session.name.clone().unwrap_or_default();
+/// VERB-LAYER ADAPTER ONLY: `map_err` + `eprintln!`. Note that the
+/// identity-preservation line is a NOTE rather than an error — it is printed
+/// BEFORE the refusal it precedes, exactly where the pre-move body wrote it.
+pub(super) fn run_acp_send(session: &Session, message: &str) -> CarrierOutcome {
     let env = RealEnv;
+    let clock = RealClock;
+    // The caller mints the send id now that `SendParams` carries one (see
+    // `quorum_qw::contract::Message::id`). NO intent record is written for it:
+    // a resident carrier keys its `send-initiated` on the TURN id its resident
+    // answered with, so a qd record under this id would correlate with nothing,
+    // and `send:relay` is outside `qd delivery:recover`'s verb gate by
+    // construction anyway. The field is filled honestly rather than left blank
+    // so no carrier can be handed an id that is not one.
+    let send_id = dispatch::events::mint_send_id(&clock);
     let paths = match common::paths_from_home(&env) {
         Ok(p) => p,
-        Err(code) => return code,
+        Err(code) => return CarrierOutcome::unkeyed(code),
     };
-    // §C1 (door-inventory B2) — record-then-fail-loud: every acp-door "not
-    // reachable" exit leaves a `send-failed` account (best-effort, keyed to the
-    // TARGET session, `send_id` omitted pre-wire) BEFORE the loud exit, so no
-    // acp-door failure is stderr-only. `reason` names the surface. Serves BOTH
-    // acp/claude-code AND acp/opencode (both route through this arm). The emit
-    // never alters the exit path; the identity-preservation tombstone is unchanged.
-    let not_reachable = |reason: &str| {
-        emit_door_failure(&name, Some(session), message, reason);
-        eprintln!(
-            "qd send:relay: \"{name}\": acp session daemon not reachable (try qd resume {name})"
-        );
-        1
-    };
-
-    let Some(pid) = session.pid.filter(|&p| p != 0) else {
-        // A row with no live pid is already-lost transport (the janitor may
-        // have reaped the registry row entirely) — preserve identity, refuse.
-        acp_loss::preserve_identity(session, "acp session has no live daemon pid at send entry");
-        return not_reachable("daemon-unreachable");
-    };
-    // The endpoint + degradation latch live in the row (re-read by pid; NOT on --json).
-    let entry = dispatch::registry::read_entry(&paths.sessions_dir, pid);
-    let endpoint = entry
-        .as_ref()
-        .and_then(|e| e.endpoint.clone())
-        .filter(|s| !s.is_empty());
-    let transport_field = entry.as_ref().and_then(|e| e.transport.clone());
-
-    // S6 identity + liveness: a connect-success is liveness, NOT identity — the cmdline
-    // (+ pid liveness) is the identity fence against PID reuse.
-    let cmdline = dispatch::create_daemon::real_cmdline_probe(pid);
-    let endpoint_alive = endpoint.is_some()
-        && dispatch::effects::is_pid_alive(pid as i32)
-        && dispatch::acp_residence::cmdline_is_our_acp_daemon(cmdline.as_deref(), endpoint.as_deref());
-
-    let tier = derive_tier("acp/claude-code", transport_field.as_deref(), endpoint_alive);
-
-    if tier != Tier::Acp {
-        // Entry-lane transport loss (dead endpoint, or a historical pty latch):
-        // the named-divergence disposition — preserve identity (qd-owned store,
-        // acp/claude-code only; a no-op for acp/opencode, whose refusal stays
-        // byte-identical), then refuse to the human-recovery surface. Whether a
-        // structured send was ever issued no longer branches here: pre-send and
-        // post-send loss BOTH refuse (Arm B — the Child-B pre-send auto-deliver
-        // was removed, not gated).
-        acp_loss::preserve_identity(session, "acp endpoint not reachable at send entry");
-        return not_reachable("daemon-unreachable");
-    }
-    let endpoint = endpoint.expect("Tier::Acp implies a live endpoint");
-
-    let conn = match AcpConnection::connect(&endpoint, Duration::from_secs(5)) {
-        Ok(c) => c,
-        Err(_) => {
-            // F2 (red-team round 1) + the round-1 TOCTOU fix: `tier == Tier::Acp`
-            // proved `endpoint_alive` BEFORE connect, but that probe cannot
-            // confirm liveness ACROSS the connect boundary — a daemon can die in
-            // the window and its row is then janitor-reapable. So RE-PROBE now
-            // and classify (ladder's `classify_connect_failure`):
-            //   - still alive + identity-verified ⇒ a genuine wedge: refuse with
-            //     NO tombstone (live-pid row is not janitor-reapable; `qd resume`
-            //     kills + restarts — the only safe way to clear a wedge). A
-            //     wedge that dies LATER with no further qd interaction is the
-            //     ACCEPTED residual — stated + defended in ladder.rs clause 3
-            //     (next interaction hits the entry lane; ids.jsonl + the CC
-            //     transcript carry the recovery-critical identity regardless).
-            //   - now dead / identity gone ⇒ it died across the boundary: a
-            //     transport LOSS — preserve identity, then the same refusal.
-            // Never a floor drive either way.
-            let pid_alive_now = dispatch::effects::is_pid_alive(pid as i32);
-            let cmdline_is_ours_now = dispatch::acp_residence::cmdline_is_our_acp_daemon(
-                dispatch::create_daemon::real_cmdline_probe(pid).as_deref(),
-                Some(endpoint.as_str()),
-            );
-            if classify_connect_failure(pid_alive_now, cmdline_is_ours_now)
-                == ConnectFailure::TransportLost
-            {
-                acp_loss::preserve_identity(
-                    session,
-                    "acp daemon died across the connect boundary (was live at the pre-connect probe)",
-                );
-            }
-            return not_reachable("daemon-unreachable");
-        }
-    };
-    let conn_ref: &dyn AcpClient = &conn;
-    // Child B exactly-once guard: durably mark `structured_send_issued=true` the
-    // MOMENT this turn's bytes are confirmed on the wire (see
-    // `AcpConnection::prompt`) — before we know whether the reply ever arrives.
-    // Never gated on `inject`'s `Ok` return: a crash or socket drop right after
-    // dispatch must still leave this true for the NEXT process to read.
-    let sessions_dir = paths.sessions_dir.clone();
-    let mark_dispatched = || {
-        if let Some(mut e) = dispatch::registry::read_entry(&sessions_dir, pid) {
-            if e.structured_send_issued != Some(true) {
-                e.structured_send_issued = Some(true);
-                if let Err(err) = dispatch::registry::write_entry(&sessions_dir, &e) {
-                    eprintln!(
-                        "qd send:relay: could not persist the structured-send marker: {err}"
-                    );
-                }
-            }
-        }
-    };
-    let fx = ProviderFx {
-        await_relay: None,
+    let deps = delivery::SendDeps {
         env: &env,
         paths: &paths,
-        socket_dir: paths.sessions_dir.clone(),
-        mux: None,
-        clock: None,
-        sleeper: None,
-        relay: None,
-        relay_port: None,
-        app_server: None,
-        codex_expected_turn_id: None,
-        acp_client: Some(conn_ref),
-        pi_rpc: None,
-        // F3 (red-team round 2, Child B era — the rule KEPT under Child D): this
-        // hook is installed UNCONDITIONALLY. The historical bug was gating it on
-        // the floor's disable flag (`floor_disabled()`, retired with the floor):
-        // a send that dispatched but failed on the reply-read left
-        // `structured_send_issued` unset — a false "never sent" history, which
-        // in the auto-degrade era could double-deliver. The floor and its flag
-        // are gone (every loss now refuses), but the rule stands: recording
-        // that bytes reached the wire is history truth, never gated — the
-        // resume seam consumes it, and a false record misleads any future
-        // reader (registry.rs's field doc carries the current framing).
-        acp_pre_dispatch: Some(&mark_dispatched),
+        clock: &clock,
     };
-    let key = SessionKey {
-        id: &session.session_id,
-        name: session.name.as_deref(),
-        cwd: session.cwd.as_deref(),
-        pid: session.pid,
-    };
-    let from = derive_from_session(&RealEnv);
-    match ACP_CC_PROVIDER.inject(&fx, &key, message, &from) {
-        Ok(turn_id) => {
-            // C5/C3: sent + delivered (turn-accepted) into the TARGET's log on the
-            // inject ACK; the StopReason-mapped terminal lands later in run_acp_wait.
-            emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
-            println!("{turn_id}");
-            invoked_send_relay(&name);
-            0
-        }
-        Err(InjectError::Precondition(s)) => {
-            // §C1: a refused/precondition inject (queue full, etc.) — record the
-            // door failure before the loud exit.
-            emit_door_failure(&name, Some(session), message, "inject-failed");
-            eprintln!("qd send:relay: \"{name}\": send failed ({s}).");
-            1
-        }
-        Err(err @ InjectError::NoTransport(_)) => {
-            // Mid-flight transport loss (a live connect, then the dispatch
-            // itself failed): the same named-divergence refusal as the
-            // entry-lane arm. `mark_dispatched` may have JUST durably recorded
-            // `structured_send_issued=true` (bytes confirmed on the wire before
-            // the failure — the exactly-once guard, kept) — wire-history truth,
-            // but no longer a disposition branch: pre-send and post-send loss
-            // both refuse (Arm B).
-            acp_loss::preserve_identity(
-                session,
-                &format!("acp transport lost mid-flight ({err})"),
-            );
-            not_reachable("transport-lost")
-        }
-        Err(_) => not_reachable("daemon-unreachable"),
-    }
+    delivery::render(
+        delivery::acp::send_acp(&deps, &delivery::SendParams {
+            session,
+            message,
+            send_id: &send_id,
+        }),
+        "send:relay",
+    )
 }
 
-/// WS-A.5 pi residence SEND path. The pi analog of [`run_acp_send`]: re-read the row's
-/// recorded `endpoint`, verify the resident pi-daemon's IDENTITY (pid alive AND the live
-/// `/proc` cmdline carries our `pi-daemon --listen <endpoint>` marker — defeats PID reuse:
-/// a connect-success is liveness, the cmdline + recorded endpoint is identity), connect a
-/// fresh short-lived [`PiRemote`] to the resident ws front, and drive `PiProvider::inject`.
+/// The `pi_daemon` carrier's qd half — the resident, floor sub-lane included. See
+/// [`quorum_qw::delivery::pi::send_pi`].
 ///
-/// `inject` mints a live turn via `prompt{streamingBehavior:"steer"}` — a single call that
-/// starts a fresh turn when the resident is idle and steers the open turn when busy (no
-/// per-turn believed-state read; contrast the codex `expectedTurnId` ladder). On success the
-/// minted turn id is printed (the async-send analog — the codex/acp arms print the turn id
-/// too). Events do NOT return through this client (`PiRemote::next_event` is `Ok(None)` by
-/// design — the resident routes pi's stream into the registry sink); a caller wanting the
-/// turn OUTCOME reads the registry/transcript, not the send reply. A dead/wrong-identity
-/// endpoint or a failed connect DEGRADES to the SEND "not reachable" surface — never a hang
-/// on a dead endpoint, never a fake.
-pub(super) fn run_pi_send(session: &Session, message: &str) -> i32 {
-    use dispatch::provider::pi::residence::cmdline_is_our_pi_daemon;
-    use dispatch::provider::pi::{PiProvider, PiRemote, PiRpc};
-    use dispatch::provider::{InjectError, Provider, ProviderFx, SessionKey};
-
-    let name = session.name.clone().unwrap_or_default();
+/// VERB-LAYER ADAPTER ONLY: resolve HOME and the process cwd (the floor's
+/// one-shot child inherits it when the row records none — a library reading
+/// `current_dir()` would be a hidden input), then `map_err` + `eprintln!`.
+///
+/// The floor sub-lane answers `echo_id: false`: it is a synchronous one-shot that
+/// reports on stderr and has never printed an id, so
+/// [`quorum_qw::delivery::render`] prints none.
+pub(super) fn run_pi_send(session: &Session, message: &str) -> CarrierOutcome {
     let env = RealEnv;
+    let clock = RealClock;
+    // The caller mints the send id now that `SendParams` carries one (see
+    // `quorum_qw::contract::Message::id`). NO intent record is written for it:
+    // a resident carrier keys its `send-initiated` on the TURN id its resident
+    // answered with, so a qd record under this id would correlate with nothing,
+    // and `send:relay` is outside `qd delivery:recover`'s verb gate by
+    // construction anyway. The field is filled honestly rather than left blank
+    // so no carrier can be handed an id that is not one.
+    let send_id = dispatch::events::mint_send_id(&clock);
     let paths = match common::paths_from_home(&env) {
         Ok(p) => p,
-        Err(code) => return code,
+        Err(code) => return CarrierOutcome::unkeyed(code),
     };
-    // §C1 (door-inventory B3, resident door) — record-then-fail-loud: every
-    // pi-door "not reachable" exit leaves a `send-failed` account (best-effort,
-    // keyed to the target session, `send_id` omitted pre-wire) BEFORE the loud
-    // exit. `reason` names the surface; the emit never alters the exit path.
-    let not_reachable = |reason: &str| {
-        emit_door_failure(&name, Some(session), message, reason);
-        eprintln!(
-            "qd send:relay: \"{name}\": pi session daemon not reachable (try qd resume {name})"
-        );
-        1
-    };
-
-    // Identity + liveness fence (residence S6): a connect-success is liveness only — the
-    // live cmdline carrying OUR `pi-daemon --listen <endpoint>` marker (+ pid alive + a
-    // recorded endpoint) is the identity guard against PID reuse.
-    let pid = session.pid.filter(|&p| p != 0);
-    // The endpoint lives in the registry row (re-read by pid; NOT on the --json surface).
-    let endpoint = pid
-        .and_then(|pid| dispatch::registry::read_entry(&paths.sessions_dir, pid))
-        .and_then(|e| e.endpoint)
-        .filter(|s| !s.is_empty());
-    let (pid_alive, cmdline_is_ours) = match pid {
-        Some(pid) => {
-            let cmdline = dispatch::create_daemon::real_cmdline_probe(pid);
-            (
-                dispatch::effects::is_pid_alive(pid as i32),
-                cmdline_is_our_pi_daemon(cmdline.as_deref(), endpoint.as_deref()),
-            )
-        }
-        None => (false, false),
-    };
-
-    // A6.1 DEAD-ONLY floor (super-22 acceptance condition 8): when the native rpc
-    // resident is PROVABLY DEAD/GONE (no pid / pid dead / wrong-identity cmdline /
-    // missing endpoint — the S6 "not reachable" branch) DROP to the structured
-    // `-p --mode json` floor instead of erroring. A LIVE identity-verified resident
-    // NEVER floors — even the failed/slow ws connect below stays "not reachable" (the
-    // rpc retry/steer surface), because a one-shot `-c --session-dir` concurrent with
-    // the resident's OPEN session JSONL would race/corrupt it (single-writer safety).
-    // dead ⇒ floor + reuse-dir; alive ⇒ never floor.
-    if dispatch::provider::pi::floor::floor_may_fire(
-        pid.is_some(),
-        pid_alive,
-        cmdline_is_ours,
-        endpoint.is_some(),
-    ) {
-        return run_pi_floor_send(session, message, &env, &paths);
-    }
-    let endpoint = endpoint.expect("live identity-verified resident implies a recorded endpoint");
-
-    // Connect a fresh short-lived remote to the resident ws front (the AcpConnection
-    // fail-fast discipline — a contended connect fails fast rather than hanging).
-    let remote = match PiRemote::connect(&endpoint, Duration::from_secs(5)) {
-        Ok(r) => r,
-        Err(_) => return not_reachable("daemon-unreachable"),
-    };
-    let rpc_ref: &dyn PiRpc = &remote;
-    let fx = ProviderFx {
-        await_relay: None,
+    let fallback_cwd =
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let deps = delivery::pi::PiSendDeps {
         env: &env,
         paths: &paths,
-        socket_dir: paths.sessions_dir.clone(),
-        mux: None,
-        clock: None,
-        sleeper: None,
-        relay: None,
-        relay_port: None,
-        app_server: None,
-        codex_expected_turn_id: None,
-        acp_client: None,
-        pi_rpc: Some(rpc_ref),
-            acp_pre_dispatch: None,
+        clock: &clock,
+        fallback_cwd,
     };
-    let key = SessionKey {
-        id: &session.session_id,
-        name: session.name.as_deref(),
-        cwd: session.cwd.as_deref(),
-        pid: session.pid,
-    };
-    let from = derive_from_session(&RealEnv);
-    // PRE-inject busy read, for the DISPOSITION of the post-send landing check
-    // below — NOT for routing (inject does its own, later, read: see
-    // `PiProvider::inject`). A busy resident means inject will route `FollowUp`,
-    // i.e. the message is QUEUED behind the open turn and legitimately lands
-    // minutes from now — polling the rollout for it would burn the window and
-    // prove nothing. An unreadable probe is treated as idle (we poll, and a
-    // no-show is reported as pending, which is the honest answer either way).
-    let queued = remote.get_state().map(|st| st.is_streaming);
-    let queued_behind_open_turn = queued.unwrap_or(false);
-    let result = PiProvider.inject(&fx, &key, message, &from);
-    // Best-effort close of our short-lived client (the resident daemon stays up).
-    let _ = remote.close();
-    match result {
-        Ok(turn_id) => {
-            // C5/C3: sent + delivered (turn-accepted) into the TARGET's log on the
-            // inject ACK — NON-terminal.
-            emit_daemon_send_events(&name, Some(session), message, &turn_id, &session.provider);
-            // The terminal used to be reachable ONLY through the wait observer, so
-            // a plain fire-and-forget send left a turn-accepted with no terminal
-            // and nothing to contradict it — a dropped message was indistinguishable
-            // from a delivered one. Close the loop HERE, bounded, for the send that
-            // is expected to land NOW.
-            if queued_behind_open_turn {
-                eprintln!(
-                    "qd send:relay: \"{name}\": queued behind the open turn (follow-up); \
-                     delivery stays PENDING until it runs (qd wait {name} resolves it)."
-                );
-            } else if pi_confirm_landing(&env, &paths, session, message, PI_LANDING_WINDOW) {
-                eprintln!("qd send:relay: \"{name}\": landed (message-seen).");
-            } else {
-                // NO terminal — the send stays recoverable. Never a hard "didn't
-                // land": the rollout write may simply be slower than the window.
-                eprintln!(
-                    "qd send:relay: \"{name}\": accepted, but not yet present in the \
-                     rollout after {}ms — delivery PENDING, not confirmed.",
-                    PI_LANDING_WINDOW.as_millis()
-                );
-            }
-            // The async-send analog: print the minted turn id, append invoked.
-            println!("{turn_id}");
-            invoked_send_relay(&name);
-            0
-        }
-        Err(InjectError::Precondition(s)) => {
-            // A refused/timed-out prompt (PA9: the sink stays idle) — SEND-vocabulary only.
-            // §C1: record the door failure before the loud exit.
-            emit_door_failure(&name, Some(session), message, "inject-failed");
-            eprintln!("qd send:relay: \"{name}\": send failed ({s}).");
-            1
-        }
-        Err(_) => not_reachable("daemon-unreachable"),
-    }
-}
-
-/// How long the SEND seam waits for a pi prompt to appear in the rollout before
-/// reporting the send as PENDING. Bounded and short: this is a confirmation
-/// window, not a wait — a message that has not been written as a user record by
-/// now is one the resident has not taken up, and saying so beats a silent
-/// turn-accepted. `qd wait` remains the unbounded resolver.
-const PI_LANDING_WINDOW: Duration = Duration::from_millis(2000);
-const PI_LANDING_POLL: Duration = Duration::from_millis(100);
-
-/// The SEND-seam half of the pi content-keyed observer: poll the resident's
-/// rollout for at most [`PI_LANDING_WINDOW`] for the sent bytes as a USER record
-/// (content-keyed on the send's `content_sha256`, the same key the wait observer
-/// and the dead-only floor sub-lane match on). On a hit, drive
-/// [`super::wait::pi_observe_landed_sends`] to emit the `message-seen` TERMINAL
-/// into the target's log and return true.
-///
-/// Returns false — and emits NOTHING — when the window closes with no record.
-/// That is deliberately NOT a `seen-failed`: an un-landed-yet send is
-/// indistinguishable from a slow rollout write, so it stays PENDING/recoverable,
-/// per the "never claim didn't-land" rule the recovery keys are built on.
-fn pi_confirm_landing(
-    env: &dyn Env,
-    paths: &dispatch::paths::QdPaths,
-    session: &Session,
-    message: &str,
-    window: Duration,
-) -> bool {
-    let Some(rollout_path) = session
-        .jsonl_path
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.exists())
-    else {
-        return false;
-    };
-    let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
-    let deadline = std::time::Instant::now() + window;
-    loop {
-        let rollout = std::fs::read_to_string(&rollout_path).unwrap_or_default();
-        if dispatch::provider::pi::floor::rollout_landed(&rollout, &content_sha256) {
-            super::wait::pi_observe_landed_sends(env, paths, session);
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(PI_LANDING_POLL);
-    }
-}
-
-/// A6.1 pi structured-floor SEND — the DEAD-ONLY fallback lane. Reached from
-/// [`run_pi_send`] ONLY when the native rpc resident is provably dead (the S6
-/// identity+liveness fence failed; [`dispatch::provider::pi::floor::floor_may_fire`]).
-/// Delivers the turn via a ONE-SHOT `pi -p --mode json -c --session-dir <dedicated>`
-/// child and captures the outcome SCRAPE-FREE from the `turn_end`/`agent_end` ndjson
-/// (see [`dispatch::provider::pi::floor`]). Continuity = `-c` + one dedicated
-/// per-qd-session `--session-dir` (turn-2 resumes turn-1's single appended session
-/// file). The drop is OBSERVABLE (a stderr drop-log line — a degradation is never
-/// silent; pi's own floor doctrine, `provider/pi/floor.rs`). pi's OWN settings cred (openai-codex, `~/.pi/agent`) is inherited —
-/// NEVER a `--provider`/credential override or swap.
-fn run_pi_floor_send(
-    session: &Session,
-    message: &str,
-    env: &RealEnv,
-    paths: &dispatch::paths::QdPaths,
-) -> i32 {
-    use dispatch::provider::pi::{floor, PiProvider};
-    use dispatch::provider::Provider;
-
-    let name = session.name.clone().unwrap_or_default();
-
-    // pi binary: the QD_PI_BIN override (pi is NOT on PATH in quorum boxes) else "pi".
-    let pi_bin = env
-        .var("QD_PI_BIN")
-        .filter(|b| !b.is_empty())
-        .unwrap_or_else(|| "pi".to_string());
-
-    // pi's sessions root off env ONLY (PI_CODING_AGENT_SESSION_DIR else
-    // $HOME/.pi/agent/sessions) — reuse the provider's public resolver via a minimal
-    // env-only fx (transcript_root reads fx.env, never paths).
-    let fx = pi_resolve_fx(env, paths);
-    let sessions_root = PiProvider.transcript_root(&fx);
-    // One dedicated floor dir per qd-session, isolated from the rpc resident's
-    // sessions so `-c`'s most-recent pick is unambiguous + turn-2 resumes turn-1.
-    let session_dir = floor::floor_session_dir(&sessions_root, &session.session_id);
-    if let Err(e) = std::fs::create_dir_all(&session_dir) {
-        // §C1 (door-inventory B4, dead-only floor door) — record then fail loud.
-        emit_door_failure(&name, Some(session), message, "floor-setup-failed");
-        eprintln!("qd send:relay: \"{name}\": pi floor could not create session dir: {e}");
-        return 1;
-    }
-    let continue_session = floor::dir_has_session(&session_dir);
-    let cwd = session
-        .cwd
-        .as_deref()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        });
-
-    // Observable degrade (never silent — pi's floor doctrine; the Child-B ACP
-    // ladder's analogous drop-log was retired with that floor in Child D).
-    eprintln!(
-        "{}",
-        floor::floor_drop_log_line(&name, "native rpc resident not identity-verified")
-    );
-
-    let turn = floor::FloorTurn {
-        pi_bin: &pi_bin,
-        session_dir: &session_dir,
-        cwd: &cwd,
-        prompt: message,
-        continue_session,
-    };
-    match floor::run_floor_turn(&turn, floor::DEFAULT_FLOOR_TIMEOUT) {
-        Ok(outcome) => {
-            // C5/C3 (obligation (c), the DEAD-ONLY floor sub-lane): emit the three
-            // phases into the target's log. The floor is a SYNCHRONOUS one-shot, so
-            // sent + delivered + the success TERMINAL all resolve here — but the
-            // terminal is CONTENT-KEYED against the APPENDED session record (the
-            // floor's own observation seam; its `stopReason` readback is NOT the
-            // resident observer). A minted send_id anchors all three (the floor has
-            // no resident turn id). Best-effort; never alters the exit.
-            let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
-            let send_id = dispatch::events::mint_send_id(&RealClock);
-            emit_daemon_send_events(&name, Some(session), message, &send_id, "pi");
-            if dispatch::provider::pi::floor::rollout_landed(
-                &floor_session_jsonl(&session_dir),
-                &content_sha256,
-            ) {
-                emit_daemon_seen(&name, Some(session), &send_id, &content_sha256);
-            }
-            // Best-effort structured delivery: the turn landed and was captured
-            // scrape-free. The outcome persists in the appended session file (the
-            // transcript-read analog of the async rpc send). Confirm delivery on
-            // stderr; SEND-vocabulary only.
-            eprintln!(
-                "qd send:relay: \"{name}\": delivered via pi structured floor (stopReason={}).",
-                outcome.stop_reason.as_deref().unwrap_or("?")
-            );
-            invoked_send_relay(&name);
-            0
-        }
-        Err(e) => {
-            // §C1: the dead-only floor turn failed to deliver — record then fail loud.
-            emit_door_failure(&name, Some(session), message, "floor-failed");
-            eprintln!("qd send:relay: \"{name}\": pi floor delivery failed ({e}).");
-            1
-        }
-    }
-}
-
-/// A minimal `ProviderFx` for resolving pi's env-only `transcript_root`
-/// (`PI_CODING_AGENT_SESSION_DIR`/$HOME — never paths). Borrow lifetimes are
-/// bounded by the caller's `env`/`paths`.
-fn pi_resolve_fx<'a>(
-    env: &'a RealEnv,
-    paths: &'a dispatch::paths::QdPaths,
-) -> dispatch::provider::ProviderFx<'a> {
-    dispatch::provider::ProviderFx {
-        await_relay: None,
-        env,
-        paths,
-        socket_dir: paths.sessions_dir.clone(),
-        mux: None,
-        clock: None,
-        sleeper: None,
-        relay: None,
-        relay_port: None,
-        app_server: None,
-        codex_expected_turn_id: None,
-        acp_client: None,
-        pi_rpc: None,
-            acp_pre_dispatch: None,
-    }
-}
-
-/// A minimal `ProviderFx` for resolving the codex `transcript_root` off env only
-/// (codex's `transcript_root` reads `fx.env` $CODEX_HOME/$HOME — never paths). The
-/// borrow lifetimes are bounded by the caller's `env`/`paths`.
-fn codex_resolve_fx<'a>(
-    env: &'a RealEnv,
-    paths: &'a dispatch::paths::QdPaths,
-) -> dispatch::provider::ProviderFx<'a> {
-    dispatch::provider::ProviderFx {
-        await_relay: None,
-        env,
-        paths,
-        socket_dir: paths.sessions_dir.clone(),
-        mux: None,
-        clock: None,
-        sleeper: None,
-        relay: None,
-        relay_port: None,
-        app_server: None,
-        codex_expected_turn_id: None,
-        acp_client: None,
-        pi_rpc: None,
-        acp_pre_dispatch: None,
-    }
+    delivery::render(
+        delivery::pi::send_pi(&deps, &delivery::SendParams {
+            session,
+            message,
+            send_id: &send_id,
+        }),
+        "send:relay",
+    )
 }
 
 /// Resolve `(relay_port, session_name, provider_id)` for `query`. The port is
@@ -1558,16 +575,38 @@ fn resolve_relay_port(
 /// entries + relay ports + ppid map). Mirror of the I/O the TS
 /// `fastRelayLookup` does inline (session.ts:1281, 1289, 1293-1298).
 /// Whether a registry row's provider participates in the relay FAST PATH (F4 guard).
-/// Daemon-hosted providers (`codex` / `acp/*`) do NOT: they carry no relay port and must
+/// Non-relay providers do NOT: they carry no relay port and must
 /// take the full-scan fallback so `send:relay` routes to their own SEND ladder. Without
 /// this exclusion the fast path matches such a row BY NAME and resolves a relay via PID
 /// ANCESTRY (a claude relay up the spawn chain) — mis-delivering the send (caught live:
 /// the first acp send returned a relay id, not a turn id). Pinned by
 /// `daemon_providers_excluded_from_relay_fast_path` so the fix cannot silently regress.
+///
+/// **This is NOT `qd send`'s carrier selection and it did not go with it.** The
+/// duplicated routing (`send_unified::select_carrier` and friends) is retired in
+/// favour of `LaneOps::deliver`; this gates a DIFFERENT verb's registry
+/// fast-LOOKUP filter (`qd send:relay`), which runs before any session is
+/// resolved and therefore has no lane to ask. Deleting it re-opens F4.
+///
+/// **DRIFT CORRECTED (this change), because it was real.** The exclusion list was
+/// `codex` and `acp/*` and nothing else, which left TWO providers that carry no
+/// relay port inside the fast path:
+///
+///   - `pi` — both of its lanes. A pi resident's receive path is its ws endpoint
+///     and a pi TUI's is its pane; neither is a relay, so a pi row matched here by
+///     name could only ever resolve someone else's relay up the spawn chain. That
+///     is the F4 shape exactly, one provider over.
+///   - `opencode` — the CLI alias for `acp/opencode` (`Harness::from_provider_id`
+///     accepts both, and `join.rs` emits rows carrying the bare token). The
+///     `acp/` prefix test does not match it, so the alias walked straight past a
+///     guard written for the thing it is an alias OF.
+///
+/// The rule is now stated as what it means — the relay is claude-code's carrier,
+/// and only claude-code's — with every non-relay provider named.
 fn provider_uses_relay_fast_path(provider: Option<&str>) -> bool {
     // An absent provider reads as claude-code at the boundary (relay-capable).
     let p = provider.unwrap_or("claude-code");
-    p != "codex" && !p.starts_with("acp/")
+    p != "codex" && p != "pi" && p != "opencode" && !p.starts_with("acp/")
 }
 
 struct FastLookup {
@@ -1671,7 +710,7 @@ fn real_session_access(session: &Session) -> (SessionAccess, Option<u16>) {
 /// (door-inventory §A). `target_session` keys the log to the target uuid when the
 /// full-scan row is known, else the `byname-<target>` file.
 fn no_relay_exit(name: &str, message: &str, target_session: Option<&Session>) -> i32 {
-    emit_door_failure(name, target_session, message, "no-relay");
+    delivery::emit_door_failure(&RealEnv, &RealClock, name, target_session, message, "no-relay");
     eprintln!("Session \"{name}\" has no relay.");
     1
 }
@@ -1686,71 +725,24 @@ fn bare_destination_message(name: &str) -> String {
 }
 
 fn bare_destination_exit(name: &str, message: &str, target_session: Option<&Session>) -> i32 {
-    emit_door_failure(name, target_session, message, "non-receivable-bare");
+    delivery::emit_door_failure(
+        &RealEnv,
+        &RealClock,
+        name,
+        target_session,
+        message,
+        "non-receivable-bare",
+    );
     eprintln!("{}", bare_destination_message(name));
     1
 }
 
 /// §C1 — emit a single `send-failed` terminal at a send DOOR (best-effort).
-/// Serves BOTH the relay door (`no_relay_exit`, D1) AND the daemon protocol arms
-/// (codex/`acp/*`/pi — D2's `run_codex_send`/`run_acp_send`/`run_pi_send`/
-/// `run_pi_floor_send`): every carrier's door failure funnels its `send-failed`
-/// here, so no door reads as "someone else's child" (door-inventory §A/§B).
-/// Mirrors [`emit_relay_send_events`]'s target-keying and content hashing but
-/// emits ONE failure record instead of the success pair. `send_id` is OMITTED
-/// (spec `send-failed { send_id?, reason }`): a resolved pre-wire door has no
-/// server-minted / resident-minted id yet — never client-invented. `content_sha256`
-/// is carried for correlation; `reason` is a short surface token (extend additively).
-fn emit_door_failure(
-    target_name: &str,
-    target_session: Option<&Session>,
-    message: &str,
-    reason: &str,
-) {
-    emit_door_failure_with_env(&RealEnv, target_name, target_session, message, reason);
-}
-
-fn emit_door_failure_with_env(
-    env: &dyn Env,
-    target_name: &str,
-    target_session: Option<&Session>,
-    message: &str,
-    reason: &str,
-) {
-    let Some(home) = env.var("HOME").filter(|s| !s.is_empty()) else {
-        // No HOME → cannot resolve the state dir; emission is best-effort.
-        return;
-    };
-    let state_dir =
-        dispatch::paths::QdPaths::from_home_env(std::path::Path::new(&home), env).state_dir;
-    // Key to the TARGET (not the sender): full-scan → target uuid; else the
-    // `byname-<target>` file (session omitted), exactly as the success path keys.
-    let writer = match target_session {
-        Some(s) => dispatch::events::EventWriter::for_key(
-            &state_dir,
-            &s.session_id,
-            Some(s.session_id.clone()),
-            s.name.clone(),
-        ),
-        None => dispatch::events::EventWriter::for_key(
-            &state_dir,
-            &dispatch::events::byname_key(target_name),
-            None,
-            Some(target_name.to_string()),
-        ),
-    };
-    let content_sha256 = dispatch::events::sha256_hex(message.as_bytes());
-    let clock = RealClock;
-    dispatch::events::warn_emit(
-        &writer,
-        &clock,
-        &dispatch::events::Payload::SendFailed {
-            send_id: None,
-            content_sha256,
-            reason: reason.to_string(),
-        },
-    );
-}
+///
+/// The RELAY door's half of the emitter phase 3B moved into qw: the four daemon
+/// doors call [`quorum_qw::delivery::emit_door_failure`] from inside their cores,
+/// and `no_relay_exit` / `bare_destination_exit` call it from here, so every send
+/// door — relay or resident — writes the SAME record (door-inventory §A/§B).
 
 /// `--wait` long-poll loop (send.ts:442-474). Returns the process exit code.
 fn wait_for_reply(client: &dyn RelayContract, port: u16, message_id: &str, timeout_s: u64) -> i32 {
@@ -1881,184 +873,34 @@ mod tests {
         );
     }
 
-    // F2 regression guard (red-team round 1) + the round-1 TOCTOU-fix pin:
-    // `run_acp_send`'s `AcpConnection::connect` failure arm is reached ONLY when
-    // `tier == Tier::Acp` proved `endpoint_alive` BEFORE connect — a reading
-    // that cannot confirm liveness ACROSS the connect boundary. The arm must
-    // therefore (a) never floor-drive (the historical F2 hunt: auto-flooring a
-    // possibly-live daemon risks a second live writer on one transcript), and
-    // (b) RE-PROBE liveness+identity and preserve identity when the daemon died
-    // in the window (`classify_connect_failure` ⇒ `TransportLost` ⇒
-    // `preserve_identity`), refusing either way. This is a structural
-    // (source-text) guard rather than a behavioral one because exercising the
-    // real branch requires a pid that is BOTH genuinely alive AND
-    // identity-verified via a real `/proc/<pid>/cmdline` read
-    // (`cmdline_is_our_acp_daemon`), which every other test in this module
-    // deliberately avoids — this file tests small pure/fake-backed helpers,
-    // never the full verb against real process state. The classification
-    // SEMANTICS are unit-pinned in ladder.rs (`connect_failure_*` tests).
-    // MUTATION EVIDENCE: reintroducing a floor drive in the arm reds the bans;
-    // dropping the re-probe or the loss-path preserve reds the positive
-    // controls.
-    #[test]
-    fn acp_connect_failure_never_consults_the_ladder_or_drives_the_floor() {
-        let src = include_str!("send_relay.rs");
-        let start_marker = "let conn = match AcpConnection::connect(&endpoint, Duration::from_secs(5)) {";
-        let start = src
-            .find(start_marker)
-            .expect("run_acp_send's connect-failure match must still exist verbatim");
-        let after_start = &src[start..];
-        // The match's Err(_) arm body runs from "Err(_) => {" to the matching "};"
-        // that closes the whole `let conn = match ... };` statement — find that by
-        // the next line consisting of only `    };` after the marker.
-        let close = after_start
-            .find("\n    };\n")
-            .expect("the connect match must close with `    };` on its own line");
-        let match_block = &after_start[..close];
-        let err_arm_start = match_block
-            .find("Err(_) => {")
-            .expect("the connect match must still have an Err(_) arm");
-        let err_arm = &match_block[err_arm_start..];
-
-        for banned in [
-            "on_inject_error",
-            "DropToPtyFloor",
-            "degrade_and_persist",
-            "drive_acp_floor_send",
-        ] {
-            assert!(
-                !err_arm.contains(banned),
-                "run_acp_send's AcpConnection::connect failure arm must NEVER reach \
-                 `{banned}` — the acp daemon is confirmed alive at this point (tier==Acp \
-                 already proved endpoint_alive), so auto-flooring here risks a second live \
-                 writer on the same session_id. Arm body:\n{err_arm}"
-            );
-        }
-        // Positive control 1: it DOES call not_reachable (an empty/renamed
-        // arm would vacuously pass the bans above without actually refusing).
-        assert!(
-            err_arm.contains("not_reachable("),
-            "the arm must still call not_reachable — a silently-removed refusal would also \
-             vacuously pass the bans above. Arm body:\n{err_arm}"
-        );
-        // Positive controls 2+3 (round-1 TOCTOU fix): the arm must classify
-        // from a FRESH post-failure re-probe, and preserve identity on the
-        // loss classification — a connect failure is never blanket-treated as
-        // "confirmed still alive" from the stale pre-connect reading.
-        assert!(
-            err_arm.contains("classify_connect_failure(pid_alive_now, cmdline_is_ours_now)"),
-            "the connect-Err arm must re-probe and classify wedge-vs-loss. Arm body:\n{err_arm}"
-        );
-        assert!(
-            err_arm.contains("acp_loss::preserve_identity("),
-            "the connect-Err arm's TransportLost classification must preserve identity \
-             before refusing. Arm body:\n{err_arm}"
-        );
-    }
-
-    // F3 regression guard (red-team round 2, confirmed real): `run_acp_send`'s
-    // `ProviderFx.acp_pre_dispatch` — the exactly-once history marker's install
-    // point — must be installed UNCONDITIONALLY. Recording that a structured
-    // send genuinely reached the wire is truth about the session's history and
-    // must never be gated (originally: on the retired floor's disable flag).
-    // The disposition no longer branches on it (Child D: pre-send and post-send
-    // loss both refuse), but the durable record still guards any future reader
-    // — e.g. `lifecycle.rs`'s resume seam consumes it — and losing it silently
-    // was exactly the F3 bug. This is a structural (source-text) guard because
-    // exercising the real branch needs a live, identity-verified acp connection
-    // this file's test style deliberately avoids. MUTATION EVIDENCE: gating the
-    // hook (`acp_pre_dispatch: some_condition.then(...)`) reds this test.
-    #[test]
-    fn acp_pre_dispatch_hook_is_installed_unconditionally() {
-        // Scope the check to `run_acp_send`'s OWN body (fn-start to the next
-        // top-level `fn`), NOT the whole file — a whole-file `contains` check
-        // would be VACUOUSLY true here since this test's own assertion string
-        // literal (quoting the exact marker) is itself part of `src`.
-        let src = include_str!("send_relay.rs");
-        let fn_start = src
-            .find("fn run_acp_send(session: &Session, message: &str) -> i32 {")
-            .expect("run_acp_send must still exist verbatim");
-        let after_start = &src[fn_start..];
-        let fn_end = after_start
-            .find("fn run_pi_send(")
-            .expect("run_pi_send must still follow run_acp_send");
-        let body = &after_start[..fn_end];
-
-        let unconditional = "acp_pre_dispatch: Some(&mark_dispatched),";
-        assert!(
-            body.contains(unconditional),
-            "run_acp_send's ProviderFx must install acp_pre_dispatch UNCONDITIONALLY as \
-             `{unconditional}`. Function body:\n{body}"
-        );
-    }
-
-    // Child D structural guard (opencode D1 — clerk-4's Arm-B ratification, bond
-    // note 01KX01BY7G): `run_acp_send` must have NO reachable auto-deliver path
-    // on transport loss. Child B's degrade+latch+companion-drive machinery was
-    // REMOVED, not gated — so this guard is structural: the identifiers cannot
-    // appear in the fn body at all. It also pins the replacement disposition:
-    // identity preservation (`acp_loss::preserve_identity`) at all four
-    // transport-loss sites — the no-live-pid entry, the dead-tier entry lane,
-    // the connect-boundary death (round-1 TOCTOU fix: the re-probe's
-    // TransportLost classification), and the mid-flight NoTransport arm — each
-    // followed by the existing human-recovery refusal. MUTATION EVIDENCE:
-    // reintroducing a floor
-    // drive (any banned identifier) reds this even though it compiles; deleting
-    // a preserve_identity call reds the positive control.
-    #[test]
-    fn acp_send_transport_loss_refuses_with_identity_preserved_and_never_auto_delivers() {
-        let src = include_str!("send_relay.rs");
-        let fn_start = src
-            .find("fn run_acp_send(session: &Session, message: &str) -> i32 {")
-            .expect("run_acp_send must still exist verbatim");
-        let after_start = &src[fn_start..];
-        let fn_end = after_start
-            .find("fn run_pi_send(")
-            .expect("run_pi_send must still follow run_acp_send");
-        let body = &after_start[..fn_end];
-
-        for banned in [
-            "drive_acp_floor_send",
-            "ensure_floor_pane",
-            "degrade_and_persist",
-            "degrade_to_pty",
-            "on_inject_error",
-            "DropToPtyFloor",
-        ] {
-            assert!(
-                !body.contains(banned),
-                "run_acp_send must have NO auto-deliver machinery — found `{banned}`. \
-                 acp/claude-code is a NAMED DIVERGENCE (refuse-and-surface, identity \
-                 preserved); pi's floor is the only auto-deliver realization. Body:\n{body}"
-            );
-        }
-        let occurrences = body.matches("acp_loss::preserve_identity(").count();
-        assert_eq!(
-            occurrences, 4,
-            "run_acp_send must preserve identity at exactly its four transport-loss \
-             refusals (no-live-pid entry, dead-tier entry, connect-boundary death \
-             [round-1 TOCTOU fix], mid-flight NoTransport) — found {occurrences}. \
-             Body:\n{body}"
-        );
-    }
-
     // F4 regression guard: the relay fast-path daemon-exclusion (the live-surfaced
     // mis-route fix). Reverting `provider_uses_relay_fast_path` to allow codex/acp (or
     // dropping the `acp/` check) reds this — a non-vacuous guard for the no-regression
     // condition that previously had only the live turn-id-vs-relay-id discriminator.
     #[test]
     fn daemon_providers_excluded_from_relay_fast_path() {
-        // Relay-capable rows participate in the fast path.
+        // The relay is claude-code's carrier and only claude-code's, so it is the
+        // only row shape that participates.
         assert!(provider_uses_relay_fast_path(None), "absent → claude-code (relay)");
         assert!(provider_uses_relay_fast_path(Some("claude-code")));
-        assert!(provider_uses_relay_fast_path(Some("opencode")));
-        // Daemon-hosted rows are EXCLUDED → they take the full-scan fallback.
+        // Non-relay rows are EXCLUDED → they take the full-scan fallback.
         assert!(!provider_uses_relay_fast_path(Some("codex")), "codex is daemon-hosted");
         assert!(
             !provider_uses_relay_fast_path(Some("acp/claude-code")),
             "acp/* is daemon-hosted"
         );
         assert!(!provider_uses_relay_fast_path(Some("acp/anything")));
+        // DRIFT CORRECTED. `pi` carries no relay port in EITHER lane (a resident's
+        // ws endpoint; a TUI's pane), so a pi row inside the fast path could only
+        // resolve someone ELSE's relay by ancestry — F4, one provider over.
+        assert!(!provider_uses_relay_fast_path(Some("pi")), "pi has no relay in either lane");
+        // …and `opencode` is the CLI ALIAS for `acp/opencode` (`join.rs` emits rows
+        // carrying the bare token). It asserted TRUE here until this change,
+        // walking past a guard written for the very thing it is an alias of.
+        assert!(
+            !provider_uses_relay_fast_path(Some("opencode")),
+            "the bare `opencode` token is acp/opencode, and an ACP bridge has no relay"
+        );
     }
 
     #[test]
@@ -2155,73 +997,7 @@ mod tests {
         );
     }
 
-    // --- B2 item 5: derive_from_session precedence matrix (unit level; the
-    // full-stack channel-header pin is punch_b2_item5_repro.rs). -------------
-
     use dispatch::effects::MapEnv;
-
-    /// Build a MapEnv + a staged ids.jsonl under a tempdir HOME. Returns the
-    /// tempdir (keep alive) and the env.
-    fn identity_env(
-        qd_session_id: Option<&str>,
-        claude_session_id: Option<&str>,
-        ids_lines: &str,
-    ) -> (tempfile::TempDir, MapEnv) {
-        let home = tempfile::tempdir().unwrap();
-        let state = home.path().join(".quorum").join("dispatch").join("state");
-        std::fs::create_dir_all(&state).unwrap();
-        std::fs::write(state.join("ids.jsonl"), ids_lines).unwrap();
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
-        if let Some(v) = qd_session_id {
-            vars.insert("QD_SESSION_ID".to_string(), v.to_string());
-        }
-        if let Some(v) = claude_session_id {
-            vars.insert("CLAUDE_CODE_SESSION_ID".to_string(), v.to_string());
-        }
-        (home, MapEnv { vars, uid: 501 })
-    }
-
-    const MINT: &str = "{\"event\":\"mint\",\"id\":\"ab3kx9mq\",\"session_id\":\"true-uuid-1\"}\n";
-
-    #[test]
-    fn engine_identity_wins_over_inherited_env() {
-        // Both planted: the idstore-resolved uuid wins over the leaked env var.
-        let (_h, env) = identity_env(Some("ab3kx9mq"), Some("imposter-uuid"), MINT);
-        assert_eq!(derive_from_session(&env), "true-uuid-1");
-    }
-
-    #[test]
-    fn unresolvable_engine_identity_falls_back_to_claude_env() {
-        // Valid-shaped but unknown id → fall through, never invent.
-        let (_h, env) = identity_env(Some("zzzzzzzz"), Some("cc-uuid"), MINT);
-        assert_eq!(derive_from_session(&env), "cc-uuid");
-        // Malformed id → same fall-through.
-        let (_h2, env2) = identity_env(Some("not-an-id!"), Some("cc-uuid"), MINT);
-        assert_eq!(derive_from_session(&env2), "cc-uuid");
-        // UNBOUND mint (no uuid yet) → same fall-through.
-        let unbound = "{\"event\":\"mint\",\"id\":\"cd47qrst\",\"session_id\":null}\n";
-        let (_h3, env3) = identity_env(Some("cd47qrst"), Some("cc-uuid"), unbound);
-        assert_eq!(derive_from_session(&env3), "cc-uuid");
-    }
-
-    #[test]
-    fn bare_shell_is_cli() {
-        // Neither identity present → "cli" (the operator-shell attribution the
-        // ruling pins as must-not-break).
-        let (_h, env) = identity_env(None, None, MINT);
-        assert_eq!(derive_from_session(&env), "cli");
-        // QD_SESSION_ID unresolvable and no claude env → still "cli".
-        let (_h2, env2) = identity_env(Some("zzzzzzzz"), None, MINT);
-        assert_eq!(derive_from_session(&env2), "cli");
-    }
-
-    #[test]
-    fn engine_identity_is_case_folded() {
-        // Ids are case-insensitive at resolution (idstore::normalize).
-        let (_h, env) = identity_env(Some("AB3KX9MQ"), Some("imposter"), MINT);
-        assert_eq!(derive_from_session(&env), "true-uuid-1");
-    }
 
     /// A `RelayFailed` (the claude inject mapping a transport `RelayError`) maps
     /// back to exit 1 AND the SAME "Failed to send message: <send_err_text(e)>"
@@ -2258,7 +1034,7 @@ mod tests {
     // =======================================================================
     // §X (3-phase delivery) — Tier-2 seam-integration proof of the SENDER side
     // (Group A): a true e2e relay POST mints a real server `message_id`, then the
-    // REAL `emit_relay_send_events_with_env` writes `send-initiated` (the reused
+    // REAL `quorum_qw::delivery::emit_relay_send_events` writes `send-initiated` (the reused
     // Payload::SendInitiated with relay values) + `relay-delivered` into the
     // TARGET's real `<state>/sessions/<uuid>.events.jsonl`, tailed from disk and
     // asserted against PINNED-EVENT-CONTRACT §X.3.1/§X.3.2. No record is
@@ -2285,7 +1061,7 @@ mod tests {
 
     /// I1 (sender side, true e2e): a real `send:relay` POST to a real local
     /// `relay:serve` recipient mints a real `message_id`; the REAL
-    /// `emit_relay_send_events_with_env` then writes exactly one `send-initiated`
+    /// `delivery::emit_relay_send_events` then writes exactly one `send-initiated`
     /// (relay values) + one `relay-delivered` (non-terminal) into the TARGET's real
     /// delivery log. Tailed from disk; §X.3.1/§X.3.2 shapes + send_id==message_id +
     /// content_sha256 over the raw message bytes are asserted.
@@ -2349,7 +1125,14 @@ mod tests {
             hosting: None,
             which_branch: dispatch::model::SessionBranch::LiveRegistry,
         };
-        emit_relay_send_events_with_env(&env, "target-b", Some(&target), message, &message_id);
+        delivery::emit_relay_send_events(
+            &env,
+            &RealClock,
+            "target-b",
+            Some(&target),
+            message,
+            &message_id,
+        );
 
         // 4) Tail the TARGET's real delivery log under the sender HOME.
         let state_dir = dispatch::paths::QdPaths::from_home_env(sender_home.path(), &env).state_dir;
@@ -2435,266 +1218,15 @@ mod tests {
         handle.shutdown();
     }
 
-    /// D2 §C1 (door-inventory §B) — a daemon-arm DOOR FAILURE emits exactly one
-    /// `send-failed` terminal into the TARGET's delivery log: keyed to the target
-    /// uuid, `send_id` OMITTED (pre-wire, spec `send-failed { send_id? }`),
-    /// `content_sha256` over the raw message, `reason` the surface token. This is
-    /// the single emission ALL four daemon-arm doors (codex/acp/pi/floor) funnel
-    /// through (`emit_door_failure` → this `_with_env`); the per-lane end-to-end
-    /// door INJECTIONS live in the conformance suite. No record is hand-written.
-    #[test]
-    fn door_failure_emits_send_failed_terminal_keyed_to_target() {
-        let home = tempfile::tempdir().unwrap();
-        let mut vars = std::collections::HashMap::new();
-        vars.insert(
-            "HOME".to_string(),
-            home.path().to_string_lossy().to_string(),
-        );
-        let env = MapEnv { vars, uid: 501 };
-        let target_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-        let message = "steer: please ack";
-        let target = Session {
-            name: Some("codex-dead-1".to_string()),
-            user_named: None,
-            session_id: target_uuid.to_string(),
-            code: None,
-            qd_id: None,
-            pid: None,
-            status: dispatch::model::SessionStatus::Idle,
-            zmx_name: None,
-            zmx_clients: None,
-            socket_dir: None,
-            relay_port: None,
-            turns: 0,
-            tokens: 0,
-            cwd: None,
-            last_active_ms: None,
-            version: None,
-            started_at_ms: None,
-            git_branch: None,
-            jsonl_path: None,
-            last_turns: None,
-            provider: "codex".to_string(),
-            entrypoint: None,
-            lineage: None,
-            hosting: None,
-            which_branch: dispatch::model::SessionBranch::LiveRegistry,
-        };
-        emit_door_failure_with_env(&env, "codex-dead-1", Some(&target), message, "daemon-unreachable");
+    // === The SEND-seam landing check, ACROSS the two seams ====================
+    //
+    // The landing check's OWN units moved into `quorum_qw::delivery::pi` with the
+    // function. This one stays: its subject is the pair — qw's send-seam
+    // `confirm_landing` and `wait.rs`'s own copy of the observer — and it is what
+    // proves they agree while the two exist. When `qd wait`'s pi observer moves
+    // (the other half of phase 3B), it moves with them.
 
-        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
-        let log = state_dir
-            .join("sessions")
-            .join(format!("{target_uuid}.events.jsonl"));
-        let raw = std::fs::read_to_string(&log)
-            .unwrap_or_else(|e| panic!("target log {log:?} must exist: {e}"));
-        let recs = parse_events(&raw).records;
-
-        let kinds: Vec<&str> = recs.iter().map(|r| r.event.as_str()).collect();
-        assert_eq!(
-            kinds,
-            vec!["send-failed"],
-            "exactly one send-failed at the door; got {kinds:?}"
-        );
-
-        let sf: serde_json::Value =
-            serde_json::from_str(raw.lines().find(|l| l.contains("send-failed")).unwrap()).unwrap();
-        assert_eq!(sf["event"], "send-failed");
-        assert_eq!(sf["v"], 1);
-        assert_eq!(sf["reason"], "daemon-unreachable");
-        assert_eq!(
-            sf["content_sha256"].as_str().unwrap(),
-            sha256_hex(message.as_bytes()),
-            "content_sha256 over the raw message bytes (the consumer's join key)"
-        );
-        assert!(
-            sf.get("send_id").is_none(),
-            "send_id OMITTED at a pre-wire door (spec `send-failed {{ send_id? }}`)"
-        );
-        assert_eq!(
-            sf["session"].as_str().unwrap(),
-            target_uuid,
-            "keyed to the TARGET uuid"
-        );
-        assert!(
-            dispatch::events::is_terminal("send-failed"),
-            "send-failed is a terminal (§C1)"
-        );
-    }
-
-    /// D2 §C5/C3 (daemon-lane phases) — a daemon inject-SUCCESS emits exactly
-    /// `send-initiated` (sent — daemon values: verb `send:relay`, `send_path` the
-    /// lane, `send_id` the resident turn id, NO recovery transcript keys) then
-    /// `turn-accepted` (delivered, NON-terminal), keyed to the TARGET uuid, in that
-    /// order. The success TERMINAL is deliberately NOT emitted here — it lands at
-    /// the observe seam (run_acp_wait / run_pi_wait). The absent transcript keys +
-    /// verb `send:relay` keep this send OUT of the recover verb's pty/new-p sweep.
-    #[test]
-    fn daemon_send_emits_send_initiated_then_turn_accepted() {
-        let home = tempfile::tempdir().unwrap();
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
-        let env = MapEnv { vars, uid: 501 };
-        let target_uuid = "12121212-3434-5656-7878-909090909090";
-        let message = "steer: land this mid-turn";
-        let turn_id = "turn-abc";
-        let target = Session {
-            name: Some("acp-live-1".to_string()),
-            user_named: None,
-            session_id: target_uuid.to_string(),
-            code: None,
-            qd_id: None,
-            pid: Some(4242),
-            status: dispatch::model::SessionStatus::Idle,
-            zmx_name: None,
-            zmx_clients: None,
-            socket_dir: None,
-            relay_port: None,
-            turns: 0,
-            tokens: 0,
-            cwd: None,
-            last_active_ms: None,
-            version: None,
-            started_at_ms: None,
-            git_branch: None,
-            jsonl_path: None,
-            last_turns: None,
-            provider: "acp/claude-code".to_string(),
-            entrypoint: None,
-            lineage: None,
-            hosting: None,
-            which_branch: dispatch::model::SessionBranch::LiveRegistry,
-        };
-        emit_daemon_send_events_with_env(
-            &env,
-            "acp-live-1",
-            Some(&target),
-            message,
-            turn_id,
-            "acp/claude-code",
-        );
-
-        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
-        let log = state_dir
-            .join("sessions")
-            .join(format!("{target_uuid}.events.jsonl"));
-        let raw = std::fs::read_to_string(&log)
-            .unwrap_or_else(|e| panic!("target log {log:?} must exist: {e}"));
-        let recs = parse_events(&raw).records;
-
-        let kinds: Vec<&str> = recs.iter().map(|r| r.event.as_str()).collect();
-        assert_eq!(
-            kinds,
-            vec!["send-initiated", "turn-accepted"],
-            "daemon inject-success emits sent then delivered (no terminal here); got {kinds:?}"
-        );
-        for r in &recs {
-            assert_eq!(
-                r.send_id().as_deref(),
-                Some(turn_id),
-                "send_id == the resident turn id on both records"
-            );
-        }
-        let want_sha = sha256_hex(message.as_bytes());
-
-        let si: serde_json::Value =
-            serde_json::from_str(raw.lines().find(|l| l.contains("send-initiated")).unwrap())
-                .unwrap();
-        assert_eq!(si["verb"], "send:relay");
-        assert_eq!(si["send_path"], "acp/claude-code", "send_path names the lane");
-        assert_eq!(si["content_sha256"].as_str().unwrap(), want_sha);
-        assert!(
-            si.get("transcript").is_none() && si.get("transcript_offset").is_none(),
-            "NO recovery transcript keys → out of the recover verb's pty/new-p sweep"
-        );
-        assert_eq!(si["session"].as_str().unwrap(), target_uuid, "keyed to TARGET uuid");
-
-        let ta: serde_json::Value =
-            serde_json::from_str(raw.lines().find(|l| l.contains("turn-accepted")).unwrap())
-                .unwrap();
-        assert_eq!(ta["event"], "turn-accepted");
-        assert_eq!(ta["content_sha256"].as_str().unwrap(), want_sha);
-        assert!(
-            !dispatch::events::is_terminal("turn-accepted"),
-            "turn-accepted is NON-terminal delivered — only the terminal says landed"
-        );
-    }
-
-    /// D2 §C5/C3 (obligation (c), the DEAD-ONLY floor sub-lane) — the floor's
-    /// success terminal is CONTENT-KEYED against the APPENDED session record:
-    /// `floor_session_jsonl` reads the dedicated `--session-dir`, the shared
-    /// `rollout_landed` confirms the sent bytes as a user record, and
-    /// `emit_daemon_seen` appends the message-seen terminal. Hermetic — the live
-    /// floor drive needs pi/OAuth (deferred).
-    #[test]
-    fn floor_content_keyed_seen_from_appended_session_record() {
-        let home = tempfile::tempdir().unwrap();
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("HOME".to_string(), home.path().to_string_lossy().to_string());
-        let env = MapEnv { vars, uid: 501 };
-        let uuid = "abababab-cdcd-efef-0101-232323232323";
-        let msg = "floor prompt that must land";
-        let target = Session {
-            name: Some("pi-floor-1".to_string()),
-            user_named: None,
-            session_id: uuid.to_string(),
-            code: None,
-            qd_id: None,
-            pid: None,
-            status: dispatch::model::SessionStatus::Idle,
-            zmx_name: None,
-            zmx_clients: None,
-            socket_dir: None,
-            relay_port: None,
-            turns: 0,
-            tokens: 0,
-            cwd: None,
-            last_active_ms: None,
-            version: None,
-            started_at_ms: None,
-            git_branch: None,
-            jsonl_path: None,
-            last_turns: None,
-            provider: "pi".to_string(),
-            entrypoint: None,
-            lineage: None,
-            hosting: None,
-            which_branch: dispatch::model::SessionBranch::LiveRegistry,
-        };
-
-        // A dedicated floor `--session-dir` holding the appended user record.
-        let session_dir = home.path().join("floordir");
-        std::fs::create_dir_all(&session_dir).unwrap();
-        let user = serde_json::json!({
-            "type": "message",
-            "message": {"role": "user", "content": [{"type": "text", "text": msg}]}
-        });
-        std::fs::write(
-            session_dir.join("sess.jsonl"),
-            format!("{}\n", serde_json::to_string(&user).unwrap()),
-        )
-        .unwrap();
-
-        let jsonl = floor_session_jsonl(&session_dir);
-        let sha = sha256_hex(msg.as_bytes());
-        assert!(
-            dispatch::provider::pi::floor::rollout_landed(&jsonl, &sha),
-            "the appended user record makes the send content-keyed LANDED"
-        );
-
-        emit_daemon_seen_with_env(&env, "pi-floor-1", Some(&target), "floor-send-1", &sha);
-        let state_dir = dispatch::paths::QdPaths::from_home_env(home.path(), &env).state_dir;
-        let raw = std::fs::read_to_string(dispatch::events::events_path(&state_dir, uuid)).unwrap();
-        let ms: serde_json::Value =
-            serde_json::from_str(raw.lines().find(|l| l.contains("message-seen")).unwrap()).unwrap();
-        assert_eq!(ms["event"], "message-seen");
-        assert_eq!(ms["send_id"], "floor-send-1");
-        assert_eq!(ms["content_sha256"].as_str().unwrap(), sha);
-    }
-
-    // === The SEND-seam landing check (the busy-drop fix, part 3) ===============
-
-    /// Build a pi target whose rollout is `<home>/rollout.jsonl`, with `records`
+    /// Build a pi target whose rollout is `<home>/rollout.jsonl`, with `rollout`
     /// as its contents, and a `send-initiated` already in its delivery log for
     /// `msg` (what `emit_daemon_send_events` writes on the inject ACK).
     fn pi_landing_fixture(
@@ -2736,7 +1268,15 @@ mod tests {
             which_branch: dispatch::model::SessionBranch::LiveRegistry,
         };
         // The inject-ACK records the observer joins against.
-        emit_daemon_send_events_with_env(&env, "pi-resident-1", Some(&target), msg, "turn-1", "pi");
+        delivery::emit_daemon_send_events(
+            &env,
+            &RealClock,
+            "pi-resident-1",
+            Some(&target),
+            msg,
+            "turn-1",
+            "pi",
+        );
         (env, paths, target)
     }
 
@@ -2751,10 +1291,17 @@ mod tests {
         )
     }
 
-    /// `pi_confirm_landing` with a ZERO window — the tests exercise the content
-    /// key and the emission, never the polling clock.
+    /// `delivery::pi::confirm_landing` with a ZERO window — this exercises the
+    /// content key and the emission, never the polling clock.
     fn landed(env: &MapEnv, paths: &dispatch::paths::QdPaths, target: &Session, msg: &str) -> bool {
-        pi_confirm_landing(env, paths, target, msg, Duration::from_millis(0))
+        delivery::pi::confirm_landing(
+            env,
+            &RealClock,
+            paths,
+            target,
+            msg,
+            Duration::from_millis(0),
+        )
     }
 
     fn terminals_in_log(paths: &dispatch::paths::QdPaths, uuid: &str) -> Vec<String> {
@@ -2767,88 +1314,31 @@ mod tests {
             .collect()
     }
 
-    /// THE FIX: a plain fire-and-forget send now reaches its TERMINAL at the send
-    /// seam. Before, `message-seen` was reachable only through the wait observer,
-    /// so a delivered send and a dropped one left identical logs — a turn-accepted
-    /// and nothing else.
-    #[test]
-    fn send_seam_landing_check_emits_the_terminal() {
-        let home = tempfile::tempdir().unwrap();
-        let msg = "the message that must land";
-        let (env, paths, target) = pi_landing_fixture(home.path(), msg, &pi_user_record(msg));
-        assert!(
-            terminals_in_log(&paths, &target.session_id).is_empty(),
-            "the inject ACK alone is NON-terminal"
-        );
-        assert!(landed(&env, &paths, &target, msg));
-        assert_eq!(
-            terminals_in_log(&paths, &target.session_id),
-            vec!["message-seen".to_string()]
-        );
-    }
-
-    /// A send absent from the rollout emits NOTHING — no `seen-failed`, no
-    /// terminal of any kind. An un-landed-yet send is indistinguishable from a slow
-    /// rollout write, so it stays PENDING/recoverable: the recovery keys never
-    /// claim "didn't land."
-    #[test]
-    fn unlanded_send_emits_no_terminal_ever() {
-        let home = tempfile::tempdir().unwrap();
-        let msg = "the message that never lands";
-        let (env, paths, target) =
-            pi_landing_fixture(home.path(), msg, &pi_user_record("some other turn"));
-        assert!(!landed(&env, &paths, &target, msg));
-        assert!(
-            terminals_in_log(&paths, &target.session_id).is_empty(),
-            "no terminal — the send stays recoverable, never a hard didn't-land"
-        );
-    }
-
-    /// An assistant ECHO of the prompt is not a landing (the shared
-    /// `rollout_landed` false-positive guard, pinned at THIS seam too).
-    #[test]
-    fn assistant_echo_is_not_a_landing_at_the_send_seam() {
-        let home = tempfile::tempdir().unwrap();
-        let msg = "echoed but never accepted";
-        let echo = format!(
-            "{}\n",
-            serde_json::to_string(&serde_json::json!({
-                "type": "turn_end",
-                "message": {"role": "assistant", "content": [{"type": "text", "text": msg}]}
-            }))
-            .unwrap()
-        );
-        let (env, paths, target) = pi_landing_fixture(home.path(), msg, &echo);
-        assert!(!landed(&env, &paths, &target, msg));
-        assert!(terminals_in_log(&paths, &target.session_id).is_empty());
-    }
-
     /// Idempotent across the two seams: the send seam emits, and a later wait-seam
     /// sweep over the same landed send adds NOTHING (first-terminal-wins).
+    ///
+    /// Its subject SURVIVED the convergence and narrowed to the thing that was
+    /// always load-bearing. It used to drive two IMPLEMENTATIONS — this one and
+    /// `qd wait`'s field-for-field copy — and prove they agreed. Ruling D2's
+    /// `await_idle` moved the wait arm into `quorum_qw::idle`, which now calls
+    /// `delivery::pi::observe_landed_sends` directly, so the copy is gone and
+    /// "they agree" is true by construction. What is NOT true by construction, and
+    /// is what this still proves, is that the two SEAMS firing over one landed
+    /// send produce exactly ONE terminal: that rests on first-terminal-wins in the
+    /// ledger, which no amount of sharing an implementation would give you.
     #[test]
     fn send_and_wait_seams_never_double_emit() {
         let home = tempfile::tempdir().unwrap();
         let msg = "landed exactly once";
         let (env, paths, target) = pi_landing_fixture(home.path(), msg, &pi_user_record(msg));
         assert!(landed(&env, &paths, &target, msg));
-        // The wait seam runs over the same rollout afterwards.
-        super::super::wait::pi_observe_landed_sends(&env, &paths, &target);
+        // The WAIT seam runs over the same rollout afterwards — the very call
+        // `idle::await_idle_pi` makes at every release.
+        delivery::pi::observe_landed_sends(&env, &RealClock, &paths, &target);
         assert_eq!(
             terminals_in_log(&paths, &target.session_id),
             vec!["message-seen".to_string()],
             "exactly one terminal, whichever seam gets there first"
         );
-    }
-
-    /// A row with no recorded rollout path cannot be content-keyed: false, and no
-    /// terminal. Never a panic, never an invented landing.
-    #[test]
-    fn missing_rollout_path_is_pending_not_landed() {
-        let home = tempfile::tempdir().unwrap();
-        let msg = "no rollout on the row";
-        let (env, paths, mut target) = pi_landing_fixture(home.path(), msg, &pi_user_record(msg));
-        target.jsonl_path = None;
-        assert!(!landed(&env, &paths, &target, msg));
-        assert!(terminals_in_log(&paths, &target.session_id).is_empty());
     }
 }

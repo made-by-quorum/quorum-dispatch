@@ -637,9 +637,21 @@ mod tests {
         // and the grace collects an acked message FAR sooner than the 7-day TTL.
         let recv = NOW - INBOX_TTL_MS / 2; // well within TTL
         let acked = NOW - ACK_GRACE_MS + 1; // grace-1
-        assert!(!inbox_is_collectible(recv, Some(acked), INBOX_TTL_MS, NOW, false));
+        assert!(!inbox_is_collectible(
+            recv,
+            Some(acked),
+            INBOX_TTL_MS,
+            NOW,
+            false
+        ));
         let acked = NOW - ACK_GRACE_MS; // grace exactly
-        assert!(inbox_is_collectible(recv, Some(acked), INBOX_TTL_MS, NOW, false));
+        assert!(inbox_is_collectible(
+            recv,
+            Some(acked),
+            INBOX_TTL_MS,
+            NOW,
+            false
+        ));
         // grace really is shorter than the TTL: acked-and-graced collects while the
         // same-age un-acked message (judged on received_at) would still be held.
         assert!(ACK_GRACE_MS < INBOX_TTL_MS);
@@ -649,7 +661,13 @@ mod tests {
     fn inbox_presence_protect_short_circuits_age() {
         // recipient_protected → never collectible, even at 10× the TTL, acked or not.
         let ancient = NOW - 10 * INBOX_TTL_MS;
-        assert!(!inbox_is_collectible(ancient, None, INBOX_TTL_MS, NOW, true));
+        assert!(!inbox_is_collectible(
+            ancient,
+            None,
+            INBOX_TTL_MS,
+            NOW,
+            true
+        ));
         assert!(!inbox_is_collectible(
             ancient,
             Some(NOW - 10 * ACK_GRACE_MS),
@@ -659,7 +677,13 @@ mod tests {
         ));
         // Negative control (the no-loss keystone): flip protection OFF → the same
         // ancient message IS collected (revert the presence gate → RED = loss).
-        assert!(inbox_is_collectible(ancient, None, INBOX_TTL_MS, NOW, false));
+        assert!(inbox_is_collectible(
+            ancient,
+            None,
+            INBOX_TTL_MS,
+            NOW,
+            false
+        ));
     }
 
     #[test]
@@ -681,7 +705,13 @@ mod tests {
         let recv = parse_iso_ms(&rec.received_at).expect("received_at parses");
         // 14 days after the mint, un-acked, unaddressed → collectible.
         let now = recv + 14 * 24 * 60 * 60 * 1000;
-        assert!(inbox_is_collectible(recv, rec.acked_at_ms, INBOX_TTL_MS, now, false));
+        assert!(inbox_is_collectible(
+            recv,
+            rec.acked_at_ms,
+            INBOX_TTL_MS,
+            now,
+            false
+        ));
     }
 
     #[test]
@@ -746,7 +776,12 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|e| e.path())
-            .find(|p| p.file_name().unwrap().to_string_lossy().ends_with("_meta.json"))
+            .find(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .ends_with("_meta.json")
+            })
             .expect("a _meta.json sidecar is present");
         let meta_name = meta.file_name().unwrap().to_string_lossy().into_owned();
         assert!(
@@ -755,7 +790,10 @@ mod tests {
             "trash name keeps the stamp + id, gains a nonce, and keeps the .json ext — got {meta_name}"
         );
         let base = meta_name.strip_suffix("_meta.json").unwrap();
-        assert!(base.ends_with(".json"), "trash data file keeps its .json extension — got {base}");
+        assert!(
+            base.ends_with(".json"),
+            "trash data file keeps its .json extension — got {base}"
+        );
         let trashed = trash.join(base);
         assert_eq!(fs::read(&trashed).unwrap(), b"{\"text\":\"x\"}");
         let m: TrashMeta = serde_json::from_str(&fs::read_to_string(&meta).unwrap()).unwrap();

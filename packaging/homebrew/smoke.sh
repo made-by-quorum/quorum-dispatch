@@ -35,14 +35,24 @@ brew tap-new --no-git "$TAP"
 TAPDIR="$(brew --repository)/Library/Taps/qdrust-smoke/homebrew-local"
 cp "$WORK/quorum-dispatch.rb" "$TAPDIR/Formula/quorum-dispatch.rb"
 
-echo "[smoke] brew install --build-from-source $TAP/quorum-dispatch (rebuilds qd in brew's sandbox)"
+echo "[smoke] brew install --build-from-source $TAP/quorum-dispatch (rebuilds qd + qw in brew's sandbox)"
 brew install --build-from-source "$TAP/quorum-dispatch"
 INSTALLED_OK=$?
-echo "[smoke] installed: $(command -v qd || true) ($("$(brew --prefix)/bin/qd" --version 2>/dev/null))"
+BREWBIN="$(brew --prefix)/bin"
+echo "[smoke] installed: $(command -v qd || true) ($("$BREWBIN/qd" --version 2>/dev/null))"
+# ADR-0020: qw must be BESIDE qd — qd resolves it as a sibling of its own
+# executable and never searches PATH, so this checks the file next to qd, NOT
+# that `qw` resolves as a command. `brew test` asserts the same thing; this line
+# makes the failure legible here too, before the (longer) test run.
+[ -x "$BREWBIN/qw" ] \
+  && echo "[smoke] qw is beside qd at $BREWBIN ($("$BREWBIN/qw" build-profile 2>/dev/null))" \
+  || { echo "[smoke] FAIL: $BREWBIN/qw missing — an installed qd cannot open a lane" >&2; exit 1; }
 brew test "$TAP/quorum-dispatch" && echo "[smoke] brew test PASS"
-ls "$(brew --prefix)/share/quorum-dispatch/zmx/" && echo "[smoke] pinned-zmx staging present"
+# The formula stages NO third-party multiplexer any more (FTUE R1) — the check
+# that its pinned tarball landed under share/ went with it. `qd` + `qw` in bin
+# ARE the package; nothing else is expected to be installed.
 echo "[smoke] UNINSTALLING + untapping (rule 9: no lingering Rust qd on PATH)"
 brew uninstall quorum-dispatch
 brew untap "$TAP"
-! [ -x "$(brew --prefix)/bin/qd" ] && echo "[smoke] uninstalled clean"
+! [ -x "$BREWBIN/qd" ] && ! [ -x "$BREWBIN/qw" ] && echo "[smoke] uninstalled clean (qd + qw)"
 echo "[smoke] DONE rc=$INSTALLED_OK"

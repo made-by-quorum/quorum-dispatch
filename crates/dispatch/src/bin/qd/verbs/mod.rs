@@ -2,7 +2,6 @@
 //! file routes a parsed clap `ArgMatches` to the right backend, and the default
 //! action (bare `qd` → ls, index.ts:202-204) when no subcommand matched.
 
-mod acp_loss;
 mod adopt;
 mod bootstrap;
 mod common;
@@ -10,6 +9,7 @@ mod attach;
 mod dispositions;
 mod gc;
 mod init;
+mod intent;
 mod kill;
 mod lifecycle;
 mod ls;
@@ -22,6 +22,7 @@ pub(super) mod resume;
 mod send;
 mod send_relay;
 mod send_unified;
+mod setup;
 mod stubs;
 mod update;
 mod wait;
@@ -67,6 +68,7 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         Some(("info", m)) => lifecycle::run_info(m),
         Some(("gc", m)) => gc::run(m),
         Some(("init", m)) => init::run(m),
+        Some(("setup", m)) => setup::run(m),
         Some(("bootstrap", _)) => bootstrap::run(),
         Some(("update", _)) => update::run(),
         Some(("ping", m)) => ping::run(m),

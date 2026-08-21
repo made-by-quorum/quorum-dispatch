@@ -121,6 +121,10 @@ struct Jail {
     convo: PathBuf,
     uuid: String,
     created: std::cell::RefCell<Vec<String>>,
+    /// Has `teardown` already run? Makes teardown idempotent so the explicit
+    /// `jail.teardown()` at the end of a test body and the `Drop` safety net
+    /// below can both fire without reaping twice.
+    torn: std::cell::Cell<bool>,
 }
 
 impl Jail {
@@ -160,6 +164,7 @@ impl Jail {
             convo,
             uuid,
             created: std::cell::RefCell::new(Vec::new()),
+            torn: std::cell::Cell::new(false),
         }
     }
 
@@ -245,12 +250,39 @@ impl Jail {
     }
 
     fn teardown(&self) {
+        // Idempotent (first call wins): the explicit `jail.teardown()` that ends a
+        // test body AND the `Drop` safety net below both land here, and a test that
+        // tears down mid-body then keeps going must not be reaped a second time.
+        if self.torn.replace(true) {
+            return;
+        }
         let names: Vec<String> = self.created.borrow().clone();
         for name in names {
             let _ = run_qd(self, &["stop", "--force", &name], &[]);
         }
         let _ = std::fs::remove_dir_all(&self.root);
         let _ = std::fs::remove_dir_all(&self.xdg);
+    }
+}
+
+/// Panic-path safety net. Every test body ends with an explicit `jail.teardown()`,
+/// but a test that PANICS never reaches it — the unwind skips teardown outright, so
+/// the jail's embedded `qrmux-server` is orphaned and its `/tmp/qd-*` tree is left
+/// on disk. Not theoretical: a failing test leaked on EVERY run, and ~500 orphaned
+/// servers (the oldest 7 days old) had accumulated on one dev box. Past a few
+/// hundred they contend for resources and the suite starts failing in a pattern
+/// INDISTINGUISHABLE from a code regression — failure count climbing run over run
+/// while runtime collapses. That cost one false regression alarm; anyone bisecting
+/// would have chased a ghost. `teardown` is idempotent, so this never double-reaps
+/// the explicit call sites, and it keeps their per-target `qd stop --force` reap
+/// (never a destructive sweep).
+impl Drop for Jail {
+    fn drop(&mut self) {
+        // Best-effort, and deliberately panic-proof: a panic raised while already
+        // unwinding ABORTS the process, which is strictly worse than the leak this
+        // exists to prevent. `teardown` itself is unchanged for the explicit call
+        // sites — only this path swallows.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.teardown()));
     }
 }
 
@@ -1250,13 +1282,13 @@ fn engine_kind_disposition(p: &dispatch::events::Payload) -> Option<Delegation> 
         // sole remaining emitter is the C6-deferred `await_received` budget-exhaustion
         // path (events.rs:1931). DELEGATED to the kind's roundtrip coverage.
         AnchorTimeout { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "g1_representative_of_each_kind_roundtrips",
         }),
         PendingAbandoned { .. } => None, // R-REC-abandoned (recovery verb, not a door)
         // DELEGATED (not produced here; named in-repo carriers):
         ComposerCleared { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "g1_representative_of_each_kind_roundtrips",
         }),
         PrimingReadinessTimeout { .. } => Some(Delegation {
@@ -1268,22 +1300,22 @@ fn engine_kind_disposition(p: &dispatch::events::Payload) -> Option<Delegation> 
             test_fn: "g3_seq_sendpty_wait_complete_anchored_with_status_transitions",
         }),
         EventsTruncated => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "rotation_reserve_band_takes_terminal_only",
         }),
         // §X (3-phase delivery) — not produced by this matrix; DELEGATED to the
         // events.rs unit tests (U1 shape + U4 terminal-class). Emission of these
         // kinds is exercised by the Tier-2 seam integration (relay/pty on-received).
         RelayDelivered { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "x3_relay_delivered_key_order_and_nonterminal",
         }),
         MessageSeen { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "x3_message_seen_key_order_and_terminal",
         }),
         SeenFailed { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "x3_seen_failed_key_order_and_terminal",
         }),
         // C5/C3 (daemon-lane delivered phase) — the NON-terminal turn-accepted kind
@@ -1293,7 +1325,7 @@ fn engine_kind_disposition(p: &dispatch::events::Payload) -> Option<Delegation> 
         // ack3_matrix test non-compiling at the tip; this arm + the engine_all entry
         // restore the build (surfaced to the coordinator as a cross-child fix-up).
         TurnAccepted { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "d2_turn_accepted_serializes_non_terminal_send_id_and_content_sha",
         }),
         // §C1 (delivery contract) — the DOOR-failure terminal. Not produced by this
@@ -1301,17 +1333,17 @@ fn engine_kind_disposition(p: &dispatch::events::Payload) -> Option<Delegation> 
         // shape+optional-send_id unit test, and exercised end-to-end by the recover-verb
         // integration proofs (tests/delivery_recover_verb.rs).
         SendFailed { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "d1_send_failed_serializes_with_optional_send_id",
         }),
         // R3d recovery-ladder forensics — not produced by this matrix; DELEGATED to
         // the events.rs replay tests (emit the kinds, read the file back, replay).
         RungEntered { .. } | RungSucceeded { .. } | RungTimeout { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "r3d_recovery_episode_reconstructs_from_log_alone",
         }),
         RecoveryCrit { .. } => Some(Delegation {
-            file: "crates/dispatch/src/events.rs",
+            file: "crates/quorum-qw/src/events.rs",
             test_fn: "r3d_recovery_crit_episode_reconstructs_from_log",
         }),
     }

@@ -3,8 +3,9 @@
 //! `kill` verb no longer reaches this module (it errors in verbs/stubs.rs), so
 //! every user-facing string here names `stop` — the verb the caller invoked.
 //!
-//! The decision core (the three-fallback zmx-target resolution) lives in the pure
-//! `dispatch::kill` module; this verb drives the live effects around the plan:
+//! BOTH halves of the pane reap now live in `dispatch::kill` — the pure decision
+//! core (the three-fallback zmx-target resolution) it always held, and, since
+//! stage-2 phase 3, the effect sequence that drives it (`reap_pane_session`):
 //!   - capture the registry entry BEFORE kill (claude self-removes its `<pid>.json`
 //!     on graceful SIGTERM, so we keep a copy to synthesize a tombstone),
 //!   - reap the zmx session (verify-gone 12×250ms, fail-safe loud rc=1),
@@ -16,29 +17,48 @@
 //!   - F2/C2 post-verify scan (a survivor → exit 1 advisory; the hint uses
 //!     `zmx ls`, NEVER `zmx kill` an unconfirmed target).
 //!
+//! It was extracted because `LaneOps::kill` had nothing to delegate to while it
+//! was inlined here. What this verb kept is the part that is NOT a lane's: the
+//! CLI-resolved mux/dir geometry, every rendering site (the reap answers in
+//! fields, never in prints), and the dead-pid registry sweep — housekeeping over
+//! ALL registry rows, not this session's lane.
+//!
+//! # What the lane replaced, and what it deliberately did not
+//!
+//! The FOUR DAEMON lanes go through `LaneOps::kill` (`stop_daemon`, at the
+//! bottom). That retired a guarded four-arm provider if-chain whose ORDER was
+//! load-bearing — codex+Daemon, `starts_with("acp/")`, pi+Daemon, then the
+//! unknown-provider refusal wrapped in its own hosting guard — plus the three
+//! near-identical verb bodies it dispatched into. The lane keys on the LANE, so
+//! the arm that could be forgotten does not exist.
+//!
+//! The three PANE lanes deliberately do NOT, and the reason is stated in full at
+//! the fall-through below: `LaneOps::kill` re-resolves the row by id and joins the
+//! mux BY NAME, while the row this verb holds carries the gather's PID/ancestry
+//! join — and `reap_pane_session` consumes exactly those pane coordinates. It also
+//! means `dispatch::kill::PidProvenance`, which the pane reap reads off
+//! `which_branch`, is byte-identically the join's on the one destructive path.
+//!
 //! Exits 0/1 only.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use clap::ArgMatches;
 
-use dispatch::effects::{
-    find_zmx_wrapper_for_pid, is_pid_alive, kill_pid, Clock, Env, RealClock, RealEnv,
-    RealProcessTable,
-};
+use dispatch::effects::{is_pid_alive, Env, RealClock, RealEnv};
 use dispatch::exec::RealExec;
-use dispatch::kill::{have_kill_target, resolve_zmx_target};
-use dispatch::launch::remove_session_env_file;
-use dispatch::mux::{Mux, MuxSession};
+use dispatch::mux::Mux;
 use dispatch::paths::QdPaths;
 use dispatch::reconcile::{plan as reconcile_plan, Action};
-use dispatch::registry::{ensure_tombstone, read_entries, read_entry, tombstone, RegistryEntry};
+use dispatch::registry::{read_entries, tombstone, RegistryEntry};
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
+use quorum_qw::contract::{LaneError, LaneOps, SessionId};
+use quorum_qw::lane::{Harness, Lane};
 
 use super::common;
 
-/// `qd stop <session>` — provider split, then the claude/zmx dual-reap core.
+/// `qd stop <session>` — the lane, then either the daemon reap or the pane
+/// dual-reap. See the module docs for which goes where, and why.
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
     // W3 (ADD-15, Pete 2026-06-05): the interactive confirmation prompt is GONE —
@@ -72,74 +92,75 @@ pub fn run(m: &ArgMatches) -> i32 {
     };
     let session = &session;
 
-    // A-OC.1: opencode is un-parked — an `acp/opencode` row is daemon-hosted and reaches the
-    // acp/ GROUP-reap arm below (session.provider.starts_with("acp/") → run_acp_kill), reaping
-    // the resident adapter + its `opencode acp` bridge child together, exactly like
-    // acp/claude-code. No by-name opencode kill branch remains.
-    // codex P2 W7 (codex-p2-spec §7.6 kill paragraph): a codex row is DAEMON-hosted —
-    // the daemon pid IS the session. Reap it GROUP-addressed (the W4
-    // RealDaemonSpawner::kill pgid ladder — the launcher ignores SIGTERM + a
-    // launcher-only SIGKILL orphans the native child, so GROUP is mandatory) → then
-    // ensure_tombstone with the captured row (carries provider + endpoint). NO
-    // zmx/mux reap (a codex row has no pane). THIN dispatch branch → the NEW
-    // resume_daemon::kill_codex; RETURNS before any claude zmx/pid dual-reap. Placed
-    // BEFORE refuse_unknown_provider (which would otherwise refuse "codex").
+    // --- THE LANE, from the ROW's provider + hosting -------------------------
     //
-    // codex-interactive: SCOPED to DAEMON-hosted codex rows. An `--interactive`
-    // codex row has no daemon at all — its pid is the mux pane — so the group-kill
-    // above is not merely unnecessary, it silently LEAKS: `cmdline_is_our_daemon`
-    // requires both `codex` and `app-server` on the cmdline, a TUI pane has no
-    // `app-server`, the guard correctly refuses to signal, and the session would
-    // be tombstoned while the pane kept running. A pane-hosted codex row falls
-    // through to the claude-shaped dual-reap below, which is the machinery that
-    // actually reaps a pane (mux kill + pid-targeted kill, loud on partial).
-    if session.provider == "codex"
-        && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
-            == Some(dispatch::provider::Hosting::Daemon)
-    {
-        return run_codex_kill(&paths, session);
-    }
-    // scoped-ACP-CC (F3 / rider-4 kill-no-leak): an acp/* row is daemon-hosted — the
-    // resident adapter pid IS the session. GROUP-reap it (the adapter + its bridge child
-    // together) via the SAME proven group ladder as codex. Placed BEFORE
-    // refuse_unknown_provider (which would otherwise refuse acp and leave both procs alive).
-    if session.provider.starts_with("acp/") {
-        return run_acp_kill(&paths, session);
-    }
-    // WS-A.2 (item 3 kill-no-leak): a pi row is daemon-hosted — the resident pi-daemon
-    // pid IS the session (= the pgid). GROUP-reap it (resident + the pi child + pi's
-    // &-detached grandchildren together) via the same proven group ladder, gated on the
-    // pi cmdline identity, then tombstone. Placed BEFORE refuse_unknown_provider (which
-    // would otherwise refuse "pi" and leave the resident + pi alive — the live #8 leak).
+    // ONE call, in place of the four guarded if-chains that stood here: codex+
+    // Daemon, `starts_with("acp/")`, pi+Daemon, and the `row_hosting(..).is_none()`
+    // wrapper around the unknown-provider refusal. Their ORDER was load-bearing and
+    // enforced by comment — and getting it wrong did not merely fail, it LEAKED: the
+    // daemon group-kill applied to a PANE row silently tombstones the row while the
+    // pane keeps running, because the cmdline guard correctly refuses to signal a TUI
+    // that has no `app-server` / `pi-daemon` on its command line. Here the lane is
+    // the key, so there is no ordering to get wrong and no arm to forget.
     //
-    // pi-interactive: SCOPED to DAEMON-hosted pi rows, exactly as the codex arm
-    // above is. An `--interactive` pi row has no resident at all — its pid is the
-    // mux pane — so the group-reap is not merely unnecessary, it LEAKS:
-    // `cmdline_is_our_pi_daemon` requires our `pi-daemon` cmdline, a TUI pane has
-    // none, the guard correctly refuses to signal, and the row would be tombstoned
-    // while the pane kept running. A pane-hosted pi row falls through to the
-    // claude-shaped dual-reap below, which is the machinery that actually reaps a
-    // pane (mux kill + pid-targeted kill, loud on partial).
-    if session.provider == "pi"
-        && dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
-            == Some(dispatch::provider::Hosting::Daemon)
-    {
-        return run_pi_kill(&paths, session);
-    }
-    // codex P1, R1 (codex-p1-spec section 2.3): refuse an unknown provider LOUDLY.
+    // `None` ⇒ a genuinely unknown provider ⇒ the pre-existing loud refusal.
+    // `lane_for` answers `None` for exactly the ids `row_hosting` answered `None`
+    // for, so the guard the refusal used to carry is the `else` branch now.
     //
-    // codex-interactive: scoped to rows with no resolvable hosting (the same
-    // narrowing as `attach_resolved`'s). A pane-hosted codex row has just fallen
-    // through the daemon arms on purpose, headed for the dual-reap below; this
-    // helper's allow-list predates codex having a pane, so running it
-    // unconditionally would refuse to stop a session we know exactly how to stop.
-    if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref()).is_none() {
-        if let Some(code) = common::refuse_unknown_provider("stop", session) {
-            return code;
-        }
+    // NAMED USER-VISIBLE CHANGE — bare `opencode`. `refuse_unknown_provider` waves
+    // "opencode" through and `row_hosting("opencode", None)` answers `Daemon`, so
+    // such a row used to fall PAST all four arms into the CLAUDE PANE dual-reap —
+    // the mux-kill-plus-pid-kill machinery, aimed at a daemon-hosted row that has
+    // no pane at all. `lane_for` accepts `opencode` as the CLI alias it is and
+    // resolves it to the acp/opencode DAEMON lane. In practice these rows come from
+    // the opencode store's cold scan (`join.rs`'s opencode branch: no registry
+    // record, no pid), so both before and after they exit 1 having killed nothing;
+    // what changes is that the sentence now describes a daemon rather than a pane.
+    let Some(lane) = quorum_qw::lane_for(&session.provider, session.hosting.as_deref()) else {
+        return common::refuse_unknown_provider("stop", session).unwrap_or(1);
+    };
+
+    // The four DAEMON lanes: the resident pid IS the session, and the reap is a
+    // group-addressed signal ladder gated on a cmdline identity check. All three
+    // near-identical verb bodies that used to live at the bottom of this file
+    // (`run_codex_kill` / `run_acp_kill` / `run_pi_kill`) are gone; what is left is
+    // their rendering, which is all they ever held that a library must not.
+    if lane.is_daemon() {
+        return stop_daemon(&env, &paths, session, lane);
     }
 
-    // --- claude-code kill: dual-reap, PID-targeted, loud-on-partial (Bug A / I4) ---
+    // --- the three PANE lanes: dual-reap, PID-targeted, loud-on-partial (Bug A / I4) ---
+    //
+    // THE PANE REAP DELIBERATELY DOES NOT GO THROUGH THE LANE, and the reason is
+    // the row, not the routing. [`quorum_qw::contract::LaneOps::kill`] is addressed
+    // by [`SessionId`] and re-resolves it with `row_for_id`, whose pane join is
+    // BY NAME (`pane.name == row.name`); the row this verb already holds got its
+    // pane coordinates from the gather's join, which matches by PID and then by
+    // ancestry. Those disagree whenever the pane's name is not the row's — and it
+    // need not be: `derive_zmx_name` SANITISES the session name, and an unnamed row
+    // gets `claude-<id8>`. `reap_pane_session` consumes exactly those coordinates
+    // (`resolve_zmx_target`'s `lookup_key` is `zmx_name.or(session_name)`), so
+    // handing it the weaker row would silently demote fallback 1 to the ancestry
+    // fallback and stamp the success line `[zmx dir unconfirmed]`. On the one
+    // DESTRUCTIVE verb that is not a trade worth making for a shorter function.
+    //
+    // It also keeps [`dispatch::kill::PidProvenance`] EXACTLY as it was, and that is
+    // the load-bearing half: `reap_pane_session` reads `session.which_branch` to
+    // choose it, `ColdJsonl`/`ZmxOnly` ⇒ `PaneDerived` ⇒ the r8 foreign gate is
+    // skipped and the subtree sweep is permitted, anything else ⇒ `Registry` ⇒
+    // withheld. Reaping from the row qd holds means the branch is the JOIN's, byte
+    // for byte, on every row this arm sees.
+    //
+    // The reap itself is [`dispatch::kill::reap_pane_session`], EXTRACTED from
+    // this body in stage-2 phase 3 (the `kill` step). It used to be ~450 lines
+    // inlined right here — interleaved with printing and four early returns — so
+    // there was nothing `LaneOps::kill` could delegate to and the three pane lanes
+    // were blocked on that alone. Nothing about the sequence changed: same
+    // ordering, same 12×250ms verify loop, same failure wording, same tombstone
+    // step. What stays in this verb is what a library must not own — the CLI-
+    // resolved mux/dir geometry, the four rendering sites below, and the dead-pid
+    // registry sweep, which is housekeeping over ALL rows rather than this
+    // session's lane.
     let exec = RealExec;
     // Backend-selected mux (C1 D3). ONE QD_MUX parse drives the mux AND the dir
     // set below. A bogus QD_MUX exits loudly here.
@@ -152,10 +173,7 @@ pub fn run(m: &ArgMatches) -> i32 {
         Err(code) => return code,
     };
     let mux: &dyn Mux = mux.as_ref();
-    let pt = RealProcessTable::new(exec);
     let clock = RealClock;
-
-    let pid = session.pid.unwrap_or(0);
 
     // The socket dirs to scan/kill in. Backend-keyed (C1 D2): zmx keeps the
     // canonical + cross-dir legacy scan (Bug D); embedded uses the single qrmux
@@ -183,167 +201,9 @@ pub fn run(m: &ArgMatches) -> i32 {
         }
         dispatch::mux_selector::Backend::Embedded => Vec::new(),
     };
-    let mut dirs = vec![canonical.clone()];
+    // CANONICAL FIRST — the reap reads `dirs[0]` as the canonical dir.
+    let mut dirs = vec![canonical];
     dirs.extend(legacy);
-
-    let canonical_str = canonical.to_string_lossy().into_owned();
-
-    // Ancestry wrapper for the claude PID (red-team #1) — the wrapper is a real
-    // ANCESTOR even when its socket lives in an unscanned dir. Walk the full
-    // ps `{ppid,cmd}` rows (the wrapper is a bash/zmx process, not a claude one,
-    // so claude_procs alone is insufficient). The SAME rows feed the r7
-    // ownership chain (clause (b) of the resolver's confirmed-target gate).
-    let proc_rows = if pid > 0 { ps_rows(&pt) } else { None };
-    let wrapper = proc_rows
-        .as_ref()
-        .and_then(|rows| find_zmx_wrapper_for_pid(pid as i32, rows))
-        .map(|w| (w.wrapper_pid, w.zmx_name));
-    let owner_chain: Vec<i32> = proc_rows
-        .as_ref()
-        .map(|rows| dispatch::effects::ancestor_chain(pid as i32, rows))
-        .unwrap_or_default();
-
-    // Gather the FILTERED + RAW cross-dir lists for the by-name fallbacks.
-    let live_list = scan_all_dirs(mux, &dirs, false);
-    let raw_list = scan_all_dirs(mux, &dirs, true);
-
-    // r8 (identity-first): establish what the recorded pid IS before deriving
-    // any ownership witness from it. A Registry-sourced pid (LiveRegistry /
-    // Tombstoned rows) is a historical claim with a reuse window — alive but
-    // not the session's program ⇒ FOREIGN ⇒ no clause-(a) pid, no wrapper, no
-    // ancestor chain (a reused pid's ancestry otherwise reaches a live
-    // victim's pane). A pane-derived pid (ColdJsonl adoption / ZmxOnly) is
-    // same-invocation pane truth and exempt.
-    let provenance = match session.which_branch {
-        dispatch::model::SessionBranch::LiveRegistry
-        | dispatch::model::SessionBranch::Tombstoned => dispatch::kill::PidProvenance::Registry,
-        dispatch::model::SessionBranch::ColdJsonl | dispatch::model::SessionBranch::ZmxOnly => {
-            dispatch::kill::PidProvenance::PaneDerived
-        }
-    };
-    // The session program may be overridden (CLAUDE_BIN — test SUTs, alt
-    // installs); a legit recorded pid then shows THAT cmdline, not "claude".
-    let session_bin = dispatch::launch::claude_bin(&env);
-    let pid_alive_now = pid > 0 && is_pid_alive(pid as i32);
-    let pid_cmdline = if pid_alive_now {
-        dispatch::create_daemon::real_cmdline_probe(pid)
-    } else {
-        None
-    };
-    // The start-time arm: (pid, start-time) identity survives `exec` and is
-    // program-agnostic — the sound half of the foreign check (the cmdline
-    // arm is the belt; see kill::pid_is_foreign).
-    let pid_started = if pid_alive_now {
-        dispatch::effects::proc_start_ms(pid as i32)
-    } else {
-        None
-    };
-    let (ownership_pid, wrapper, owner_chain, pid_foreign) = dispatch::kill::gate_pid_witnesses(
-        provenance,
-        pid,
-        pid_alive_now,
-        pid_cmdline.as_deref(),
-        &session_bin,
-        pid_started,
-        session.started_at_ms,
-        wrapper,
-        owner_chain,
-    );
-
-    // punch item 8 (b3-kill-spec): the descendant-tree snapshot for the
-    // grandchild sweep — taken BEFORE any kill while the tree is intact (the
-    // pane teardown reparents survivors to init and erases the ppid evidence).
-    //
-    // SWEEP-ROOT GATE (b3 adversarial concern 1): the lone-pid kill gate
-    // (!pid_foreign) is NOT strong enough to root a SUBTREE sweep. pid_foreign
-    // is false when the cmdline read failed (the adjudicated "probably died in
-    // the probe window" cell) — but a reused registry pid now held by a
-    // STRANGER, whose cmdline probe happened to fail, would otherwise root a
-    // sweep over the STRANGER's children, and every per-victim recheck would
-    // PASS (those victims genuinely are the stranger's descendants). So the
-    // SWEEP requires a POSITIVE root witness (cmdline-matched-ours OR
-    // confirmed-started-ours; a confirmed start MISMATCH is a hard veto) via
-    // sweep_root_allowed. When the only evidence is "alive but
-    // unidentifiable", the lone root-kill below still runs (r7/r8 unchanged) —
-    // only the subtree sweep is withheld (grandchildren leak = accepted leak
-    // direction). PaneDerived provenance is same-invocation pane truth, never
-    // a reuse window — it roots without the registry-row witness.
-    let sweep_root_ok = pid > 0
-        && pid_alive_now
-        && !pid_foreign
-        && (provenance == dispatch::kill::PidProvenance::PaneDerived
-            || dispatch::kill::sweep_root_allowed(
-                pid_cmdline.as_deref(),
-                &session_bin,
-                pid_started,
-                session.started_at_ms,
-            ));
-    // Each victim is stamped with its current (pid, start-time) at STAMP TIME
-    // — the identity anchor runs forward from here, NOT back to the snapshot
-    // (the ~1-3s scan gap means a victim could in principle have been replaced
-    // between snapshot and stamp; the forward anchor + the kill_pid_tree
-    // recheck close the window from stamp time on). descendant_kill_list
-    // returns EMPTY for self-stop (qd inside the session's own tree — never
-    // sweep toward the caller; the L10 PID-only lesson).
-    let descendant_victims: Vec<(i32, i64)> = if sweep_root_ok {
-        proc_rows
-            .as_ref()
-            .map(|rows| {
-                dispatch::kill::descendant_kill_list(pid as i32, std::process::id() as i32, rows)
-                    .into_iter()
-                    .filter_map(|p| dispatch::effects::proc_start_ms(p).map(|s| (p, s)))
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    let pid_alive_probe = |p: i32| is_pid_alive(p);
-    let mut target = resolve_zmx_target(
-        session.zmx_name.as_deref(),
-        session.name.as_deref(),
-        ownership_pid,
-        &canonical_str,
-        &live_list,
-        &raw_list,
-        wrapper,
-        &owner_chain,
-        &pid_alive_probe,
-    );
-
-    // r7 OPEN-Q1 (fallback-3 belt): an ended task's recorded wrapper pid is
-    // mint-time data with a real reuse window. Only signal it when its CURRENT
-    // cmdline parses as a zmx wrapper for this name; otherwise it is either a
-    // reused stranger (never signal) or already gone (nothing to signal) — in
-    // both cases the wrapper slot is cleared and the rest of the reap proceeds.
-    // The ancestry wrapper (zmx_dir_unconfirmed) needs no guard: its pid came
-    // from a fresh `ps` walk moments ago, cmdline-matched by construction.
-    if target.wrapper_pid > 0 && !target.zmx_dir_unconfirmed {
-        let cmdline = dispatch::create_daemon::real_cmdline_probe(i64::from(target.wrapper_pid));
-        let name = target.zmx_name.as_deref().unwrap_or("");
-        if !dispatch::kill::wrapper_kill_allowed(cmdline.as_deref(), name) {
-            target.wrapper_pid = 0;
-        }
-    }
-
-    let have_zmx = target.zmx_name.is_some();
-    let have_pid = pid > 0;
-
-    // The two verify belts below must judge "still there" identically: a pane
-    // counts only at the dir the kill was pinned to (an ownership-refused
-    // same-name pane in another dir is someone else's). socket_dir-less rows
-    // stay conservative-loud; an unconfirmed dir falls back to name-only.
-    let at_target_dir = |z: &MuxSession| {
-        target.zmx_dir_unconfirmed
-            || z.socket_dir.is_none()
-            || z.socket_dir.as_deref() == target.zmx_dir.as_deref()
-    };
-
-    if !have_kill_target(&target, pid) {
-        eprintln!("Session is not in zmx and has no PID. Nothing to kill.");
-        return 1;
-    }
 
     // W3 NOTE (war story carried from the deleted confirmation block, lifecycle.ts:
     // 651-681 / old kill.rs:127-154): the TS prompt once made a non-TTY caller
@@ -352,179 +212,91 @@ pub fn run(m: &ArgMatches) -> i32 {
     // prompt entirely ("misguided for this tool"). No code path reads stdin in
     // this verb anymore — the hang class is dead structurally, not defended.
 
-    let mut failures: Vec<String> = Vec::new();
-
-    // Capture the registry entry BEFORE killing (lifecycle.ts:684-687) — claude
-    // removes its own <pid>.json on graceful SIGTERM.
-    let captured: Option<RegistryEntry> = if pid > 0 {
-        read_entry(&paths.sessions_dir, pid)
-    } else {
-        None
-    };
-
-    // 1. Reap the zmx session (lifecycle.ts:689-739).
-    if have_zmx {
-        let zmx_name = target.zmx_name.clone().unwrap();
-        let mut code = 0;
-        if !target.zmx_dir_unconfirmed {
-            if let Some(dir) = &target.zmx_dir {
-                code = mux.kill(Path::new(dir), &zmx_name).unwrap_or(1);
-            }
-        }
-        if target.wrapper_pid > 0 {
-            kill_pid(target.wrapper_pid, dispatch::effects::KILL_GRACE_MS);
-        }
-        // Verify gone: 12×250ms (~3s), fail-safe loud rc=1. A loaded host clears
-        // the dying socket slower; the worst case is a loud "possible leak", never
-        // a silent desync. When the dir was unconfirmed we additionally require the
-        // wrapper PID to be dead (an unscanned-dir leak would otherwise be invisible).
-        let mut still_there = true;
-        for _ in 0..12 {
-            // r7: verify at the dir the kill was pinned to (see at_target_dir).
-            let in_scanned = scan_all_dirs(mux, &dirs, false)
-                .iter()
-                .any(|z| z.name == zmx_name && at_target_dir(z));
-            let wrapper_alive = target.wrapper_pid > 0 && is_pid_alive(target.wrapper_pid);
-            still_there = in_scanned || wrapper_alive;
-            if !still_there {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(250));
-        }
-        if still_there {
-            let wrapper_still_alive = target.wrapper_pid > 0 && is_pid_alive(target.wrapper_pid);
-            failures.push(if wrapper_still_alive {
-                format!(
-                    "zmx wrapper \"{zmx_name}\" (pid {} still alive — leak)",
-                    target.wrapper_pid
-                )
-            } else if target.zmx_dir_unconfirmed {
-                format!(
-                    "zmx wrapper \"{zmx_name}\" (pid {}, socket dir unknown — possible leak)",
-                    target.wrapper_pid
-                )
-            } else {
-                format!("zmx session \"{zmx_name}\" (zmx kill exit {code})")
-            });
-        }
-    }
-
-    // 2. Reap the claude PID directly — never rely on zmx kill alone (Bug A).
-    //    r7 OPEN-Q1: unless the pid is FOREIGN (reused by a process the
-    //    cmdline cannot identify as the session program) — then the stranger
-    //    is never signaled; say so (the silent path would read as a kill).
-    //    Liveness is RE-CHECKED here: a mux-corroborated pane kill in step 1
-    //    may already have reaped the process (the clause-(a) path where the
-    //    cmdline could not identify it) — then there is nothing to skip and
-    //    nothing to announce.
-    if have_pid {
-        if pid_foreign && is_pid_alive(pid as i32) {
-            eprintln!(
-                "note: pid {pid} now belongs to a different process (not the session's \
-                 program) — not signaled; the dead session's record is tombstoned."
-            );
-        } else if !pid_foreign {
-            let dead = kill_pid(pid as i32, dispatch::effects::KILL_GRACE_MS);
-            if !dead {
-                failures.push(format!("claude process PID {pid}"));
-            }
-        }
-    }
-
-    // 2b. punch item 8: the descendant sweep — the grandchild-survival gap
-    //     (P2 panel-unanimous). claude's graceful exit does not reliably reap
-    //     its children's children; sweep the pre-kill snapshot bottom-up.
-    //     Every signal inside kill_pid_tree is (pid, start-time)-re-verified
-    //     (a reused pid is never signaled); a survivor that still IS the
-    //     snapshot process is a loud leak, never a silent one. Empty for
-    //     foreign/dead/self-stop/no-positive-witness roots (see the snapshot
-    //     site above).
+    // `pi/extension`: capture the control socket BEFORE the reap.
     //
-    //     KNOWN SHAPE (b3 adversarial concern 4, defensible — documented not
-    //     fixed): a session B being COMMISSIONED from inside session A (an
-    //     embedded `qd start B` running as a descendant of A's claude) at the
-    //     instant `qd stop A` snapshots is a true descendant of A, so its
-    //     nascent process is swept. This is `qd stop A` stopping A's whole
-    //     subtree, which includes the in-flight commission it spawned — the
-    //     intended semantics of stopping the commissioner; the window closes
-    //     when `qd start B` exits and B reparents off A.
-    if !descendant_victims.is_empty() {
-        for leftover in
-            dispatch::effects::kill_pid_tree(&descendant_victims, dispatch::effects::KILL_GRACE_MS)
-        {
-            failures.push(format!("descendant process PID {leftover} (still alive)"));
-        }
+    // The endpoint lives on the registry ROW, not on the joined `Session`, and
+    // the reap tombstones that row — so reading it afterwards is a race against
+    // our own cleanup. Resolved here, unlinked below.
+    let control_socket = lane.has_control_channel().then(|| {
+        let endpoint = session
+            .pid
+            .filter(|&p| p != 0)
+            .and_then(|p| dispatch::registry::read_entry(&paths.sessions_dir, p))
+            .and_then(|e| e.endpoint);
+        quorum_qw::provider::pi::extension::socket_for(
+            &env,
+            endpoint.as_deref(),
+            &session.session_id,
+        )
+    });
+
+    let reap = dispatch::kill::reap_pane_session(
+        &dispatch::kill::PaneReapDeps {
+            paths: &paths,
+            env: &env,
+            exec: &exec,
+            clock: &clock,
+            mux,
+            dirs: &dirs,
+        },
+        session,
+    );
+
+    // Unlink the control socket the reaped session was serving.
+    //
+    // WHY HERE AND NOT ONLY IN THE LANE. `LaneOps::kill` does this too, for
+    // callers that go through it — but this verb deliberately does NOT go
+    // through the lane for a pane row (see the long note above: the lane
+    // re-resolves pane coordinates by NAME, and this verb already holds the
+    // stronger ones from the gather's join). So the cleanup has to exist on both
+    // paths, and the duplication is the same shape, for the same reason, as the
+    // codex viewer reap.
+    //
+    // Left behind, the socket file outlives the process that bound it and
+    // `connect(2)` on it fails with ECONNREFUSED — which reads as "the channel
+    // broke" when the truth is "the session is gone". The path comes from
+    // `quorum_qw`, never re-derived here, so both halves address one socket.
+    if let Some(sock) = &control_socket {
+        quorum_qw::provider::pi::extension::install::remove_socket(sock);
     }
 
-    // 3. Tombstone IFF the process is actually dead (I4) — or FOREIGN (r7: a
-    //    reused pid means the SESSION is dead; the live stranger is not it).
-    //    ensure_tombstone renames a live <pid>.json, or synthesizes one from
-    //    the captured/fallback entry.
-    if pid > 0 {
-        if pid_foreign || !is_pid_alive(pid as i32) {
-            let fallback = captured.clone().unwrap_or_else(|| RegistryEntry {
-                pid: Some(pid),
-                session_id: Some(session.session_id.clone()),
-                cwd: session.cwd.clone(),
-                started_at: session.started_at_ms.or(Some(clock.now_ms())),
-                updated_at: Some(clock.now_ms()),
-                status: Some("idle".to_string()),
-                name: session.name.clone(),
-                ..Default::default()
-            });
-            ensure_tombstone(&paths.sessions_dir, pid, Some(&fallback));
-        } else {
-            failures.push(format!(
-                "registry tombstone for PID {pid} (process still alive)"
-            ));
-        }
+    // r7 OPEN-Q1: the foreign-pid note is non-fatal and must be said out loud —
+    // the silent path would read as a kill. Printed FIRST, exactly where step 2
+    // printed it relative to everything below.
+    for note in &reap.notes {
+        eprintln!("{note}");
     }
 
-    if !failures.is_empty() {
+    if reap.nothing_to_kill {
+        eprintln!("Session is not in zmx and has no PID. Nothing to kill.");
+        return 1;
+    }
+
+    if !reap.failures.is_empty() {
         let label = session
             .name
             .clone()
-            .or_else(|| target.zmx_name.clone())
-            .unwrap_or_else(|| pid.to_string());
+            .or_else(|| reap.zmx_name.clone())
+            .unwrap_or_else(|| reap.pid.to_string());
         eprintln!(
             "Failed to fully reap session \"{label}\". Could not reap: {}.",
-            failures.join("; ")
+            reap.failures.join("; ")
         );
         return 1;
     }
 
-    // F1 cleanup runs BEFORE kill-verify (verify may exit 1 and must not strand
-    // the per-session env file). Best-effort.
-    let kill_session_name = session
-        .name
-        .clone()
-        .or_else(|| target.zmx_name.clone())
-        .unwrap_or_default();
-    if !kill_session_name.is_empty() {
-        remove_session_env_file(&home, &kill_session_name);
-    }
-
-    // Kill-verify (F2/C2, lifecycle.ts:760-784): ONE presence scan for the pane
-    // we actually targeted. A survivor means the "success" would be a silent
-    // lie — exit 1 with an advisory. The hint uses `zmx ls`, NEVER `zmx kill`
-    // (don't direct the operator to kill an innocent same-named session).
-    // r7/M3: keyed to target.zmx_name (pane truth), NOT session.name — when no
-    // pane was targeted there is nothing to verify, and a registry-name scan
-    // would false-flag an ownership-refused innocent as a "survivor". Dir-pinned
-    // for the same reason when the dir was confirmed.
-    let verify_name = target.zmx_name.clone().unwrap_or_default();
-    if !verify_name.is_empty() {
-        if let Some(survivor) = scan_all_dirs(mux, &dirs, false)
-            .into_iter()
-            .find(|z| z.name == verify_name && at_target_dir(z))
-        {
-            let dir = survivor.socket_dir.unwrap_or(canonical_str.clone());
-            eprintln!(
-                "WARNING: zmx session \"{verify_name}\" still exists after kill (found in {dir}). \
-                 Registry cleaned but zmx task was not reached. Verify with: ZMX_DIR={dir} zmx ls"
-            );
-            return 1;
-        }
+    // Kill-verify (F2/C2, lifecycle.ts:751-784): the reap's post-verify scan found
+    // the pane we targeted STILL PRESENT. A survivor means the "success" would be
+    // a silent lie — exit 1 with an advisory. The hint uses `zmx ls`, NEVER
+    // `zmx kill` (don't direct the operator to kill an innocent same-named
+    // session).
+    if let Some(dir) = &reap.survivor_dir {
+        let verify_name = reap.zmx_name.clone().unwrap_or_default();
+        eprintln!(
+            "WARNING: zmx session \"{verify_name}\" still exists after kill (found in {dir}). \
+             Registry cleaned but zmx task was not reached. Verify with: ZMX_DIR={dir} zmx ls"
+        );
+        return 1;
     }
 
     // Dead-PID registry sweep (root-cause complement to the resolver fix): the
@@ -567,13 +339,13 @@ pub fn run(m: &ArgMatches) -> i32 {
     // (lifecycle.ts:633-637 class): success is real (wrapper verified dead) but
     // the socket-dir claim stays honest. Failure paths above are byte-UNCHANGED.
     let reg_name = session.name.clone().unwrap_or_else(|| "-".to_string());
-    let zmx_label = target.zmx_name.clone().unwrap_or_else(|| "-".to_string());
-    let pid_label = if pid > 0 {
-        pid.to_string()
+    let zmx_label = reap.zmx_name.clone().unwrap_or_else(|| "-".to_string());
+    let pid_label = if reap.pid > 0 {
+        reap.pid.to_string()
     } else {
         "-".to_string()
     };
-    let unconfirmed = if target.zmx_name.is_some() && target.zmx_dir_unconfirmed {
+    let unconfirmed = if reap.zmx_name.is_some() && reap.zmx_dir_unconfirmed {
         " [zmx dir unconfirmed]"
     } else {
         ""
@@ -588,210 +360,259 @@ pub fn run(m: &ArgMatches) -> i32 {
     0
 }
 
-/// codex P2 W7 (codex-p2-spec §7.6 kill paragraph) — the codex KILL path at the
-/// verb layer. A codex row is daemon-hosted; the daemon pid IS the session. ALL kill
-/// logic lives in [`dispatch::resume_daemon::kill_codex`] (the GROUP-pgid ladder reap +
-/// tombstone); this is the thin glue: capture the row BEFORE the kill (the tombstone
-/// audit trail carries provider + endpoint), call the lib, print the success line.
-/// NO zmx/mux reap (no pane). The HONEST EDGE (an already-dead daemon pid → no signal,
-/// still tombstone) is handled inside `kill_codex`.
-fn run_codex_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
-    use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
-    use dispatch::resume_daemon::kill_codex;
-
+/// The four DAEMON lanes' `qd stop`, through [`quorum_qw::contract::LaneOps::kill`].
+///
+/// It replaces `run_codex_kill`, `run_acp_kill` and `run_pi_kill` — three bodies
+/// that differed in a noun and a bracketed clause and were otherwise the same
+/// twelve lines: capture the row before the kill, group-reap it under a cmdline
+/// identity guard, tombstone, print. Every one of those steps is the lane's now
+/// (each arm calls the SAME delegate its verb body called), and every one of the
+/// DIFFERENCES is here, where a difference in wording belongs.
+///
+/// What the lane could not give back, and therefore reports: `was_alive` is the
+/// delegate's OWN answer, read at the instant it decided whether to signal — for
+/// codex and acp that is `pid > 0 && is_pid_alive(pid) && cmdline_is_our_daemon(…)`,
+/// computed inside the kill. Re-probing it here would reimplement the identity
+/// guard AND race the kill it describes.
+fn stop_daemon(
+    env: &RealEnv,
+    paths: &QdPaths,
+    session: &dispatch::model::Session,
+    lane: Lane,
+) -> i32 {
     let name = session
         .name
         .clone()
         .unwrap_or_else(|| session.session_id.clone());
-    let pid = session.pid.unwrap_or(0);
-    if pid <= 0 {
-        // A codex row with no daemon pid has nothing to reap (and nothing to key a
-        // tombstone by). Mirrors the claude "nothing to kill" wording shape.
-        eprintln!("qd stop: \"{name}\": codex session has no daemon pid. Nothing to kill.");
+    let no_pid = daemon_no_pid_clause(lane);
+
+    let ops = dispatch::lane::open(lane, env, paths.clone());
+    let report = match ops.kill(&SessionId(session.session_id.clone())) {
+        Ok(r) => r,
+        // The lane could not ADDRESS the row. `row_for_id` is registry-keyed —
+        // tombstone-aware, so an idempotent second `qd stop` still resolves — and
+        // EVERY daemon row qd can carry a pid for was written into that registry by
+        // the create or the revive that spawned the resident. So what lands here is
+        // a daemon-shaped row read out of a provider's own COLD STORE (`join.rs`'s
+        // codex / pi / opencode cold branches, all of which carry `pid: None`):
+        // there is no resident to signal and no row to tombstone, which is exactly
+        // what the no-pid clause says.
+        Err(LaneError::NotFound { .. }) => {
+            eprintln!("qd stop: \"{name}\": {no_pid} Nothing to kill.");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("qd stop: {e}");
+            return 1;
+        }
+    };
+
+    if report.observed.nothing_to_kill {
+        eprintln!("qd stop: \"{name}\": {no_pid} Nothing to kill.");
         return 1;
     }
 
-    // Capture the row BEFORE the kill (claude removes its own <pid>.json on graceful
-    // SIGTERM; the codex daemon knows nothing of qd, but capturing keeps the tombstone
-    // audit trail — provider + endpoint — even if the kill races a row rewrite).
-    let captured = read_entry(&paths.sessions_dir, pid);
-    let spawner = RealDaemonSpawner;
-    // W9 FIX M-1: the cmdline-identity guard — kill_codex group-signals ONLY when
-    // the live pid's command line is OUR codex daemon (never a reused-pid foreign
-    // group). The probe reads one pid's cmdline via the existing `ps` seam.
-    let probe = real_cmdline_probe;
-    let outcome = kill_codex(
-        &paths.sessions_dir,
-        pid,
-        captured.as_ref(),
-        &spawner,
-        &probe,
+    // `was_alive` is the delegate's OWN answer at the instant it decided whether to
+    // signal; `None` cannot arise on a daemon arm (a pane lane never reaches this
+    // function) and reads as "not observed alive", which is the conservative half.
+    println!(
+        "{}",
+        daemon_success_line(
+            lane,
+            session,
+            report.observed.pid,
+            !report.observed.was_alive.unwrap_or(false),
+        )
     );
-
-    // codex-interactive, use case 2: reap any HUMAN VIEWER pane opened on this
-    // session (`qd attach` on a live daemon row spawns `codex --remote <endpoint>
-    // …`). The viewer is not the session and holds no row, but it is a live TUI
-    // pointed at an app server we are about to kill — left behind it would sit
-    // there rendering a dead connection, and its name would block the next
-    // viewer. Best-effort: a missing pane is the normal case.
-    if let Some(vname) = session.name.as_deref() {
-        reap_viewer_pane(&RealEnv, &paths.home, vname);
-    }
-
-    // ONE unambiguous success line (the W4 kill format shape). A daemon-hosted
-    // session has no mux pane at all, so the pid IS the reaped identity.
-    let reg_name = session.name.clone().unwrap_or_else(|| "-".to_string());
-    if outcome.was_alive {
-        println!("killed {reg_name} (daemon pid {pid})");
-    } else {
-        // The already-dead edge: the daemon was already gone — we tombstoned the
-        // dead row (the dead-row seal). Honest about what happened.
-        println!("killed {reg_name} (daemon pid {pid}) [daemon already dead — tombstoned]");
-    }
     0
 }
 
-/// scoped-ACP-CC stop (F3 / rider-4 kill-no-leak): the ACP analog of [`run_codex_kill`].
-/// GROUP-reaps the resident adapter pid (= pgid) via [`kill_acp`] — reaping the adapter
-/// AND its bridge child together — gated on the ACP cmdline identity, then tombstones. No
-/// zmx/mux reap (an acp row has no pane). After this, `pgrep` shows ZERO adapter/bridge
-/// procs for the killed session (the no-leaked-procs proof).
-/// codex-interactive, use case 2: best-effort reap of a session's human-viewer
-/// pane (see `verbs::lifecycle::attach_codex_viewer`).
+/// The no-pid clause, per lane. codex and acp call it a "daemon pid"; pi calls it
+/// a "resident pid", because that is what pi's row records and what pi's own arm
+/// has always said. Preserved as three clauses, not normalised to one: silently
+/// rewriting a user-facing line during a code move is the change that goes
+/// unnoticed.
+fn daemon_no_pid_clause(lane: Lane) -> &'static str {
+    match lane.harness {
+        Harness::Codex => "codex session has no daemon pid.",
+        Harness::Pi => "pi session has no resident pid.",
+        // Both ACP lanes. claude-code has no daemon lane at all, so it cannot
+        // reach here; giving it the acp clause rather than an `unreachable!` keeps
+        // an impossible input from being a panic.
+        _ => "acp session has no daemon pid.",
+    }
+}
+
+/// ONE unambiguous success line (the W4 kill format shape). A daemon-hosted session
+/// has no mux pane at all, so the pid IS the reaped identity.
 ///
-/// Silent by design at every step: a session with no viewer is the overwhelmingly
-/// common case, and a viewer that cannot be reaped must never turn a successful
-/// `qd stop` into a failure — the session itself is already down.
-fn reap_viewer_pane(env: &RealEnv, home: &Path, session_name: &str) {
-    let pane = super::lifecycle::viewer_pane_name(session_name);
-    let Ok(backend) = common::select_backend(env) else {
-        return;
-    };
-    let Ok(mux) = common::build_mux(backend, home, env) else {
-        return;
-    };
-    let dirs: Vec<PathBuf> = match backend {
-        dispatch::mux_selector::Backend::Embedded => {
-            match dispatch::qrmux_dir::resolve_qrmux_dir(home, env) {
-                Ok(d) => vec![d],
-                Err(_) => return,
+/// `already_dead` is the honest edge: the resident was gone before we got there, so
+/// we tombstoned the dead row (the dead-row seal) and signalled nothing.
+///
+/// The pi line differs from the codex/acp pair in BOTH halves — it names the row by
+/// `name || sessionId` where they use `name || "-"`, and calls the pid a bare `pid`
+/// where they call it a `daemon pid`. That asymmetry predates the lane and is kept
+/// deliberately; see [`daemon_no_pid_clause`].
+fn daemon_success_line(
+    lane: Lane,
+    session: &dispatch::model::Session,
+    pid: i64,
+    already_dead: bool,
+) -> String {
+    match lane.harness {
+        Harness::Pi => {
+            let name = session
+                .name
+                .clone()
+                .unwrap_or_else(|| session.session_id.clone());
+            if already_dead {
+                format!("killed {name} (pid {pid}) [resident already dead — tombstoned]")
+            } else {
+                format!("killed {name} (pid {pid})")
             }
         }
-        dispatch::mux_selector::Backend::Zmx => vec![resolve_zmx_dir(env)],
-    };
-    for d in dirs {
-        if mux
-            .list(&d)
-            .unwrap_or_default()
-            .into_iter()
-            .any(|z| z.name == pane)
-        {
-            let _ = mux.kill(&d, &pane);
+        harness => {
+            let reg_name = session.name.clone().unwrap_or_else(|| "-".to_string());
+            let suffix = if !already_dead {
+                ""
+            } else if harness == Harness::Codex {
+                " [daemon already dead — tombstoned]"
+            } else {
+                " [adapter already dead — tombstoned]"
+            };
+            format!("killed {reg_name} (daemon pid {pid}){suffix}")
         }
     }
 }
 
-fn run_acp_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
-    use dispatch::create_daemon::{real_cmdline_probe, RealDaemonSpawner};
-    use dispatch::resume_daemon::kill_acp;
+#[cfg(test)]
+mod tests {
+    use super::{daemon_no_pid_clause, daemon_success_line};
+    use quorum_qw::lane::{Harness, Lane, Mode};
 
-    let name = session
-        .name
-        .clone()
-        .unwrap_or_else(|| session.session_id.clone());
-    let pid = session.pid.unwrap_or(0);
-    if pid <= 0 {
-        eprintln!("qd stop: \"{name}\": acp session has no daemon pid. Nothing to kill.");
-        return 1;
+    /// The two fields these lines read, and nothing else — the rest is spelled out
+    /// because `Session` has no `Default` (a session with no branch and no provider
+    /// is not a session).
+    fn row(name: Option<&str>) -> dispatch::model::Session {
+        dispatch::model::Session {
+            name: name.map(str::to_string),
+            user_named: None,
+            session_id: "sid-1".to_string(),
+            code: None,
+            qd_id: None,
+            pid: Some(4242),
+            status: dispatch::model::SessionStatus::Cold,
+            zmx_name: None,
+            zmx_clients: None,
+            socket_dir: None,
+            relay_port: None,
+            turns: 0,
+            tokens: 0,
+            cwd: None,
+            last_active_ms: None,
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: None,
+            last_turns: None,
+            provider: "codex".to_string(),
+            entrypoint: None,
+            lineage: None,
+            hosting: Some("daemon".to_string()),
+            which_branch: dispatch::model::SessionBranch::LiveRegistry,
+        }
     }
-    // Capture the row BEFORE the kill (carries provider + endpoint for the tombstone).
-    let captured = read_entry(&paths.sessions_dir, pid);
-    let spawner = RealDaemonSpawner;
-    let probe = real_cmdline_probe;
-    let outcome = kill_acp(&paths.sessions_dir, pid, captured.as_ref(), &spawner, &probe);
 
-    let reg_name = session.name.clone().unwrap_or_else(|| "-".to_string());
-    if outcome.was_alive {
-        println!("killed {reg_name} (daemon pid {pid})");
-    } else {
-        println!("killed {reg_name} (daemon pid {pid}) [adapter already dead — tombstoned]");
+    /// The daemon lane of `harness` — genuinely "the daemon lane of THIS harness",
+    /// not "this row's lane": the fixture row above is a codex row throughout, and
+    /// these tests vary the harness independently of it to walk the four daemon
+    /// lanes' prose.
+    ///
+    /// It refuses rather than asserting a standing claim about the harness table.
+    /// The `expect("every non-claude harness has a daemon lane")` this replaced was
+    /// true when written and is still true today, but it was a sentence about lanes
+    /// this test does not name, parked in a test that names four — so the day a
+    /// harness stops having a daemon lane, the panic would have explained the wrong
+    /// thing. `None` here means THIS call named a harness with no daemon lane, i.e.
+    /// the test is wrong, and the message says which harness.
+    fn daemon(harness: Harness) -> Lane {
+        Lane::new(harness, Mode::Daemon)
+            .unwrap_or_else(|| panic!("{} has no daemon lane", harness.provider_id()))
     }
-    0
-}
 
-/// WS-A.2 pi stop (item-3 kill-no-leak): the pi analog of [`run_acp_kill`].
-/// GROUP-reaps the resident pi-daemon pid (= pgid) via
-/// [`dispatch::provider::pi::daemon::teardown_pi_daemon`] — reaping the resident, the
-/// `pi --mode rpc` child, AND pi's `&`-detached grandchildren (PA11) together — gated
-/// on the pi cmdline identity (defeats PID reuse), then tombstones the row. The teardown
-/// routes its group signals through the `safe_group_kill` chokepoint (via
-/// `RealDaemonSpawner.kill`); this arm issues NO raw negative-pid group signal of its
-/// own — the box-killer conformance lint stays green over it. After this,
-/// ZERO pi-daemon/pi procs remain for the killed session (the no-leaked-procs proof
-/// the live #8 demands).
-fn run_pi_kill(paths: &QdPaths, session: &dispatch::model::Session) -> i32 {
-    use dispatch::create_daemon::real_cmdline_probe;
-    use dispatch::provider::pi::daemon::teardown_pi_daemon;
+    /// The four daemon lanes' `qd stop` prose, pinned BYTE FOR BYTE against what the
+    /// three retired verb bodies (`run_codex_kill` / `run_acp_kill` / `run_pi_kill`)
+    /// printed. The bodies collapsed into one `LaneOps::kill` call; the lines did
+    /// not, and the asymmetries between them are the reason — pi names the row and
+    /// the pid differently from the codex/acp pair, and each lane's already-dead
+    /// clause names its OWN process ("daemon" / "adapter" / "resident").
+    ///
+    /// MUTATION EVIDENCE: normalise any one of the three shapes onto another — the
+    /// obvious "cleanup" a collapse invites — and the matching assertion reds with
+    /// the exact line the retired body used to print.
+    #[test]
+    fn the_daemon_stop_lines_survive_the_collapse_byte_for_byte() {
+        let named = row(Some("wk"));
+        // codex: name || "-", "daemon pid", "daemon already dead".
+        assert_eq!(
+            daemon_success_line(daemon(Harness::Codex), &named, 4242, false),
+            "killed wk (daemon pid 4242)"
+        );
+        assert_eq!(
+            daemon_success_line(daemon(Harness::Codex), &named, 4242, true),
+            "killed wk (daemon pid 4242) [daemon already dead — tombstoned]"
+        );
+        // acp (both lanes): the SAME shape as codex, with the adapter's own noun.
+        for harness in [Harness::AcpClaudeCode, Harness::Opencode] {
+            assert_eq!(
+                daemon_success_line(daemon(harness), &named, 4242, false),
+                "killed wk (daemon pid 4242)"
+            );
+            assert_eq!(
+                daemon_success_line(daemon(harness), &named, 4242, true),
+                "killed wk (daemon pid 4242) [adapter already dead — tombstoned]"
+            );
+        }
+        // pi: a DIFFERENT shape — bare `pid`, and the resident's noun.
+        assert_eq!(
+            daemon_success_line(daemon(Harness::Pi), &named, 4242, false),
+            "killed wk (pid 4242)"
+        );
+        assert_eq!(
+            daemon_success_line(daemon(Harness::Pi), &named, 4242, true),
+            "killed wk (pid 4242) [resident already dead — tombstoned]"
+        );
 
-    let name = session
-        .name
-        .clone()
-        .unwrap_or_else(|| session.session_id.clone());
-    let pid = session.pid.unwrap_or(0);
-    if pid <= 0 {
-        eprintln!("qd stop: \"{name}\": pi session has no resident pid. Nothing to kill.");
-        return 1;
+        // The nameless row: codex/acp render `-`, pi renders the session id. Two
+        // different fallbacks, and neither is a placeholder for the other.
+        let anon = row(None);
+        assert_eq!(
+            daemon_success_line(daemon(Harness::Codex), &anon, 4242, false),
+            "killed - (daemon pid 4242)"
+        );
+        assert_eq!(
+            daemon_success_line(daemon(Harness::Pi), &anon, 4242, false),
+            "killed sid-1 (pid 4242)"
+        );
     }
-    // Capture the row BEFORE the kill — it carries the endpoint (the cmdline-identity
-    // discriminator that defeats PID reuse) + the data the tombstone preserves.
-    let captured = read_entry(&paths.sessions_dir, pid);
-    let endpoint = captured.as_ref().and_then(|e| e.endpoint.as_deref());
-    let was_alive = dispatch::effects::is_pid_alive(pid as i32);
-    let probe = real_cmdline_probe;
-    teardown_pi_daemon(pid, endpoint, &probe);
-    ensure_tombstone(&paths.sessions_dir, pid, captured.as_ref());
-    if was_alive {
-        println!("killed {name} (pid {pid})");
-    } else {
-        println!("killed {name} (pid {pid}) [resident already dead — tombstoned]");
-    }
-    0
-}
 
-/// Scan every socket dir (canonical + legacy) with the FILTERED or RAW list and
-/// flatten into one cross-dir vec (the kill-side equivalent of the join's
-/// merge_canonical_wins — but kill wants ALL rows by name, not a dedupe).
-fn scan_all_dirs(mux: &dyn Mux, dirs: &[PathBuf], raw: bool) -> Vec<MuxSession> {
-    let mut out = Vec::new();
-    for dir in dirs {
-        let list = if raw {
-            mux.list_raw(dir).unwrap_or_default()
-        } else {
-            mux.list(dir).unwrap_or_default()
-        };
-        out.extend(list);
+    /// The no-pid clause, per lane — the "Nothing to kill." refusal each retired
+    /// body printed. pi's names a RESIDENT pid because that is what pi's row records.
+    #[test]
+    fn the_no_pid_clause_names_each_lanes_own_process() {
+        assert_eq!(
+            daemon_no_pid_clause(daemon(Harness::Codex)),
+            "codex session has no daemon pid."
+        );
+        assert_eq!(
+            daemon_no_pid_clause(daemon(Harness::Pi)),
+            "pi session has no resident pid."
+        );
+        for harness in [Harness::AcpClaudeCode, Harness::Opencode] {
+            assert_eq!(
+                daemon_no_pid_clause(daemon(harness)),
+                "acp session has no daemon pid."
+            );
+        }
     }
-    out
-}
-
-/// The full `ps -eo pid=,ppid=,command=` rows for the ancestry walk. The walk
-/// needs ALL processes (the zmx wrapper is a bash/zmx process, not a claude one),
-/// so we route the same single parse `RealProcessTable` uses through the public
-/// `Exec` seam + `parse_ps_rows`.
-fn ps_rows(
-    _pt: &RealProcessTable<RealExec>,
-) -> Option<std::collections::HashMap<i32, dispatch::effects::ProcRow>> {
-    use dispatch::effects::parse_ps_rows;
-    use dispatch::exec::Exec;
-    let exec = RealExec;
-    let r = exec
-        .run(
-            "ps",
-            &["-eo".to_string(), "pid=,ppid=,command=".to_string()],
-            &[],
-            None,
-            None,
-        )
-        .ok()?;
-    Some(parse_ps_rows(&r.stdout))
 }

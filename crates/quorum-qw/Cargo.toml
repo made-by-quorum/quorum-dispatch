@@ -1,0 +1,63 @@
+[package]
+# qw — SESSION MANAGEMENT. The package qd delegates to for everything about
+# running an agent session: lifecycle (start/wake/kill), enumeration and health,
+# message delivery into the session, and terminal attachment.
+#
+# This crate is the DESTINATION the qd/qw split is converging on. It currently
+# holds the lane identity, the `LaneOps` contract and its conformance suite. Still
+# to move in: `provider/*`, the per-provider gather functions, `qrmux` (session
+# hosting), and the session-lifecycle verb bodies. Each of those is blocked on its
+# own dependency untangling, tracked in
+# `doc/tbd/provider-architecture/07-lane-gaps.md`.
+#
+# DEPENDENCY DIRECTION IS LOAD-BEARING: qd (`quorum-dispatch`) depends on qw,
+# never the reverse. That is why this crate defines its own `SessionStatus`
+# instead of borrowing dispatch's — a package boundary owns the types it reports.
+name = "quorum-qw"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "qw — agent session management: lane identity, the LaneOps contract, and its conformance suite."
+
+[lib]
+name = "quorum_qw"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+libc = "0.2"
+sha2 = "0.10"
+anyhow = "1"
+# Carries dispatch's full feature set. A trimmed [rt, time] was tried and does
+# NOT compile — the moving set reaches tokio::net / io-util transitively.
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "io-util"] }
+# EXACT pin, not a caret range: the non-`-tokio` 1.x line is load-bearing.
+agent-client-protocol = "=1.0.1"
+async-process = "2"
+futures = "0.3"
+# `handshake` only — no TLS deps; the ws lanes are loopback plaintext.
+tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+# Non-bundled: links the system libsqlite3.
+rusqlite = { version = "0.32", default-features = false }
+
+qrmux = { path = "../qrmux" }
+quorum-core = { path = "../quorum-core" }
+# DEFAULT features deliberately: this crate gates serde_json's `preserve_order`
+# behind its own default-on `json-insertion-order`, so the byte-exact wire order
+# is inherited. quorum-qw must NOT request `preserve_order` itself — doing so
+# unconditionally would flip Map iteration order for every other crate in the
+# build, which is the anti-pattern dispatch's own manifest warns about.
+quorum-delivery-events = { path = "../quorum-delivery-events" }
+quorum-submit-discipline = { path = "../quorum-submit-discipline" }
+
+[features]
+# events.rs carries 5 `#[cfg(feature = "mutation-evidence")]` tests (the M-1
+# claims). A dependent's feature flag never reaches a dependency's own
+# `#[cfg(test)]` code, so without declaring it here those tests would compile out
+# and silently report zero — green for the wrong reason. dispatch forwards to it.
+mutation-evidence = []
+
+[dev-dependencies]
+tempfile = "3"

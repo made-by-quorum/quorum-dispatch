@@ -114,9 +114,13 @@ pub fn presence_of(state_dir: &Path, session_id: &str, now_ms: i64) -> Presence 
     let row = crate::recovery::read_recovery_row(state_dir, session_id);
     let recovery = row.as_ref().map(|r| r.ladder_state);
     let identity = row.as_ref().and_then(|r| {
-        r.old_identity.as_ref().map(|i| ProcKey::new(i.pid, i.start_ms))
+        r.old_identity
+            .as_ref()
+            .map(|i| ProcKey::new(i.pid, i.start_ms))
     });
-    let incarnation = row.as_ref().and_then(|r| r.old_identity.as_ref().map(|i| i.incarnation));
+    let incarnation = row
+        .as_ref()
+        .and_then(|r| r.old_identity.as_ref().map(|i| i.incarnation));
 
     let live = is_live(state_dir, session_id);
     // Classify liveness from the OS for the known identity; without one, fall back to
@@ -228,7 +232,7 @@ mod tests {
                 .expect("lock free → acquired");
             assert!(is_live(dir.path(), "sess-x"), "held lock → live");
         } // released here
-        // Released lock (file persists, lock free) → probe_dead → NOT live.
+          // Released lock (file persists, lock free) → probe_dead → NOT live.
         assert!(
             !is_live(dir.path(), "sess-x"),
             "released lock → probe_dead positive → not live"

@@ -4,16 +4,21 @@
 //! the qb-owned deploy steps (artifact deploy, shell-profile patch, plugin
 //! registration) are DROPPED (ruled — that content is the qb deploy's, not the
 //! engine's; the dropped TS step names live in the A5 spec, never in this
-//! repo). What survives is the state-dir creation (`~/.quorum/dispatch` + `~/.quorum/dispatch/state`) and
-//! the zmx capability notice (`decideZmxAction`/`checkZmx`, the engine core the
-//! TS test "decideZmxAction (pure decider — every branch)" pins). On top of
-//! that, A5 adds the ADD-5 relay-driver detect→offer→self-install step (§4.2).
+//! repo). What survives is the state-dir creation (`~/.quorum/dispatch` +
+//! `~/.quorum/dispatch/state`). On top of that, A5 adds the ADD-5 relay-driver
+//! detect→offer→self-install step (§4.2).
+//!
+//! RETIRED STEP — the TS-era terminal-multiplexer capability notice (its pure
+//! decider + runtime probe pair) is GONE (FTUE R1). It probed for a multiplexer
+//! qd no longer drives and, on a fresh macOS box, made a `brew install` offer
+//! for it the FIRST prompt a new human ever saw. Removed rather than repaired:
+//! with nothing driving that mux there is no capability left to notice, so the
+//! step had no truth to report. Do not reintroduce a probe here.
 //!
 //! Library-first (spec §2): the decision logic is PURE
-//! ([`decide_zmx_action`] / [`decide_relay_offer`]); the runtime
-//! ([`check_zmx`] / [`run_bootstrap`]) is a thin shell over injected effects so
-//! tests never probe real zmx/brew, prompt a real TTY, run a real `brew
-//! install`, or shell out a real relay installer.
+//! ([`classify_relay_finding`] / [`decide_wrapper_offer`]); the runtime
+//! ([`check_relay`] / [`run_bootstrap`]) is a thin shell over injected effects so
+//! tests never prompt a real TTY or shell out a real relay installer.
 //!
 //! Output is `[bootstrap]`-prefixed, engine-truthful, and CONTENT-FREE: it
 //! names none of the qb-side content concepts (carry 5; the forbidden-token
@@ -25,7 +30,6 @@ use std::path::{Path, PathBuf};
 use crate::effects::Env;
 use crate::exec::Exec;
 use crate::model::RelayHealth;
-use crate::preflight::{self, Capability};
 use crate::relay;
 
 // ----------------------------------------------------------------------------
@@ -62,204 +66,6 @@ pub fn resolve_bootstrap_paths(home: &Path, env: &dyn Env) -> BootstrapPaths {
 }
 
 // ----------------------------------------------------------------------------
-// zmx step (port of decideZmxAction/checkZmx, bootstrap.ts:786-925).
-//
-// zmx (the terminal multiplexer qd sessions run inside) is NOT in homebrew-core
-// — it ships as the tap formula `neurosnap/tap/zmx` (macOS/brew only). bootstrap
-// DETECTS it and, only in an interactive macOS+brew context, OFFERS to install
-// it (default No). It NEVER installs silently and NEVER fails bootstrap on a
-// missing zmx — this is a notice step. The non-TTY path only warns (the TS
-// postinstall path: `bun install`'s postinstall ran bootstrap WITHOUT a TTY, so
-// it had to only warn — never prompt or install; bootstrap.ts:781-783).
-// ----------------------------------------------------------------------------
-
-/// Homebrew tap formula that ships zmx (macOS/brew only; not homebrew-core).
-/// (bootstrap.ts:756 `ZMX_BREW_FORMULA`.)
-pub const ZMX_BREW_FORMULA: &str = "neurosnap/tap/zmx";
-
-/// Guidance for installing zmx, by platform (port of `zmxGuidance`,
-/// bootstrap.ts:759-764). Byte-matches the TS strings.
-pub fn zmx_guidance(platform: &str) -> String {
-    if platform == "darwin" || platform == "macos" {
-        format!("Install zmx (needed for qd sessions):  brew install {ZMX_BREW_FORMULA}")
-    } else {
-        "Install zmx (needed for qd sessions): see https://github.com/neurosnap/zmx".to_string()
-    }
-}
-
-/// The PURE zmx-step decision (port of `ZmxAction`, bootstrap.ts:766-769).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ZmxAction {
-    /// present + capable → nothing to do.
-    Ok,
-    /// missing + interactive + darwin + brew → offer the opt-in install.
-    Prompt,
-    /// every other state → warn with guidance.
-    Warn { guidance: String },
-}
-
-/// Injected inputs for the pure zmx decider (port of `decideZmxAction`'s input
-/// object, bootstrap.ts:786-792).
-#[derive(Debug, Clone)]
-pub struct ZmxDecisionInput {
-    pub has_zmx: bool,
-    /// `None` = capability not probed (zmx absent); `Some(false)` = present but
-    /// stale (no `send`); `Some(true)` = present + capable.
-    pub zmx_capable: Option<bool>,
-    /// Host platform string (`std::env::consts::OS`-shaped: "macos"/"linux"/…;
-    /// the TS used NodeJS.Platform "darwin"). Both spellings are accepted.
-    pub platform: String,
-    pub has_brew: bool,
-    pub interactive: bool,
-}
-
-/// PURE decider for the zmx step (port of `decideZmxAction`, bootstrap.ts:786-803):
-///   - present + capable (has `send`)              → Ok (nothing to do)
-///   - present + STALE (no `send`, zmx < 0.6)      → Warn (upgrade guidance)
-///   - missing + interactive + darwin + brew       → Prompt (offer install)
-///   - everything else (incl. ANY non-TTY)         → Warn (platform guidance)
-///
-/// Every branch is unit-tested below (the TS test
-/// "decideZmxAction (pure decider — every branch)").
-pub fn decide_zmx_action(input: &ZmxDecisionInput) -> ZmxAction {
-    if input.has_zmx {
-        if input.zmx_capable == Some(false) {
-            // present-but-stale → warn with the UPGRADE guidance (not the
-            // platform install guidance), bootstrap.ts:794-796.
-            return ZmxAction::Warn {
-                guidance: preflight::zmx_upgrade_guidance(),
-            };
-        }
-        return ZmxAction::Ok;
-    }
-    let is_darwin = input.platform == "darwin" || input.platform == "macos";
-    if input.interactive && is_darwin && input.has_brew {
-        return ZmxAction::Prompt;
-    }
-    ZmxAction::Warn {
-        guidance: zmx_guidance(&input.platform),
-    }
-}
-
-/// The zmx-step outcome (port of `ZmxResult.zmx`, bootstrap.ts:870-873).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZmxStatus {
-    /// installed + capable.
-    Present,
-    /// we just installed it via brew.
-    Installed,
-    /// installed but too old to drive (no `send`).
-    Stale,
-    /// absent.
-    Missing,
-}
-
-/// The zmx step's full result (port of `ZmxResult`, bootstrap.ts:867-875).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ZmxResult {
-    pub zmx: ZmxStatus,
-    /// Lines to print as part of the bootstrap summary (may be empty).
-    pub messages: Vec<String>,
-}
-
-/// Injected effects for the zmx step runtime (port of `ZmxDeps`,
-/// bootstrap.ts:806-833). The decider is pure; this seam covers the live
-/// probes / prompt / install so tests never touch real zmx/brew/TTY.
-pub struct ZmxDeps<'a> {
-    /// Is a command available on PATH? (real: `command -v <name>`.)
-    pub command_exists: &'a dyn Fn(&str) -> bool,
-    /// Does the installed zmx support the `send` subcommand? (real:
-    /// [`preflight::zmx_send_capability`].) Only consulted when zmx is present.
-    pub zmx_has_send: &'a dyn Fn() -> bool,
-    pub platform: String,
-    pub interactive: bool,
-    /// Ask a yes/no question; default No (real: visible `[y/N]` prompt).
-    pub prompt_yes_no: &'a dyn Fn(&str) -> bool,
-    /// Install zmx via brew; returns success (real: `brew install <formula>`,
-    /// inherit). Only called on an explicit interactive yes in the macOS+brew
-    /// path.
-    pub install_zmx: &'a dyn Fn() -> bool,
-}
-
-/// The zmx step runtime (port of `checkZmx`, bootstrap.ts:883-925). Detects zmx;
-/// in an interactive macOS+brew context OFFERS to install (default No);
-/// otherwise warns with guidance. NEVER installs without an explicit yes, NEVER
-/// fails bootstrap. `install_zmx` is only called on an explicit interactive yes
-/// in the macOS+brew path.
-pub fn check_zmx(deps: &ZmxDeps) -> ZmxResult {
-    let has_zmx = (deps.command_exists)("zmx");
-    // Only probe capability when zmx is actually present (bootstrap.ts:890).
-    let zmx_capable = if has_zmx {
-        Some((deps.zmx_has_send)())
-    } else {
-        None
-    };
-    let decision = decide_zmx_action(&ZmxDecisionInput {
-        has_zmx,
-        zmx_capable,
-        platform: deps.platform.clone(),
-        has_brew: (deps.command_exists)("brew"),
-        interactive: deps.interactive,
-    });
-    let guidance = zmx_guidance(&deps.platform);
-
-    match decision {
-        ZmxAction::Ok => ZmxResult {
-            zmx: ZmxStatus::Present,
-            messages: vec![],
-        },
-        ZmxAction::Warn { guidance: g } => {
-            // present-but-stale vs genuinely-missing — same warn shape, different
-            // state (bootstrap.ts:903-904).
-            let status = if has_zmx {
-                ZmxStatus::Stale
-            } else {
-                ZmxStatus::Missing
-            };
-            ZmxResult {
-                zmx: status,
-                messages: vec![g],
-            }
-        }
-        ZmxAction::Prompt => {
-            // interactive macOS + brew — offer the opt-in install (default N),
-            // bootstrap.ts:907-921.
-            let question = format!(
-                "zmx not found (needed for qd sessions). Install via \
-                 `brew install {ZMX_BREW_FORMULA}` now? [y/N] "
-            );
-            if !(deps.prompt_yes_no)(&question) {
-                return ZmxResult {
-                    zmx: ZmxStatus::Missing,
-                    messages: vec![guidance],
-                };
-            }
-            if (deps.install_zmx)() {
-                ZmxResult {
-                    zmx: ZmxStatus::Installed,
-                    messages: vec!["zmx installed.".to_string()],
-                }
-            } else {
-                ZmxResult {
-                    zmx: ZmxStatus::Missing,
-                    messages: vec![format!("zmx install failed. {guidance}")],
-                }
-            }
-        }
-    }
-}
-
-/// Render the zmx summary status word (port of `zmxStatus`, bootstrap.ts:980-987).
-fn zmx_status_word(status: ZmxStatus) -> &'static str {
-    match status {
-        ZmxStatus::Present => "ok (present)",
-        ZmxStatus::Installed => "installed via brew",
-        ZmxStatus::Stale => "TOO OLD (no `send` — upgrade required)",
-        ZmxStatus::Missing => "missing",
-    }
-}
-
-// ----------------------------------------------------------------------------
 // Relay step (2026-06-10 ruling; SUPERSEDES the ~/.claude/.mcp.json target of
 // ADR 0016 — see doc/adr/0017-relay-via-claude-mcp.md).
 //
@@ -277,6 +83,20 @@ fn zmx_status_word(status: ZmxStatus) -> &'static str {
 // a TTY, default No, NEVER fail bootstrap. Runtime health (sidecar discovery)
 // is still reported as an FYI line — it is orthogonal to whether NEW sessions
 // will load the relay (that's the registration).
+//
+// RENDER RULE (FTUE R2 — the step must not contradict itself). The step reports
+// TWO INDEPENDENT AXES and a fresh machine can legitimately be "no" on one and
+// "yes" on the other:
+//   - REGISTRATION — is a relay MCP server registered with Claude Code? This is
+//     the durable fact, and the only one that decides whether NEW sessions load
+//     a relay.
+//   - RUNNING NOW — is a relay server PROCESS alive on this host right now? A
+//     transient fact about existing sessions; it registers nothing.
+// Rendered bare, those read as a flat contradiction ("not configured" directly
+// above "a relay server is up"). So EVERY line names its axis, and the
+// running-now FYI is emitted LAST — after the registration fact AND its how-to
+// — so the registration story reads start-to-finish before the process aside.
+// Keep both properties if these strings are ever reworded.
 // ----------------------------------------------------------------------------
 
 /// The relay runtime-health finding (sidecar/port discovery — an FYI, NOT the
@@ -334,9 +154,9 @@ pub enum RelayStepOutcome {
     RegisterFailed { error: String },
 }
 
-/// Injected effects for the relay step runtime. Kept separate from [`ZmxDeps`]
-/// so the two steps' seams don't entangle. The `claude mcp` shell-out lives in
-/// [`crate::relay_server::register`]; the bin layer wires it into these.
+/// Injected effects for the relay step runtime. Kept separate from the other
+/// steps' dep structs so their seams don't entangle. The `claude mcp` shell-out
+/// lives in [`crate::relay_server::register`]; the bin layer wires it into these.
 pub struct RelayDeps<'a> {
     pub interactive: bool,
     /// Is `claude` on PATH? We drive `claude mcp` to register/detect, so this is
@@ -360,43 +180,67 @@ pub struct RelayDeps<'a> {
     pub register: &'a dyn Fn() -> Result<String, String>,
 }
 
-/// Append the runtime-health FYI line for a discovered relay server (nothing
-/// when none is up — silence is the normal idle-fleet state).
+/// Append the RUNNING-NOW axis line for a discovered relay server (nothing when
+/// none is up — silence is the normal idle-fleet state).
+///
+/// The line explicitly disclaims the registration axis. Without that, it lands
+/// under a "not registered" line and reads as a denial of it (FTUE R2) — the two
+/// are different questions, and the answers are allowed to differ.
 fn push_relay_health_fyi(relays: &[RelayHealth], lines: &mut Vec<String>) {
     match classify_relay_finding(relays) {
-        RelayFinding::PresentHealthy => {
-            lines.push("relay: a relay server is up (healthy).".to_string())
-        }
-        RelayFinding::PresentUnhealthy => {
-            lines.push("relay: a relay server is up but NOT healthy.".to_string())
-        }
+        RelayFinding::PresentHealthy => lines.push(
+            "relay: running now — a relay server process is up and healthy \
+             (a live process on this host, not a registration)."
+                .to_string(),
+        ),
+        RelayFinding::PresentUnhealthy => lines.push(
+            "relay: running now — a relay server process is up but NOT healthy \
+             (a live process on this host, not a registration)."
+                .to_string(),
+        ),
         RelayFinding::Absent => {}
     }
 }
 
 /// The relay step runtime: precondition-check `claude`, report registration
-/// state (+ the runtime-health FYI), decide the offer, and (on an explicit yes)
-/// run the injected registration. Returns the outcome + the report lines.
-/// NEVER hangs on a declined / non-TTY path; NEVER fails bootstrap.
+/// state, decide the offer, run the injected registration on an explicit yes,
+/// and close with the runtime-health FYI. Returns the outcome + the report
+/// lines. NEVER hangs on a declined / non-TTY path; NEVER fails bootstrap.
 pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcome, Vec<String>) {
+    // Registration axis first (state + how-to), running-now axis LAST — see the
+    // RENDER RULE above. Splitting the registration half into its own function is
+    // what makes "the FYI is always last" true by construction rather than by
+    // remembering to append it on each of the nine return paths.
+    let (outcome, mut lines) = check_relay_registration(deps);
+    push_relay_health_fyi(relays, &mut lines);
+    (outcome, lines)
+}
+
+/// The REGISTRATION axis alone: is a relay MCP server registered with Claude
+/// Code, and (consent-gated) should we register or re-point one? Every line it
+/// emits is prefixed `relay: registration` so it cannot be misread as a claim
+/// about a running process.
+fn check_relay_registration(deps: &RelayDeps) -> (RelayStepOutcome, Vec<String>) {
     // Precondition: we register by driving `claude mcp`. No claude → notice.
     if !deps.claude_present {
-        let mut lines = vec![
-            "relay: cannot configure — `claude` is not on PATH. Install Claude Code, \
-             then run: qd relay:register"
+        let lines = vec![
+            "relay: registration — cannot configure: `claude` is not on PATH. \
+             Install Claude Code, then run: qd relay:register"
                 .to_string(),
         ];
-        push_relay_health_fyi(relays, &mut lines);
         return (RelayStepOutcome::ClaudeMissing, lines);
     }
 
     let registered = deps.relay_registered.unwrap_or(false);
     let mut lines = vec![if registered {
-        "relay: configured (registered with Claude Code, user scope).".to_string()
+        "relay: registration — configured (registered with Claude Code, user scope); \
+         new sessions will load it."
+            .to_string()
     } else {
-        "relay: not configured (no relay MCP server registered with Claude Code).".to_string()
+        "relay: registration — not configured (no relay MCP server registered with \
+         Claude Code); new sessions will not load one."
+            .to_string()
     }];
-    push_relay_health_fyi(relays, &mut lines);
 
     if registered {
         // RECURRENCE FIX (relay-path hardening v2): an absolute-path relay command
@@ -410,7 +254,8 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
         // and prints a how-to FYI, never hanging.
         if !deps.interactive {
             lines.push(
-                "relay: re-point to this binary later (after moving `qd`) with: qd relay:repoint"
+                "relay: registration — re-point to this binary later (after moving `qd`) \
+                 with: qd relay:repoint"
                     .to_string(),
             );
             return (RelayStepOutcome::ConfiguredAlready, lines);
@@ -418,19 +263,22 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
         let question = "Re-point the relay registration at THIS qd binary (idempotent; \
              fixes a stale path after the `qd` binary moves)? [y/N] ";
         if !(deps.prompt_yes_no)(question) {
-            lines.push("relay: left as-is — re-point later with: qd relay:repoint".to_string());
+            lines.push(
+                "relay: registration — left as-is; re-point later with: qd relay:repoint"
+                    .to_string(),
+            );
             return (RelayStepOutcome::RepointDeclined, lines);
         }
         return match (deps.register)() {
             Ok(command) => {
                 lines.push(format!(
-                    "relay: re-pointed — new sessions will load `{command} relay:serve`."
+                    "relay: registration — re-pointed; new sessions will load `{command} relay:serve`."
                 ));
                 (RelayStepOutcome::Repointed { command }, lines)
             }
             Err(error) => {
                 lines.push(format!(
-                    "relay: re-point FAILED ({error}) — old registration kept; \
+                    "relay: registration — re-point FAILED ({error}); old registration kept, \
                      retry with: qd relay:repoint"
                 ));
                 (RelayStepOutcome::RepointFailed { error }, lines)
@@ -440,27 +288,29 @@ pub fn check_relay(relays: &[RelayHealth], deps: &RelayDeps) -> (RelayStepOutcom
 
     // Not registered. Offer only on a TTY.
     if !deps.interactive {
-        lines.push("relay: register later with: qd relay:register".to_string());
+        lines.push("relay: registration — register later with: qd relay:register".to_string());
         return (RelayStepOutcome::NotOffered, lines);
     }
 
     let question = "Register qd's relay MCP server with Claude Code (runs \
          `claude mcp add`; enables cross-session messaging in NEW sessions)? [y/N] ";
     if !(deps.prompt_yes_no)(question) {
-        lines.push("relay: skipped — register later with: qd relay:register".to_string());
+        lines.push(
+            "relay: registration — skipped; register later with: qd relay:register".to_string(),
+        );
         return (RelayStepOutcome::Declined, lines);
     }
 
     match (deps.register)() {
         Ok(command) => {
             lines.push(format!(
-                "relay: registered — new sessions will load `{command} relay:serve`."
+                "relay: registration — registered; new sessions will load `{command} relay:serve`."
             ));
             (RelayStepOutcome::Registered { command }, lines)
         }
         Err(error) => {
             lines.push(format!(
-                "relay: registration FAILED ({error}) — register later with: qd relay:register"
+                "relay: registration — FAILED ({error}); register later with: qd relay:register"
             ));
             (RelayStepOutcome::RegisterFailed { error }, lines)
         }
@@ -772,7 +622,6 @@ pub struct BootstrapResult {
     pub paths: BootstrapPaths,
     /// True if `qd_home`/`state_dir` already existed (idempotent re-run).
     pub already_existed: bool,
-    pub zmx: ZmxResult,
     pub relay: RelayStepOutcome,
     pub wrapper: WrapperStepOutcome,
     pub extensions: ExtensionsStepOutcome,
@@ -789,15 +638,14 @@ pub struct BootstrapFs<'a> {
 }
 
 /// Run the engine bootstrap: ensure the state dirs exist (idempotent), run the
-/// zmx notice step, the native relay-registration step, and the shell-
-/// integration step, and build the `[bootstrap]` report. Returns the result;
-/// the caller prints `report` and maps to an exit code (0 unless a state-dir
-/// mkdir failed — the only hard failure; the zmx/relay/shell steps are
-/// consent-gated notices and NEVER fail bootstrap).
+/// native relay-registration step, the shell-integration step and the
+/// extension-install step, and build the `[bootstrap]` report. Returns the
+/// result; the caller prints `report` and maps to an exit code (0 unless a
+/// state-dir mkdir failed — the only hard failure; the relay/shell/extension
+/// steps are consent-gated notices and NEVER fail bootstrap, ADR 0008).
 pub fn run_bootstrap(
     paths: BootstrapPaths,
     fs: &BootstrapFs,
-    zmx_deps: &ZmxDeps,
     relays: &[RelayHealth],
     relay_deps: &RelayDeps,
     wrapper_deps: &WrapperDeps,
@@ -809,7 +657,6 @@ pub fn run_bootstrap(
     (fs.mkdir_p)(&paths.qd_home)?;
     (fs.mkdir_p)(&paths.state_dir)?;
 
-    let zmx = check_zmx(zmx_deps);
     let (relay, relay_lines) = check_relay(relays, relay_deps);
     let (wrapper, wrapper_lines) = check_wrapper(wrapper_deps);
     let (extensions, extension_lines) = check_extensions(extensions_deps);
@@ -829,10 +676,6 @@ pub fn run_bootstrap(
             "created"
         }
     ));
-    report.push(format!("[bootstrap] zmx: {}", zmx_status_word(zmx.zmx)));
-    for line in &zmx.messages {
-        report.push(format!("[bootstrap]   {line}"));
-    }
     for line in &relay_lines {
         report.push(format!("[bootstrap] {line}"));
     }
@@ -846,7 +689,6 @@ pub fn run_bootstrap(
     Ok(BootstrapResult {
         paths,
         already_existed,
-        zmx,
         relay,
         wrapper,
         extensions,
@@ -867,12 +709,6 @@ pub fn real_command_exists(exec: &impl Exec, name: &str) -> bool {
         Ok(r) => r.status == Some(0),
         Err(_) => false,
     }
-}
-
-/// Real zmx `send` capability probe via the injected exec
-/// ([`preflight::zmx_send_capability`]).
-pub fn real_zmx_has_send(exec: &impl Exec) -> bool {
-    preflight::zmx_send_capability(exec) != Capability::No
 }
 
 /// Discover relay-health records the same way A4's join does: sidecars first,
@@ -925,241 +761,6 @@ mod tests {
         let env = map_env(&[("QD_HOME", "")]);
         let p = resolve_bootstrap_paths(Path::new("/jail/home"), &env);
         assert_eq!(p.qd_home, PathBuf::from("/jail/home/.quorum/dispatch"));
-    }
-
-    // --- decide_zmx_action: EVERY branch (TS "every branch" test) ---------
-
-    fn zin(
-        has_zmx: bool,
-        zmx_capable: Option<bool>,
-        platform: &str,
-        has_brew: bool,
-        interactive: bool,
-    ) -> ZmxDecisionInput {
-        ZmxDecisionInput {
-            has_zmx,
-            zmx_capable,
-            platform: platform.to_string(),
-            has_brew,
-            interactive,
-        }
-    }
-
-    #[test]
-    fn zmx_present_capable_is_ok() {
-        // present + capable → Ok (both platform spellings, both interactivities).
-        assert_eq!(
-            decide_zmx_action(&zin(true, Some(true), "darwin", true, true)),
-            ZmxAction::Ok
-        );
-        assert_eq!(
-            decide_zmx_action(&zin(true, Some(true), "linux", false, false)),
-            ZmxAction::Ok
-        );
-    }
-
-    #[test]
-    fn zmx_present_capability_unprobed_is_ok() {
-        // present + capability None (assumed true; TS `?? true`) → Ok.
-        assert_eq!(
-            decide_zmx_action(&zin(true, None, "darwin", true, true)),
-            ZmxAction::Ok
-        );
-    }
-
-    #[test]
-    fn zmx_present_stale_warns_with_upgrade_guidance() {
-        // present + STALE → Warn with the UPGRADE guidance (not platform).
-        let a = decide_zmx_action(&zin(true, Some(false), "darwin", true, true));
-        match a {
-            ZmxAction::Warn { guidance } => {
-                assert_eq!(guidance, preflight::zmx_upgrade_guidance());
-                assert!(guidance.contains("too old"));
-            }
-            other => panic!("expected Warn, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn zmx_missing_interactive_darwin_brew_prompts() {
-        assert_eq!(
-            decide_zmx_action(&zin(false, None, "darwin", true, true)),
-            ZmxAction::Prompt
-        );
-        // "macos" spelling (std::env::consts::OS) also prompts.
-        assert_eq!(
-            decide_zmx_action(&zin(false, None, "macos", true, true)),
-            ZmxAction::Prompt
-        );
-    }
-
-    #[test]
-    fn zmx_missing_non_tty_never_prompts_darwin() {
-        // Non-TTY on darwin+brew → Warn (the postinstall/CI path), never Prompt.
-        let a = decide_zmx_action(&zin(false, None, "darwin", true, false));
-        match a {
-            ZmxAction::Warn { guidance } => assert!(guidance.contains("brew install")),
-            other => panic!("expected Warn, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn zmx_missing_no_brew_warns() {
-        // interactive darwin but NO brew → Warn (can't offer the install).
-        let a = decide_zmx_action(&zin(false, None, "darwin", false, true));
-        assert!(matches!(a, ZmxAction::Warn { .. }));
-    }
-
-    #[test]
-    fn zmx_missing_linux_warns_with_platform_guidance() {
-        // interactive linux (no brew offer on non-darwin) → Warn platform guidance.
-        let a = decide_zmx_action(&zin(false, None, "linux", false, true));
-        match a {
-            ZmxAction::Warn { guidance } => assert!(guidance.contains("github.com/neurosnap/zmx")),
-            other => panic!("expected Warn, got {other:?}"),
-        }
-    }
-
-    // --- check_zmx runtime (injected effects) -----------------------------
-
-    struct ZmxFx {
-        zmx_present: bool,
-        brew_present: bool,
-        has_send: bool,
-        platform: String,
-        interactive: bool,
-        yes: bool,
-        install_ok: bool,
-        prompted: Cell<bool>,
-        installed: Cell<bool>,
-    }
-
-    fn run_check(fx: &ZmxFx) -> ZmxResult {
-        let command_exists = |name: &str| match name {
-            "zmx" => fx.zmx_present,
-            "brew" => fx.brew_present,
-            _ => false,
-        };
-        let zmx_has_send = || fx.has_send;
-        let prompt_yes_no = |_q: &str| {
-            fx.prompted.set(true);
-            fx.yes
-        };
-        let install_zmx = || {
-            fx.installed.set(true);
-            fx.install_ok
-        };
-        let deps = ZmxDeps {
-            command_exists: &command_exists,
-            zmx_has_send: &zmx_has_send,
-            platform: fx.platform.clone(),
-            interactive: fx.interactive,
-            prompt_yes_no: &prompt_yes_no,
-            install_zmx: &install_zmx,
-        };
-        check_zmx(&deps)
-    }
-
-    fn fx() -> ZmxFx {
-        ZmxFx {
-            zmx_present: false,
-            brew_present: false,
-            has_send: true,
-            platform: "darwin".to_string(),
-            interactive: false,
-            yes: false,
-            install_ok: false,
-            prompted: Cell::new(false),
-            installed: Cell::new(false),
-        }
-    }
-
-    #[test]
-    fn check_zmx_present_capable_no_prompt_no_install() {
-        let f = ZmxFx {
-            zmx_present: true,
-            has_send: true,
-            ..fx()
-        };
-        let r = run_check(&f);
-        assert_eq!(r.zmx, ZmxStatus::Present);
-        assert!(r.messages.is_empty());
-        assert!(!f.prompted.get());
-        assert!(!f.installed.get());
-    }
-
-    #[test]
-    fn check_zmx_present_stale_is_stale() {
-        let f = ZmxFx {
-            zmx_present: true,
-            has_send: false,
-            ..fx()
-        };
-        let r = run_check(&f);
-        assert_eq!(r.zmx, ZmxStatus::Stale);
-        assert_eq!(r.messages.len(), 1);
-        assert!(!f.installed.get());
-    }
-
-    #[test]
-    fn check_zmx_missing_non_tty_warns_never_prompts() {
-        let f = ZmxFx {
-            zmx_present: false,
-            brew_present: true,
-            interactive: false,
-            ..fx()
-        };
-        let r = run_check(&f);
-        assert_eq!(r.zmx, ZmxStatus::Missing);
-        assert!(!f.prompted.get(), "non-TTY must NEVER prompt");
-        assert!(!f.installed.get());
-    }
-
-    #[test]
-    fn check_zmx_missing_tty_declined_no_install() {
-        let f = ZmxFx {
-            zmx_present: false,
-            brew_present: true,
-            interactive: true,
-            yes: false,
-            ..fx()
-        };
-        let r = run_check(&f);
-        assert_eq!(r.zmx, ZmxStatus::Missing);
-        assert!(f.prompted.get());
-        assert!(!f.installed.get(), "declined → no install");
-    }
-
-    #[test]
-    fn check_zmx_missing_tty_accepted_installs() {
-        let f = ZmxFx {
-            zmx_present: false,
-            brew_present: true,
-            interactive: true,
-            yes: true,
-            install_ok: true,
-            ..fx()
-        };
-        let r = run_check(&f);
-        assert_eq!(r.zmx, ZmxStatus::Installed);
-        assert!(f.installed.get());
-    }
-
-    #[test]
-    fn check_zmx_missing_tty_accepted_install_fails() {
-        let f = ZmxFx {
-            zmx_present: false,
-            brew_present: true,
-            interactive: true,
-            yes: true,
-            install_ok: false,
-            ..fx()
-        };
-        let r = run_check(&f);
-        assert_eq!(r.zmx, ZmxStatus::Missing);
-        assert!(f.installed.get());
-        assert_eq!(r.messages.len(), 1);
-        assert!(r.messages[0].contains("install failed"));
     }
 
     // --- relay finding + offer decider ------------------------------------
@@ -1342,7 +943,108 @@ mod tests {
         let (o, lines) = run_relay(&[rh("ok")], &f);
         assert_eq!(o, RelayStepOutcome::Declined);
         assert!(f.prompted.get(), "unregistered must offer despite health");
-        assert!(lines.iter().any(|l| l.contains("server is up")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("running now — a relay server process is up and healthy")));
+    }
+
+    // --- R2: the two axes must not read as a contradiction ------------------
+    //
+    // The exact case that produced the punch-list report: a fresh machine that is
+    // NOT registered but DOES have a relay process running. Both facts are true;
+    // rendered bare they read as "not configured" / "a relay server is up" — a
+    // flat self-contradiction. These tests pin the fix at the RENDERING level:
+    // every line names its axis, and the transient running-now fact is emitted
+    // LAST so the registration story reads start-to-finish first.
+
+    #[test]
+    fn relay_lines_name_both_axes_when_unregistered_but_running() {
+        let f = RelayFx {
+            interactive: false,
+            relay_registered: Some(false),
+            ..rfx()
+        };
+        let (o, lines) = run_relay(&[rh("ok")], &f);
+        assert_eq!(o, RelayStepOutcome::NotOffered);
+        // Registration axis: the durable fact + what it costs the user.
+        assert!(
+            lines[0].starts_with("relay: registration — not configured"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0].contains("new sessions will not load one"),
+            "{lines:?}"
+        );
+        // Its how-to stays with it, BEFORE the process aside.
+        assert!(
+            lines[1].starts_with("relay: registration — register later"),
+            "{lines:?}"
+        );
+        // Running-now axis: LAST, self-labelled, and explicitly not a registration.
+        assert!(lines[2].starts_with("relay: running now —"), "{lines:?}");
+        assert!(lines[2].contains("not a registration"), "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        // The retired rendering: no line may claim (un)configured without saying
+        // WHICH axis it means — that ambiguity is what read as a contradiction.
+        for l in &lines {
+            assert!(
+                l.starts_with("relay: registration —") || l.starts_with("relay: running now —"),
+                "unaxed relay line: {l}"
+            );
+        }
+    }
+
+    #[test]
+    fn relay_health_fyi_is_always_last_even_when_registration_acts() {
+        // The FYI trails the registration RESULT too, not just the state line —
+        // otherwise an accepted registration reads as interrupted by the aside.
+        let f = RelayFx {
+            interactive: true,
+            relay_registered: Some(false),
+            yes: true,
+            register_ok: true,
+            ..rfx()
+        };
+        let (_, lines) = run_relay(&[rh("degraded")], &f);
+        let last = lines.last().expect("lines");
+        assert!(last.starts_with("relay: running now —"), "{lines:?}");
+        assert!(last.contains("NOT healthy"), "{lines:?}");
+        assert!(
+            lines[lines.len() - 2].contains("registration — registered"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn relay_claude_missing_still_names_the_registration_axis() {
+        let f = RelayFx {
+            interactive: true,
+            claude_present: false,
+            relay_registered: None,
+            ..rfx()
+        };
+        let (o, lines) = run_relay(&[rh("ok")], &f);
+        assert_eq!(o, RelayStepOutcome::ClaudeMissing);
+        assert!(
+            lines[0].starts_with("relay: registration — cannot configure"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.last().unwrap().starts_with("relay: running now —"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn relay_absent_process_emits_no_running_now_line() {
+        // Silence is the normal idle-fleet state — an "and nothing is running"
+        // line would be noise on every fresh machine.
+        let f = rfx();
+        let (_, lines) = run_relay(&[], &f);
+        assert!(
+            !lines.iter().any(|l| l.contains("running now")),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -1711,20 +1413,8 @@ mod tests {
             exists: &exists,
             mkdir_p: &mkdir_p,
         };
-        // zmx: present+capable (no prompts), relay: configured native (no
-        // offer), wrapper: already configured (no offer).
-        let command_exists = |_n: &str| true;
-        let zmx_has_send = || true;
-        let prompt_yes_no = |_q: &str| false;
-        let install_zmx = || false;
-        let zmx_deps = ZmxDeps {
-            command_exists: &command_exists,
-            zmx_has_send: &zmx_has_send,
-            platform: "linux".to_string(),
-            interactive: false,
-            prompt_yes_no: &prompt_yes_no,
-            install_zmx: &install_zmx,
-        };
+        // relay: configured native (no offer), wrapper: already configured (no
+        // offer) — every step non-interactive so the harness never prompts.
         let r_prompt = |_q: &str| false;
         let r_register = || Ok("/jail/deployed/qd".to_string());
         // relay: already registered (claude present) → no offer, clean report.
@@ -1762,7 +1452,6 @@ mod tests {
         run_bootstrap(
             paths,
             &bfs,
-            &zmx_deps,
             &relays,
             &relay_deps,
             &wrapper_deps,
@@ -1791,7 +1480,8 @@ mod tests {
     #[test]
     fn bootstrap_report_is_well_formed() {
         // POSITIVE structure: every report line is `[bootstrap]`-prefixed and the
-        // report names only its own engine concepts (state dir, zmx, relay). The
+        // report names only its own engine concepts (state dir, relay, shell,
+        // extensions). The
         // NEGATIVE forbidden-token enumeration (carry 5 / G-B5) deliberately lives
         // in `scenarios/bootstrap_output_audit.sh`, NOT here: spelling the banned
         // tokens out as string literals in engine source would itself trip the CI
@@ -1811,7 +1501,6 @@ mod tests {
         // The report surfaces the four engine concepts it owns.
         let joined = r.report.join("\n");
         assert!(joined.contains("state"), "missing state line:\n{joined}");
-        assert!(joined.contains("zmx:"), "missing zmx line:\n{joined}");
         assert!(joined.contains("relay:"), "missing relay line:\n{joined}");
         assert!(joined.contains("shell:"), "missing shell line:\n{joined}");
         assert!(

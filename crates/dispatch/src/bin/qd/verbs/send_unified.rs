@@ -13,17 +13,57 @@ use dispatch::idstore::IdMap;
 use dispatch::launch::RenderMode;
 use dispatch::model::{Session, SessionStatus};
 use dispatch::origin_send::Refusal;
+use quorum_qw::contract::{
+    Confirmation, DeliverPolicy, LaneError, LaneOps, Message, MessageId, Receipt, ReceivePath,
+    SessionId,
+};
 
-use super::{common, lifecycle, resume, send, send_relay};
+use super::common;
+use super::intent;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UnifiedCarrier {
-    ClaudeRelay { port: u16 },
-    MuxPty,
-    CodexDaemon,
-    AcpDaemon,
-    PiDaemon,
-}
+// ===========================================================================
+// WHAT USED TO BE HERE, and where it went
+// ===========================================================================
+//
+// `UnifiedCarrier`, `select_carrier`, `dispatch_selected`, `trait Waker` and
+// `RealWaker` are RETIRED. All five were qd's own copy of routing that
+// `quorum_qw::lanes::LaneImpl` now owns:
+//
+//   - `select_carrier` keyed on `session.provider.as_str()` plus a
+//     `row_hosting` re-derivation. `LaneOps::deliver` keys on the LANE — an
+//     exhaustive `match (harness, mode)` — which is what put the old `"codex"`
+//     and `"pi"` arms one guard away from routing a pane row into a daemon
+//     carrier with no endpoint to reach.
+//   - `dispatch_selected` was the one-call table between the selection and the
+//     five carriers. The lane calls the SAME five functions directly, as
+//     `quorum_qw::delivery` module functions — one body per carrier, shared with
+//     the `qd send:relay` / `qd send:pty` verbs, rather than two a reader had to
+//     compare by eye.
+//   - `RealWaker` routed provider+hosting to a revive. `LaneOps::wake` routes
+//     `(harness, mode)` to the same revives, and it HAS the `pi`/mux-pane arm
+//     `RealWaker` never had — which is BUG 2, closed by this deletion rather
+//     than by a note (see `quorum_qw::conformance`).
+//
+// What did NOT move, and must not: the disposition ledger (envelope append,
+// `attempted`/`queued`/`delivered`/`delivery-failed` stamping, the claim lock,
+// body-digest idempotency), fleet/remote-peer routing, target resolution, and
+// the refusal RENDERING below — `report_refusal` still owns qd's wording and
+// still downgrades an absence to `refused{receive-path-undetermined}` from THIS
+// gather's `DiscoveryHealth`, which the lane cannot speak for.
+
+/// What one carrier call answers with.
+///
+/// **The type MOVED to `quorum_qw::lanes` and is re-exported here**, unchanged in
+/// every field, constructor and doc word. It was defined in this file when qd's
+/// carriers were its only caller; `LaneOps::deliver` is its second, and a qw twin
+/// converted at the seam would be a drift bug waiting for its first divergent
+/// field. Every `super::send_unified::CarrierOutcome` path in `send.rs` /
+/// `send_relay.rs` keeps resolving — a relocation, not an API change, the same
+/// move `dispatch::lib`'s re-exports make for two dozen other modules.
+///
+/// `code` is still the carrier's UNCHANGED exit code, and [`deliver_then_stamp`]
+/// still reads exactly that, so the disposition ledger's bytes do not move.
+pub(super) use quorum_qw::lanes::CarrierOutcome;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SendRefusal {
@@ -34,9 +74,17 @@ enum SendRefusal {
 
 /// A target's lifecycle liveness, from its one resolved registry/join snapshot.
 /// A NOT-live target (`Cold`/`Killed`) is no longer a send refusal (qd–qf W3b:
-/// "stopped is not a refusal class") — it is a WAKE trigger: the unified send
-/// path revives it via [`wake_to_deliverable`] and delivers into the refreshed
-/// row. Only a LIVE target reaches [`select_carrier`].
+/// "stopped is not a refusal class") — it is a WAKE trigger, and this is the ONE
+/// place `qd send` decides which of the two paths a row takes.
+///
+/// **This reads the STATUS ENUM ALONE, and `LaneOps::health` does not.** Health
+/// reads status PLUS `(pid, start_time)` through the `qd ls` liveness gate, so a
+/// row with `status: "idle"` over a pid that is gone reads LIVE here and COLD
+/// there. Both answers are deliberate — see `LaneOps::deliver`'s docs, which
+/// carry the whole argument — and the disagreement is why the LIVE path passes
+/// `wake_if_cold: false`: the lane must ATTEMPT such a row and let the carrier
+/// report, never revive it off a projection this function does not share.
+/// Reconciling the two readings is a separate, user-visible commit.
 fn is_live(session: &Session) -> bool {
     matches!(
         session.status,
@@ -44,252 +92,99 @@ fn is_live(session: &Session) -> bool {
     )
 }
 
-/// Pure pre-attempt selector. There is intentionally no probing or discovery
-/// here: relay presence, mux linkage, and provider all come from the one resolved
-/// registry/join snapshot.
+// THIS VERB HAS NO CARRIER, AND THAT IS THE POINT OF PHASE 3B.
+//
+// There WAS a local `trait UnifiedBackend` here with five signatures, and a
+// `RealUnifiedBackend` implementing BOTH it and `quorum_qw::Carriers` — the
+// callback `LaneOps::deliver` reached UP through to run a delivery whose body was
+// a `qd` verb function. The twin trait went first; then phase 3B moved all five
+// BODIES into `quorum_qw::delivery`, so `Carriers`, `RealUnifiedBackend` and
+// `lane_ops_with_carriers` are all deleted and `lane_ops` is the only
+// constructor. What this file kept is what was always qd's: the disposition
+// ledger, the envelope append, the claim lock, the body-digest idempotency and
+// the fleet/remote routing.
+
+// ===========================================================================
+// THE ATTEMPT — one delivery, already bound to its target
+// ===========================================================================
+
+/// ONE delivery attempt, with its target, its wake policy and its body already
+/// bound. The durability wrapper below owns the LEDGER and knows nothing else;
+/// this is the whole of what it calls.
 ///
-/// qd–qf W3b: lifecycle liveness is NO LONGER gated here — the Cold/Stopped
-/// refusal arms are RETIRED. The unified send path wakes a not-live target
-/// ([`wake_to_deliverable`]) BEFORE it calls this, so `select_carrier` only ever
-/// runs on a live (or freshly-revived) row. The remaining `NoLiveReceivePath`
-/// arms are the transport-shape refusals (a live claude with neither relay nor a
-/// joined mux pane; a pane-hosted codex with no live pane) — a genuinely-bare
-/// receive surface, distinct from a stopped session. As a defense-in-depth floor
-/// (a caller that reaches this on a not-live row) a non-live status also yields
-/// `NoLiveReceivePath` rather than routing into a carrier that cannot receive.
-fn select_carrier(session: &Session) -> Result<UnifiedCarrier, SendRefusal> {
-    if session.session_id.is_empty() {
-        return Err(SendRefusal::Bare);
-    }
-    if !is_live(session) {
-        // Floor only — the unified path wakes a not-live target before selecting.
-        return Err(SendRefusal::NoLiveReceivePath);
-    }
-
-    match session.provider.as_str() {
-        // codex-interactive: a codex row is only an app-server row when it is
-        // DAEMON-hosted. The `--interactive` lane has no ws endpoint to reconnect
-        // to — its receive path is the pane's PTY, the same carrier a
-        // relay-less claude pane uses. Routing it to `CodexDaemon` would fail on a
-        // missing endpoint and blame the transport for a session that never had
-        // one.
-        //
-        // The PTY carrier DELIVERS for codex: `qrmux::attended::fire` carries codex
-        // composer facts, and although codex publishes no pollable busy/idle
-        // signal, its rollout records the submitted message — so acceptance is
-        // confirmed from the transcript (`AcceptanceSignal::Landing`) rather than
-        // from a status it never publishes.
-        "codex"
-            if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
-                == Some(dispatch::provider::Hosting::MuxPane) =>
-        {
-            if session.zmx_name.is_some() && session.socket_dir.is_some() {
-                Ok(UnifiedCarrier::MuxPty)
-            } else {
-                Err(SendRefusal::NoLiveReceivePath)
-            }
-        }
-        "codex" => Ok(UnifiedCarrier::CodexDaemon),
-        provider if provider.starts_with("acp/") => Ok(UnifiedCarrier::AcpDaemon),
-        // pi-interactive: the exact codex story one provider over. A pi row is only
-        // a resident-adapter row when it is DAEMON-hosted; the `--interactive` lane
-        // has no ws endpoint to reconnect to, and its receive path is the pane's
-        // PTY. Routing it to `PiDaemon` would fail on a missing endpoint and blame
-        // the transport for a session that never had one.
-        //
-        // The PTY carrier DELIVERS here too. pi's transcript is append-per-entry
-        // once flushed (see `dispatch::provider::pi::tui`), so a submitted message
-        // is observable on disk and acceptance is confirmed by the same
-        // landing-as-acceptance proof codex uses. The one gap is a session whose
-        // first assistant reply has not happened yet — pi has written nothing at
-        // all by then, so a landing cannot be confirmed and the send reports an
-        // honest non-delivery rather than an unverifiable claim.
-        "pi"
-            if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
-                == Some(dispatch::provider::Hosting::MuxPane) =>
-        {
-            if session.zmx_name.is_some() && session.socket_dir.is_some() {
-                Ok(UnifiedCarrier::MuxPty)
-            } else {
-                Err(SendRefusal::NoLiveReceivePath)
-            }
-        }
-        "pi" => Ok(UnifiedCarrier::PiDaemon),
-        // Relay precedence is structural: a recorded port selects relay before
-        // mux state is considered. PTY can only be selected from a positive
-        // relay_port=None observation plus a live joined mux pane.
-        "claude-code" => match session.relay_port {
-            Some(port) => Ok(UnifiedCarrier::ClaudeRelay { port }),
-            None if session.zmx_name.is_some() && session.socket_dir.is_some() => {
-                Ok(UnifiedCarrier::MuxPty)
-            }
-            None => Err(SendRefusal::NoLiveReceivePath),
-        },
-        other => Err(SendRefusal::UnknownProvider(other.to_string())),
-    }
-}
-
-/// qd–qf W3b — the WAKE seam. A NOT-live target is revived into a deliverable
-/// (live) row; on success the refreshed [`Session`] (new pid/endpoint, SAME
-/// session id) is handed back so the caller re-runs carrier selection + delivery
-/// against it. A wake that cannot succeed is a [`Refusal::failed`]`("wake", …)` —
-/// the contract's `failed{wake}` (exit 12). Seamed as a trait so the
-/// [`wake_then_deliver`] durability wiring is unit-testable with a mock that
-/// returns Ok(refreshed) / Err(failed{wake}) without standing up a live revive.
-trait Waker {
-    fn wake(&self, session: &Session, render: RenderMode) -> Result<Session, Refusal>;
-}
-
-/// The production [`Waker`]: dispatch to the matching REUSED revive machinery by
-/// provider + hosting. Nothing here re-implements a revive — it calls the SAME
-/// fns `qd resume` / `qd attach` run:
-///   - claude-code MuxPane  → [`resume::revive_claude`] (`fresh=false`, detached),
-///   - codex MuxPane        → [`lifecycle::revive_codex_tui`] (verb `"send"`),
-///   - codex / acp/* / pi daemon → the matching `run_*_resume` (they print their
-///     own "resumed …" line and return an exit code; a nonzero is a wake failure).
+/// It is a seam for two reasons, and neither is testing alone:
 ///
-/// On success the row is re-resolved by its STABLE `session_id` (never a name /
-/// prefix — the revive rewrote the registry row under the same id). A revive that
-/// cannot succeed, an unknown/​un-wakeable provider, or a row that vanishes after a
-/// "successful" revive all map to `failed{wake}`.
-struct RealWaker;
+///  1. **A row with no lane still has a funnel.** An unknown-provider COLD row
+///     (`provider: "mystery"`, the shape `tests/acceptance.rs` and
+///     `tests/inbound_mode.rs` both drive) is not addressable by any lane, and
+///     `RealWaker` used to answer it with `failed{wake}` from its fallthrough
+///     arm. That row must keep its `attempted, queued, delivery-failed{wake}`
+///     funnel and its exit 12, so [`Unwakeable`] answers exactly that and rides
+///     the SAME ledger code as a real lane instead of a second copy of it.
+///  2. The funnel shape stays provable without a live carrier or a live revive,
+///     which is what the `deliver_with_durability` tests below have always done.
+trait Attempt {
+    fn run(&self) -> Result<Receipt, LaneError>;
+}
 
-impl Waker for RealWaker {
-    fn wake(&self, session: &Session, render: RenderMode) -> Result<Session, Refusal> {
-        use dispatch::provider::{row_hosting, Hosting};
+/// The production attempt: `LaneOps::deliver`, which chooses the carrier itself
+/// and — when the policy says so — performs the wake INSIDE the call.
+struct LaneAttempt<'a> {
+    ops: &'a dyn LaneOps,
+    id: SessionId,
+    policy: DeliverPolicy,
+    message: String,
+    /// The send id qd minted — and recorded in its intent log — BEFORE this
+    /// attempt was built. See [`super::intent`]: the record has to be durable
+    /// before the message crosses, so the id cannot come back on the receipt.
+    send_id: String,
+}
 
-        let label = session
-            .name
-            .clone()
-            .unwrap_or_else(|| session.session_id.clone());
-        let provider = session.provider.as_str();
-        let hosting = row_hosting(provider, session.hosting.as_deref());
-
-        // Re-resolve the refreshed row by the STABLE session id after a revive that
-        // reported success (new pid/endpoint, same id). A vanished row is itself a
-        // wake failure — the revive claimed success but left nothing to deliver to.
-        let refreshed = |session_id: &str| -> Result<Session, Refusal> {
-            common::resolve_session_uncapped(session_id).map_err(|_| {
-                Refusal::failed(
-                    "wake",
-                    format!("revived \"{label}\" but its session row vanished before delivery"),
-                )
-            })
-        };
-
-        match (provider, hosting) {
-            // claude-code pane — the shared cold→drivable claude revive (fresh=false
-            // ⇒ resume the EXISTING session id, not a new one). Detached +
-            // ready-gated; errors-only print. Ok(_) ⇒ re-resolve; Err ⇒ failed{wake}.
-            ("claude-code", _) => match resume::revive_claude(session, None, render, false) {
-                Ok(_) => refreshed(&session.session_id),
-                Err(_) => Err(Refusal::failed(
-                    "wake",
-                    format!("could not revive claude session \"{label}\""),
-                )),
+impl Attempt for LaneAttempt<'_> {
+    fn run(&self) -> Result<Receipt, LaneError> {
+        self.ops.deliver(
+            &self.id,
+            &Message {
+                id: MessageId(self.send_id.clone()),
+                // `from` is the SENDING session, and `qd send` has never carried
+                // one into a carrier: all five take `(session, message)`. Passing
+                // `None` is the honest answer, not a stub.
+                text: self.message.clone(),
+                from: None,
             },
-            // codex, pane-hosted (--interactive) — the codex twin of revive_claude.
-            ("codex", Some(Hosting::MuxPane)) => {
-                match lifecycle::revive_codex_tui(session, render, "send") {
-                    Ok(_) => refreshed(&session.session_id),
-                    Err(_) => Err(Refusal::failed(
-                        "wake",
-                        format!("could not revive codex session \"{label}\""),
-                    )),
-                }
-            }
-            // codex daemon — the app-server revive (`thread/resume`). It prints its
-            // own success line; exit 0 ⇒ re-resolve, nonzero ⇒ failed{wake}.
-            ("codex", _) => match resume::run_codex_resume(session) {
-                0 => refreshed(&session.session_id),
-                _ => Err(Refusal::failed(
-                    "wake",
-                    format!("could not revive codex daemon session \"{label}\""),
-                )),
-            },
-            // acp/* daemon — the resident adapter revive (`session/load`).
-            (p, _) if p.starts_with("acp/") => match resume::run_acp_resume(session) {
-                0 => refreshed(&session.session_id),
-                _ => Err(Refusal::failed(
-                    "wake",
-                    format!("could not revive acp session \"{label}\""),
-                )),
-            },
-            // pi daemon — the resident revive (`--load-session <id>`).
-            ("pi", _) => match resume::run_pi_resume(session) {
-                0 => refreshed(&session.session_id),
-                _ => Err(Refusal::failed(
-                    "wake",
-                    format!("could not revive pi session \"{label}\""),
-                )),
-            },
-            // No headless wake route for this provider/hosting.
-            _ => Err(Refusal::failed(
-                "wake",
-                format!("provider \"{provider}\" cannot be woken headlessly"),
-            )),
-        }
+            &self.policy,
+        )
     }
 }
 
-trait UnifiedBackend {
-    fn claude_relay(&self, session: &Session, message: &str, port: u16) -> i32;
-    fn mux_pty(&self, session: &Session, message: &str) -> i32;
-    fn codex_daemon(&self, session: &Session, message: &str) -> i32;
-    fn acp_daemon(&self, session: &Session, message: &str) -> i32;
-    fn pi_daemon(&self, session: &Session, message: &str) -> i32;
+/// A provider no lane can address, on a row that is NOT live.
+///
+/// `quorum_qw::lane_for` refuses an unknown provider outright, so there is no
+/// `LaneOps` to ask — and the row still has to reach the ledger the way it does
+/// today: envelope, `attempted`, `queued`, `delivery-failed{wake}`, exit 12. The
+/// message is `RealWaker`'s fallthrough arm, carried across verbatim.
+///
+/// A LIVE row with an unknown provider never gets here: it is a sync
+/// `refused{...}` with no envelope, exactly as `select_carrier`'s
+/// `UnknownProvider` arm was.
+struct Unwakeable {
+    provider: String,
 }
 
-struct RealUnifiedBackend;
-
-impl UnifiedBackend for RealUnifiedBackend {
-    fn claude_relay(&self, session: &Session, message: &str, port: u16) -> i32 {
-        send_relay::run_claude_relay_unified(session, message, port)
-    }
-
-    fn mux_pty(&self, session: &Session, message: &str) -> i32 {
-        send::run_send_pty_unified(session, message)
-    }
-
-    fn codex_daemon(&self, session: &Session, message: &str) -> i32 {
-        send_relay::run_codex_send(session, message)
-    }
-
-    fn acp_daemon(&self, session: &Session, message: &str) -> i32 {
-        send_relay::run_acp_send(session, message)
-    }
-
-    fn pi_daemon(&self, session: &Session, message: &str) -> i32 {
-        send_relay::run_pi_send(session, message)
-    }
-}
-
-fn dispatch_selected(
-    backend: &dyn UnifiedBackend,
-    carrier: UnifiedCarrier,
-    session: &Session,
-    message: &str,
-) -> i32 {
-    // Unified-send decision table (selection is complete before this match):
-    //
-    //   codex, daemon-hosted          -> codex daemon lane
-    //   codex, pane-hosted (--interactive) -> PTY (no ws endpoint exists)
-    //   acp/*                         -> ACP daemon lane
-    //   pi                            -> pi daemon lane
-    //   claude-code + relay_port      -> relay (wins even with a live mux pane)
-    //   claude-code + no relay + mux  -> PTY spare tire
-    //   anything else                 -> refused before dispatch
-    //
-    // Every arm makes exactly one carrier call and returns its result. There is
-    // no cross-carrier fallback after any carrier's acceptance boundary.
-    match carrier {
-        UnifiedCarrier::ClaudeRelay { port } => {
-            backend.claude_relay(session, message, port)
-        }
-        UnifiedCarrier::MuxPty => backend.mux_pty(session, message),
-        UnifiedCarrier::CodexDaemon => backend.codex_daemon(session, message),
-        UnifiedCarrier::AcpDaemon => backend.acp_daemon(session, message),
-        UnifiedCarrier::PiDaemon => backend.pi_daemon(session, message),
+impl Attempt for Unwakeable {
+    fn run(&self) -> Result<Receipt, LaneError> {
+        Err(LaneError::WakeFailed {
+            detail: format!(
+                "provider \"{}\" cannot be woken headlessly",
+                self.provider
+            ),
+            // qd's `failed{wake}` door code. Nothing produced this from a revive
+            // core — there is no core — so it is spelled here rather than
+            // carried, and the ledger tail below routes it through
+            // `Refusal::failed`, which is where the 12 actually comes from.
+            exit_code: 12,
+            self_attributed: false,
+        })
     }
 }
 
@@ -311,9 +206,9 @@ fn resolve_self_session_id(env: &dyn Env) -> Result<Option<String>, i32> {
 
 /// Report a refusal.
 ///
-/// `health` does NOT participate in SELECTION: [`select_carrier`] stays a pure
-/// function of the resolved row, exactly as its doc promises. What health
-/// changes is whether an absence may be ASSERTED. `relay_port: None` produced
+/// `health` does NOT participate in ROUTING — routing is `LaneOps::deliver`'s,
+/// keyed on the lane, and this function never sees it. What health changes is
+/// whether an absence may be ASSERTED. `relay_port: None` produced
 /// by a refused `ps` is not evidence of no relay — it is the absence of
 /// evidence — so that case is reported as a distinct refusal CLASS
 /// (`refused{receive-path-undetermined}`) carrying the underlying OS error,
@@ -441,7 +336,7 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
             )
             .emit();
         }
-        return run_inbound(&RealEnv, &RealUnifiedBackend, &RealWaker, path);
+        return run_inbound(&RealEnv, path);
     }
 
     // ORIGIN mode: the positionals are REQUIRED (clap-optional → runtime-checked).
@@ -619,27 +514,92 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
         }
     };
 
-    // qd–qf W3b: the LIVE vs NOT-live split. A LIVE target takes the byte-identical
-    // W3a path — select the carrier FIRST (a transport-shape refusal is an
-    // immediate exit-1 with NO envelope logged, exactly as today), then
-    // write-then-deliver. A NOT-live target is no longer refused: it is
-    // resume-and-deliver — log the envelope FIRST, WAKE it, then select + deliver
-    // into the refreshed row (a wake that cannot succeed is a `failed{wake}`
-    // stamped against the logged envelope, exit 12).
+    // THE ROW'S LANE. `lane_for` is the routing `select_carrier` used to do off a
+    // provider string plus a `row_hosting` re-derivation, and `None` here means
+    // exactly what `SendRefusal::UnknownProvider` meant: no lane can address this
+    // provider. The two halves of that answer are NOT symmetric and never were —
+    // a LIVE unknown-provider row is a sync exit-1 refusal with no envelope, and a
+    // NOT-LIVE one runs the whole write-then-deliver funnel to a
+    // `delivery-failed{wake}` (`tests/acceptance.rs`'s §6 scenario and
+    // `tests/inbound_mode.rs`'s "mystery" rows both drive the second). So the
+    // liveness split below owns both, and the no-lane case rides it through
+    // [`Unwakeable`] rather than through a second copy of the ledger.
+    let lane = quorum_qw::lane_for(&current.provider, current.hosting.as_deref());
+
+    // qd–qf W3b: the LIVE vs NOT-live split, decided by [`is_live`] — the STATUS
+    // ENUM alone, unchanged. A LIVE target takes the byte-identical W3a path: ask
+    // the lane whether there is anywhere to receive FIRST (a transport-shape
+    // refusal is an immediate exit-1 with NO envelope logged, exactly as today),
+    // then write-then-deliver with NO wake. A NOT-live target is no longer
+    // refused: it is resume-and-deliver — log the envelope FIRST, then one atomic
+    // `deliver` that wakes and delivers, and a wake that cannot succeed is a
+    // `failed{wake}` stamped against the logged envelope, exit 12.
     if is_live(&current) {
-        let carrier = match select_carrier(&current) {
-            Ok(carrier) => carrier,
-            Err(refusal) => return report_refusal(query, &current, refusal, &health),
+        let Some(lane) = lane else {
+            return report_refusal(
+                query,
+                &current,
+                SendRefusal::UnknownProvider(current.provider.clone()),
+                &health,
+            );
         };
+        // THE PRE-FLIGHT, and the reason `LaneOps::receive_path` exists. qd logs
+        // the envelope BEFORE the carrier runs and treats a failed append as
+        // fatal; a live target with nothing to receive through is an immediate
+        // exit-1 that logs NO envelope and stamps NO disposition
+        // (`verbs_a4::send_live_unroutable_claude_is_unchanged_no_wake_no_envelope`).
+        // Folding that verdict inside an atomic `deliver` would put the append
+        // first and move the ledger's bytes. `receive_path` is the pre-flight the
+        // contract SANCTIONS for exactly this: topology only, side-effect-free,
+        // and — enforced by a source scan in `quorum_qw::conformance` — never an
+        // INPUT to `deliver`. Its answer is rendered here and DISCARDED; the lane
+        // determines the carrier again, itself, from its own fresh read.
+        let ops = dispatch::lane::open(lane, &env, paths.clone());
+        let id = SessionId(current.session_id.clone());
+        match ops.receive_path(&id) {
+            Ok(ReceivePath::Available) => {}
+            // `None` is a positive observation of absence; `Undetermined` is the
+            // lane's own denied read. BOTH render through `report_refusal`,
+            // because the DOWNGRADE to `refused{receive-path-undetermined}` is
+            // decided by THIS gather's `DiscoveryHealth` — the reads that produced
+            // the row qd is holding — and the lane cannot speak for those. An
+            // `Err` (a row the registry cannot key, a transport that failed
+            // answering) is the same user-visible fact: there is no live receive
+            // path, exit 1, no envelope.
+            Ok(ReceivePath::None { .. }) | Ok(ReceivePath::Undetermined { .. }) | Err(_) => {
+                return report_refusal(query, &current, SendRefusal::NoLiveReceivePath, &health)
+            }
+        }
         // qd–qf W3 part A: WRITE-THEN-DELIVER. Log the envelope BEFORE delivery
-        // (hard-fail if the append errors), stamp `attempted`, deliver via the
-        // existing unified carrier, then stamp the witnessed outcome (best-effort).
+        // (hard-fail if the append errors), stamp `attempted`, deliver through the
+        // lane, then stamp the witnessed outcome (best-effort).
         deliver_with_durability(
             &env,
             &paths,
-            &RealUnifiedBackend,
-            carrier,
-            &current,
+            &LaneAttempt {
+                ops: ops.as_ref(),
+                id,
+                // NO WAKE on the live path — `is_live` already said this row is
+                // live, and the lane's own `health` disagrees about exactly the
+                // stale-live rows `verbs_a4` pins as must-not-wake. `deliver`
+                // ATTEMPTS on `false` rather than refusing, which is what keeps
+                // that fixture's `attempted, delivery-failed{delivery}` funnel.
+                policy: DeliverPolicy {
+                    wake_if_cold: false,
+                    // Ignored when no wake happens, which is the whole point here.
+                    render: RenderMode::default(),
+                    ..DeliverPolicy::default()
+                },
+                message: message.clone(),
+                send_id: intent::record_send_intent(
+                    &env,
+                    &dispatch::effects::RealClock,
+                    Some(&current.session_id),
+                    current.name.as_deref(),
+                    intent::VERB_SEND,
+                    message,
+                ),
+            },
             query,
             message,
             expires_ms,
@@ -650,22 +610,61 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
         // pane). The `send` verb has NO `--alt-screen`/`--inline` flags, so this is
         // FLAG-LESS: `render-default` config > the inline default (never
         // `m.get_flag`, which would panic on the flag-less `send` subcommand).
+        // Resolved ONLY on this branch, exactly as before — the live path never
+        // read the config and still does not.
         let render = dispatch::launch::resolve_render_mode(
             None,
-            dispatch::launch::render_default_from_config(&env).as_deref(),
+            common::render_default_from_config(&env).as_deref(),
         );
-        wake_then_deliver(
-            &env,
-            &paths,
-            &RealUnifiedBackend,
-            &RealWaker,
-            render,
-            &current,
-            query,
-            message,
-            expires_ms,
-            supplied_correlation_id,
-        )
+        // No `receive_path` pre-flight here, and that is deliberate: a cold row
+        // has no receive path YET, and the envelope is logged before the wake so
+        // that a `delivery-failed{wake}` has an envelope to join on. A revive that
+        // reports success but leaves an unroutable row is the lane's own
+        // `WakeFailed` (its `no_live_receive_path` helper answers exactly that
+        // when a wake happened), which lands the same `delivery-failed{wake}` +
+        // exit 12 `wake_then_deliver` used to land here.
+        match lane {
+            Some(lane) => {
+                let ops = dispatch::lane::open(lane, &env, paths.clone());
+                deliver_with_durability(
+                    &env,
+                    &paths,
+                    &LaneAttempt {
+                        ops: ops.as_ref(),
+                        id: SessionId(current.session_id.clone()),
+                        policy: DeliverPolicy {
+                            wake_if_cold: true,
+                            render,
+                            ..DeliverPolicy::default()
+                        },
+                        message: message.clone(),
+                        send_id: intent::record_send_intent(
+                            &env,
+                            &dispatch::effects::RealClock,
+                            Some(&current.session_id),
+                            current.name.as_deref(),
+                            intent::VERB_SEND,
+                            message,
+                        ),
+                    },
+                    query,
+                    message,
+                    expires_ms,
+                    supplied_correlation_id,
+                )
+            }
+            None => deliver_with_durability(
+                &env,
+                &paths,
+                &Unwakeable {
+                    provider: current.provider.clone(),
+                },
+                query,
+                message,
+                expires_ms,
+                supplied_correlation_id,
+            ),
+        }
     }
 }
 
@@ -1004,22 +1003,18 @@ fn origin_remote_send(
 ///      `delivery-failed` row does NOT block the retry.
 ///   6. ADMIT + (resume-and-)DELIVER: `accepted` is RETIRED (R14.3) — admission
 ///      is marked by `attempted`; a not-live target additionally emits `queued`
-///      and is WOKEN (reuse the W3b [`Waker`] wake path) before delivery; a wake
-///      that cannot succeed stamps `delivery-failed{class}` (exit 12). A live but
-///      carrierless select_carrier refusal stamps `refused{no-live-receive-path}`
-///      (NO `attempted` — the R12 family split, now a refused row) + refusal exit.
-///      NO envelope log append (contract §4).
+///      and is WOKEN inside `LaneOps::deliver` (`wake_if_cold`) before delivery;
+///      a wake that cannot succeed stamps `delivery-failed{class}` (exit 12). A
+///      live target with no receive path — asked of [`LaneOps::receive_path`],
+///      which is topology-only and never an input to `deliver` — stamps
+///      `refused{no-live-receive-path}` (NO `attempted`; the R12 family split,
+///      now a refused row) + refusal exit. NO envelope log append (contract §4).
 ///   7. STAMP the outcome (`delivered` / `delivery-failed{delivery}`) via the
 ///      SHARED [`deliver_then_stamp`] tail — best-effort append.
 ///
-/// Seamed (deps injected — `env`/`backend`/`waker`) so the whole door is proven
-/// with mocks + a jailed store, no live carrier/revive.
-fn run_inbound(
-    env: &dyn Env,
-    backend: &dyn UnifiedBackend,
-    waker: &dyn Waker,
-    envelope_arg: &str,
-) -> i32 {
+/// Seamed (`env` injected) so the whole door is proven with a jailed store. It
+/// never picks a carrier — the lane does, from its own fresh read of the row.
+fn run_inbound(env: &dyn Env, envelope_arg: &str) -> i32 {
     use dispatch::dispositions;
     use dispatch::effects::{Clock, RealClock};
 
@@ -1192,32 +1187,72 @@ fn run_inbound(
         );
     };
 
-    // A not-live target is WOKEN first (reuse the W3b wake seam), then delivered;
-    // a live target is delivered directly. NO envelope log append either way.
+    // The target's LANE (the routing `select_carrier` used to do off a provider
+    // string). `None` is a provider no lane can address — the same two-sided
+    // answer the origin path makes: refused at the door when the row is LIVE,
+    // and `failed{wake}` through the funnel when it is not.
+    let lane = quorum_qw::lane_for(&target.provider, target.hosting.as_deref());
+
+    // A not-live target is WOKEN inside `deliver` (`wake_if_cold`), then
+    // delivered; a live target is delivered directly, with no wake. NO envelope
+    // log append either way.
     if is_live(&target) {
-        let carrier = match select_carrier(&target) {
-            Ok(c) => c,
-            // R14.3: a live-but-carrierless target is a parse-valid inbound refusal
-            // — stamp `refused{no-live-receive-path}` IN the funnel (NO `attempted`,
-            // the message never admitted) + the refusal exit. The old `report_refusal`
-            // (a row-less exit-1) is replaced here for the inbound door.
-            Err(_refusal) => {
-                let label = target.name.as_deref().unwrap_or(&envelope.target);
-                return stamp_refused(
-                    Refusal::refused(
-                        "no-live-receive-path",
-                        format!("\"{label}\" has no live receive path — not sendable"),
-                    ),
+        // R14.3: a live-but-carrierless target is a parse-valid inbound refusal —
+        // stamp `refused{no-live-receive-path}` IN the funnel (NO `attempted`, the
+        // message never admitted) + the refusal exit. The origin path's row-less
+        // exit-1 `report_refusal` is replaced by this for the inbound door.
+        //
+        // The pre-flight is `LaneOps::receive_path` — topology only, and never an
+        // input to `deliver` (see the origin path, and the source scan in
+        // `quorum_qw::conformance`). An unknown provider takes the same door: it
+        // was `select_carrier`'s `UnknownProvider`, and this arm never
+        // distinguished which refusal it caught.
+        let refuse_no_receive_path = || {
+            let label = target.name.as_deref().unwrap_or(&envelope.target);
+            stamp_refused(
+                Refusal::refused(
                     "no-live-receive-path",
-                );
-            }
+                    format!("\"{label}\" has no live receive path — not sendable"),
+                ),
+                "no-live-receive-path",
+            )
         };
+        let Some(lane) = lane else {
+            return refuse_no_receive_path();
+        };
+        let paths_for_lane = paths.clone();
+        let ops = dispatch::lane::open(lane, env, paths_for_lane);
+        let id = SessionId(target.session_id.clone());
+        match ops.receive_path(&id) {
+            Ok(ReceivePath::Available) => {}
+            Ok(ReceivePath::None { .. }) | Ok(ReceivePath::Undetermined { .. }) | Err(_) => {
+                return refuse_no_receive_path()
+            }
+        }
         stamp_attempted();
         deliver_then_stamp(
             &tpaths,
-            backend,
-            carrier,
-            &target,
+            &LaneAttempt {
+                ops: ops.as_ref(),
+                id,
+                // No wake: `is_live` said this row is live. `deliver` ATTEMPTS on
+                // `wake_if_cold: false` rather than refusing off its own `health`,
+                // which is what keeps a stale-live row's funnel where it is.
+                policy: DeliverPolicy {
+                    wake_if_cold: false,
+                    render: RenderMode::default(),
+                    ..DeliverPolicy::default()
+                },
+                message: envelope.body.clone(),
+                send_id: intent::record_send_intent(
+                    env,
+                    &clock,
+                    Some(&target.session_id),
+                    target.name.as_deref(),
+                    intent::VERB_SEND,
+                    &envelope.body,
+                ),
+            },
             &envelope.body,
             &envelope.correlation_id,
             &clock,
@@ -1227,57 +1262,54 @@ fn run_inbound(
         // render-default > the inline default (exactly the origin not-live path).
         let render = dispatch::launch::resolve_render_mode(
             None,
-            dispatch::launch::render_default_from_config(env).as_deref(),
+            common::render_default_from_config(env).as_deref(),
         );
-        // On a wake failure, stamp `delivery-failed{class}` against the ENVELOPE
-        // (created_at = now; the peer's origin/authored_at join from the mirror) +
-        // exit 12 — the SAME contract as W3b, but with NO envelope log append.
-        let stamp_failed_wake = |refusal: Refusal| -> i32 {
-            stamp_event(
-                &tpaths,
-                &dispatch::dispositions::DispositionEvent::delivery_failed(
-                    envelope.correlation_id.clone(),
-                    clock.now_ms(),
-                    refusal.class.clone(),
-                ),
-            );
-            refusal.emit()
-        };
-        // The attempt starts, and it placed the message durably awaiting the
-        // target's WAKE: `attempted` then `queued`, BEFORE the wake is tried.
+        // The attempt starts. `queued` is stamped by the SHARED tail once the lane
+        // reports whether a wake happened (`Receipt::woke`, or a returned
+        // `WakeFailed`) — the file ORDER is unchanged (`attempted`, `queued`,
+        // outcome) while `created_at` is no longer the moment before the wake was
+        // tried. See `deliver_then_stamp` for why that is now unavoidable and what
+        // it costs.
         stamp_attempted();
-        stamp_event(
-            &tpaths,
-            &dispatch::dispositions::DispositionEvent::queued(
-                envelope.correlation_id.clone(),
-                clock.now_ms(),
+        let paths_for_lane = paths.clone();
+        match lane {
+            Some(lane) => {
+                let ops = dispatch::lane::open(lane, env, paths_for_lane);
+                deliver_then_stamp(
+                    &tpaths,
+                    &LaneAttempt {
+                        ops: ops.as_ref(),
+                        id: SessionId(target.session_id.clone()),
+                        policy: DeliverPolicy {
+                            wake_if_cold: true,
+                            render,
+                            ..DeliverPolicy::default()
+                        },
+                        message: envelope.body.clone(),
+                        send_id: intent::record_send_intent(
+                            env,
+                            &clock,
+                            Some(&target.session_id),
+                            target.name.as_deref(),
+                            intent::VERB_SEND,
+                            &envelope.body,
+                        ),
+                    },
+                    &envelope.body,
+                    &envelope.correlation_id,
+                    &clock,
+                )
+            }
+            None => deliver_then_stamp(
+                &tpaths,
+                &Unwakeable {
+                    provider: target.provider.clone(),
+                },
+                &envelope.body,
+                &envelope.correlation_id,
+                &clock,
             ),
-        );
-        let (refreshed, carrier) = match waker.wake(&target, render) {
-            Ok(refreshed) => match select_carrier(&refreshed) {
-                Ok(carrier) => (refreshed, carrier),
-                Err(_) => {
-                    let label = refreshed
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| refreshed.session_id.clone());
-                    return stamp_failed_wake(Refusal::failed(
-                        "wake",
-                        format!("revived \"{label}\" but it has no live receive path"),
-                    ));
-                }
-            },
-            Err(refusal) => return stamp_failed_wake(refusal),
-        };
-        deliver_then_stamp(
-            &tpaths,
-            backend,
-            carrier,
-            &refreshed,
-            &envelope.body,
-            &envelope.correlation_id,
-            &clock,
-        )
+        }
     }
 }
 
@@ -1294,25 +1326,34 @@ fn read_envelope_bytes(arg: &str) -> std::io::Result<Vec<u8>> {
     }
 }
 
-/// qd–qf W3 part A — the write-then-deliver + event-stamp wrapper around the
-/// existing unified carrier dispatch. Kept as a seamed helper (deps injected)
-/// so the log-append / event-stamp shape is exercised without standing up a
-/// full live carrier: the `backend` is any [`UnifiedBackend`], `env`/`paths` are
-/// the resolved seams.
+/// qd–qf W3 part A — the write-then-deliver + event-stamp wrapper around ONE
+/// [`Attempt`].
 ///
-/// Ordering (format doc §1/§2): LOG the envelope, stamp `attempted`, THEN
-/// deliver, THEN stamp the outcome. The envelope append is fatal-on-error (no
-/// durable record ⇒ do not deliver); the event appends are best-effort (a lost
-/// event row never changes the exit). A synchronous local attempt that
-/// completes is `delivered` (exit 0) or `delivery-failed{delivery}` (nonzero);
+/// **This is now the WHOLE durability boundary.** It used to have a twin,
+/// `wake_then_deliver`, which existed only because qd performed the wake ITSELF:
+/// it had to log, stamp, wake, re-select a carrier for the refreshed row and only
+/// then deliver. `LaneOps::deliver` is ATOMIC — the wake happens inside the call
+/// when `policy.wake_if_cold` is set, and the lane re-reads the row afterwards —
+/// so there is nothing left for a second function to sequence. The live and cold
+/// paths now differ in exactly ONE value, the policy's `wake_if_cold`, and the
+/// receipt reports back whether a wake happened so the ledger can still stamp
+/// `queued`.
+///
+/// Ordering (format doc §1/§2): LOG the envelope, stamp `attempted`, THEN run the
+/// attempt, THEN stamp the outcome. The envelope append is fatal-on-error (no
+/// durable record ⇒ do not deliver) — and it is what makes a `failed{wake}` have
+/// an envelope to join on. The event appends are best-effort (a lost event row
+/// never changes the exit). A synchronous local attempt that completes is
+/// `delivered` (exit 0) or `delivery-failed{delivery}` (nonzero);
 /// `pending`/`expired` are DERIVED (absence) and never stamped here.
-#[allow(clippy::too_many_arguments)]
+///
+/// Kept as a seamed helper (deps injected) so the log-append / event-stamp shape
+/// is exercised without standing up a live carrier OR a live revive: the
+/// `attempt` is any [`Attempt`], `env`/`paths` are the resolved seams.
 fn deliver_with_durability(
     env: &dyn Env,
     paths: &dispatch::paths::QdPaths,
-    backend: &dyn UnifiedBackend,
-    carrier: UnifiedCarrier,
-    session: &Session,
+    attempt: &dyn Attempt,
     raw_target: &str,
     message: &str,
     expires_ms: i64,
@@ -1339,7 +1380,7 @@ fn deliver_with_durability(
     // normalized HOME of origin, R14.2). Event rows no longer carry origin/witness.
     let origin = dispositions::local_host(env);
 
-    // R15 CLAIM LOCK — held across check→(log)→deliver→stamp (the `_claim` guard
+    // R15 CLAIM LOCK — held across check→(log)→attempt→stamp (the `_claim` guard
     // lives to the end of this fn). Serializes concurrent same-id origin submits
     // and the body-consistency check. Fail CLOSED on a lock error.
     let _claim = match dispositions::acquire_claim(&tpaths, &correlation_id) {
@@ -1358,9 +1399,10 @@ fn deliver_with_durability(
     //   - SAME body + a `delivered` event exists ⇒ no-op success (idempotent).
     //   - SAME body + NOT delivered ⇒ a legit caller retry: NO fresh envelope
     //     append (do not double-append the log), a fresh `attempted`, then
-    //     redeliver into the outcome tail.
+    //     re-run the attempt into the outcome tail.
     // Absent from the log ⇒ the normal write-then-deliver path (append below).
     let presented_digest = dispatch::origin_send::body_digest(message);
+    let mut skip_append = false;
     if let Some(prior) = dispositions::logged_envelope(&tpaths, &correlation_id) {
         if dispatch::origin_send::body_digest(&prior.body) != presented_digest {
             // Sync refusal, ROW-LESS (origin mode, R14a pin 3): the id already
@@ -1379,26 +1421,9 @@ fn deliver_with_durability(
                 eprintln!("qd send: {correlation_id} already delivered — no-op");
                 return 0;
             }
-            Ok(None) => {
-                // Legit caller retry: do NOT append the envelope again; stamp a
-                // fresh `attempted` and redeliver via the shared outcome tail.
-                stamp_event(
-                    &tpaths,
-                    &dispatch::dispositions::DispositionEvent::attempted(
-                        correlation_id.clone(),
-                        clock.now_ms(),
-                    ),
-                );
-                return deliver_then_stamp(
-                    &tpaths,
-                    backend,
-                    carrier,
-                    session,
-                    message,
-                    &correlation_id,
-                    &clock,
-                );
-            }
+            // Legit caller retry: do NOT append the envelope again; stamp a fresh
+            // `attempted` and re-attempt through the shared outcome tail.
+            Ok(None) => skip_append = true,
             Err(e) => {
                 eprintln!("qd send: could not read the disposition ledger for {correlation_id} ({e}) — not sent.");
                 return 1;
@@ -1407,22 +1432,29 @@ fn deliver_with_durability(
     }
 
     // Mint + LOG FIRST (write-then-deliver). `target` is the RAW address the
-    // caller gave (operational record); `body` is the message verbatim.
-    let envelope = build_envelope(
-        correlation_id.clone(),
-        authored_at,
-        expires_ms,
-        raw_target.to_string(),
-        origin.clone(),
-        message.to_string(),
-    );
-    if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
-        // HARD FAIL: no durable envelope ⇒ we must not proceed to deliver. Nothing
-        // was sent; the caller gets a clear error + a nonzero exit (generic class).
-        eprintln!(
-            "qd send: could not durably record the message before delivery ({e}) — not sent."
+    // caller gave (operational record); `body` is the message verbatim. Even a
+    // wake that later fails leaves the durable envelope, so a
+    // `delivery-failed{wake}` has an envelope to join on. A caller-retry
+    // (`skip_append`) reuses the envelope already in the log — never a
+    // double-append.
+    if !skip_append {
+        let envelope = build_envelope(
+            correlation_id.clone(),
+            authored_at,
+            expires_ms,
+            raw_target.to_string(),
+            origin.clone(),
+            message.to_string(),
         );
-        return 1;
+        if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
+            // HARD FAIL: no durable envelope ⇒ we must not proceed to deliver.
+            // Nothing was sent; the caller gets a clear error + a nonzero exit
+            // (generic class).
+            eprintln!(
+                "qd send: could not durably record the message before delivery ({e}) — not sent."
+            );
+            return 1;
+        }
     }
 
     // The delivery attempt STARTS here (the envelope is durable): stamp
@@ -1437,20 +1469,9 @@ fn deliver_with_durability(
         ),
     );
 
-    // Deliver via the existing unified carrier + stamp the outcome. (This is the
-    // LIVE path — a not-live target's resume-and-deliver / failed{wake} lives in
-    // `wake_then_deliver`.) The deliver + outcome-stamp tail is the SHARED
-    // `deliver_then_stamp` core (identical to the not-live and W4 inbound tails):
-    // exit 0 ⇒ `delivered`; a definitive failure ⇒ `delivery-failed{delivery}`.
-    deliver_then_stamp(
-        &tpaths,
-        backend,
-        carrier,
-        session,
-        message,
-        &correlation_id,
-        &clock,
-    )
+    // Run the attempt + stamp the outcome. The tail is SHARED with W4 inbound, so
+    // the two cannot drift.
+    deliver_then_stamp(&tpaths, attempt, message, &correlation_id, &clock)
 }
 
 /// Best-effort disposition-EVENT append (R8): a lost event row must NEVER
@@ -1466,12 +1487,53 @@ fn stamp_event(
     }
 }
 
-/// qd–qf W3/W4 — the SHARED deliver → stamp-OUTCOME tail (NO log append, and NO
+/// qd–qf W3/W4 — the SHARED attempt → stamp-OUTCOME tail (NO log append, and NO
 /// `attempted` emission — CALLERS own the attempt-start event). The envelope is
-/// ALREADY durable (origin logged it; inbound never logs its own). One carrier
-/// call, then a best-effort outcome [`dispatch::dispositions::DispositionEvent`]:
-///   - exit 0             ⇒ `delivered`,
-///   - definitive nonzero ⇒ `delivery-failed{delivery}`.
+/// ALREADY durable (origin logged it; inbound never logs its own). One
+/// [`Attempt`], then the best-effort
+/// [`dispatch::dispositions::DispositionEvent`]s the receipt calls for.
+///
+/// # What the receipt is read for, in order
+///
+/// **`queued`, from `Receipt::woke`.** The LIVE path stamps no `queued`, so the
+/// row's PRESENCE is how the ledger records that a wake happened at all. `deliver`
+/// being ATOMIC means qd cannot know whether one did until the lane TELLS it, so
+/// the rule is exactly the one `Receipt::woke` documents: stamp when the lane says
+/// a wake HAPPENED — `Confirmation::Yes` or `Unknown`, OR a returned
+/// [`LaneError::WakeFailed`], which is only ever produced by a wake that was
+/// attempted. Both pinned funnels survive: `attempted, queued, delivered` and
+/// `attempted, queued, delivery-failed{wake}`.
+///
+/// It is stamped RETROSPECTIVELY, and the cost is stated rather than discovered:
+/// `created_at` is no longer the moment the message was placed durably awaiting
+/// the wake — it is the moment qd LEARNED a wake had been attempted, a whole
+/// revive later (seconds, not ms). R14.1 still holds as written (`created_at` is
+/// when THIS host RECORDED the event; there is no retro-dating). What no longer
+/// holds is the row schema's parenthetical that for the qd-driven events "record
+/// time and happen time coincide to within ms" — said out loud in
+/// `doc/formats/dispatch-transport-formats.md` and on `DispositionEvent::queued`.
+///
+/// **The outcome.**
+///   - accepted            ⇒ `delivered` (exit 0),
+///   - not accepted        ⇒ `delivery-failed{delivery}`,
+///   - [`LaneError::WakeFailed`] ⇒ `delivery-failed{wake}` + the shared refusal
+///     exit 12, printed as `failed{wake}` — a wake that could not succeed is NOT
+///     a verdict on the id, and a later retry re-attempts (idempotence keys on
+///     `delivered` EXISTING, never on a failure),
+///   - any other [`LaneError`] ⇒ `delivery-failed{delivery}`, SILENTLY. The
+///     carrier already printed its own loud line before answering — that is the
+///     entire content of `CarrierOutcome::unkeyed`, which is what produces
+///     `LaneError::Transport` here — and a second qd-authored line on top of it
+///     would be new output for a case that has always been the carrier's to
+///     narrate.
+///
+/// **The exit code narrows to 1 for a failed delivery, and that is a decision.**
+/// `Receipt` carries `accepted`, not a code, on purpose: the carrier's exit code
+/// is a private number and the ledger keys on the qd-minted `correlation_id`.
+/// Every reachable carrier failure answers `1` today (`no_relay_exit`, every
+/// `CarrierOutcome::unkeyed(1)` door, `run_send_pty_resolved`'s strict returns),
+/// so nothing observable moves; what changes is that a NEW carrier cannot
+/// introduce a third exit code through this path without saying so.
 ///
 /// R14.2: event rows are FULLY NORMALIZED — the outcome row carries ONLY
 /// `{v, correlation_id, event, created_at}` (+ `class` on the failed variant,
@@ -1480,218 +1542,84 @@ fn stamp_event(
 /// on the row (they live on the envelope and join by `correlation_id`).
 ///
 /// R15: on success the `delivered` row binds `body_digest(message)` — the hex
-/// sha-256 of the body that ACTUALLY landed (the exact `message` string handed to
-/// the carrier). This is the integrity binding the door reads back to refuse a
-/// later same-id/different-body presentation. Used by the origin live path, the
-/// origin resume-and-deliver path, AND W4 inbound — so the three cannot drift.
+/// sha-256 of the body that ACTUALLY landed (the exact `message` string the
+/// attempt carried). This is the integrity binding the door reads back to refuse a
+/// later same-id/different-body presentation. Used by the origin path AND W4
+/// inbound, so the two cannot drift.
 fn deliver_then_stamp(
     tpaths: &dispatch::paths::QdPaths,
-    backend: &dyn UnifiedBackend,
-    carrier: UnifiedCarrier,
-    session: &Session,
+    attempt: &dyn Attempt,
     message: &str,
     correlation_id: &str,
     clock: &dyn dispatch::effects::Clock,
 ) -> i32 {
     use dispatch::dispositions::DispositionEvent;
 
-    let code = dispatch_selected(backend, carrier, session, message);
+    let outcome = attempt.run();
 
-    let event = if code == 0 {
-        DispositionEvent::delivered(
-            correlation_id.to_string(),
-            clock.now_ms(),
-            dispatch::origin_send::body_digest(message),
-        )
-    } else {
-        DispositionEvent::delivery_failed(
-            correlation_id.to_string(),
-            clock.now_ms(),
-            "delivery".to_string(),
-        )
+    // `queued` first — see the doc above for the rule and what it costs.
+    let a_wake_happened = match &outcome {
+        Ok(receipt) => receipt.woke != Confirmation::No,
+        Err(LaneError::WakeFailed { .. }) => true,
+        Err(_) => false,
     };
-    stamp_event(tpaths, &event);
-    code
-}
-
-/// qd–qf W3b — the RESUME-AND-DELIVER path for a NOT-live target. "Stopped is not
-/// a refusal class": the envelope is LOGGED FIRST (write-then-deliver — hard-fail
-/// if the append errors), THEN the target is WOKEN, THEN delivered into the
-/// refreshed row.
-///
-/// Ordering (contract §4, format doc §1/§2), all inside the durability boundary:
-///   1. LOG the envelope (fatal-on-error — no durable record ⇒ do not proceed),
-///      then stamp `attempted` and `queued` — the attempt placed the message
-///      durably awaiting the target's WAKE, a witnessed moment stamped BEFORE
-///      the wake is tried;
-///   2. WAKE via the [`Waker`] seam. On `Err(failed{wake})` the wake could not
-///      succeed → stamp a `delivery-failed{wake}` event against the logged
-///      envelope, print the refusal, and return [`EXIT_REFUSED`] (12). Nothing
-///      was delivered (and a later retry is NOT blocked — idempotence keys on
-///      `delivered` existing).
-///   3. On `Ok(refreshed)` re-select the carrier for the refreshed (now live) row.
-///      A revive that reported success but left an unroutable row is itself a wake
-///      failure → the SAME `delivery-failed{wake}` stamp + exit 12 (never a
-///      silent no-op).
-///   4. DELIVER via the carrier, then STAMP `delivered`/`delivery-failed{delivery}`
-///      — the identical outcome wiring the live path uses.
-///
-/// Seamed (deps injected — `backend`/`waker`/`env`/`paths`) so the log → stamp →
-/// wake → select → deliver → stamp shape is proven with mocks (no live
-/// carrier/revive).
-#[allow(clippy::too_many_arguments)]
-fn wake_then_deliver(
-    env: &dyn Env,
-    paths: &dispatch::paths::QdPaths,
-    backend: &dyn UnifiedBackend,
-    waker: &dyn Waker,
-    render: RenderMode,
-    session: &Session,
-    raw_target: &str,
-    message: &str,
-    expires_ms: i64,
-    supplied_correlation_id: Option<String>,
-) -> i32 {
-    use dispatch::dispositions::{self, DispositionEvent};
-    use dispatch::effects::{Clock, RealClock};
-    use dispatch::origin_send::{build_envelope, mint_correlation_id};
-
-    // Same transport-file resolution + minting as the live path (from_home_env
-    // honors QD_HOME, matching the store + the W5 reader).
-    let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, env);
-    let clock = RealClock;
-    let authored_at = clock.now_ms();
-    // qd–qf W3c: the supplied id (frame's origin event id) also threads the
-    // resume-and-deliver path — it shares the SAME origin envelope, so the logged
-    // envelope AND every stamped event key on it. Absent ⇒ mint (the BARE-send
-    // default). Empty was already refused at the verb entry.
-    let correlation_id = supplied_correlation_id.unwrap_or_else(|| mint_correlation_id(&clock));
-    // This qd ORIGINATES here: local_host is the envelope's `origin` (the single
-    // normalized HOME of origin, R14.2). Event rows no longer carry origin/witness.
-    let origin = dispositions::local_host(env);
-
-    // R15 CLAIM LOCK — held across check→(log)→wake→deliver→stamp. Serializes
-    // concurrent same-id submits + the body-consistency check. Fail CLOSED.
-    let _claim = match dispositions::acquire_claim(&tpaths, &correlation_id) {
-        Ok(lock) => lock,
-        Err(e) => {
-            eprintln!("qd send: could not acquire the delivery claim for {correlation_id} ({e}) — not sent.");
-            return 1;
-        }
-    };
-
-    // R15 ORIGIN no-double-append (same rule as the live path): if this id is
-    // ALREADY in my log, the caller is re-submitting the SAME authored act.
-    //   - DIFFERENT body ⇒ sync `refused{body-mismatch}`, ROW-LESS (R14a pin 3).
-    //   - SAME body + delivered exists ⇒ no-op success.
-    //   - SAME body + not delivered ⇒ legit caller retry: do NOT re-append the
-    //     envelope; fall through with `skip_append` and re-run the wake+deliver.
-    let presented_digest = dispatch::origin_send::body_digest(message);
-    let mut skip_append = false;
-    if let Some(prior) = dispositions::logged_envelope(&tpaths, &correlation_id) {
-        if dispatch::origin_send::body_digest(&prior.body) != presented_digest {
-            return dispatch::origin_send::Refusal::refused(
-                "body-mismatch",
-                format!(
-                    "{correlation_id} is already in the log with a different body — refusing to re-submit a conflicting body under the same id"
-                ),
-            )
-            .emit();
-        }
-        match dispositions::recorded_delivered_digest(&tpaths, &correlation_id) {
-            Ok(Some(_)) => {
-                eprintln!("qd send: {correlation_id} already delivered — no-op");
-                return 0;
-            }
-            // Same body, not delivered: a legit retry ⇒ redeliver, no re-append.
-            Ok(None) => skip_append = true,
-            Err(e) => {
-                eprintln!("qd send: could not read the disposition ledger for {correlation_id} ({e}) — not sent.");
-                return 1;
-            }
-        }
-    }
-
-    // (1) LOG FIRST — even a wake that later fails leaves the durable envelope, so
-    // a `delivery-failed{wake}` event has an envelope to join on
-    // (write-then-deliver). A caller-retry (`skip_append`) reuses the envelope
-    // already in the log — never a double-append.
-    let envelope = build_envelope(
-        correlation_id.clone(),
-        authored_at,
-        expires_ms,
-        raw_target.to_string(),
-        origin.clone(),
-        message.to_string(),
-    );
-    if !skip_append {
-        if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
-            eprintln!(
-                "qd send: could not durably record the message before delivery ({e}) — not sent."
-            );
-            return 1;
-        }
-    }
-
-    // The delivery attempt STARTS here: stamp `attempted`, then `queued` — the
-    // attempt placed the message durably awaiting the target's WAKE (a recorded
-    // moment, stamped BEFORE the wake is tried; the prose may land minutes from
-    // now). Normalized rows (R14.2): `{v, correlation_id, event, created_at}` only.
-    stamp_event(
-        &tpaths,
-        &DispositionEvent::attempted(correlation_id.clone(), clock.now_ms()),
-    );
-    stamp_event(
-        &tpaths,
-        &DispositionEvent::queued(correlation_id.clone(), clock.now_ms()),
-    );
-
-    // A wake that cannot succeed: stamp a `delivery-failed{class}` event against
-    // the logged envelope (best-effort — a lost event must not change the exit),
-    // print the refusal, exit 12. NOT a verdict on the id — a later retry
-    // re-attempts (idempotence keys on `delivered` EXISTING, never on a failure).
-    let stamp_failed_wake = |refusal: Refusal| -> i32 {
+    if a_wake_happened {
         stamp_event(
-            &tpaths,
-            &DispositionEvent::delivery_failed(
-                correlation_id.clone(),
-                clock.now_ms(),
-                refusal.class.clone(),
-            ),
+            tpaths,
+            &DispositionEvent::queued(correlation_id.to_string(), clock.now_ms()),
         );
-        refusal.emit()
-    };
+    }
 
-    // (2) WAKE. (3) On success, re-select the carrier for the refreshed row — an
-    // unroutable refreshed row is a wake that did not produce a deliverable target.
-    let (refreshed, carrier) = match waker.wake(session, render) {
-        Ok(refreshed) => match select_carrier(&refreshed) {
-            Ok(carrier) => (refreshed, carrier),
-            Err(_) => {
-                let label = refreshed
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| refreshed.session_id.clone());
-                return stamp_failed_wake(Refusal::failed(
-                    "wake",
-                    format!("revived \"{label}\" but it has no live receive path"),
-                ));
-            }
-        },
-        Err(refusal) => return stamp_failed_wake(refusal),
-    };
-
-    // (4) DELIVER into the refreshed row + STAMP the outcome (the SHARED
-    // `deliver_then_stamp` tail — identical to the live + inbound paths).
-    deliver_then_stamp(
-        &tpaths,
-        backend,
-        carrier,
-        &refreshed,
-        message,
-        &correlation_id,
-        &clock,
-    )
+    match outcome {
+        Ok(receipt) if receipt.accepted => {
+            stamp_event(
+                tpaths,
+                &DispositionEvent::delivered(
+                    correlation_id.to_string(),
+                    clock.now_ms(),
+                    dispatch::origin_send::body_digest(message),
+                ),
+            );
+            0
+        }
+        Ok(_) => {
+            stamp_event(
+                tpaths,
+                &DispositionEvent::delivery_failed(
+                    correlation_id.to_string(),
+                    clock.now_ms(),
+                    "delivery".to_string(),
+                ),
+            );
+            1
+        }
+        Err(LaneError::WakeFailed { detail, .. }) => {
+            stamp_event(
+                tpaths,
+                &DispositionEvent::delivery_failed(
+                    correlation_id.to_string(),
+                    clock.now_ms(),
+                    "wake".to_string(),
+                ),
+            );
+            // The CORE's own message, carried out unchanged under qd's class. The
+            // lane deliberately does not stamp a verb on it (a lane has no verb —
+            // see `LaneError::WakeFailed`), and `Refusal::failed` is where
+            // `qd send: failed{wake}:` and the exit 12 both come from.
+            Refusal::failed("wake", detail).emit()
+        }
+        Err(_) => {
+            stamp_event(
+                tpaths,
+                &DispositionEvent::delivery_failed(
+                    correlation_id.to_string(),
+                    clock.now_ms(),
+                    "delivery".to_string(),
+                ),
+            );
+            1
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1864,144 +1792,80 @@ mod tests {
         );
     }
 
-    // === codex-interactive: a codex row's carrier follows its HOSTING ===
+    // === THE ROUTING MOVED, and this is what qd still owes ===============
     //
-    // The two codex topologies have disjoint receive paths — the daemon has a ws
-    // endpoint and no pane, the interactive lane has a pane and no endpoint — so
-    // selecting on the provider id alone necessarily gets one of them wrong.
-
-    #[test]
-    fn pane_hosted_codex_selects_the_pty_carrier_not_the_daemon() {
-        let mut s = session("codex");
-        s.hosting = Some("mux-pane".into());
-        assert_eq!(
-            select_carrier(&s),
-            Ok(UnifiedCarrier::MuxPty),
-            "an --interactive codex row has no ws endpoint; its receive path is the pane"
-        );
-    }
-
-    #[test]
-    fn daemon_hosted_codex_still_selects_the_daemon_carrier() {
-        // Both the explicit token and the absent field (every pre-existing codex
-        // row) must keep the app-server lane — this is the regression guard for
-        // the whole codex daemon fleet.
-        let mut explicit = session("codex");
-        explicit.hosting = Some("daemon".into());
-        assert_eq!(select_carrier(&explicit), Ok(UnifiedCarrier::CodexDaemon));
-
-        let absent = session("codex");
-        assert_eq!(absent.hosting, None);
-        assert_eq!(select_carrier(&absent), Ok(UnifiedCarrier::CodexDaemon));
-    }
-
-    // === pi-interactive: a pi row's carrier follows its HOSTING too ===
+    // Fourteen tests lived here — the `select_carrier` table, exhaustively: the
+    // two codex topologies, the two pi topologies, relay-precedes-PTY, the bare
+    // and unknown-provider refusals, the non-live floor. They are GONE with the
+    // function, and not because coverage was traded away: the table they pinned
+    // is `quorum_qw::lanes::LaneImpl::deliver`'s seven-arm `match (harness,
+    // mode)`, and it is pinned THERE — `lanes::tests::deliver_is_total_for_every_lane`,
+    // `relay_precedence_is_structural_and_pty_needs_an_observed_absence`, and
+    // `lane::tests::start_routing_is_total_over_every_real_input`, which walks
+    // every real `(provider, hosting)` input. Re-asserting it here would be a
+    // second copy of the thing this change deleted.
     //
-    // Same disjoint-receive-path argument as codex, one provider over: the
-    // resident adapter has a ws front and no pane, the interactive lane has a pane
-    // and no front.
+    // What is left on THIS side is the one step qd still performs: turning a
+    // registry row into a LANE. That is `quorum_qw::lane_for(provider, hosting)`,
+    // and the test below pins the property the fourteen were really defending.
 
+    /// **A row's carrier follows its HOSTING, never its provider id alone.**
+    ///
+    /// This is the whole content of the deleted codex/pi topology tests, asked of
+    /// the one function qd still calls. The two codex topologies have DISJOINT
+    /// receive paths — the daemon has a ws endpoint and no pane, the
+    /// `--interactive` lane has a pane and no endpoint — so a router keyed on
+    /// `"codex"` alone necessarily gets one of them wrong, and `select_carrier`
+    /// was one guard away from exactly that. pi is the same story one provider
+    /// over, and it is the shape BUG 2 was: a pane row driven through the
+    /// resident revive.
+    ///
+    /// MUTATION EVIDENCE: make `lane_for` ignore the hosting token and the two
+    /// `Mode::Pane` rows come back `Mode::Daemon`.
     #[test]
-    fn pane_hosted_pi_selects_the_pty_carrier_not_the_daemon() {
-        let mut s = session("pi");
-        s.hosting = Some("mux-pane".into());
+    fn a_rows_lane_follows_its_hosting_not_its_provider_string() {
+        use quorum_qw::lane::{Harness, Mode};
+
+        let lane_of = |provider: &str, hosting: Option<&str>| {
+            quorum_qw::lane_for(provider, hosting).map(|l| (l.harness, l.mode))
+        };
+
+        // The two topologies that split, in both directions.
         assert_eq!(
-            select_carrier(&s),
-            Ok(UnifiedCarrier::MuxPty),
-            "an --interactive pi row has no resident front; its receive path is the pane"
+            lane_of("codex", Some("mux-pane")),
+            Some((Harness::Codex, Mode::Pane)),
+            "an --interactive codex row is a PANE lane: its receive path is the \
+             pane's PTY, and it has no ws endpoint to reconnect to"
         );
-    }
+        assert_eq!(lane_of("codex", Some("daemon")), Some((Harness::Codex, Mode::Daemon)));
+        assert_eq!(lane_of("codex", None), Some((Harness::Codex, Mode::Daemon)));
+        assert_eq!(lane_of("pi", Some("mux-pane")), Some((Harness::Pi, Mode::Pane)));
+        assert_eq!(lane_of("pi", Some("daemon")), Some((Harness::Pi, Mode::Daemon)));
+        assert_eq!(lane_of("pi", None), Some((Harness::Pi, Mode::Daemon)));
 
-    #[test]
-    fn daemon_hosted_pi_still_selects_the_daemon_carrier() {
-        // Both the explicit token and the absent field (every pre-existing pi row)
-        // must keep the resident lane — the regression guard for the pi fleet.
-        let mut explicit = session("pi");
-        explicit.hosting = Some("daemon".into());
-        assert_eq!(select_carrier(&explicit), Ok(UnifiedCarrier::PiDaemon));
-
-        let absent = session("pi");
-        assert_eq!(absent.hosting, None);
-        assert_eq!(select_carrier(&absent), Ok(UnifiedCarrier::PiDaemon));
-    }
-
-    #[test]
-    fn pane_hosted_pi_with_no_live_pane_refuses_as_no_receive_path() {
-        // The pane died but the row is still live-shaped. There is no ws front to
-        // fall back to, so the honest answer is "no live receive path" — not a
-        // route into the resident lane, which would fail on a missing endpoint and
-        // blame the transport.
-        let mut s = session("pi");
-        s.hosting = Some("mux-pane".into());
-        s.zmx_name = None;
-        s.socket_dir = None;
-        assert_eq!(select_carrier(&s), Err(SendRefusal::NoLiveReceivePath));
-    }
-
-    #[test]
-    fn unidentified_pane_hosted_codex_refuses_as_bare_not_as_a_daemon() {
-        // The window between starting an interactive codex session and typing into
-        // it: the row exists, the pane is live, but codex has disclosed no thread
-        // id. It must refuse as Bare (no identity) — NOT get routed to the
-        // app-server lane, and NOT be reported as having no receive path.
-        let mut s = session("codex");
-        s.hosting = Some("mux-pane".into());
-        s.session_id = String::new();
-        assert_eq!(select_carrier(&s), Err(SendRefusal::Bare));
-    }
-
-    #[test]
-    fn pane_hosted_codex_without_a_live_pane_refuses_instead_of_lying() {
-        // No pane and no endpoint means nothing can receive. Refuse honestly
-        // rather than dispatch into a carrier that cannot deliver.
-        let mut s = session("codex");
-        s.hosting = Some("mux-pane".into());
-        s.zmx_name = None;
-        assert_eq!(select_carrier(&s), Err(SendRefusal::NoLiveReceivePath));
-
-        let mut s2 = session("codex");
-        s2.hosting = Some("mux-pane".into());
-        s2.socket_dir = None;
-        assert_eq!(select_carrier(&s2), Err(SendRefusal::NoLiveReceivePath));
-    }
-
-    #[test]
-    fn pane_hosted_codex_not_live_is_a_wake_trigger_not_a_carrier_refusal() {
-        // qd–qf W3b: Cold/Killed are NO LONGER lifecycle REFUSALS — they are WAKE
-        // triggers (`is_live` == false), so the unified path revives the row before
-        // selecting a carrier. `select_carrier` is only ever reached on a live row;
-        // its non-live floor is the generic `NoLiveReceivePath` (never a Cold /
-        // Stopped-specific refusal — those variants are retired).
-        for status in [SessionStatus::Cold, SessionStatus::Killed] {
-            let mut s = session("codex");
-            s.hosting = Some("mux-pane".into());
-            s.status = status;
-            assert!(!is_live(&s), "{status:?} is a wake trigger, not live");
-            assert_eq!(
-                select_carrier(&s),
-                Err(SendRefusal::NoLiveReceivePath),
-                "select_carrier's non-live floor is NoLiveReceivePath, not a Cold/Stopped refusal"
-            );
-        }
-    }
-
-    #[test]
-    fn selection_table_is_deterministic_and_relay_precedes_pty() {
-        let mut claude = session("claude-code");
-        claude.relay_port = Some(4312);
+        // claude-code has no daemon lane, so a `daemon` token cannot invent one.
         assert_eq!(
-            select_carrier(&claude),
-            Ok(UnifiedCarrier::ClaudeRelay { port: 4312 })
+            lane_of("claude-code", Some("daemon")),
+            Some((Harness::ClaudeCode, Mode::Pane)),
+            "an unsupportable hosting token falls back to the harness's structural \
+             mode rather than fabricating a lane"
         );
-        assert_eq!(select_carrier(&claude), select_carrier(&claude));
 
-        claude.relay_port = None;
-        assert_eq!(select_carrier(&claude), Ok(UnifiedCarrier::MuxPty));
-        claude.zmx_name = None;
-        assert_eq!(
-            select_carrier(&claude),
-            Err(SendRefusal::NoLiveReceivePath)
-        );
+        // Both ACP bridges, including the bare `opencode` CLI alias.
+        assert_eq!(lane_of("acp/claude-code", None), Some((Harness::AcpClaudeCode, Mode::Daemon)));
+        assert_eq!(lane_of("acp/opencode", None), Some((Harness::Opencode, Mode::Daemon)));
+        assert_eq!(lane_of("opencode", None), Some((Harness::Opencode, Mode::Daemon)));
+
+        // AND THE DRIFT THIS CHANGE ACCEPTS, named rather than discovered.
+        // `select_carrier` matched `acp/*` by PREFIX, so a hypothetical
+        // `acp/future` routed to the ACP daemon carrier. `lane_for` knows the two
+        // ACP harnesses that exist and refuses the rest — the same answer it
+        // already gives `qd attach`, `qd resume` and `qd kill`, all of which
+        // moved onto it first. A future bridge is added to `Harness`, which is
+        // where a new lane belongs, rather than being routed by a string prefix
+        // into a carrier nobody wired.
+        assert_eq!(lane_of("acp/future", None), None);
+        assert_eq!(lane_of("mystery", None), None);
     }
 
     // --- refusal reporting: absence vs. undetermined ---------------------
@@ -2014,19 +1878,16 @@ mod tests {
         dispatch::discovery::AcquireFailure::new(source, &eperm())
     }
 
-    /// Selection must NOT change when discovery is degraded — health explains a
-    /// refusal, it never causes or prevents one. This is the invariant that
-    /// keeps `select_carrier` a pure function of the resolved row.
-    #[test]
-    fn discovery_health_never_participates_in_selection() {
-        let mut claude = session("claude-code");
-        claude.relay_port = None;
-        claude.zmx_name = None;
-        claude.socket_dir = None;
-        // Same input row, same verdict, regardless of what the gather managed
-        // to read — the selector cannot see health at all.
-        assert_eq!(select_carrier(&claude), Err(SendRefusal::NoLiveReceivePath));
-    }
+    // `discovery_health_never_participates_in_selection` lived here. It pinned
+    // that a degraded gather could not change `select_carrier`'s verdict, which
+    // was a property of a function in THIS file that happened not to read
+    // `DiscoveryHealth`. It is retired rather than rewritten because the property
+    // is now STRUCTURAL: routing is `LaneOps::deliver`'s, in `quorum-qw`, and
+    // `DiscoveryHealth` is a `quorum-dispatch` type the lane cannot name — qw
+    // must never depend on qd. There is nothing left for a test to defend.
+    //
+    // The REPORTING half of the same rule is very much still qd's, and every test
+    // below pins it.
 
     /// A clean gather still ASSERTS the absence, and keeps the pre-existing
     /// transport-shape exit `1` that `verbs_a4` pins.
@@ -2131,56 +1992,74 @@ mod tests {
         );
     }
 
+    /// The two-sided answer for a provider NO LANE CAN ADDRESS, which is the one
+    /// place `select_carrier`'s `UnknownProvider` had a user-visible consequence
+    /// that survives its deletion.
+    ///
+    /// It is deliberately NOT symmetric, and both halves are pinned end-to-end
+    /// elsewhere: a LIVE unknown-provider row is a sync exit-1 refusal with NO
+    /// envelope and NO disposition, while a NOT-LIVE one runs the whole
+    /// write-then-deliver funnel to `attempted, queued, delivery-failed{wake}`
+    /// and exit 12 (`tests/acceptance.rs`'s §6 scenario and
+    /// `tests/inbound_mode.rs`'s "mystery" rows both drive the second). This pins
+    /// the two pieces qd owns: the refusal exit for the live half, and the
+    /// [`Unwakeable`] attempt that carries the cold half.
+    ///
+    /// MUTATION EVIDENCE: give `Unwakeable` any other `LaneError` and the funnel
+    /// below becomes `delivery-failed{delivery}` at exit 1 — the failed leg
+    /// `acceptance.rs` reads would change class.
     #[test]
-    fn daemon_providers_route_to_their_one_lane_even_with_relay_state() {
-        for (provider, expected) in [
-            ("codex", UnifiedCarrier::CodexDaemon),
-            ("acp/claude-code", UnifiedCarrier::AcpDaemon),
-            ("acp/opencode", UnifiedCarrier::AcpDaemon),
-            ("acp/future", UnifiedCarrier::AcpDaemon),
-            ("pi", UnifiedCarrier::PiDaemon),
-        ] {
-            let mut target = session(provider);
-            target.relay_port = Some(9999);
-            assert_eq!(select_carrier(&target), Ok(expected), "{provider}");
+    fn an_unaddressable_provider_refuses_live_and_fails_the_wake_when_cold() {
+        // LIVE: a sync refusal, exit 1, and the message names the provider.
+        let live = session("mystery");
+        assert!(is_live(&live));
+        assert_eq!(
+            report_refusal(
+                "t",
+                &live,
+                SendRefusal::UnknownProvider("mystery".into()),
+                &DiscoveryHealth::default()
+            ),
+            1
+        );
+
+        // NOT LIVE: the funnel's attempt is `Unwakeable`, whose answer is the
+        // `failed{wake}` class + `RealWaker`'s fallthrough message, verbatim.
+        let mut cold = session("mystery");
+        cold.status = SessionStatus::Cold;
+        assert!(!is_live(&cold));
+        match (Unwakeable {
+            provider: "mystery".into(),
+        })
+        .run()
+        {
+            Err(LaneError::WakeFailed { detail, exit_code, .. }) => {
+                assert_eq!(detail, "provider \"mystery\" cannot be woken headlessly");
+                assert_eq!(exit_code, 12);
+            }
+            other => panic!("an unaddressable provider must answer failed{{wake}}, got {other:?}"),
         }
     }
 
+    /// Cold/Killed are NOT refusals — "stopped is not a refusal class" (qd–qf
+    /// W3b). They are the WAKE TRIGGER, and [`is_live`] is the one place `qd send`
+    /// decides it. `select_carrier` used to carry a defense-in-depth non-live
+    /// floor; there is nothing left to floor, because the not-live branch now
+    /// hands the row to `deliver` with `wake_if_cold: true` and the lane owns the
+    /// rest.
     #[test]
-    fn bare_unknown_and_unavailable_are_refused_but_not_live_is_a_wake_trigger() {
-        // Bare (no bound identity) stays an immediate refusal.
+    fn a_stopped_target_is_a_wake_trigger_not_a_refusal() {
         let mut target = session("claude-code");
-        target.session_id.clear();
-        assert_eq!(select_carrier(&target), Err(SendRefusal::Bare));
-
-        // qd–qf W3b: Cold/Killed are NO LONGER carrier refusals — `is_live` is
-        // false (a wake trigger), and `select_carrier`'s non-live floor is the
-        // generic NoLiveReceivePath (the Cold/Stopped variants are retired).
-        target = session("claude-code");
         target.status = SessionStatus::Cold;
         assert!(!is_live(&target));
-        assert_eq!(select_carrier(&target), Err(SendRefusal::NoLiveReceivePath));
-
         target.status = SessionStatus::Killed;
         assert!(!is_live(&target));
-        assert_eq!(select_carrier(&target), Err(SendRefusal::NoLiveReceivePath));
 
-        // An unknown provider on a LIVE row is still an unknown-provider refusal.
-        target = session("mystery");
-        assert!(is_live(&target));
-        assert_eq!(
-            select_carrier(&target),
-            Err(SendRefusal::UnknownProvider("mystery".into()))
-        );
-
-        // A LIVE claude with neither relay nor a joined mux pane has a genuinely
-        // bare receive surface — NoLiveReceivePath (a transport-shape refusal,
-        // distinct from a stopped session).
-        target = session("claude-code");
-        target.zmx_name = None;
-        target.socket_dir = None;
-        assert!(is_live(&target));
-        assert_eq!(select_carrier(&target), Err(SendRefusal::NoLiveReceivePath));
+        // …and the three that ARE live, including a pane sitting at a shell.
+        for status in [SessionStatus::Idle, SessionStatus::Busy, SessionStatus::Shell] {
+            target.status = status;
+            assert!(is_live(&target), "{status:?} is deliverable as it stands");
+        }
     }
 
     #[test]
@@ -2196,68 +2075,71 @@ mod tests {
         assert!(!is_self_send(None, &ids, "session-uuid"));
     }
 
-    #[derive(Default)]
-    struct ProbeBackend {
-        calls: RefCell<Vec<(&'static str, String, String, Option<u16>)>>,
-        result: i32,
+    /// Read the TARGET's delivery-log records out of the jail. `emit_door_failure`
+    /// — the codex carrier's refusal record — writes them, so this is how the
+    /// carrier is observed now that it is a real function rather than a probe.
+    fn door_records(
+        paths: &dispatch::paths::QdPaths,
+        env: &dyn Env,
+    ) -> Vec<serde_json::Value> {
+        let state_dir = dispatch::paths::QdPaths::from_home_env(&paths.home, env).state_dir;
+        let raw = std::fs::read_to_string(dispatch::events::events_path(&state_dir, JAILED_SID))
+            .unwrap_or_default();
+        raw.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .collect()
     }
 
-    impl ProbeBackend {
-        fn record(&self, lane: &'static str, session: &Session, message: &str, port: Option<u16>) {
-            self.calls.borrow_mut().push((
-                lane,
-                session.session_id.clone(),
-                message.to_string(),
-                port,
-            ));
-        }
-    }
-
-    impl UnifiedBackend for ProbeBackend {
-        fn claude_relay(&self, session: &Session, message: &str, port: u16) -> i32 {
-            self.record("relay", session, message, Some(port));
-            self.result
-        }
-        fn mux_pty(&self, session: &Session, message: &str) -> i32 {
-            self.record("pty", session, message, None);
-            self.result
-        }
-        fn codex_daemon(&self, session: &Session, message: &str) -> i32 {
-            self.record("codex", session, message, None);
-            self.result
-        }
-        fn acp_daemon(&self, session: &Session, message: &str) -> i32 {
-            self.record("acp", session, message, None);
-            self.result
-        }
-        fn pi_daemon(&self, session: &Session, message: &str) -> i32 {
-            self.record("pi", session, message, None);
-            self.result
-        }
-    }
-
+    /// **Exactly ONE carrier call, and no fallback after a failure** — through
+    /// the REAL lane AND the REAL carrier, which is where the decision now lives.
+    ///
+    /// This used to watch a `ProbeBackend` at the `Carriers` seam. Phase 3B moved
+    /// the four daemon carriers into `quorum_qw::delivery`, so the codex/daemon
+    /// arm now calls a real function and there is no seam to instrument — but the
+    /// carrier leaves a BETTER witness than a call counter did: its `§C1`
+    /// record-then-fail-loud door writes exactly one `send-failed` into the
+    /// target's delivery log per call. One record is one carrier call.
+    ///
+    /// MUTATION EVIDENCE: a `deliver` arm that retried a second carrier on a
+    /// refusal writes a second door record and reds the count.
     #[test]
-    fn dispatch_makes_exactly_one_call_and_never_falls_back_on_failure() {
-        let backend = ProbeBackend {
-            result: 9,
-            ..Default::default()
-        };
-        let target = session("claude-code");
-        let code = dispatch_selected(
-            &backend,
-            UnifiedCarrier::ClaudeRelay { port: 7070 },
-            &target,
-            "hello",
+    fn deliver_reaches_exactly_one_carrier_and_never_falls_back_on_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (paths, env, lane) = jailed_daemon_lane(tmp.path());
+        let ops = quorum_qw::lanes::lane_ops(lane, &env, paths.clone());
+        let out = LaneAttempt {
+            ops: &ops,
+            id: SessionId(JAILED_SID.into()),
+            policy: live_policy(),
+            message: "hello".into(),
+            send_id: "m-test".to_string(),
+        }
+        .run();
+
+        // The forged row has a recorded pid and NO endpoint, so the codex carrier
+        // hits its reachability door: no turn is minted, hence no keyed receipt.
+        assert!(
+            matches!(out, Err(LaneError::Transport { .. })),
+            "an id-less carrier refusal is a Transport error, got {out:?}"
         );
-        assert_eq!(code, 9);
-        assert_eq!(backend.calls.borrow().as_slice(), &[(
-            "relay",
-            "session-uuid".into(),
-            "hello".into(),
-            Some(7070),
-        )]);
+
+        let recs = door_records(&paths, &env);
+        let kinds: Vec<&str> = recs.iter().filter_map(|r| r["event"].as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["send-failed"],
+            "exactly ONE carrier ran, and it left exactly one door record"
+        );
+        assert_eq!(recs[0]["reason"], "daemon-unreachable");
     }
 
+    /// The payload reaches the carrier byte for byte, whatever is in it.
+    ///
+    /// Same substitution as above: the witness is the door record's
+    /// `content_sha256`, which the carrier computes over the RAW message bytes it
+    /// was handed. That is strictly stronger than the old call-list compare — it
+    /// proves the bytes survived all the way into the carrier's own hashing, not
+    /// just into a probe's argument.
     #[test]
     fn payload_is_forwarded_byte_for_byte_without_affecting_carrier() {
         for message in [
@@ -2268,26 +2150,56 @@ mod tests {
             "$(shell) `ticks` ; & | ' \" $HOME",
             &"x".repeat(8193),
         ] {
-            let backend = ProbeBackend::default();
-            let target = session("claude-code");
+            let tmp = tempfile::tempdir().unwrap();
+            let (paths, env, lane) = jailed_daemon_lane(tmp.path());
+            let ops = quorum_qw::lanes::lane_ops(lane, &env, paths.clone());
+            let _ = LaneAttempt {
+                ops: &ops,
+                id: SessionId(JAILED_SID.into()),
+                policy: live_policy(),
+                message: message.to_string(),
+                send_id: "m-test".to_string(),
+            }
+            .run();
+
+            let recs = door_records(&paths, &env);
+            assert_eq!(recs.len(), 1, "one carrier call for {message:?}");
             assert_eq!(
-                dispatch_selected(&backend, UnifiedCarrier::MuxPty, &target, message),
-                0
+                recs[0]["content_sha256"].as_str().unwrap(),
+                dispatch::events::sha256_hex(message.as_bytes()),
+                "the carrier hashed the payload it was handed, byte for byte"
             );
-            let calls = backend.calls.borrow();
-            assert_eq!(calls.len(), 1);
-            assert_eq!(calls[0].0, "pty");
-            assert_eq!(calls[0].1, target.session_id);
-            assert_eq!(calls[0].2.as_bytes(), message.as_bytes());
         }
     }
 
     // === qd–qf W3 part A: write-then-deliver + disposition stamping =========
     //
     // These exercise the `deliver_with_durability` seam directly with a jailed
-    // QdPaths + a ProbeBackend, so the log-append / event-stamp wiring is
-    // proven without standing up a full live carrier. The store readers
-    // (dispatch::dispositions) parse the actual files the seam wrote.
+    // QdPaths, so the log-append / event-stamp wiring is proven without standing
+    // up a full live carrier. The store readers (dispatch::dispositions) parse the
+    // actual files the seam wrote.
+    //
+    // TWO kinds of double, and the split is deliberate:
+    //
+    //   - a REAL `LaneImpl` over a forged registry row, driving the REAL codex
+    //     carrier, for every funnel that ends in a FAILURE. It exercises the whole
+    //     chain qd now owns — `Attempt` → `LaneOps::deliver` → carrier — and the
+    //     carrier refuses deterministically at its reachability door.
+    //   - `ProbeAttempt`, an [`Attempt`] answering a pre-set `Receipt`/`LaneError`,
+    //     for every funnel that ends in a DELIVERY, and for the WAKE funnel. A real
+    //     lane's `wake_if_cold: true` would run a real revive (a codex
+    //     `thread/resume`, a detached claude launch), which is exactly what the
+    //     retired `MockWaker` existed to avoid.
+    //
+    // THE SUCCESS HALF USED TO USE THE FIRST DOUBLE, through `ProbeBackend` at the
+    // `Carriers` seam. Phase 3B moved the four daemon carriers into
+    // `quorum_qw::delivery`, so the only route left through that seam is `mux_pty`
+    // — and reaching it needs a JOINED PANE, which a jail cannot forge without
+    // launching a real mux. So the ledger tests that need an ACCEPTED receipt
+    // moved out one level, to `ProbeAttempt`. Nothing they assert is lost: every
+    // one of them measures the disposition ledger, and which carrier produced the
+    // receipt was never their subject. The two tests whose subject WAS the carrier
+    // stayed on the real lane and now watch the carrier's own door record.
 
     use dispatch::effects::MapEnv;
 
@@ -2296,33 +2208,124 @@ mod tests {
     fn jail_env(home: &std::path::Path) -> MapEnv {
         let mut e = MapEnv::default();
         e.vars.insert("HOME".into(), home.to_string_lossy().into_owned());
+        // The mux dirs the lane's row-join lists. SHORT literals so the `sun_path`
+        // budget holds on any host, and jailed so the join cannot reach the
+        // developer's real panes. Nothing is ever launched into them.
+        e.vars.insert("XDG_RUNTIME_DIR".into(), "/tmp/qd-su-xdg".into());
+        e.vars.insert("ZMX_DIR".into(), "/tmp/qd-su-zmx".into());
         // QD_HOST unset ⇒ local_host = "local" (the v1 envelope-origin placeholder).
         e
+    }
+
+    /// The forged row's session id. Distinctive so a stray real pane cannot join
+    /// onto it.
+    const JAILED_SID: &str = "qd-send-unified-jailed-sid";
+
+    /// A jailed home holding ONE live registry row, plus the lane + env that
+    /// address it.
+    ///
+    /// **codex/daemon on purpose.** Its `deliver` arm is the codex carrier and
+    /// nothing else — no relay discovery (which would port-scan 8900..9000 on the
+    /// developer's machine) and no pane gate — so these tests measure the LEDGER
+    /// rather than a topology probe. Which carrier a lane reaches is pinned where
+    /// it lives, in `quorum_qw::lanes`.
+    ///
+    /// The row carries a pid and NO endpoint, so the real carrier stops at its
+    /// reachability door: it reaches the wire never, and refuses deterministically
+    /// on any host.
+    fn jailed_daemon_lane(
+        home: &std::path::Path,
+    ) -> (dispatch::paths::QdPaths, MapEnv, quorum_qw::lane::Lane) {
+        let paths = dispatch::paths::QdPaths::from_home(home);
+        std::fs::create_dir_all(&paths.sessions_dir).unwrap();
+        std::fs::write(
+            paths.sessions_dir.join("424242.json"),
+            format!(
+                concat!(
+                    r#"{{"pid":424242,"sessionId":"{sid}","name":"qd-su-jailed-row","cwd":"/w","#,
+                    r#""startedAt":1717000000000,"updatedAt":1717003600000,"status":"idle","#,
+                    r#""version":"0.1.0","provider":"codex","hosting":"daemon"}}"#
+                ),
+                sid = JAILED_SID
+            ),
+        )
+        .unwrap();
+        let lane = quorum_qw::lane_for("codex", Some("daemon")).expect("codex/daemon is a lane");
+        (paths, jail_env(home), lane)
+    }
+
+    /// The LIVE path's policy, verbatim: no wake, and a render mode that is
+    /// ignored because no wake happens.
+    fn live_policy() -> DeliverPolicy {
+        DeliverPolicy {
+            wake_if_cold: false,
+            render: RenderMode::default(),
+            ..DeliverPolicy::default()
+        }
+    }
+
+    /// An [`Attempt`] that answers a pre-set outcome and counts its calls. The
+    /// successor to `MockWaker` — see the section note above for why the seam
+    /// moved out one level.
+    struct ProbeAttempt {
+        calls: Cell<u32>,
+        outcome: Result<Receipt, LaneError>,
+    }
+
+    impl ProbeAttempt {
+        fn new(outcome: Result<Receipt, LaneError>) -> Self {
+            ProbeAttempt {
+                calls: Cell::new(0),
+                outcome,
+            }
+        }
+        /// A delivery that landed with NO wake — what the LIVE path answers.
+        fn delivered() -> Self {
+            ProbeAttempt::new(Ok(Receipt {
+                message_id: quorum_qw::contract::MessageId("probe-mid".into()),
+                accepted: true,
+                terminal: quorum_qw::contract::TerminalExpectation::Pending,
+                woke: Confirmation::No,
+            }))
+        }
+        /// A delivery that WOKE the target first and then landed — what
+        /// `wake_if_cold: true` answers on a successful revive.
+        fn woke_and_delivered() -> Self {
+            ProbeAttempt::new(Ok(Receipt {
+                message_id: quorum_qw::contract::MessageId("probe-mid".into()),
+                accepted: true,
+                terminal: quorum_qw::contract::TerminalExpectation::Pending,
+                woke: Confirmation::Yes,
+            }))
+        }
+    }
+
+    impl Attempt for ProbeAttempt {
+        fn run(&self) -> Result<Receipt, LaneError> {
+            self.calls.set(self.calls.get() + 1);
+            self.outcome.clone()
+        }
     }
 
     #[test]
     fn durability_logs_envelope_before_delivery_then_stamps_delivered() {
         let tmp = tempfile::tempdir().unwrap();
-        let env = jail_env(tmp.path());
-        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend::default(); // returns 0 ⇒ delivered
-        let target = session("claude-code");
+        let (paths, env, _lane) = jailed_daemon_lane(tmp.path());
+        let attempt = ProbeAttempt::delivered();
 
         let code = deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            UnifiedCarrier::MuxPty,
-            &target,
+            &attempt,
             "worker@brano", // the RAW caller address
             "hello body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
             None, // no caller-supplied id ⇒ qd mints a ULID
         );
-        assert_eq!(code, 0, "delivered ⇒ exit 0 (backend's result)");
+        assert_eq!(code, 0, "delivered ⇒ exit 0");
 
-        // The carrier was actually called (delivery happened).
-        assert_eq!(backend.calls.borrow().len(), 1);
+        // The attempt was actually run (delivery happened).
+        assert_eq!(attempt.calls.get(), 1);
 
         // The transport files honor QD_HOME resolution; read them back.
         let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
@@ -2337,9 +2340,10 @@ mod tests {
             env_row.authored_at + dispatch::origin_send::DEFAULT_EXPIRES_MS
         );
 
-        // The funnel for a live-origin success: attempted, delivered. Rows are
-        // fully normalized (R14.2) — no witness/origin/authored_at fields; every
-        // row joins the envelope by correlation_id and carries only created_at.
+        // The funnel for a live-origin success: attempted, delivered — and NO
+        // `queued`, because the receipt said no wake happened. Rows are fully
+        // normalized (R14.2) — no witness/origin/authored_at fields; every row
+        // joins the envelope by correlation_id and carries only created_at.
         let events = dispatch::dispositions::read_local_events(&tpaths);
         let kinds: Vec<dispatch::dispositions::EventKind> =
             events.records.iter().map(|e| e.kind()).collect();
@@ -2349,7 +2353,7 @@ mod tests {
                 dispatch::dispositions::EventKind::Attempted,
                 dispatch::dispositions::EventKind::Delivered
             ],
-            "live origin path stamps attempted then delivered"
+            "live origin path stamps attempted then delivered, with no queued"
         );
         for d in &events.records {
             assert_eq!(
@@ -2377,23 +2381,27 @@ mod tests {
     #[test]
     fn durability_stamps_failed_delivery_when_carrier_returns_nonzero() {
         let tmp = tempfile::tempdir().unwrap();
-        let env = jail_env(tmp.path());
-        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend { result: 1, ..Default::default() }; // definitive fail
-        let target = session("claude-code");
+        let (paths, env, lane) = jailed_daemon_lane(tmp.path());
+        // The REAL codex carrier over a row with no endpoint: a definitive
+        // delivery failure at its reachability door.
+        let ops = quorum_qw::lanes::lane_ops(lane, &env, paths.clone());
 
         let code = deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            UnifiedCarrier::MuxPty,
-            &target,
+            &LaneAttempt {
+                ops: &ops,
+                id: SessionId(JAILED_SID.into()),
+                policy: live_policy(),
+                message: "body".into(),
+                send_id: "m-test".to_string(),
+            },
             "worker",
             "body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
             None,
         );
-        assert_eq!(code, 1, "carrier failure exit is preserved");
+        assert_eq!(code, 1, "a carrier failure is a nonzero exit");
 
         let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
         // Envelope still logged (write-then-deliver logs BEFORE the attempt).
@@ -2419,19 +2427,15 @@ mod tests {
     #[test]
     fn durability_custom_expires_is_reflected_in_the_envelope() {
         let tmp = tempfile::tempdir().unwrap();
-        let env = jail_env(tmp.path());
-        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend::default();
-        let target = session("claude-code");
+        let (paths, env, _lane) = jailed_daemon_lane(tmp.path());
+        let attempt = ProbeAttempt::delivered();
 
         // 30m in ms (what parse_expires("30m") yields).
         let thirty_min_ms = 30 * 60_000;
         deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            UnifiedCarrier::MuxPty,
-            &target,
+            &attempt,
             "worker",
             "body",
             thirty_min_ms,
@@ -2458,17 +2462,13 @@ mod tests {
     #[test]
     fn durability_uses_the_supplied_correlation_id_in_envelope_and_disposition() {
         let tmp = tempfile::tempdir().unwrap();
-        let env = jail_env(tmp.path());
-        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend::default(); // 0 ⇒ delivered
-        let target = session("claude-code");
+        let (paths, env, _lane) = jailed_daemon_lane(tmp.path());
+        let attempt = ProbeAttempt::delivered();
 
         let code = deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            UnifiedCarrier::MuxPty,
-            &target,
+            &attempt,
             "worker",
             "hello body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
@@ -2498,17 +2498,13 @@ mod tests {
     #[test]
     fn durability_mints_a_ulid_when_no_id_is_supplied() {
         let tmp = tempfile::tempdir().unwrap();
-        let env = jail_env(tmp.path());
-        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend::default();
-        let target = session("claude-code");
+        let (paths, env, _lane) = jailed_daemon_lane(tmp.path());
+        let attempt = ProbeAttempt::delivered();
 
         deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            UnifiedCarrier::MuxPty,
-            &target,
+            &attempt,
             "worker",
             "body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
@@ -2540,20 +2536,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let env = jail_env(tmp.path());
         let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend::default();
-        let refreshed = live_refreshed();
-        let waker = MockWaker::ok(refreshed);
 
-        let mut cold = session("claude-code");
-        cold.status = SessionStatus::Cold;
-
-        let code = wake_then_deliver(
+        let code = deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            &waker,
-            RenderMode::Inline,
-            &cold,
+            &ProbeAttempt::woke_and_delivered(),
             "worker",
             "body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
@@ -2589,43 +2576,37 @@ mod tests {
         };
 
         let tmp = tempfile::tempdir().unwrap();
-        let env = jail_env(tmp.path());
-        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let (paths, env, lane) = jailed_daemon_lane(tmp.path());
 
-        // Invocation 1 — LIVE origin path; the backend returns nonzero (a
-        // definitive delivery failure): attempted + delivery-failed{delivery}.
-        let failing = ProbeBackend {
-            result: 7,
-            ..Default::default()
-        };
-        let target = session("claude-code");
+        // Invocation 1 — LIVE origin path; the REAL codex carrier refuses at its
+        // reachability door (a definitive delivery failure): attempted +
+        // delivery-failed{delivery}.
+        {
+            let ops = quorum_qw::lanes::lane_ops(lane, &env, paths.clone());
+            let code = deliver_with_durability(
+                &env,
+                &paths,
+                &LaneAttempt {
+                    ops: &ops,
+                    id: SessionId(JAILED_SID.into()),
+                    policy: live_policy(),
+                    message: "hello body".into(),
+                    send_id: "m-test".to_string(),
+                },
+                "worker",
+                "hello body",
+                dispatch::origin_send::DEFAULT_EXPIRES_MS,
+                Some("Q6FUNNEL".to_string()),
+            );
+            assert_ne!(code, 0, "invocation 1 is a definitive delivery failure");
+        }
+
+        // Invocation 2 — the RETRY, SAME supplied id, through the wake path: the
+        // revive succeeds and the delivery lands: attempted + queued + delivered.
         let code = deliver_with_durability(
             &env,
             &paths,
-            &failing,
-            UnifiedCarrier::MuxPty,
-            &target,
-            "worker",
-            "hello body",
-            dispatch::origin_send::DEFAULT_EXPIRES_MS,
-            Some("Q6FUNNEL".to_string()),
-        );
-        assert_ne!(code, 0, "invocation 1 is a definitive delivery failure");
-
-        // Invocation 2 — the RETRY, SAME supplied id, through the wake path: the
-        // waker succeeds (refreshed live row) and the backend succeeds:
-        // attempted + queued + delivered.
-        let ok_backend = ProbeBackend::default(); // 0 ⇒ delivered
-        let waker = MockWaker::ok(live_refreshed());
-        let mut cold = session("claude-code");
-        cold.status = SessionStatus::Cold;
-        let code = wake_then_deliver(
-            &env,
-            &paths,
-            &ok_backend,
-            &waker,
-            RenderMode::Inline,
-            &cold,
+            &ProbeAttempt::woke_and_delivered(),
             "worker",
             "hello body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
@@ -2689,85 +2670,35 @@ mod tests {
 
     // === qd–qf W3b: resume-and-deliver + failed{wake} ========================
     //
-    // These exercise the `wake_then_deliver` seam with a MOCK Waker (no live
-    // revive): a NOT-live target logs the envelope FIRST, then wakes, then either
-    // delivers into the refreshed row (delivered stamp) or, on an unwakeable
-    // target, stamps `failed{wake}` and exits 12. The store readers parse the
-    // actual files the seam wrote. Separately, `RealWaker::wake`'s provider→route
-    // mapping is pinned (the unknown-provider `failed{wake}` is unit-checkable
-    // without a revive; the revive-backed arms are covered by the live bin test).
-
-    /// A live (Idle) claude row a successful wake "refreshes" into — carries a mux
-    /// pane so `select_carrier` routes it to the PTY carrier.
-    fn live_refreshed() -> Session {
-        let mut s = session("claude-code");
-        s.status = SessionStatus::Idle; // live ⇒ select_carrier succeeds
-        s
-    }
-
-    /// A mock [`Waker`]: returns a pre-set outcome and records that it was asked to
-    /// wake (so a test can assert the wake was actually attempted).
-    struct MockWaker {
-        outcome: RefCell<Option<Result<Session, Refusal>>>,
-        woke: Cell<bool>,
-    }
-    impl MockWaker {
-        fn ok(refreshed: Session) -> Self {
-            MockWaker {
-                outcome: RefCell::new(Some(Ok(refreshed))),
-                woke: Cell::new(false),
-            }
-        }
-        fn err(refusal: Refusal) -> Self {
-            MockWaker {
-                outcome: RefCell::new(Some(Err(refusal))),
-                woke: Cell::new(false),
-            }
-        }
-    }
-    impl Waker for MockWaker {
-        fn wake(&self, _session: &Session, _render: RenderMode) -> Result<Session, Refusal> {
-            self.woke.set(true);
-            self.outcome.borrow_mut().take().expect("wake called once")
-        }
-    }
+    // A NOT-live target logs the envelope FIRST, then the lane wakes and delivers
+    // inside ONE `deliver` call, and the ledger stamps from what the receipt says.
+    // The `Attempt` is stubbed (see the section note above): a real lane here
+    // would drive a real revive.
 
     #[test]
     fn wake_then_deliver_logs_envelope_wakes_then_delivers_into_refreshed_row() {
         let tmp = tempfile::tempdir().unwrap();
         let env = jail_env(tmp.path());
         let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend::default(); // 0 ⇒ delivered
-        let refreshed = live_refreshed();
-        let waker = MockWaker::ok(refreshed.clone());
+        let attempt = ProbeAttempt::woke_and_delivered();
 
-        let mut cold = session("claude-code");
-        cold.status = SessionStatus::Cold; // the NOT-live target that triggers a wake
-
-        let code = wake_then_deliver(
+        let code = deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            &waker,
-            RenderMode::Inline,
-            &cold,
+            &attempt,
             "worker@brano",
             "hello body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
             None, // no caller-supplied id ⇒ qd mints a ULID
         );
         assert_eq!(code, 0, "woken + delivered ⇒ exit 0");
-        assert!(waker.woke.get(), "a not-live target must actually be woken");
-        // The carrier was called ONCE against the REFRESHED row's identity.
-        let calls = backend.calls.borrow();
-        assert_eq!(calls.len(), 1, "delivered into the refreshed row exactly once");
-        assert_eq!(calls[0].1, refreshed.session_id);
+        assert_eq!(attempt.calls.get(), 1, "exactly one attempt");
 
         // Envelope logged FIRST (write-then-deliver); the wake-path funnel is
-        // attempted, queued (durably awaiting the wake), then delivered.
+        // attempted, queued (the lane reported a wake), then delivered.
         let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
         let log = dispatch::dispositions::read_local_log(&tpaths);
-        assert_eq!(log.records.len(), 1, "envelope logged before the wake");
+        assert_eq!(log.records.len(), 1, "envelope logged before the attempt");
         assert_eq!(log.records[0].target, "worker@brano");
         let events = dispatch::dispositions::read_local_events(&tpaths);
         let rows: Vec<(dispatch::dispositions::EventKind, Option<String>)> =
@@ -2786,37 +2717,180 @@ mod tests {
         }
     }
 
+    /// `Receipt::woke` is what decides the `queued` row — nothing else does.
+    ///
+    /// The LIVE funnel has no `queued`, so the row's PRESENCE is how the ledger
+    /// records that a wake happened at all. Since `deliver` is atomic, the ONLY
+    /// evidence qd has is the receipt, and the rule (`Receipt::woke`'s own docs)
+    /// is: stamp on `Yes` or `Unknown`, never on `No`. `Unknown` is a real answer
+    /// — a lane that revived something it cannot re-confirm still attempted a
+    /// wake, and the ledger's question is whether one happened.
+    ///
+    /// MUTATION EVIDENCE: collapsing `Unknown` into "no wake" reds the middle
+    /// case; stamping unconditionally reds the first.
     #[test]
-    fn wake_then_deliver_unwakeable_target_stamps_failed_wake_exit_12() {
+    fn queued_is_stamped_from_the_receipt_and_only_when_a_wake_happened() {
+        for (woke, expect_queued) in [
+            (Confirmation::No, false),
+            (Confirmation::Yes, true),
+            (Confirmation::Unknown, true),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let env = jail_env(tmp.path());
+            let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+            let code = deliver_with_durability(
+                &env,
+                &paths,
+                &ProbeAttempt::new(Ok(Receipt {
+                    message_id: quorum_qw::contract::MessageId("probe-mid".into()),
+                    accepted: true,
+                    terminal: quorum_qw::contract::TerminalExpectation::Pending,
+                    woke,
+                })),
+                "wk",
+                "body",
+                dispatch::origin_send::DEFAULT_EXPIRES_MS,
+                None,
+            );
+            assert_eq!(code, 0);
+            let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+            let rows: Vec<dispatch::dispositions::EventKind> =
+                dispatch::dispositions::read_local_events(&tpaths)
+                    .records
+                    .iter()
+                    .map(|e| event_row(e).0)
+                    .collect();
+            let expected = if expect_queued {
+                vec![
+                    dispatch::dispositions::EventKind::Attempted,
+                    dispatch::dispositions::EventKind::Queued,
+                    dispatch::dispositions::EventKind::Delivered,
+                ]
+            } else {
+                vec![
+                    dispatch::dispositions::EventKind::Attempted,
+                    dispatch::dispositions::EventKind::Delivered,
+                ]
+            };
+            assert_eq!(rows, expected, "woke = {woke:?}");
+        }
+    }
+
+    /// `queued` is stamped AFTER the attempt resolves, not before it is tried.
+    ///
+    /// This is the stage-2 phase-2 timing change, pinned so it cannot silently
+    /// revert — and so the cost stays visible. `queued`'s `created_at` is no
+    /// longer the moment the message was placed awaiting the wake; it is the
+    /// moment qd learned a wake had been attempted, which on a real revive is
+    /// seconds later. R14.1 still holds (no retro-dating); the row schema's
+    /// "record time and happen time coincide to within ms" no longer does, and
+    /// both `doc/formats/dispatch-transport-formats.md` and
+    /// `DispositionEvent::queued` say so.
+    ///
+    /// WHY it moved: `LaneOps::deliver` performs the wake INSIDE the call, so qd
+    /// can only learn that one happened from the lane's answer
+    /// (`Receipt::woke`, or a returned `WakeFailed`). Asking `health` first is the
+    /// composition that method's atomicity rule forbids.
+    ///
+    /// MUTATION EVIDENCE: moving the `queued` stamp above `attempt.run()` reds the
+    /// first assert; deleting it reds the second.
+    #[test]
+    fn queued_is_stamped_after_the_attempt_resolves_not_before_it_is_tried() {
+        /// An [`Attempt`] that PHOTOGRAPHS the event log at the instant it runs —
+        /// the only way to observe stamp ORDER against the wake from outside, now
+        /// that the wake is inside the call.
+        struct SnapshottingAttempt {
+            tpaths: dispatch::paths::QdPaths,
+            at_attempt: RefCell<Vec<dispatch::dispositions::EventKind>>,
+        }
+        impl Attempt for SnapshottingAttempt {
+            fn run(&self) -> Result<Receipt, LaneError> {
+                *self.at_attempt.borrow_mut() =
+                    dispatch::dispositions::read_local_events(&self.tpaths)
+                        .records
+                        .iter()
+                        .map(|e| event_row(e).0)
+                        .collect();
+                ProbeAttempt::woke_and_delivered().run()
+            }
+        }
+
         let tmp = tempfile::tempdir().unwrap();
         let env = jail_env(tmp.path());
         let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend::default();
-        let waker = MockWaker::err(Refusal::failed("wake", "could not revive claude session \"wk\""));
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let attempt = SnapshottingAttempt {
+            tpaths: dispatch::paths::QdPaths::from_home_env(&paths.home, &env),
+            at_attempt: RefCell::new(Vec::new()),
+        };
 
-        let mut killed = session("claude-code");
-        killed.status = SessionStatus::Killed; // a tombstoned target
-
-        let code = wake_then_deliver(
+        let code = deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            &waker,
-            RenderMode::Inline,
-            &killed,
+            &attempt,
             "wk",
             "body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
             None,
         );
-        assert_eq!(code, dispatch::origin_send::EXIT_REFUSED, "failed{{wake}} ⇒ exit 12");
-        assert!(waker.woke.get(), "the wake was attempted");
-        // The carrier was NEVER called — nothing was delivered.
-        assert_eq!(backend.calls.borrow().len(), 0, "no delivery on a wake failure");
+        assert_eq!(code, 0);
+        assert_eq!(
+            *attempt.at_attempt.borrow(),
+            vec![dispatch::dispositions::EventKind::Attempted],
+            "at the moment the attempt runs the ledger must hold `attempted` ALONE — \
+             `queued` is stamped from the attempt's OUTCOME"
+        );
+        // And the funnel that reaches disk is unchanged, which is the whole point:
+        // the ORDER survives the timing change.
+        let events = dispatch::dispositions::read_local_events(&tpaths);
+        let rows: Vec<dispatch::dispositions::EventKind> =
+            events.records.iter().map(|e| event_row(e).0).collect();
+        assert_eq!(
+            rows,
+            vec![
+                dispatch::dispositions::EventKind::Attempted,
+                dispatch::dispositions::EventKind::Queued,
+                dispatch::dispositions::EventKind::Delivered,
+            ]
+        );
+    }
+
+    /// A wake that could not succeed: `attempted, queued, delivery-failed{wake}`,
+    /// exit 12, and the CORE's own message under qd's class.
+    ///
+    /// `queued` is stamped even though the wake FAILED, because a wake that failed
+    /// is still a wake that happened — which is what keeps this funnel and the
+    /// success funnel reading exactly as they did.
+    #[test]
+    fn wake_then_deliver_unwakeable_target_stamps_failed_wake_exit_12() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let attempt = ProbeAttempt::new(Err(LaneError::WakeFailed {
+            detail: "could not revive claude session \"wk\"".into(),
+            exit_code: 1,
+            self_attributed: false,
+        }));
+
+        let code = deliver_with_durability(
+            &env,
+            &paths,
+            &attempt,
+            "wk",
+            "body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            None,
+        );
+        assert_eq!(
+            code,
+            dispatch::origin_send::EXIT_REFUSED,
+            "failed{{wake}} rides the shared refusal door code (12), NOT the revive \
+             core's own exit — `qd send` has one wake-failure exit and always has"
+        );
 
         // The envelope was still logged FIRST; the funnel reads attempted, queued
-        // (the attempt placed the message durably awaiting the wake), then
-        // delivery-failed{wake} — so an operator can read back the outcome.
+        // (a wake was attempted), then delivery-failed{wake} — so an operator can
+        // read back the outcome.
         let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
         let log = dispatch::dispositions::read_local_log(&tpaths);
         assert_eq!(log.records.len(), 1, "envelope logged even though the wake failed");
@@ -2837,94 +2911,83 @@ mod tests {
         }
     }
 
+    /// A revive that reports success but yields a row with no live receive path is
+    /// a wake that did not produce a deliverable target → `failed{wake}`, never a
+    /// silent no-op or a `delivered`.
+    ///
+    /// The verdict MOVED but did not change: `wake_then_deliver` used to re-run
+    /// `select_carrier` on the refreshed row and call the miss a wake failure;
+    /// `quorum_qw::lanes::no_live_receive_path` now answers `WakeFailed` for
+    /// exactly the same condition, because it knows whether THIS delivery revived
+    /// the row. This pins qd's half — that such an answer still lands
+    /// `delivery-failed{wake}` and exit 12.
     #[test]
-    fn wake_then_deliver_refreshed_but_unroutable_is_also_failed_wake() {
-        // A revive that reports success but yields a row with no live receive path
-        // (live but relay-less and mux-less) is a wake that did not produce a
-        // deliverable target → failed{wake}, not a silent no-op / delivered.
+    fn a_revived_but_unroutable_row_is_also_failed_wake() {
         let tmp = tempfile::tempdir().unwrap();
         let env = jail_env(tmp.path());
         let paths = dispatch::paths::QdPaths::from_home(tmp.path());
-        let backend = ProbeBackend::default();
-        let mut unroutable = live_refreshed();
-        unroutable.zmx_name = None;
-        unroutable.socket_dir = None; // live claude, no relay, no mux ⇒ NoLiveReceivePath
-        let waker = MockWaker::ok(unroutable);
-
-        let mut cold = session("claude-code");
-        cold.status = SessionStatus::Cold;
-
-        let code = wake_then_deliver(
+        let code = deliver_with_durability(
             &env,
             &paths,
-            &backend,
-            &waker,
-            RenderMode::Inline,
-            &cold,
+            // Verbatim the shape `no_live_receive_path` answers when a wake
+            // happened first.
+            &ProbeAttempt::new(Err(LaneError::WakeFailed {
+                detail: "revived \"wk\" but it has no live receive path".into(),
+                exit_code: 12,
+                self_attributed: false,
+            })),
             "wk",
             "body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
             None,
         );
         assert_eq!(code, dispatch::origin_send::EXIT_REFUSED);
-        assert_eq!(backend.calls.borrow().len(), 0, "unroutable ⇒ no delivery");
         let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
         let events = dispatch::dispositions::read_local_events(&tpaths);
         let last = events.records.last().expect("a delivery-failed event was stamped");
-        assert_eq!(event_row(last), (dispatch::dispositions::EventKind::DeliveryFailed, Some("wake".to_string())));
+        assert_eq!(
+            event_row(last),
+            (dispatch::dispositions::EventKind::DeliveryFailed, Some("wake".to_string()))
+        );
     }
 
+    /// A carrier that refused BEFORE minting an id (`CarrierOutcome::unkeyed`)
+    /// reaches qd as `LaneError::Transport`, and it must still be an ordinary
+    /// `delivery-failed{delivery}` — NOT a `failed{wake}` (nothing was revived)
+    /// and NOT a fresh qd-authored stderr line (the carrier already printed its
+    /// own loud one; that is the whole content of an unkeyed refusal).
     #[test]
-    fn real_waker_unknown_provider_is_failed_wake() {
-        // The provider→route table's default arm: a provider with no headless wake
-        // route yields failed{wake} (no revive attempted). This is the one RealWaker
-        // arm reachable off the default floor — the revive-backed arms need a live
-        // registry/mux and are covered by the live bin test.
-        let mut mystery = session("mystery");
-        mystery.status = SessionStatus::Cold;
-        let r = RealWaker.wake(&mystery, RenderMode::Inline).unwrap_err();
-        assert_eq!(r.family, dispatch::origin_send::Family::Failed);
-        assert_eq!(r.class, "wake");
-        assert!(
-            r.reason.contains("cannot be woken headlessly"),
-            "unknown provider ⇒ headless-wake refusal, got: {}",
-            r.reason
+    fn a_carrier_refusal_with_no_minted_id_is_a_plain_delivery_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = jail_env(tmp.path());
+        let paths = dispatch::paths::QdPaths::from_home(tmp.path());
+        let code = deliver_with_durability(
+            &env,
+            &paths,
+            &ProbeAttempt::new(Err(LaneError::Transport {
+                detail: "the carrier refused before minting a message id (exit 1)".into(),
+            })),
+            "wk",
+            "body",
+            dispatch::origin_send::DEFAULT_EXPIRES_MS,
+            None,
+        );
+        assert_eq!(code, 1);
+        let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
+        let rows: Vec<(dispatch::dispositions::EventKind, Option<String>)> =
+            dispatch::dispositions::read_local_events(&tpaths)
+                .records
+                .iter()
+                .map(event_row)
+                .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (dispatch::dispositions::EventKind::Attempted, None),
+                (dispatch::dispositions::EventKind::DeliveryFailed, Some("delivery".to_string())),
+            ],
+            "no `queued` — nothing was woken; and the class is `delivery`, not `wake`"
         );
     }
 
-    // QS-2 structural guard: `run_claude_relay_unified` in send_relay.rs MUST
-    // inject using the resolved session UUID (session.session_id) as the
-    // SessionKey.id — NOT a display name. The prior bug delegated to
-    // inject_via_provider which set id=display_name. The fix inlines ProviderFx
-    // construction. This test pins the fix so that future refactors cannot silently
-    // revert to name-based injection.
-    // MUTATION EVIDENCE: restoring the inject_via_provider call reds the first
-    // assert; removing the session_id reference reds the second.
-    #[test]
-    fn relay_unified_uses_session_uuid_not_display_name_as_injection_identity() {
-        let src = include_str!("send_relay.rs");
-        let fn_start = src
-            .find("pub(super) fn run_claude_relay_unified(")
-            .expect("run_claude_relay_unified must exist in send_relay.rs");
-        let after_start = &src[fn_start..];
-        // Scope to the function body: ends at the next pub(super)/pub/fn boundary.
-        // Scope to the function body: run_with_client immediately follows.
-        let fn_end = after_start
-            .find("\nfn run_with_client(")
-            .expect("run_with_client must immediately follow run_claude_relay_unified");
-        let body = &after_start[..fn_end];
-
-        // Must NOT delegate to inject_via_provider (which would set id=display_name).
-        assert!(
-            !body.contains("inject_via_provider("),
-            "run_claude_relay_unified must NOT call inject_via_provider — it must \
-             inline ProviderFx using id: &session.session_id (QS-2). Body:\n{body}"
-        );
-        // Must reference the resolved UUID as the injection identity.
-        assert!(
-            body.contains("session.session_id"),
-            "run_claude_relay_unified must reference session.session_id as the \
-             injection identity (QS-2). Body:\n{body}"
-        );
-    }
 }

@@ -119,7 +119,10 @@ impl TerminalState {
     /// Whether this terminal kind REQUIRES a prior run-start event to be valid
     /// (Completed, Aborted) — both are the fate of a STARTED entry (R6-6).
     fn requires_prior_start(&self) -> bool {
-        matches!(self, TerminalState::Completed { .. } | TerminalState::Aborted(_))
+        matches!(
+            self,
+            TerminalState::Completed { .. } | TerminalState::Aborted(_)
+        )
     }
 
     /// Whether this terminal kind is valid ONLY in the ABSENCE of a prior
@@ -379,7 +382,11 @@ impl AuthorityJournal {
         commissioning_identity: impl Into<String>,
         mint_token: &mut dyn FnMut() -> String,
     ) -> Result<CommissioningTuple, String> {
-        if self.entries.iter().any(|e| matches!(&e.body, JournalBody::Run(r) if r.run == run)) {
+        if self
+            .entries
+            .iter()
+            .any(|e| matches!(&e.body, JournalBody::Run(r) if r.run == run))
+        {
             return Err(format!(
                 "authority journal: duplicate run id {:?} — rejected (a replayed/duplicate entry is never honored, N-1)",
                 run.0
@@ -1036,10 +1043,14 @@ mod tests {
         let mut j = AuthorityJournal::new();
         let t1 = commission_evidence(&mut j, "r8");
         let t2 = commission_evidence(&mut j, "r9");
-        j.start_run(&t1.run, "runner-1 (uq5xx83a)", &mut || "fixed-nonce".to_string())
-            .unwrap();
+        j.start_run(&t1.run, "runner-1 (uq5xx83a)", &mut || {
+            "fixed-nonce".to_string()
+        })
+        .unwrap();
         let err = j
-            .start_run(&t2.run, "runner-2 (uq5xx83a)", &mut || "fixed-nonce".to_string())
+            .start_run(&t2.run, "runner-2 (uq5xx83a)", &mut || {
+                "fixed-nonce".to_string()
+            })
             .unwrap_err();
         assert!(err.contains("collides"), "{err}");
     }
@@ -1056,14 +1067,8 @@ mod tests {
         )));
         let before_ordinal = JournalOrdinal::new(before.sequence.get());
         assert_eq!(j.manifest_digest_effective_at(before_ordinal), None);
-        assert_eq!(
-            j.manifest_digest_effective_at(ord1).unwrap().0,
-            "sha256:v1"
-        );
-        assert_eq!(
-            j.manifest_digest_effective_at(ord2).unwrap().0,
-            "sha256:v2"
-        );
+        assert_eq!(j.manifest_digest_effective_at(ord1).unwrap().0, "sha256:v1");
+        assert_eq!(j.manifest_digest_effective_at(ord2).unwrap().0, "sha256:v2");
     }
 
     #[test]
@@ -1098,7 +1103,10 @@ mod tests {
             }),
         });
         let errs = j.integrity_check().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("prior run-start")), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("prior run-start")),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -1238,7 +1246,8 @@ mod tests {
         });
         let errs = j.integrity_check().unwrap_err();
         assert!(
-            errs.iter().any(|e| e.contains("more than one terminal transition")),
+            errs.iter()
+                .any(|e| e.contains("more than one terminal transition")),
             "{errs:?}"
         );
     }
@@ -1276,7 +1285,8 @@ mod tests {
         });
         let errs = j.integrity_check().unwrap_err();
         assert!(
-            errs.iter().any(|e| e.contains("terminal ordinal") && e.contains("not strictly after its commissioning ordinal")),
+            errs.iter().any(|e| e.contains("terminal ordinal")
+                && e.contains("not strictly after its commissioning ordinal")),
             "{errs:?}"
         );
     }
@@ -1315,7 +1325,8 @@ mod tests {
         });
         let errs = j.integrity_check().unwrap_err();
         assert!(
-            errs.iter().any(|e| e.contains("run-start ordinal") && e.contains("not strictly after its commissioning ordinal")),
+            errs.iter().any(|e| e.contains("run-start ordinal")
+                && e.contains("not strictly after its commissioning ordinal")),
             "{errs:?}"
         );
     }

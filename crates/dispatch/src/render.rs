@@ -204,6 +204,37 @@ fn session_to_value(
         }
     }
 
+    // D1 / X3 (`doc/tbd/provider-architecture/16-default-lane-switch.md`) ADDITIVE:
+    // the row's LANE — the stable `<provider-id>/<hosting-token>` wire id
+    // ([`quorum_qw::Lane::id`]) — derived through `lane_for(provider, hosting)`, the
+    // SAME one-line derivation every acting verb uses. Deriving it here rather than
+    // echoing the stored `hosting` string is the point: a consumer reading this key
+    // and `qd kill`/`qd send` routing the same row cannot disagree, because both ask
+    // the same function (which owns the absent⇒harness-default rule).
+    //
+    // WHY it exists at all: until now `qd ls` emitted `provider` and nothing about
+    // hosting, which was legible only while every session of a harness sat in one
+    // lane by default. Once codex defaults to `codex/app-server` (with `codex/daemon`
+    // still reachable via `--daemon`) a user has two codex lanes on one listing and
+    // no way to tell them apart. This key is what makes a mixed-lane world legible.
+    //
+    // WHY `lane` and not a bare `hosting` token (outstanding call O5, §5): the lane
+    // id is ALREADY the stable identifier — it is what `qw`'s wire takes on
+    // `{"m":"start","lane":…}` and what `Lane::from_id` round-trips — and it reads
+    // correctly for `acp/*`, whose provider id itself contains a slash. A bare token
+    // would force every consumer to re-join it against `provider` and re-derive the
+    // absent-means-default rule for itself.
+    //
+    // OMITTED — never null, never guessed — when `lane_for` answers `None`, which
+    // happens for exactly one input: a provider id qd cannot place. Same
+    // absent-not-null contract as `qdId`/`lineage`, and the same answer every acting
+    // verb gives an unplaceable row (it refuses rather than inventing a topology).
+    // Inserted straight after the branch keys so it reads next to `provider`, and
+    // before `code`, which stays LAST.
+    if let Some(lane) = quorum_qw::lane_for(&s.provider, s.hosting.as_deref()) {
+        m.insert("lane".into(), Value::String(lane.id()));
+    }
+
     // A6 ADDITIVE (spec §4.4): backend / spawnedBy from the telemetry fold, ONLY
     // when the fold yields a value for THIS session. Absent fold or absent values
     // → these keys are not emitted → byte-identical to the base ls --json. Placed
@@ -464,70 +495,21 @@ fn turn_to_value(t: &TurnPreview) -> Value {
 }
 
 // --- Date formatting ---
-
-/// Epoch ms → `YYYY-MM-DDTHH:MM:SS.mmmZ` (UTC), replicating JS `Date.toJSON`
-/// (`toISOString`), which is ALWAYS ms-precision UTC. No chrono — civil-date
-/// math (Howard Hinnant). Verified vs bun (`new Date(ms).toJSON()`).
-pub fn epoch_ms_to_iso(ms: i64) -> String {
-    let (y, mo, d, h, mi, s, milli) = civil_from_epoch_ms(ms);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{milli:03}Z")
-}
-
-/// Epoch ms → AWS SigV4 `x-amz-date` long form `YYYYMMDDTHHMMSSZ` (UTC, no
-/// milliseconds, no separators). `crate::archive::sigv4` signs against
-/// exactly this string; the first 8 chars double as the SigV4 date stamp.
-pub fn epoch_ms_to_amz_date(ms: i64) -> String {
-    let (y, mo, d, h, mi, s, _milli) = civil_from_epoch_ms(ms);
-    format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z")
-}
-
-/// Epoch ms → en-US `toLocaleString()` form `M/D/YYYY, H:MM:SS AM/PM` in UTC.
-///
-/// NORMALIZATION-CLASS (spec §8): the real TS output is locale + timezone
-/// dependent (`Date.toLocaleString()` with no args). The 0b comparator normalizes
-/// these lines; we emit a DETERMINISTIC en-US/UTC form so the Rust output is
-/// stable and byte-exact only POST-normalization. Verified vs bun:
-///   `bun -e 'console.log(new Date(1717530000000).toLocaleString("en-US",{timeZone:"UTC"}))'`
-///     → 6/4/2024, 3:40:00 PM
-/// Rules: no leading zero on month/day/hour; zero-padded minute/second; 12-hour
-/// with AM/PM; midnight → 12 AM, noon → 12 PM.
-pub fn epoch_ms_to_en_us_locale(ms: i64) -> String {
-    let (y, mo, d, h24, mi, s, _milli) = civil_from_epoch_ms(ms);
-    let (h12, ampm) = match h24 {
-        0 => (12, "AM"),
-        1..=11 => (h24, "AM"),
-        12 => (12, "PM"),
-        _ => (h24 - 12, "PM"),
-    };
-    format!("{mo}/{d}/{y}, {h12}:{mi:02}:{s:02} {ampm}")
-}
-
-/// Decompose epoch ms (UTC) into (year, month, day, hour, min, sec, milli).
-fn civil_from_epoch_ms(ms: i64) -> (i64, u32, u32, u32, u32, u32, u32) {
-    let total_secs = ms.div_euclid(1000);
-    let milli = ms.rem_euclid(1000) as u32;
-    let days = total_secs.div_euclid(86_400);
-    let secs_of_day = total_secs.rem_euclid(86_400);
-    let hour = (secs_of_day / 3600) as u32;
-    let min = ((secs_of_day % 3600) / 60) as u32;
-    let sec = (secs_of_day % 60) as u32;
-    let (y, mo, d) = civil_from_days(days);
-    (y, mo, d, hour, min, sec, milli)
-}
-
-/// Inverse of days-from-civil (Howard Hinnant). days since 1970-01-01 → (y,m,d).
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
-    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
+//
+// MOVED to `quorum_core::timefmt` (qd/qw split): `epoch_ms_to_iso`,
+// `epoch_ms_to_amz_date`, `epoch_ms_to_en_us_locale` and the civil-calendar math
+// under them. They were never presentation — their consumers stamp WIRE fields:
+// `events` (the ledger Envelope.ts), `idstore` (the ids.jsonl mint log),
+// `telemetry` (marks.jsonl), `relay_server`, and `archive` (the SigV4
+// x-amz-date header). Only `info_text` here was ever user-facing.
+//
+// The telemetry consumer is why this mattered rather than being tidy-up:
+// `telemetry` belongs to qw, so `use crate::render::epoch_ms_to_iso` would have
+// become a qw -> qd edge the moment it moved — a violation of the one-way rule,
+// latent only because both modules happened to share a crate.
+//
+// Re-exported below so this module's own callers are unchanged.
+pub use quorum_core::timefmt::{epoch_ms_to_amz_date, epoch_ms_to_en_us_locale, epoch_ms_to_iso};
 
 // --- info ---
 
@@ -854,19 +836,19 @@ mod tests {
     fn epoch_ms_to_iso_is_byte_equal_to_the_qrmux_mux_emitter_copy() {
         // Fixed, representative instants (not random — deterministic gate).
         let fixed: &[i64] = &[
-            0,                    // epoch
-            -1,                   // one ms pre-epoch (div_euclid/rem_euclid arm)
-            1,                    // one ms post-epoch
-            999,                  // sub-second boundary
-            1000,                 // exact second
-            -1000,                // exact second pre-epoch
-            -86_400_000,          // one day pre-epoch
-            1_709_209_845_678,    // leap day 2024-02-29T12:30:45.678Z
-            1_717_495_200_123,    // 2024-06-04T10:00:00.123Z
-            951_782_400_000,      // 2000-02-29 (leap century)
-            4_102_444_800_000,    // 2100-01-01 (non-leap century)
-            -2_208_988_800_000,   // 1900-01-01
-            253_402_300_799_999,  // 9999-12-31T23:59:59.999Z (far future)
+            0,                   // epoch
+            -1,                  // one ms pre-epoch (div_euclid/rem_euclid arm)
+            1,                   // one ms post-epoch
+            999,                 // sub-second boundary
+            1000,                // exact second
+            -1000,               // exact second pre-epoch
+            -86_400_000,         // one day pre-epoch
+            1_709_209_845_678,   // leap day 2024-02-29T12:30:45.678Z
+            1_717_495_200_123,   // 2024-06-04T10:00:00.123Z
+            951_782_400_000,     // 2000-02-29 (leap century)
+            4_102_444_800_000,   // 2100-01-01 (non-leap century)
+            -2_208_988_800_000,  // 1900-01-01
+            253_402_300_799_999, // 9999-12-31T23:59:59.999Z (far future)
         ];
         for &ms in fixed {
             assert_eq!(
@@ -895,20 +877,11 @@ mod tests {
     fn amz_date_strips_separators_and_millis() {
         // Same instants as `iso_matches_bun` — the amz-date form is the ISO
         // form with dashes/colons/millis stripped.
-        assert_eq!(
-            epoch_ms_to_amz_date(1_717_495_200_000),
-            "20240604T100000Z"
-        );
+        assert_eq!(epoch_ms_to_amz_date(1_717_495_200_000), "20240604T100000Z");
         assert_eq!(epoch_ms_to_amz_date(0), "19700101T000000Z");
         // ms precision is dropped, not rounded.
-        assert_eq!(
-            epoch_ms_to_amz_date(1_717_495_200_123),
-            "20240604T100000Z"
-        );
-        assert_eq!(
-            epoch_ms_to_amz_date(1_709_209_845_678),
-            "20240229T123045Z"
-        );
+        assert_eq!(epoch_ms_to_amz_date(1_717_495_200_123), "20240604T100000Z");
+        assert_eq!(epoch_ms_to_amz_date(1_709_209_845_678), "20240229T123045Z");
     }
 
     #[test]
@@ -956,12 +929,19 @@ mod tests {
             None,
             &[Some("stopped".to_string())],
         );
-        assert_eq!(overridden.as_array().unwrap()[0]["status"], json!("stopped"));
+        assert_eq!(
+            overridden.as_array().unwrap()[0]["status"],
+            json!("stopped")
+        );
 
         // No override (empty slice) → byte-identical to plain ls_json (stored "busy").
         let plain = ls_json(std::slice::from_ref(&acp), &[]);
         let none_override = ls_json_full_acp(std::slice::from_ref(&acp), &[], None, None, &[None]);
-        assert_eq!(to_pretty(&none_override), to_pretty(&plain), "None override == stored bytes");
+        assert_eq!(
+            to_pretty(&none_override),
+            to_pretty(&plain),
+            "None override == stored bytes"
+        );
         assert_eq!(plain.as_array().unwrap()[0]["status"], json!("busy"));
     }
 
@@ -995,9 +975,15 @@ mod tests {
                 "lastActive",
                 "startedAt",
                 "provider",
+                // D1 / X3: the derived lane, next to the provider it refines. A
+                // claude-code row with no recorded hosting still carries one —
+                // `lane_for` resolves the absent token to the harness default —
+                // because "the lane is data" is exactly what this key is for.
+                "lane",
                 "code", // LAST
             ]
         );
+        assert_eq!(obj["lane"], json!("claude-code/mux-pane"));
         assert_eq!(obj["status"], json!("busy"));
         assert_eq!(obj["lastActive"], json!("2024-06-04T10:00:00.000Z"));
         assert_eq!(obj["code"], json!("abc"));
@@ -1557,6 +1543,118 @@ mod tests {
         let obj = v.as_object().unwrap();
         assert_eq!(obj["qdId"], json!("ab3kx9mq"));
         assert!(!obj.contains_key("qdIdPrefix"));
+    }
+
+    // --- D1 / X3: the `lane` key ---
+
+    /// The two codex lanes are TELLABLE APART in `ls --json`, which is the whole
+    /// point of the key. `provider` says "codex" for both; only `lane` separates a
+    /// row hosted by the daemon from one hosted by the app server — and once
+    /// `codex/app-server` is the default with `codex/daemon` still reachable via
+    /// `--daemon`, both will appear in one listing routinely.
+    ///
+    /// MUTATION EVIDENCE: emit `s.hosting` verbatim instead of deriving through
+    /// `lane_for`, and the unstamped row below reds — it would carry no lane at all
+    /// where the whole codebase (and `qd kill`, and `qd send`) reads it as the
+    /// harness default.
+    #[test]
+    fn the_lane_key_tells_two_lanes_of_one_provider_apart() {
+        let lane_of = |provider: &str, hosting: Option<&str>| -> Option<String> {
+            let mut s = base(SessionBranch::LiveRegistry);
+            s.session_id = "sess-lane".into();
+            s.provider = provider.to_string();
+            s.hosting = hosting.map(str::to_string);
+            let v = ls_json(std::slice::from_ref(&s), &[]);
+            v.as_array().unwrap()[0]
+                .as_object()
+                .unwrap()
+                .get("lane")
+                .map(|l| l.as_str().unwrap().to_string())
+        };
+
+        assert_eq!(
+            lane_of("codex", Some("daemon")).as_deref(),
+            Some("codex/daemon")
+        );
+        assert_eq!(
+            lane_of("codex", Some("app-server")).as_deref(),
+            Some("codex/app-server")
+        );
+        // An UNSTAMPED row re-derives through the harness default — the same answer
+        // `lane_for` gives every acting verb, so the listing and the router agree.
+        assert_eq!(lane_of("codex", None).as_deref(), Some("codex/daemon"));
+        // `acp/*` is why the key carries the whole id rather than a bare token: the
+        // provider half itself contains a slash, and `Lane::from_id` splits on the
+        // LAST one.
+        assert_eq!(
+            lane_of("acp/claude-code", None).as_deref(),
+            Some("acp/claude-code/daemon")
+        );
+        // A row whose hosting token names a combination the harness cannot support
+        // falls back to the harness default rather than inventing a lane.
+        assert_eq!(
+            lane_of("claude-code", Some("daemon")).as_deref(),
+            Some("claude-code/mux-pane")
+        );
+    }
+
+    /// An UNPLACEABLE provider gets NO `lane` key — absent, never null and never a
+    /// guess. `lane_for` answers `None` for a provider id qd cannot place, and the
+    /// only honest rendering of "qd does not know what this row is" is silence; a
+    /// fabricated `"unknown/daemon"` would be read by a consumer as a routable lane.
+    /// Same absent-not-null contract as `qdId`/`lineage`.
+    #[test]
+    fn an_unplaceable_provider_carries_no_lane_key() {
+        let mut s = base(SessionBranch::LiveRegistry);
+        s.session_id = "sess-alien".into();
+        s.provider = "not-a-harness".to_string();
+        let v = ls_json(std::slice::from_ref(&s), &[]);
+        let obj = v.as_array().unwrap()[0].as_object().unwrap();
+        assert!(
+            !obj.contains_key("lane"),
+            "unplaceable provider ⇒ lane ABSENT, not null: {obj:?}"
+        );
+        assert_eq!(obj["provider"], json!("not-a-harness"), "the row still renders");
+    }
+
+    /// `lane` lands next to `provider` and BEFORE `code`, on every construction
+    /// branch. `code` stays LAST (assignShortCodes ordering) — the same discipline
+    /// `backend`/`qdId`/`readiness` follow.
+    #[test]
+    fn the_lane_key_follows_provider_and_precedes_code_on_every_branch() {
+        for branch in [
+            SessionBranch::LiveRegistry,
+            SessionBranch::ColdJsonl,
+            SessionBranch::ZmxOnly,
+            SessionBranch::Tombstoned,
+        ] {
+            let mut s = base(branch);
+            s.session_id = "sess-order".into();
+            let out = to_pretty(&ls_json(std::slice::from_ref(&s), &[]));
+            let p = out.find("\"provider\"").expect("provider present");
+            let l = out.find("\"lane\"").unwrap_or_else(|| panic!("lane present: {out}"));
+            let c = out.find("\"code\"").expect("code present");
+            assert!(p < l && l < c, "provider < lane < code on {branch:?}: {out}");
+        }
+    }
+
+    /// A STRAY carries no `lane` key. A stray is an unmanaged claude transcript on
+    /// disk with no registry row behind it — its `provider` is a hardcoded literal,
+    /// not a recorded fact, so deriving a lane from it would dress a guess up as
+    /// routing information about a session qd does not manage.
+    #[test]
+    fn strays_carry_no_lane() {
+        let stray = Stray {
+            session_id: "stray-1".into(),
+            jsonl_path: std::path::PathBuf::from("/tmp/stray.jsonl"),
+            project_dir: "-tmp".into(),
+            pid: None,
+            mtime_ms: 0,
+            active_recent: false,
+        };
+        let v = ls_json(&[], &[stray]);
+        let obj = v.as_array().unwrap()[0].as_object().unwrap();
+        assert!(!obj.contains_key("lane"), "stray ⇒ no lane: {obj:?}");
     }
 
     #[test]

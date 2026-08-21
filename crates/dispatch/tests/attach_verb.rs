@@ -350,9 +350,14 @@ fn resume_help_documents_agent_facing_revive_to_drivable() {
 /// carries the start/resume/attach model line; `qd connect --help` still renders
 /// a migration pointer.
 ///
-/// MUTATION EVIDENCE: re-listing connect in help::TOP reds the absence assert;
-/// dropping the CONNECT-const renamed marker reds the pointer assert; dropping
-/// the model line from help::TOP reds the model-line assert.
+/// FTUE punch R14/R4: the table is GENERATED from the clap tree and lists only
+/// the four session verbs plus `setup`, so `attach`'s row now carries the
+/// options it actually registers, and `connect` is absent because it is hidden
+/// rather than because someone remembered to leave it out of a string const.
+///
+/// MUTATION EVIDENCE: unhiding connect in `cli::subcommands` reds the absence
+/// assert; dropping the CONNECT-const renamed marker reds the pointer assert;
+/// dropping the model line from `help::render_top` reds the model-line assert.
 #[test]
 fn connect_retired_from_top_help_and_help_marks_renamed() {
     let t = tempfile::tempdir().unwrap();
@@ -360,7 +365,7 @@ fn connect_retired_from_top_help_and_help_marks_renamed() {
     let (code, top, _e) = run_qd_empty(t.path(), &["--help"]);
     assert_eq!(code, 0, "top help exits 0");
     assert!(
-        top.contains("attach <session>"),
+        top.contains("attach [options] <session>"),
         "attach listed in the top help, got: {top}"
     );
     // The STATE-21 model line (spec-w7-start-surface D1).
@@ -374,6 +379,14 @@ fn connect_retired_from_top_help_and_help_marks_renamed() {
     assert!(
         !top.contains("connect <session>"),
         "connect is off the top-level command table, got: {top}"
+    );
+
+    // R14: connect is HIDDEN, not gone — `qd --help-all` still documents it.
+    let (ac, all, _e3) = run_qd_empty(t.path(), &["--help-all"]);
+    assert_eq!(ac, 0, "--help-all exits 0");
+    assert!(
+        all.contains("connect [options] <session>"),
+        "connect is on the full surface, got: {all}"
     );
 
     let (hc, chelp, _e2) = run_qd_empty(t.path(), &["connect", "--help"]);

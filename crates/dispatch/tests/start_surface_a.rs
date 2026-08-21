@@ -71,6 +71,10 @@ struct Jail {
     qd_home: PathBuf,
     uuid: String,
     created: std::cell::RefCell<Vec<String>>,
+    /// Has `teardown` already run? Makes teardown idempotent so the explicit
+    /// `jail.teardown()` at the end of a test body and the `Drop` safety net
+    /// below can both fire without reaping twice.
+    torn: std::cell::Cell<bool>,
 }
 
 impl Jail {
@@ -106,6 +110,7 @@ impl Jail {
             qd_home,
             uuid,
             created: std::cell::RefCell::new(Vec::new()),
+            torn: std::cell::Cell::new(false),
         }
     }
 
@@ -121,12 +126,39 @@ impl Jail {
     }
 
     fn teardown(&self) {
+        // Idempotent (first call wins): the explicit `jail.teardown()` that ends a
+        // test body AND the `Drop` safety net below both land here, and a test that
+        // tears down mid-body then keeps going must not be reaped a second time.
+        if self.torn.replace(true) {
+            return;
+        }
         let names: Vec<String> = self.created.borrow().clone();
         for name in names {
             let _ = run_qd(self, &["stop", "--force", &name], &[]);
         }
         let _ = std::fs::remove_dir_all(&self.root);
         let _ = std::fs::remove_dir_all(&self.xdg);
+    }
+}
+
+/// Panic-path safety net. Every test body ends with an explicit `jail.teardown()`,
+/// but a test that PANICS never reaches it — the unwind skips teardown outright, so
+/// the jail's embedded `qrmux-server` is orphaned and its `/tmp/qd-*` tree is left
+/// on disk. Not theoretical: a failing test leaked on EVERY run, and ~500 orphaned
+/// servers (the oldest 7 days old) had accumulated on one dev box. Past a few
+/// hundred they contend for resources and the suite starts failing in a pattern
+/// INDISTINGUISHABLE from a code regression — failure count climbing run over run
+/// while runtime collapses. That cost one false regression alarm; anyone bisecting
+/// would have chased a ghost. `teardown` is idempotent, so this never double-reaps
+/// the explicit call sites, and it keeps their per-target `qd stop --force` reap
+/// (never a destructive sweep).
+impl Drop for Jail {
+    fn drop(&mut self) {
+        // Best-effort, and deliberately panic-proof: a panic raised while already
+        // unwinding ABORTS the process, which is strictly worse than the leak this
+        // exists to prevent. `teardown` itself is unchanged for the explicit call
+        // sites — only this path swallows.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.teardown()));
     }
 }
 

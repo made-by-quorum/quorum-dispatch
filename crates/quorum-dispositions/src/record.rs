@@ -246,6 +246,25 @@ impl DispositionEvent {
     }
 
     /// A `queued` event (placed in the target's queue / awaiting idle or wake).
+    ///
+    /// **`created_at` on the WAKE path is retrospective, and deliberately so.**
+    /// The origin resume-and-deliver path (`send_unified::wake_then_deliver`)
+    /// stamped this row BEFORE it tried the wake, as a witnessed moment; it now
+    /// stamps it after the wake RESOLVES, in both the success and the failure
+    /// arm. The funnel ORDER is unchanged (`attempted, queued, delivered` and
+    /// `attempted, queued, delivery-failed{wake}` both read exactly as before),
+    /// but `created_at` is a whole revive later than the moment the message was
+    /// placed awaiting the wake — seconds, not the milliseconds the row schema's
+    /// parenthetical promises for the qd-driven events.
+    ///
+    /// R14.1 itself is untouched: `created_at` is still when THIS host RECORDED
+    /// the event, and there is still no retro-dating. What changed is which
+    /// moment qd is able to record. The cause is the qd/qw split — `LaneOps::deliver`
+    /// is atomic over the wake, so qd learns that a wake happened only from the
+    /// lane's answer (`Receipt::woke`, or a returned `WakeFailed`), and asking
+    /// beforehand is the composition that method's atomicity rule forbids. See
+    /// `doc/formats/dispatch-transport-formats.md` §"Row schema" and the stamp
+    /// site's own comment.
     pub fn queued(correlation_id: String, created_at: i64) -> Self {
         DispositionEvent::Queued { correlation_id, created_at }
     }

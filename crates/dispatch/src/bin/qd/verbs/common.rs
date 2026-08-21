@@ -14,12 +14,8 @@ use dispatch::model::{Session, SessionStatus};
 use dispatch::mux::Mux;
 use dispatch::mux_selector::{self, Backend};
 use dispatch::paths::QdPaths;
-use dispatch::registry;
 use dispatch::relay_http::HttpRelayProbe;
-use dispatch::resolve::{
-    detect_live_id_collision, is_live_status, resolve_session_with_liveness, LiveIdCollision,
-    LiveRow, Resolution,
-};
+use dispatch::resolve::{is_live_status, resolve_session_with_liveness, Resolution};
 
 /// Resolve HOME → `QdPaths` (L9a: never the real home directly — read the env).
 /// Returns `Err(exit)` with a printed message if HOME is unset.
@@ -69,6 +65,20 @@ pub fn select_backend(env: &dyn Env) -> Result<Backend, i32> {
 /// `--alt-screen` / `--inline` flags (clap marks them conflicting) + the
 /// `render-default` config key. Precedence: flag > config > inline. SHARED by
 /// start / resume / attach so every launch site resolves identically.
+/// Read the raw `render-default` value from the config file (the SAME
+/// QD_HOME-honoring path `qd config` writes), or `None` when the file or key is
+/// absent. Permissive (L8): a read failure never hard-fails a launch.
+///
+/// Lives HERE rather than in `dispatch::launch` (qd/qw split): it reads a plain,
+/// non-secret preference, and having `launch` reach for it coupled the module
+/// `provider.rs` depends on to the whole config/credential surface. Every caller
+/// is CLI code, so the read belongs on this side of the boundary.
+pub fn render_default_from_config(env: &dyn dispatch::effects::Env) -> Option<String> {
+    let path = dispatch::secrets::resolve_config_path(env);
+    let text = std::fs::read_to_string(path).ok()?;
+    dispatch::secrets::get_plain_config_key(&text, dispatch::launch::RENDER_DEFAULT_KEY)
+}
+
 pub fn resolve_render_mode(m: &clap::ArgMatches, env: &dyn Env) -> dispatch::launch::RenderMode {
     let flag = if m.get_flag("alt-screen") {
         Some(dispatch::launch::RenderMode::AltScreen)
@@ -77,10 +87,7 @@ pub fn resolve_render_mode(m: &clap::ArgMatches, env: &dyn Env) -> dispatch::lau
     } else {
         None
     };
-    dispatch::launch::resolve_render_mode(
-        flag,
-        dispatch::launch::render_default_from_config(env).as_deref(),
-    )
+    dispatch::launch::resolve_render_mode(flag, render_default_from_config(env).as_deref())
 }
 
 /// Build the backend-selected mux as a `Box<dyn Mux>` (the loud-error path is
@@ -100,28 +107,20 @@ pub fn build_mux(
 /// legacy (with the A14-2(c) test-lane scan-root override applied to the surviving
 /// READ scan; production default = literal `/tmp`). embedded → the single resolved
 /// qrmux dir (legacy EMPTY). Keyed off the SAME parsed backend as the mux.
+///
+/// The resolution itself is `mux_selector::resolve_mux_dirs` — it moved to qw with
+/// [`MuxDirs`] because the lane layer needs the same answer. What stays HERE is
+/// what has always been qd's half and only qd's half: printing the failure and
+/// choosing the exit code, exactly as [`build_mux`] does over `select_mux`.
 pub fn build_mux_dirs(
     backend: Backend,
     home: &std::path::Path,
     env: &dyn Env,
 ) -> Result<MuxDirs, i32> {
-    match backend {
-        Backend::Zmx => {
-            // A14-2(c): the surviving legacy READ scan honors QD_TEST_SCAN_ROOTS
-            // (test lanes only); production stays literal /tmp. Visibility-only.
-            let scan_roots =
-                dispatch::zmx_dir::legacy_scan_roots(env, std::path::Path::new("/tmp"));
-            let xdg = dispatch::zmx_dir::XdgFamily::from_env(env, env.uid());
-            Ok(MuxDirs::zmx_roots(env, &scan_roots, Some(&xdg)))
-        }
-        Backend::Embedded => {
-            let dir = dispatch::qrmux_dir::resolve_qrmux_dir(home, env).map_err(|msg| {
-                eprintln!("qd: {msg}");
-                1
-            })?;
-            Ok(MuxDirs::embedded(dir))
-        }
-    }
+    mux_selector::resolve_mux_dirs(backend, home, env).map_err(|msg| {
+        eprintln!("qd: {msg}");
+        1
+    })
 }
 
 /// lsview A4 fix (CF-F1): the process table the `ls` bare-proc gather reads.
@@ -174,9 +173,7 @@ pub fn all_sessions_counted(opts: JoinOpts) -> Result<(Vec<Session>, usize), i32
 /// relay. Callers that REPORT an absence (`send`'s refusal, `info`'s field
 /// rendering) take this door so they can say "undetermined" honestly. Callers
 /// that merely list rows keep the narrower signatures.
-pub fn all_sessions_full(
-    opts: JoinOpts,
-) -> Result<(Vec<Session>, usize, DiscoveryHealth), i32> {
+pub fn all_sessions_full(opts: JoinOpts) -> Result<(Vec<Session>, usize, DiscoveryHealth), i32> {
     let env = RealEnv;
     let paths = paths_from_home(&env)?;
     let home = home_path(&env)?;
@@ -279,25 +276,14 @@ fn qd_parse_int_prefix(s: &str) -> Option<i64> {
     out.parse::<i64>().ok()
 }
 
-/// Which mux backend is active, for backend-keyed user-facing wording (C1 redfix).
-/// Distinct from [`Backend`] so the message layer never depends on the selector's
-/// internal type and a future backend addition is a compile error here.
-pub enum SendBackend {
-    Embedded,
-    Zmx,
-}
-
-/// Resolve the active backend for a USER-FACING message (the "no live mux session"
-/// wording in `send:pty`). Parses QD_MUX with the SAME rule as the rest of the
-/// engine; a bogus value (already rejected upstream on every path that calls this)
-/// falls back to Embedded — the C1 DEFAULT — so the worst case still names the
-/// default backend rather than the stale zmx wording.
-pub fn send_backend_label() -> SendBackend {
-    match mux_selector::parse_backend(&RealEnv) {
-        Ok(Backend::Zmx) => SendBackend::Zmx,
-        Ok(Backend::Embedded) | Err(_) => SendBackend::Embedded,
-    }
-}
+// `SendBackend` + `send_backend_label` USED to live here: "which mux backend is
+// active", for the backend-keyed `send:pty` wording (C1 redfix) and for `new -p`'s
+// `chunks-delivered.ack_source` label. Both consumers are in `quorum-qw` now — the
+// pane carrier's own wording, and `delivery::pty::ack_source_label`, which
+// `delivery::priming` reuses — and the decider went with the second of them as
+// `delivery::pty::is_zmx_backend`, fallback preserved: a bogus `QD_MUX` answers
+// EMBEDDED, the C1 default, rather than the stale zmx wording. One decider, not a
+// qd copy that could drift from the qw one.
 
 /// The real, backend-selected mux as a `Box<dyn Mux>` (used by attach/live for the
 /// live handoff). Parses QD_MUX once; a bogus value prints the loud named error +
@@ -456,8 +442,7 @@ pub fn resolve_session_uncapped(query: &str) -> Result<Session, i32> {
 pub fn resolve_session_uncapped_with_health(
     query: &str,
 ) -> Result<(Session, DiscoveryHealth), i32> {
-    let (session, _sessions, health) =
-        resolve_session_uncapped_in_list_with_health(query, false)?;
+    let (session, _sessions, health) = resolve_session_uncapped_in_list_with_health(query, false)?;
     Ok((session, health))
 }
 
@@ -514,330 +499,76 @@ pub fn reject_if_tombstoned(query: &str, session: &Session) -> Result<(), i32> {
     Ok(())
 }
 
-/// Gather the ALIVE registry rows (RAW, pre-dedup) whose `session_id == target_id`
-/// (Pete feedback #6: duplicate session ids). Reads `<pid>.json` rows directly and
-/// keeps only those whose pid is alive (`is_pid_alive`).
+/// Live-id-collision refusal SHARED by resume / attach / send (Pete feedback #6).
+/// Returns `Some(1)` (already printed) to refuse, `None` to proceed.
 ///
-/// The RAW scan is the whole point: the join collapses two same-id LIVE rows to one
-/// (keep-newest — CORRECT for the legitimate stale-old-pid + new-live-pid case, e.g.
-/// codex resume leaving the old row), which HIDES a genuine collision (two distinct
-/// alive processes sharing an id) from `resolve_or_die`. This helper sees the
-/// unmerged truth so resume/attach can refuse loudly instead of silently picking.
-///
-/// An empty `target_id` returns empty (ZmxOnly rows carry "" and must not match;
-/// the resume verb's own "no session ID" guard handles the empty case).
-pub fn alive_rows_with_id(sessions_dir: &Path, target_id: &str) -> Vec<LiveRow> {
-    if target_id.is_empty() {
-        return Vec::new();
-    }
-    registry::read_entries(sessions_dir, false)
-        .into_iter()
-        .filter(|s| !s.tombstoned)
-        .filter_map(|s| {
-            let pid = s.entry.pid?;
-            if s.entry.session_id.as_deref() == Some(target_id) && is_pid_alive(pid as i32) {
-                Some(LiveRow {
-                    session_id: target_id.to_string(),
-                    name: s.entry.name.clone(),
-                    pid,
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Live-id-collision refusal SHARED by resume / attach (Pete feedback #6). When
-/// ≥2 ALIVE rows share `target_id` the verb CANNOT disambiguate — refuse LOUDLY and
-/// list them. Returns `Some(1)` (already printed) to refuse, `None` to proceed.
-///
-/// An attach-style verb must call this too: attaching to one of two same-id
-/// sessions would silently pick a survivor — exactly the bug. The single-alive
-/// ("already alive") case is verb-SPECIFIC (resume refuses → attach; attach may
-/// attach directly) and is NOT decided here — see [`alive_pid_for_id`].
+/// The DECISION and the wording moved to [`dispatch::resume::id_collision_refusal`]
+/// with the acp resume choreography (which runs the same preflight in a
+/// load-bearing position and could not reach back into this crate). This is the
+/// printing wrapper the three other verbs still call — the refusal is MULTI-LINE,
+/// so it prints the block the core hands back, one line at a time.
 pub fn refuse_id_collision(verb: &str, target_id: &str, sessions_dir: &Path) -> Option<i32> {
-    let alive = alive_rows_with_id(sessions_dir, target_id);
-    if let LiveIdCollision::Collision(rows) = detect_live_id_collision(target_id, &alive) {
-        eprintln!(
-            "qd {verb}: id collision — {} live sessions share id {} — refusing to act \
-             (cannot disambiguate). Kill the duplicate(s) first:",
-            rows.len(),
-            dispatch::fmt::truncate_id_default(target_id)
-        );
-        for r in &rows {
-            let name = r.name.as_deref().unwrap_or("(unnamed)");
-            eprintln!("  {name}\tPID {}", r.pid);
-        }
-        return Some(1);
+    let refusal = dispatch::resume::id_collision_refusal(sessions_dir, target_id)?;
+    for line in refusal.lines(verb) {
+        eprintln!("{line}");
     }
-    None
+    Some(refusal.exit_code())
 }
 
-/// The single live pid carrying `target_id` IFF the session is actually alive
-/// (exactly one alive row). `None` when truly cold OR when ≥2 collide (the caller
-/// runs [`refuse_id_collision`] first for the ≥2 case). Resume uses this to harden
-/// the must-be-cold gate against the deduped-status misread (SEAM 3): the join may
-/// report a session Cold (dedup of a stale row) while a live pid still carries its
-/// id — resuming would spawn a SECOND process on the same id.
-pub fn alive_pid_for_id(sessions_dir: &Path, target_id: &str) -> Option<i64> {
-    let alive = alive_rows_with_id(sessions_dir, target_id);
-    match detect_live_id_collision(target_id, &alive) {
-        LiveIdCollision::AlreadyAlive { pid } => Some(pid),
-        _ => None,
-    }
-}
-
-/// P0 wave-2 (spec-w2-env D4) — the resume same-name guard's SCAN: is a LIVE
-/// registry session OTHER than the resume target currently holding `zmx_name`?
-///
-/// The hazard (spike §4): resume kills a same-name zmx pane before relaunching;
-/// if cold session B (named "wk") is resumed by id while a DIFFERENT live
-/// session A also derives zmx name "wk", B's resume would kill A's pane. The
-/// scan walks non-tombstoned registry rows with an ALIVE pid whose DERIVED zmx
-/// name (`derive_zmx_name(None, row.name, row.session_id)` — exactly how a
-/// session's pane is named) equals `zmx_name`, excluding the target's own rows
-/// (`session_id == target_session_id` — the legitimate own-stale-pane case).
-/// Returns the holder's display id via the shared fallback chain
-/// ([`dispatch::idstore::holder_display_id`]).
-///
-/// CASE-FOLDED match (red-team r5 F1, lead-adjudicated): names are
-/// CASE-INSENSITIVE for uniqueness (the r4 ruling) and this guard is the
-/// resume-side sibling of the create gate — byte-exact comparison here let
-/// `resume` revive cold `worker` beside live `WORKER` (the exact end-state
-/// the create-side fix prevents), and `--zmx-name` gave a shortcut route.
-pub fn live_zmx_name_holder(
-    sessions_dir: &Path,
-    ids_path: &Path,
-    zmx_name: &str,
-    target_session_id: &str,
-) -> Option<String> {
-    let holder = registry::read_entries(sessions_dir, false)
-        .into_iter()
-        .filter(|s| !s.tombstoned)
-        .find(|s| {
-            s.entry.session_id.as_deref() != Some(target_session_id)
-                && s.entry
-                    .pid
-                    .is_some_and(|p| p != 0 && is_pid_alive(p as i32))
-                && dispatch::resume::derive_zmx_name(
-                    None,
-                    s.entry.name.as_deref(),
-                    s.entry.session_id.as_deref().unwrap_or(""),
-                )
-                .eq_ignore_ascii_case(zmx_name)
-        })?;
-    Some(dispatch::idstore::holder_display_id(
-        ids_path,
-        holder.entry.session_id.as_deref(),
-        holder.entry.pid,
-    ))
-}
-
-/// The D4 guard's EXACT error line (factored so a unit pins the wording).
-pub fn held_name_error_line(verb: &str, zmx_name: &str, holder: &str) -> String {
-    format!(
-        "qd {verb}: name \"{zmx_name}\" is held by running session {holder}; \
-         rename or stop it first"
-    )
-}
-
-/// P0 wave-2 (spec-w2-env D4): refuse a resume/revive whose stale same-name
-/// kill would destroy a DIFFERENT live session's pane. `Some(1)` (already
-/// printed) to refuse; `None` when no live other-holder exists — the target's
-/// OWN stale pane keeps the existing kill-then-relaunch flow.
-pub fn refuse_held_zmx_name(
-    verb: &str,
-    sessions_dir: &Path,
-    ids_path: &Path,
-    zmx_name: &str,
-    target_session_id: &str,
-) -> Option<i32> {
-    let holder = live_zmx_name_holder(sessions_dir, ids_path, zmx_name, target_session_id)?;
-    eprintln!("{}", held_name_error_line(verb, zmx_name, &holder));
-    Some(1)
-}
-
-/// The live-pane refusal's EXACT error line (factored so a unit pins it).
-pub fn live_pane_error_line(verb: &str, pane: &str, pid: i32) -> String {
-    format!(
-        "qd {verb}: a RUNNING pane named \"{pane}\" (pid {pid}) holds this name — \
-         refusing to kill a live process. Stop it first (qd stop {pane}) or rename."
-    )
-}
-
-/// Red-team r6 F1 (lead-adjudicated): clear stale same-name panes SAFELY.
-///
-/// "Stale" means DEAD. The D4 registry guard is blind to live sessions whose
-/// registry row carries no name (a revived claude relaunches with `--resume
-/// <id>` only — its pane keeps the title-derived name but its new row has
-/// `name=None`), so the pane-side check must not trust the registry at all:
-/// for every (case-folded, r4 ruling) name-matching pane across the scanned
-/// dirs, if the pane's PROCESS IS ALIVE → refuse loudly (the resume target
-/// itself was already proven non-live by the must-be-cold + id-collision
-/// preflights, so an alive matching pane is necessarily someone else's);
-/// only a DEAD pane is killed — by its FOUND name (panes are case-preserving),
-/// and ALL dead matches are cleared, not just the first (r6 M2).
-///
-/// Returns `Err(1)` (already printed) on a live-pane or unknown-pid refusal
-/// (r7 M1: pid <= 0 is unprovable, not dead), `Ok(())` after clearing
-/// zero-or-more dead panes.
-pub fn clear_stale_panes(
-    verb: &str,
-    mux: &dyn dispatch::mux::Mux,
-    dirs: &[std::path::PathBuf],
-    zmx_name: &str,
-) -> Result<(), i32> {
-    for dir in dirs {
-        for pane in mux
-            .list(dir)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|z| z.name.eq_ignore_ascii_case(zmx_name))
-        {
-            // r7 M1: a non-positive pid is UNKNOWN, not dead (the zmx parser
-            // maps a garbled pid to 0) — we cannot prove the pane is dead, so
-            // refuse on missing evidence rather than kill.
-            if pane.pid <= 0 {
-                eprintln!(
-                    "qd {verb}: pane \"{}\" reports no readable pid — cannot prove it is \
-                     dead; refusing to clear it. Inspect with: zmx ls",
-                    pane.name
-                );
-                return Err(1);
-            }
-            if is_pid_alive(pane.pid) {
-                eprintln!("{}", live_pane_error_line(verb, &pane.name, pane.pid));
-                return Err(1);
-            }
-            let _ = mux.kill(dir, &pane.name);
-        }
-    }
-    Ok(())
-}
+/// The single live pid carrying `target_id` IFF the session is actually alive.
+/// Re-exported from [`dispatch::resume`], which owns it now — see
+/// [`refuse_id_collision`] on why it moved.
+pub use dispatch::resume::alive_pid_for_id;
 
 #[cfg(test)]
 mod tests {
+
+    /// Moved here with `render_default_from_config` when it left
+    /// `dispatch::launch` (qd/qw split). Kept so the relocation did not quietly
+    /// drop coverage: the read must still honour QD_HOME and stay permissive.
+    #[test]
+    fn render_default_from_config_reads_qd_home_config() {
+        struct E(std::collections::HashMap<String, String>);
+        impl dispatch::effects::Env for E {
+            fn var(&self, k: &str) -> Option<String> {
+                self.0.get(k).cloned()
+            }
+            fn uid(&self) -> u32 {
+                0
+            }
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let qd_home = tmp.path().join("qdhome");
+        std::fs::create_dir_all(&qd_home).unwrap();
+        std::fs::write(
+            qd_home.join("config.toml"),
+            "render-default = \"alt-screen\"\n",
+        )
+        .unwrap();
+
+        let mut m = std::collections::HashMap::new();
+        m.insert(
+            "QD_HOME".to_string(),
+            qd_home.to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            render_default_from_config(&E(m)).as_deref(),
+            Some("alt-screen")
+        );
+
+        // Absent file -> None, never an error (L8).
+        let empty = tmp.path().join("nothing");
+        std::fs::create_dir_all(&empty).unwrap();
+        let mut m2 = std::collections::HashMap::new();
+        m2.insert("QD_HOME".to_string(), empty.to_string_lossy().into_owned());
+        assert_eq!(render_default_from_config(&E(m2)), None);
+    }
     use super::*;
     use dispatch::registry::RegistryEntry;
 
     // A pid that is reliably DEAD: max-ish, never a running process. is_pid_alive
     // → false (ESRCH), so a row keyed by it is the "stale dead-pid row" case.
     const DEAD_PID: i64 = 2_147_483_646;
-
-    /// Minimal fake Mux for the clear_stale_panes pins: a fixed pane list and
-    /// a recorded kill log. Everything else unreachable in these tests.
-    struct PaneMux {
-        panes: Vec<dispatch::mux::MuxSession>,
-        kills: std::cell::RefCell<Vec<String>>,
-    }
-    impl dispatch::mux::Mux for PaneMux {
-        fn list(&self, _d: &Path) -> std::io::Result<Vec<dispatch::mux::MuxSession>> {
-            Ok(self.panes.clone())
-        }
-        fn list_raw(&self, _d: &Path) -> std::io::Result<Vec<dispatch::mux::MuxSession>> {
-            Ok(self.panes.clone())
-        }
-        fn run_detached(
-            &self,
-            _d: &Path,
-            _n: &str,
-            _c: &str,
-            _w: &Path,
-        ) -> std::io::Result<dispatch::exec::ExecResult> {
-            unreachable!("not exercised")
-        }
-        fn kill(&self, _d: &Path, name: &str) -> std::io::Result<i32> {
-            self.kills.borrow_mut().push(name.to_string());
-            Ok(0)
-        }
-        fn attach(&self, _d: &Path, _n: &str) -> std::io::Result<i32> {
-            unreachable!("not exercised")
-        }
-        fn send(
-            &self,
-            _d: &Path,
-            _n: &str,
-            _t: &str,
-        ) -> std::io::Result<dispatch::exec::ExecResult> {
-            unreachable!("not exercised")
-        }
-        fn history(&self, _d: &Path, _n: &str) -> std::io::Result<String> {
-            unreachable!("not exercised")
-        }
-        fn wait(&self, _d: &Path, _n: &[String]) -> std::io::Result<i32> {
-            unreachable!("not exercised")
-        }
-    }
-
-    fn pane(name: &str, pid: i32) -> dispatch::mux::MuxSession {
-        dispatch::mux::MuxSession {
-            name: name.to_string(),
-            pid,
-            clients: 0,
-            created: 0,
-            start_dir: String::new(),
-            cmd: String::new(),
-            current: false,
-            socket_dir: None,
-            ended: None,
-            exit_code: None,
-            zmx_status: None,
-            err: None,
-        }
-    }
-
-    /// Red-team r6 F1: an ALIVE name-matching pane (any case) is REFUSED —
-    /// never killed (the registry guard is blind to revived no-name rows;
-    /// "stale" means DEAD). Uses this test process's own pid as the live one.
-    #[test]
-    fn clear_stale_panes_refuses_alive_pane_any_case() {
-        let me = std::process::id() as i32;
-        let mux = PaneMux {
-            panes: vec![pane("Fix-bug", me)],
-            kills: std::cell::RefCell::new(vec![]),
-        };
-        let dirs = vec![std::path::PathBuf::from("/tmp/x")];
-        let got = clear_stale_panes("resume", &mux, &dirs, "fix-bug");
-        assert_eq!(got, Err(1), "alive case-variant pane must refuse");
-        assert!(mux.kills.borrow().is_empty(), "NEVER kills a live pane");
-    }
-
-    /// Dead panes ARE cleared — ALL case-variants (r6 M2: not just the first),
-    /// each killed by its FOUND name (panes are case-preserving).
-    #[test]
-    fn clear_stale_panes_kills_all_dead_variants_by_found_name() {
-        let mux = PaneMux {
-            panes: vec![
-                pane("wk", DEAD_PID as i32),
-                pane("WK", DEAD_PID as i32 - 1),
-                pane("other", DEAD_PID as i32 - 2),
-            ],
-            kills: std::cell::RefCell::new(vec![]),
-        };
-        let dirs = vec![std::path::PathBuf::from("/tmp/x")];
-        let got = clear_stale_panes("resume", &mux, &dirs, "wk");
-        assert_eq!(got, Ok(()));
-        assert_eq!(
-            *mux.kills.borrow(),
-            vec!["wk".to_string(), "WK".to_string()],
-            "both dead variants cleared by FOUND name; 'other' untouched"
-        );
-    }
-
-    /// r7 M1: pid <= 0 is UNKNOWN (zmx parser maps a garbled pid to 0), not
-    /// dead — refuse, never kill on missing evidence.
-    #[test]
-    fn clear_stale_panes_refuses_unreadable_pid() {
-        let mux = PaneMux {
-            panes: vec![pane("wk", 0)],
-            kills: std::cell::RefCell::new(vec![]),
-        };
-        let dirs = vec![std::path::PathBuf::from("/tmp/x")];
-        let got = clear_stale_panes("resume", &mux, &dirs, "wk");
-        assert_eq!(got, Err(1), "unprovable pid must refuse");
-        assert!(mux.kills.borrow().is_empty(), "nothing killed");
-    }
 
     fn row(dir: &Path, pid: i64, id: &str, name: &str) {
         let e = RegistryEntry {
@@ -847,228 +578,8 @@ mod tests {
             status: Some("idle".to_string()),
             ..Default::default()
         };
-        registry::write_entry(dir, &e).unwrap();
+        dispatch::registry::write_entry(dir, &e).unwrap();
     }
 
-    #[test]
-    fn gather_keeps_only_alive_rows_matching_the_id() {
-        // Rows are keyed `<pid>.json`, so distinct rows need distinct pids (as real
-        // sessions have). `me` is the alive+matching row; a spawned child is an
-        // alive row with the WRONG id (must be filtered out by id, not liveness).
-        let dir = tempfile::tempdir().unwrap();
-        let me = std::process::id() as i64;
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
-        let child_pid = child.id() as i64;
-        row(dir.path(), me, "wanted", "live-match"); // alive + matching id → kept
-        row(dir.path(), DEAD_PID, "wanted", "dead-match"); // matching id but DEAD → dropped
-        row(dir.path(), child_pid, "other", "live-other"); // alive but WRONG id → dropped
 
-        let got = alive_rows_with_id(dir.path(), "wanted");
-        let _ = child.kill();
-        let _ = child.wait();
-
-        assert_eq!(got.len(), 1, "only the alive+matching row: {got:?}");
-        assert_eq!(got[0].pid, me);
-        assert_eq!(got[0].name.as_deref(), Some("live-match"));
-    }
-
-    #[test]
-    fn single_alive_row_is_already_alive_not_a_collision() {
-        let dir = tempfile::tempdir().unwrap();
-        let me = std::process::id() as i64;
-        row(dir.path(), me, "solo", "only");
-        row(dir.path(), DEAD_PID, "solo", "stale"); // stale dead row sharing the id
-                                                    // refuse_id_collision proceeds (≥2-alive only); alive_pid_for_id flags it
-                                                    // alive (the SEAM-3 Cold-misread hardening input).
-        assert_eq!(refuse_id_collision("resume", "solo", dir.path()), None);
-        assert_eq!(alive_pid_for_id(dir.path(), "solo"), Some(me));
-    }
-
-    #[test]
-    fn empty_or_absent_id_is_resumable() {
-        let dir = tempfile::tempdir().unwrap();
-        row(dir.path(), std::process::id() as i64, "", "zmx-only");
-        assert!(
-            alive_rows_with_id(dir.path(), "").is_empty(),
-            "empty never matches"
-        );
-        assert_eq!(refuse_id_collision("resume", "", dir.path()), None);
-        assert_eq!(alive_pid_for_id(dir.path(), "missing"), None);
-    }
-
-    // === P0 wave-2 (spec-w2-env D4): the resume same-name guard ===
-
-    /// The spike hazard, pinned: cold session B (uuid-b, named "wk") resumed
-    /// while a DIFFERENT live session A (uuid-a) also derives zmx name "wk" →
-    /// the guard names A (by stable id when mapped) and blocks. The legitimate
-    /// own-stale-pane case (only B's OWN rows hold the name) passes.
-    #[test]
-    fn resume_guard_blocks_live_other_holder_allows_own_stale() {
-        let dir = tempfile::tempdir().unwrap();
-        let ids_dir = tempfile::tempdir().unwrap();
-        let ids_path = ids_dir.path().join("ids.jsonl");
-        let me = std::process::id() as i64;
-
-        // Own stale row (the resume TARGET's uuid) — alive or not, it is
-        // excluded by session_id, so no holder is reported.
-        row(dir.path(), me, "uuid-b", "wk");
-        assert_eq!(
-            live_zmx_name_holder(dir.path(), &ids_path, "wk", "uuid-b"),
-            None,
-            "the target's own row is never a blocking holder"
-        );
-
-        // A DIFFERENT live session holding the same derived name → blocked,
-        // named by its STABLE id (seeded in the idstore).
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
-        let child_pid = child.id() as i64;
-        row(dir.path(), child_pid, "uuid-a", "wk");
-        let mut g = || "ab3kx9mq".to_string();
-        dispatch::idstore::mint_or_get_with(
-            &ids_path,
-            "uuid-a",
-            Some("wk"),
-            &dispatch::effects::FixedClock(0),
-            &mut g,
-        )
-        .unwrap();
-        let holder = live_zmx_name_holder(dir.path(), &ids_path, "wk", "uuid-b");
-        let _ = child.kill();
-        let _ = child.wait();
-        assert_eq!(holder.as_deref(), Some("ab3kx9mq"));
-    }
-
-    /// Red-team r5 F1 (lead-adjudicated): the guard is CASE-FOLDED — a live
-    /// session named `WORKER` blocks resuming a cold case-variant `worker`
-    /// (and the `--zmx-name` shortcut), exactly as the create gate refuses a
-    /// case-variant start (r4 ruling: names case-insensitive for uniqueness).
-    /// Pre-fix the byte-exact compare revived `worker` beside live `WORKER`,
-    /// recreating the r4 end-state through the resume path.
-    #[test]
-    fn resume_guard_blocks_case_variant_live_holder() {
-        let dir = tempfile::tempdir().unwrap();
-        let ids_path = dir.path().join("ids.jsonl");
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
-        let child_pid = child.id() as i64;
-        row(dir.path(), child_pid, "uuid-a", "WORKER");
-        // Resume target uuid-b derives zmx name "worker" — a case-variant of
-        // the live holder's "WORKER" → blocked (holder reported).
-        let holder = live_zmx_name_holder(dir.path(), &ids_path, "worker", "uuid-b");
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(
-            holder.is_some(),
-            "case-variant live holder must block the resume"
-        );
-    }
-
-    #[test]
-    fn resume_guard_skips_dead_tombstoned_and_other_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let ids_path = dir.path().join("ids.jsonl");
-
-        // Dead pid holding the name → not a live holder.
-        row(dir.path(), DEAD_PID, "uuid-a", "wk");
-        // Alive pid holding a DIFFERENT name → no match.
-        row(dir.path(), std::process::id() as i64, "uuid-c", "other");
-        assert_eq!(
-            live_zmx_name_holder(dir.path(), &ids_path, "wk", "uuid-b"),
-            None
-        );
-
-        // Tombstoned alive row holding the name → not a live holder.
-        let e = RegistryEntry {
-            pid: Some(std::process::id() as i64),
-            session_id: Some("uuid-t".to_string()),
-            name: Some("wk".to_string()),
-            status: Some("idle".to_string()),
-            ..Default::default()
-        };
-        registry::write_entry(dir.path(), &e).unwrap();
-        registry::ensure_tombstone(dir.path(), std::process::id() as i64, Some(&e));
-        assert_eq!(
-            live_zmx_name_holder(dir.path(), &ids_path, "wk", "uuid-b"),
-            None,
-            "tombstoned rows are not live holders"
-        );
-    }
-
-    /// An unmapped holder falls back to the truncated provider UUID, and the
-    /// derived-name matching covers the unnamed case (`claude-<id8>`).
-    #[test]
-    fn resume_guard_uuid_fallback_and_derived_name_match() {
-        let dir = tempfile::tempdir().unwrap();
-        let ids_path = dir.path().join("ids.jsonl");
-        let me = std::process::id() as i64;
-        // No idstore line → display falls back to the truncated uuid.
-        row(dir.path(), me, "uuid-live-holder", "wk");
-        assert_eq!(
-            live_zmx_name_holder(dir.path(), &ids_path, "wk", "uuid-b"),
-            Some(dispatch::fmt::truncate_id_default("uuid-live-holder"))
-        );
-        // An UNNAMED live row derives `claude-<first8>` — the guard matches the
-        // DERIVED pane name, exactly what the stale kill would target.
-        let dir2 = tempfile::tempdir().unwrap();
-        let e = RegistryEntry {
-            pid: Some(me),
-            session_id: Some("abcdef1234567890".to_string()),
-            name: None,
-            status: Some("idle".to_string()),
-            ..Default::default()
-        };
-        registry::write_entry(dir2.path(), &e).unwrap();
-        assert!(
-            live_zmx_name_holder(dir2.path(), &ids_path, "claude-abcdef12", "uuid-b").is_some(),
-            "derived-name holders are matched"
-        );
-    }
-
-    /// D4's exact error wording, pinned (spec-w2-env: "name \"wk\" is held by
-    /// running session <id>; rename or stop it first").
-    #[test]
-    fn held_name_error_line_is_pinned() {
-        assert_eq!(
-            held_name_error_line("resume", "wk", "ab3kx9mq"),
-            "qd resume: name \"wk\" is held by running session ab3kx9mq; \
-             rename or stop it first"
-        );
-        assert_eq!(
-            held_name_error_line("attach", "wk", "ab3kx9mq"),
-            "qd attach: name \"wk\" is held by running session ab3kx9mq; \
-             rename or stop it first"
-        );
-    }
-
-    #[test]
-    fn two_alive_rows_same_id_collide_end_to_end() {
-        // The real bug, end-to-end with TWO genuinely-live pids: the test process +
-        // a spawned child. refuse_id_collision must refuse (exit 1); it is NOT
-        // reported as merely "already alive".
-        let dir = tempfile::tempdir().unwrap();
-        let me = std::process::id() as i64;
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
-        let child_pid = child.id() as i64;
-        row(dir.path(), me, "dup", "first");
-        row(dir.path(), child_pid, "dup", "second");
-
-        let verdict = refuse_id_collision("resume", "dup", dir.path());
-        // Cleanup BEFORE asserting so a failed assert never leaks the child.
-        let _ = child.kill();
-        let _ = child.wait();
-
-        assert_eq!(verdict, Some(1), "two live pids on one id must refuse");
-        // And it is a Collision, not AlreadyAlive (≥2, so alive_pid_for_id is None).
-    }
 }

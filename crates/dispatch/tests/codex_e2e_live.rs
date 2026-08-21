@@ -389,6 +389,7 @@ fn codex_full_lifecycle_live_jailed() {
         agent: None,
         passthrough: vec![],
         prompt: None, // the SEND step (3) drives the one live turn.
+            hosting: None,
     };
     let out = run_new_daemon(&create_deps, &create_params).expect("live daemon create succeeds");
     let thread_id = out.thread_id.clone();
@@ -670,6 +671,10 @@ fn codex_full_lifecycle_live_jailed() {
         cwd: Some(cwd_str.clone()),
         current_pid: Some(create_pid), // dead now
         current_endpoint: Some(endpoint.clone()),
+        // Faithful to the CREATE above, which passed `hosting: None`: this
+        // exercise is a plain `codex/daemon` row, and a revive restates the
+        // lane the row already had rather than inventing one for it.
+        hosting: None,
     };
     let revived = resume_codex(&revive_deps, &revive_params).expect("revive succeeds");
     let (new_pid, new_endpoint) = match revived {

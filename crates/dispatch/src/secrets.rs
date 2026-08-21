@@ -196,8 +196,8 @@ pub fn parse_secrets_toml(text: &str) -> Vec<(String, String)> {
 
 /// Parse ANY single `[name]` section's `key = "value"` rows out of our flat
 /// string-table config format. [`parse_secrets_toml`] is this specialized to
-/// `"secrets"`; `crate::archive::config` reuses it for `[archive]` rather than
-/// re-deriving the same tiny parser for a second table.
+/// `"secrets"`. (A since-removed `archive::config` module reused it for an
+/// `[archive]` table; that module is gone and this is the only consumer now.)
 pub(crate) fn parse_toml_section(text: &str, section: &str) -> Vec<(String, String)> {
     let mut table: Vec<(String, String)> = Vec::new();
     let mut in_section = false;

@@ -246,7 +246,7 @@ impl S3Client {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let now = crate::render::epoch_ms_to_amz_date(now_ms);
+        let now = quorum_core::timefmt::epoch_ms_to_amz_date(now_ms);
         let now = now.as_str();
         let credentials = self
             .credentials

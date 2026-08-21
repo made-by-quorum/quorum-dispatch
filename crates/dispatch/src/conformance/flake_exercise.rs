@@ -32,9 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use super::attribution::{
-    resolve_heads, AttributionRecord, Disposition, ReasonCode,
-};
+use super::attribution::{resolve_heads, AttributionRecord, Disposition, ReasonCode};
 use super::evidence::{CommissioningHeader, RunArtifactBuilder, RunMode};
 use super::ids::{
     AggregationVersion, AttributionSeq, BoxId, CellId, Lane, LaneScope, ObservationId, RecordId,
@@ -65,10 +63,26 @@ const BARRED_COORDINATOR: &str = "coord-1 (aaaa1111)";
 /// Pi, so a full grid stays small and the flake lands on a non-gating cell.
 fn base_battery() -> Battery {
     let cells = vec![
-        Cell { id: CellId("d1.g".into()), dimension: Dimension::D1Lifecycle, title: "gating d1".into() },
-        Cell { id: CellId("d6.g".into()), dimension: Dimension::D6FailureHonesty, title: "gating d6".into() },
-        Cell { id: CellId("d3.n".into()), dimension: Dimension::D3BusyQueue, title: "non-gating d3".into() },
-        Cell { id: CellId("d5.n".into()), dimension: Dimension::D5Transcript, title: "non-gating d5".into() },
+        Cell {
+            id: CellId("d1.g".into()),
+            dimension: Dimension::D1Lifecycle,
+            title: "gating d1".into(),
+        },
+        Cell {
+            id: CellId("d6.g".into()),
+            dimension: Dimension::D6FailureHonesty,
+            title: "gating d6".into(),
+        },
+        Cell {
+            id: CellId("d3.n".into()),
+            dimension: Dimension::D3BusyQueue,
+            title: "non-gating d3".into(),
+        },
+        Cell {
+            id: CellId("d5.n".into()),
+            dimension: Dimension::D5Transcript,
+            title: "non-gating d5".into(),
+        },
     ];
     let mut applicability = BTreeMap::new();
     for c in ["d1.g", "d6.g", "d3.n", "d5.n"] {
@@ -86,7 +100,11 @@ fn base_battery() -> Battery {
 
 /// The flake fail's observation id (run-2, Pi, d5.n).
 fn flake_obs() -> ObservationId {
-    ObservationId::derive(&RunId(FLAKE_RUN.into()), Lane::Pi, &CellId(FLAKE_CELL.into()))
+    ObservationId::derive(
+        &RunId(FLAKE_RUN.into()),
+        Lane::Pi,
+        &CellId(FLAKE_CELL.into()),
+    )
 }
 
 /// Build a valid corpus: W=3 Evidence runs on the designated box, all cells Pass
@@ -130,9 +148,12 @@ fn build_corpus(attributions: Vec<AttributionRecord>, roles: RoleRegistry) -> Co
             )
             .unwrap();
         let launch = journal
-            .start_run_at(&tuple.run, "runner-1 (bbbb2222)", "2026-07-14T00:00:00Z", &mut || {
-                format!("nonce-{nonce}")
-            })
+            .start_run_at(
+                &tuple.run,
+                "runner-1 (bbbb2222)",
+                "2026-07-14T00:00:00Z",
+                &mut || format!("nonce-{nonce}"),
+            )
             .unwrap();
         let header = CommissioningHeader::new(tuple, launch);
         let mut b = RunArtifactBuilder::new(header, "2026-07-14T00:00:00Z");
@@ -140,7 +161,11 @@ fn build_corpus(attributions: Vec<AttributionRecord>, roles: RoleRegistry) -> Co
         for cell in &battery.cells {
             let cid = cell.id.clone();
             let outcome = if run == FLAKE_RUN && cid.0 == FLAKE_CELL {
-                b.runner().fail(vec!["cmd".into()], "observed a flake fail", "the flake fired this round")
+                b.runner().fail(
+                    vec!["cmd".into()],
+                    "observed a flake fail",
+                    "the flake fired this round",
+                )
             } else {
                 b.runner().pass(vec!["cmd".into()], "observed state")
             };
@@ -150,11 +175,19 @@ fn build_corpus(attributions: Vec<AttributionRecord>, roles: RoleRegistry) -> Co
         let artifact = b.build(&applicable).unwrap();
         let digest = artifact.content_digest();
         journal
-            .mark_terminal(&RunId(run.into()), TerminalState::Completed { artifact_digest: digest.clone() })
+            .mark_terminal(
+                &RunId(run.into()),
+                TerminalState::Completed {
+                    artifact_digest: digest.clone(),
+                },
+            )
             .unwrap();
         index.push(IndexedArtifact { digest, artifact });
     }
-    let head = ArtifactIndex { artifacts: index.clone() }.head_digest();
+    let head = ArtifactIndex {
+        artifacts: index.clone(),
+    }
+    .head_digest();
     journal.publish_snapshot(head, SNAP);
 
     let mut commits = BTreeMap::new();
@@ -205,10 +238,26 @@ fn rate_of(attributions: Vec<AttributionRecord>) -> RateValue {
 }
 
 fn harness_record(id: &str, seq: u64, issuer: &str, supersedes: Vec<&str>) -> AttributionRecord {
-    record(id, seq, Disposition::Harness, ReasonCode::HarnessFlakeTiming, issuer, FLAKE_RUN, supersedes)
+    record(
+        id,
+        seq,
+        Disposition::Harness,
+        ReasonCode::HarnessFlakeTiming,
+        issuer,
+        FLAKE_RUN,
+        supersedes,
+    )
 }
 fn product_record(id: &str, seq: u64, issuer: &str, supersedes: Vec<&str>) -> AttributionRecord {
-    record(id, seq, Disposition::Product, ReasonCode::ProductDefect, issuer, FLAKE_RUN, supersedes)
+    record(
+        id,
+        seq,
+        Disposition::Product,
+        ReasonCode::ProductDefect,
+        issuer,
+        FLAKE_RUN,
+        supersedes,
+    )
 }
 
 // ---- POSITIVE dispositions ------------------------------------------------
@@ -218,16 +267,36 @@ fn positive_harness_attributed_fail_leaves_the_rate() {
     let base = rate_of(vec![]); // pending baseline
     let harness = rate_of(vec![harness_record("rec-h", 1, NEUTRAL, vec![])]);
     match (base, harness) {
-        (RateValue::Rate { passes: bp, pool: bpool }, RateValue::Rate { passes: hp, pool: hpool }) => {
+        (
+            RateValue::Rate {
+                passes: bp,
+                pool: bpool,
+            },
+            RateValue::Rate {
+                passes: hp,
+                pool: hpool,
+            },
+        ) => {
             assert_eq!(hp, bp, "harness: numerator unchanged");
-            assert_eq!(hpool, bpool - 1, "harness: the flake fail is removed from the denominator (fail leaves the rate)");
+            assert_eq!(
+                hpool,
+                bpool - 1,
+                "harness: the flake fail is removed from the denominator (fail leaves the rate)"
+            );
         }
         other => panic!("expected pooled rates, got {other:?}"),
     }
     // Positive control: the harness record actually resolved as the active head.
     let res = resolve_heads(&[harness_record("rec-h", 1, NEUTRAL, vec![])]);
-    assert_eq!(res.head_of(&flake_obs()).map(|r| r.0.as_str()), Some("rec-h"), "the harness record is the active head");
-    assert!(res.invalid.is_empty(), "a lone well-formed record is not invalid");
+    assert_eq!(
+        res.head_of(&flake_obs()).map(|r| r.0.as_str()),
+        Some("rec-h"),
+        "the harness record is the active head"
+    );
+    assert!(
+        res.invalid.is_empty(),
+        "a lone well-formed record is not invalid"
+    );
 }
 
 #[test]
@@ -245,11 +314,25 @@ fn positive_product_attributed_demotion_stands() {
 fn n1_no_record_stays_product_counted() {
     let base = rate_of(vec![]); // n1 IS the no-record case
     let product = rate_of(vec![product_record("rec-p", 1, NEUTRAL, vec![])]);
-    assert_eq!(base, product, "n1 no-record rate == product-attributed rate (the fail is pool-counted either way)");
+    assert_eq!(
+        base, product,
+        "n1 no-record rate == product-attributed rate (the fail is pool-counted either way)"
+    );
     // Positive control: the corpus computes with zero attributions present.
-    let comp = compute_tier(&build_corpus(vec![], RoleRegistry::default()), Lane::Pi, COMMIT, &TierParams::gated());
-    assert!(comp.rate.is_some(), "the no-record corpus still computes a rate (the fail is pending)");
-    assert!(comp.verdict.tier() != super::tier::Tier::Ga, "a pending flake fail keeps the lane below GA");
+    let comp = compute_tier(
+        &build_corpus(vec![], RoleRegistry::default()),
+        Lane::Pi,
+        COMMIT,
+        &TierParams::gated(),
+    );
+    assert!(
+        comp.rate.is_some(),
+        "the no-record corpus still computes a rate (the fail is pending)"
+    );
+    assert!(
+        comp.verdict.tier() != super::tier::Tier::Ga,
+        "a pending flake fail keeps the lane below GA"
+    );
 }
 
 #[test]
@@ -257,13 +340,24 @@ fn n2_malformed_record_rejected_stays_product_counted() {
     let base = rate_of(vec![]);
     let mut malformed = harness_record("rec-bad", 1, NEUTRAL, vec![]);
     malformed.primary_evidence = vec![]; // malformed: no primary-evidence refs
-    // Positive control: well_formed rejects it AT ITS SITE.
-    assert!(malformed.well_formed().is_err(), "the malformed record is rejected by well_formed");
+                                         // Positive control: well_formed rejects it AT ITS SITE.
+    assert!(
+        malformed.well_formed().is_err(),
+        "the malformed record is rejected by well_formed"
+    );
     // The malformed record does NOT harness-remove the fail → rate == no-record.
-    assert_eq!(rate_of(vec![malformed]), base, "a malformed record leaves the fail product-counted (rate == no-record)");
+    assert_eq!(
+        rate_of(vec![malformed]),
+        base,
+        "a malformed record leaves the fail product-counted (rate == no-record)"
+    );
     // Differential control: a WELL-FORMED version DOES change the rate — proving
     // it was malformedness, not general non-application, that rejected it.
-    assert_ne!(rate_of(vec![harness_record("rec-good", 1, NEUTRAL, vec![])]), base, "a well-formed harness record changes the rate (differential)");
+    assert_ne!(
+        rate_of(vec![harness_record("rec-good", 1, NEUTRAL, vec![])]),
+        base,
+        "a well-formed harness record changes the rate (differential)"
+    );
 }
 
 #[test]
@@ -271,7 +365,11 @@ fn n3_barred_identity_rejected_stays_product_counted() {
     let base = rate_of(vec![]);
     // The run's own coordinator is barred from ruling its attribution (A8).
     let barred = harness_record("rec-barred", 1, BARRED_COORDINATOR, vec![]);
-    assert_eq!(rate_of(vec![barred]), base, "a barred-issuer record leaves the fail product-counted (rate == no-record)");
+    assert_eq!(
+        rate_of(vec![barred]),
+        base,
+        "a barred-issuer record leaves the fail product-counted (rate == no-record)"
+    );
     // Differential control: the SAME record from a neutral seat DOES change the
     // rate — so it was the AUTHORITY filter, not the record's form, that rejected it.
     assert_ne!(rate_of(vec![harness_record("rec-neutral", 1, NEUTRAL, vec![])]), base, "a neutral-issuer record changes the rate (the authority filter is what rejected the barred one)");
@@ -283,14 +381,25 @@ fn n4_second_root_preexisting_head_governs() {
     // already-chained observation without superseding rec-1.
     let rec1 = harness_record("rec-1", 1, NEUTRAL, vec![]);
     let rec2_second_root = product_record("rec-2", 2, NEUTRAL, vec![]); // supersedes NOTHING → second root
-    // Positive control: resolve_heads flags rec-2 invalid and keeps rec-1 as head.
+                                                                        // Positive control: resolve_heads flags rec-2 invalid and keeps rec-1 as head.
     let res = resolve_heads(&[rec1.clone(), rec2_second_root.clone()]);
-    assert_eq!(res.head_of(&flake_obs()).map(|r| r.0.as_str()), Some("rec-1"), "the pre-existing head rec-1 continues to govern");
-    assert!(res.invalid.iter().any(|iv| iv.id.0 == "rec-2"), "the second-root rec-2 is flagged invalid, never silently honored");
+    assert_eq!(
+        res.head_of(&flake_obs()).map(|r| r.0.as_str()),
+        Some("rec-1"),
+        "the pre-existing head rec-1 continues to govern"
+    );
+    assert!(
+        res.invalid.iter().any(|iv| iv.id.0 == "rec-2"),
+        "the second-root rec-2 is flagged invalid, never silently honored"
+    );
     // Accounting: the pre-existing harness head governs → rate == harness-only,
     // NOT flipped to product by the invalid second root.
     let harness_only = rate_of(vec![harness_record("rec-1", 1, NEUTRAL, vec![])]);
-    assert_eq!(rate_of(vec![rec1, rec2_second_root]), harness_only, "the head-only (harness) rate governs; the second root does not flip it to product");
+    assert_eq!(
+        rate_of(vec![rec1, rec2_second_root]),
+        harness_only,
+        "the head-only (harness) rate governs; the second root does not flip it to product"
+    );
 }
 
 #[test]
@@ -302,11 +411,22 @@ fn n5_fork_first_sibling_governs() {
     let rec_a = harness_record("rec-a", 2, NEUTRAL, vec!["rec-0"]);
     let rec_b = product_record("rec-b", 3, NEUTRAL, vec!["rec-0"]);
     let res = resolve_heads(&[rec0.clone(), rec_a.clone(), rec_b.clone()]);
-    assert_eq!(res.head_of(&flake_obs()).map(|r| r.0.as_str()), Some("rec-a"), "the first sibling rec-a governs");
-    assert!(res.invalid.iter().any(|iv| iv.id.0 == "rec-b"), "the fork sibling rec-b is flagged invalid, never silently honored");
+    assert_eq!(
+        res.head_of(&flake_obs()).map(|r| r.0.as_str()),
+        Some("rec-a"),
+        "the first sibling rec-a governs"
+    );
+    assert!(
+        res.invalid.iter().any(|iv| iv.id.0 == "rec-b"),
+        "the fork sibling rec-b is flagged invalid, never silently honored"
+    );
     // Accounting: rec-a (harness) governs → the fail is removed, not demoted.
     let harness_only = rate_of(vec![harness_record("rec-x", 1, NEUTRAL, vec![])]);
-    assert_eq!(rate_of(vec![rec0, rec_a, rec_b]), harness_only, "the governing harness sibling's rate stands; the fork does not flip it to product");
+    assert_eq!(
+        rate_of(vec![rec0, rec_a, rec_b]),
+        harness_only,
+        "the governing harness sibling's rate stands; the fork does not flip it to product"
+    );
 }
 
 #[test]
@@ -314,8 +434,21 @@ fn c2_decoy_run_yields_invalid_evidence() {
     // A record whose run ("run-DECOY") is absent from the journal, but whose
     // observation belongs to run-2 — the v9 attribution-run binding fails the
     // WHOLE corpus, never quietly yielding a pending/product rate.
-    let decoy = record("rec-decoy", 1, Disposition::Harness, ReasonCode::HarnessFlakeTiming, NEUTRAL, "run-DECOY", vec![]);
-    let comp = compute_tier(&build_corpus(vec![decoy], RoleRegistry::default()), Lane::Pi, COMMIT, &TierParams::gated());
+    let decoy = record(
+        "rec-decoy",
+        1,
+        Disposition::Harness,
+        ReasonCode::HarnessFlakeTiming,
+        NEUTRAL,
+        "run-DECOY",
+        vec![],
+    );
+    let comp = compute_tier(
+        &build_corpus(vec![decoy], RoleRegistry::default()),
+        Lane::Pi,
+        COMMIT,
+        &TierParams::gated(),
+    );
     // Positive control: the verdict is INVALID_EVIDENCE (v9), not a rate.
     match &comp.verdict {
         TierVerdict::InvalidEvidence { failed_checks } => {
@@ -326,5 +459,8 @@ fn c2_decoy_run_yields_invalid_evidence() {
         }
         other => panic!("decoy-run attribution must yield INVALID_EVIDENCE, got {other:?}"),
     }
-    assert!(comp.rate.is_none(), "an INVALID_EVIDENCE corpus carries no pooled rate");
+    assert!(
+        comp.rate.is_none(),
+        "an INVALID_EVIDENCE corpus carries no pooled rate"
+    );
 }

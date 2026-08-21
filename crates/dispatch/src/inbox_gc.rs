@@ -34,7 +34,9 @@ pub fn scan_collectible(inbox_dir: &Path, state_dir: &Path, now_ms: i64) -> Vec<
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
         // Unparseable record → SKIP (never collect what we cannot judge — loss-safe).
         let Ok(rec) = serde_json::from_slice::<InboxRecord>(&bytes) else {
             continue;
@@ -87,7 +89,12 @@ pub fn scan_collectible(inbox_dir: &Path, state_dir: &Path, now_ms: i64) -> Vec<
 /// trash (copy-then-unlink) under `trash_dir`. Returns the count moved. Used by the
 /// relay server's 30 s sweeper (throttled), presence-read-only; holds NO state lock
 /// (it never touches relay state — pure file IO + presence reads). `now_ms` injected.
-pub fn sweep_inbox_once(inbox_dir: &Path, state_dir: &Path, trash_dir: &Path, now_ms: i64) -> usize {
+pub fn sweep_inbox_once(
+    inbox_dir: &Path,
+    state_dir: &Path,
+    trash_dir: &Path,
+    now_ms: i64,
+) -> usize {
     let mut moved = 0;
     for c in scan_collectible(inbox_dir, state_dir, now_ms) {
         if move_to_trash_at(

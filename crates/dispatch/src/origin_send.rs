@@ -152,7 +152,10 @@ fn read_urandom(buf: &mut [u8]) -> std::io::Result<()> {
 pub fn parse_expires(raw: &str) -> Result<i64, String> {
     let s = raw.trim();
     if s.is_empty() {
-        return Err("empty duration (expected e.g. 12h, 30m, 45s, 1d, or a bare integer of seconds)".to_string());
+        return Err(
+            "empty duration (expected e.g. 12h, 30m, 45s, 1d, or a bare integer of seconds)"
+                .to_string(),
+        );
     }
     // Split a trailing unit letter off the magnitude, if present.
     let (num_str, unit_ms): (&str, i64) = match s.as_bytes().last() {
@@ -346,7 +349,11 @@ mod tests {
         let ts = 1_700_000_000_000i64;
         let a = mint_ulid_with(ts, &mut || [0u8; 10]);
         let b = mint_ulid_with(ts, &mut || [0xFFu8; 10]);
-        assert_eq!(&a[..10], &b[..10], "timestamp prefix is clock-derived: {a} vs {b}");
+        assert_eq!(
+            &a[..10],
+            &b[..10],
+            "timestamp prefix is clock-derived: {a} vs {b}"
+        );
         // A later timestamp sorts lexicographically after an earlier one.
         let later = mint_ulid_with(ts + 1000, &mut || [0u8; 10]);
         assert!(later > a, "ULIDs sort by mint time: {later} > {a}");
@@ -368,7 +375,10 @@ mod tests {
         let c = FixedClock(42);
         let a = mint_correlation_id(&c);
         let b = mint_correlation_id(&c);
-        assert_ne!(a, b, "distinct random tails ⇒ distinct ULIDs even at one ms");
+        assert_ne!(
+            a, b,
+            "distinct random tails ⇒ distinct ULIDs even at one ms"
+        );
     }
 
     // ---- parse_expires ------------------------------------------------------
@@ -395,7 +405,9 @@ mod tests {
 
     #[test]
     fn parse_expires_rejects_bad_forms() {
-        for bad in ["", "   ", "h", "m", "abc", "12x", "1.5h", "-5", "-5m", "12h30m", "h12"] {
+        for bad in [
+            "", "   ", "h", "m", "abc", "12x", "1.5h", "-5", "-5m", "12h30m", "h12",
+        ] {
             assert!(parse_expires(bad).is_err(), "{bad:?} must be rejected");
         }
     }
@@ -429,7 +441,14 @@ mod tests {
 
     #[test]
     fn build_envelope_expiry_saturates_not_wraps() {
-        let e = build_envelope("id".into(), i64::MAX - 5, DEFAULT_EXPIRES_MS, "t".into(), "o".into(), "b".into());
+        let e = build_envelope(
+            "id".into(),
+            i64::MAX - 5,
+            DEFAULT_EXPIRES_MS,
+            "t".into(),
+            "o".into(),
+            "b".into(),
+        );
         assert_eq!(e.expires_at, i64::MAX, "saturating add, never negative");
     }
 
@@ -460,7 +479,10 @@ mod tests {
         assert_eq!(EXIT_REFUSED, 12);
         assert_ne!(EXIT_REFUSED, 0);
         assert_ne!(EXIT_REFUSED, 1);
-        assert_ne!(EXIT_REFUSED, 11, "must not collide with send:pty write-failed");
+        assert_ne!(
+            EXIT_REFUSED, 11,
+            "must not collide with send:pty write-failed"
+        );
         for r in [
             Refusal::refused("a", "b"),
             Refusal::failed("a", "b"),

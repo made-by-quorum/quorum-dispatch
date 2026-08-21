@@ -33,8 +33,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::ids::{
-    AggregationVersion, BoxId, CellId, CommissionToken, Lane, LaneScope, LaunchNonce, ManifestDigest,
-    ObservationId, RunId, RunKind, RunSequence,
+    AggregationVersion, BoxId, CellId, CommissionToken, Lane, LaneScope, LaunchNonce,
+    ManifestDigest, ObservationId, RunId, RunKind, RunSequence,
 };
 
 /// How a cell's observation was produced — automated vs a scripted-manual
@@ -136,7 +136,10 @@ impl Outcome {
 
     /// The canonical "live gate is OFF" blocked outcome — the no-op-pass retiree.
     /// A skipped live run lands HERE, never at `Pass`.
-    pub fn blocked_gate_off(gate_var: impl std::fmt::Display, reentry: impl Into<String>) -> Outcome {
+    pub fn blocked_gate_off(
+        gate_var: impl std::fmt::Display,
+        reentry: impl Into<String>,
+    ) -> Outcome {
         Outcome::Blocked {
             reason: format!("gate off: {gate_var} unset"),
             reentry: reentry.into(),
@@ -213,10 +216,16 @@ impl BoxCoverageRecord {
     /// is loudly invalid, not quietly accepted.
     pub fn well_formed(&self) -> Result<(), String> {
         if self.runnable_on.0.trim().is_empty() {
-            return Err(format!("coverage record for cell {:?}: empty runnable-on box", self.cell.0));
+            return Err(format!(
+                "coverage record for cell {:?}: empty runnable-on box",
+                self.cell.0
+            ));
         }
         if self.why_not_here.trim().is_empty() {
-            return Err(format!("coverage record for cell {:?}: empty why-not-here", self.cell.0));
+            return Err(format!(
+                "coverage record for cell {:?}: empty why-not-here",
+                self.cell.0
+            ));
         }
         if self.established_by.trim().is_empty() {
             return Err(format!(
@@ -291,7 +300,10 @@ impl CommissioningHeader {
     /// already unforgeable by construction (crate-private minting); this is
     /// pure assembly, not a new authority act.
     pub fn new(tuple: CommissioningTuple, launch_nonce: LaunchNonce) -> Self {
-        CommissioningHeader { tuple, launch_nonce }
+        CommissioningHeader {
+            tuple,
+            launch_nonce,
+        }
     }
 
     pub fn run(&self) -> &RunId {
@@ -629,7 +641,10 @@ mod tests {
             // If this body ran, we'd get a pass — it must NOT run when gate off.
             r.pass(vec!["unreachable".into()], "unreachable")
         });
-        assert!(outcome.is_blocked(), "gate-off must be blocked, got {outcome:?}");
+        assert!(
+            outcome.is_blocked(),
+            "gate-off must be blocked, got {outcome:?}"
+        );
         assert!(!outcome.is_pass(), "gate-off must NEVER be pass");
         match outcome {
             Outcome::Blocked { reason, .. } => assert!(reason.contains("gate off")),
@@ -643,7 +658,10 @@ mod tests {
         let tok = header.token().clone();
         let b = builder(header);
         let outcome = Gate::On.run(b.runner(), "n/a", |r| {
-            r.pass(vec!["qd start s --provider pi".into()], "row written; pid alive")
+            r.pass(
+                vec!["qd start s --provider pi".into()],
+                "row written; pid alive",
+            )
         });
         assert!(outcome.is_pass());
         // The pass carries proof bound to the run's commission token.
@@ -773,9 +791,10 @@ mod tests {
         let cell = CellId("d1.boot-readiness".into());
         // Mint a real proof under run A's runner.
         let builder_a = RunArtifactBuilder::new(header_a, "2026-07-13T00:00:00Z");
-        let foreign_pass = builder_a
-            .runner()
-            .pass(vec!["qd start s --provider pi".into()], "row present; pid alive");
+        let foreign_pass = builder_a.runner().pass(
+            vec!["qd start s --provider pi".into()],
+            "row present; pid alive",
+        );
 
         // Splice A's proof into run B's grid.
         let mut builder_b = RunArtifactBuilder::new(header_b, "2026-07-13T00:00:00Z");
@@ -824,7 +843,10 @@ mod tests {
         assert!(r.well_formed().unwrap_err().contains("runnable-on"));
         let mut r = base.clone();
         r.established_by = "".into();
-        assert!(r.well_formed().unwrap_err().contains("establishing authority"));
+        assert!(r
+            .well_formed()
+            .unwrap_err()
+            .contains("establishing authority"));
         let mut r = base.clone();
         r.reentry = " ".into();
         assert!(r.well_formed().unwrap_err().contains("re-entry"));

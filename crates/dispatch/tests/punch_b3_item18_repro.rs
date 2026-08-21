@@ -135,6 +135,7 @@ fn ended_same_name_start_lands_in_requested_cwd() {
         qd_session_id: None,
         render: RenderMode::Inline,
         interactive: false,
+        control_socket: None,
     };
     let out = run_new(&deps, &params).expect("run_new must succeed after the ended-row reap");
     assert_eq!(out.name, "hij");

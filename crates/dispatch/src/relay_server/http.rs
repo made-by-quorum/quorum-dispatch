@@ -369,7 +369,7 @@ fn handle_message(req: &ParsedRequest, server: &RelayServer) -> Result<String, (
     // (b) Persist to inbox BEFORE notify (P-C1, server.ts:268-279) — OUTSIDE the
     // lock (no IO under the state lock, P-G6). A write failure is non-fatal
     // (logged-equivalent: silently tolerated in M2; M5 adds the log).
-    let received_at = crate::render::epoch_ms_to_iso(now_ms() as i64);
+    let received_at = quorum_core::timefmt::epoch_ms_to_iso(now_ms() as i64);
     let record = serde_json::json!({
         "text": text,
         "from_session": from_session,
@@ -769,8 +769,7 @@ mod tests {
             "relay-1.json",
             r#"{"text":"hi","from_session":"a","message_id":"relay-1","received_at":"2026-06-25T00:00:00.000Z","to_session":"me"}"#,
         );
-        let mut v: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
         assert!(ack_stamp_file("me", &p, &mut v, 1_700_000_000_000));
         // In-memory value reflects the ack...
         assert_eq!(v["acked_at_ms"].as_i64(), Some(1_700_000_000_000));
@@ -791,8 +790,7 @@ mod tests {
             "a.json",
             r#"{"message_id":"a","to_session":"me","acked_at_ms":42}"#,
         );
-        let mut v: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
         assert!(!ack_stamp_file("me", &p, &mut v, 999));
         assert_eq!(v["acked_at_ms"].as_i64(), Some(42), "ack is idempotent");
 

@@ -46,7 +46,8 @@
 //! documented wire shape (format doc §§1–2, the same lines the leaf crate's
 //! golden tests pin). WHY not a live `qd send`: a real `delivered` event
 //! requires a LIVE receive carrier (a relay port, a joined zmx mux pane, or a
-//! codex/acp/pi daemon — see `send_unified::select_carrier`); a bare PTY
+//! codex/acp/pi daemon — see `quorum_qw::lanes::LaneImpl::deliver`, which took
+//! that routing over from the retired `send_unified::select_carrier`); a bare PTY
 //! session in a jailed, empty-ZMX test has none and hits `NoLiveReceivePath`.
 //! A live-carrier delivered leg is DEFERRED TO CUTOVER per ruling R7 — the
 //! seam-level twin test in `src/bin/qd/verbs/send_unified.rs` proves the full

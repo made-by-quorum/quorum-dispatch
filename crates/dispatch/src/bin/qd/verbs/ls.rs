@@ -330,7 +330,18 @@ fn session_from_mirror_row(row: &serde_json::Value) -> Session {
         provider: s("provider").unwrap_or_else(|| "claude-code".to_string()),
         entrypoint: None,
         lineage: None,
-        hosting: None,
+        // D1: re-hydrate the peer's HOSTING out of its `lane` key — the stable
+        // `<provider-id>/<hosting-token>` id `render::session_to_value` emits — so the
+        // mirror's Hosting column shows the peer's ACTUAL lane rather than what our
+        // local harness defaults would infer from the provider alone. Those two agree
+        // today only because every harness has one default lane; the moment a peer runs
+        // a codex session in the non-default codex lane, inferring would print a
+        // confident lie about a machine we cannot see. An absent or unparseable `lane`
+        // (an older peer, a hand-written row) stays `None` and falls back to the same
+        // derivation as before — a peer's row schema is not ours to trust.
+        hosting: s("lane")
+            .and_then(|id| quorum_qw::Lane::from_id(&id))
+            .map(|lane| lane.mode.hosting_token().to_string()),
         which_branch: SessionBranch::LiveRegistry,
     }
 }
@@ -882,18 +893,41 @@ fn render_table_human_at_with_management(
     // existing Status/[Mode]/Last active/Tokens columns keep their order and
     // Tokens stays the last (right-aligned) column. The existing columns' cell
     // CONTENT is byte-identical; this only adds a new column.
+    //
+    // D1 / X3 (`16-default-lane-switch.md`): "Hosting" sits immediately after
+    // "Prov" because the two READ AS ONE — `codex` + `app-server` is the lane
+    // `codex/app-server`, and splitting the pair across the table would make a
+    // reader join them by eye. It is a column rather than a suffix on the Prov
+    // cell because Prov's whole job is to stay two characters wide for the
+    // common case ("CC"), and `codex/app-server` in that slot would push every
+    // following column right on a table that is already dense. It carries the
+    // bare hosting token, NOT the full `Lane::id()`, for the same reason: the
+    // provider half is already in the cell to its left, so the full id would
+    // print `codex` twice per row to say one thing. The JSON surface makes the
+    // opposite trade — see `render::session_to_value`, which emits the whole
+    // `lane` id because a machine consumer has no adjacent column to join
+    // against.
     let headers: Vec<&str> = if include_management {
         vec![
             "Name",
             "Id",
             "Prov",
+            "Hosting",
             "Status",
             "Mode",
             "Last active",
             "Tokens",
         ]
     } else {
-        vec!["Name", "Id", "Prov", "Status", "Last active", "Tokens"]
+        vec![
+            "Name",
+            "Id",
+            "Prov",
+            "Hosting",
+            "Status",
+            "Last active",
+            "Tokens",
+        ]
     };
     let max_name = NAME_COL_MAX;
     // Shortest-unique prefixes among the LISTED sessions' stable ids (min 2
@@ -935,6 +969,23 @@ fn render_table_human_at_with_management(
                 other => Cell::plain_only(other.to_string()),
             };
 
+            // Hosting: the row's lane, asked the SAME way every acting verb asks it
+            // (`lane_for(provider, hosting)`, which owns the absent⇒harness-default
+            // rule), rendered as the bare hosting token — `daemon`, `mux-pane`,
+            // `extension`, `app-server`.
+            //
+            // An UNPLACEABLE row — a provider id qd cannot place, so `lane_for`
+            // answers `None` — renders a dim "-", the same "no answer" glyph the
+            // Mode column uses. L8 permissive, and deliberately so: a listing must
+            // still render a row whose provider qd does not know; only ACTING verbs
+            // refuse one. Inventing a hosting token here would be the one failure
+            // mode that matters, because the token is exactly what tells
+            // `codex/daemon` apart from `codex/app-server`.
+            let host_cell = match quorum_qw::lane_for(&s.provider, s.hosting.as_deref()) {
+                Some(lane) => Cell::plain_only(lane.mode.hosting_token().to_string()),
+                None => Cell::new("-", dim("-")),
+            };
+
             // Status: colorStatus (idle=cyan busy=yellow shell=green cold=dim killed=red).
             // (L) Item 3: an acp row carries a PRIMARY-SOURCED override (live/stopped/
             // dead-endpoint), colored via the matching variant; non-acp rows keep the
@@ -958,7 +1009,7 @@ fn render_table_human_at_with_management(
             // the natural "0". Right-aligned (it's a number).
             let tokens_cell = Cell::plain_right(format_tokens(s.tokens));
 
-            let mut cells = vec![name_cell, id_cell, prov_cell, status_cell];
+            let mut cells = vec![name_cell, id_cell, prov_cell, host_cell, status_cell];
             if include_management {
                 let mode = management
                     .get(i)
@@ -1422,15 +1473,16 @@ mod tests {
         let out = render_table_human_at_with(&rows, NOW_MS, &overrides);
         let plain: String = out.lines().map(strip_ansi).collect::<Vec<_>>().join("\n");
         // the acp override rides the EXISTING Status column and adds NO column of
-        // its own; the header is the fixed set (lsview A2 added the Prov column,
-        // present in the override AND non-override render alike).
+        // its own; the header is the fixed set (lsview A2 added the Prov column and
+        // D1 the Hosting column, present in the override AND non-override render
+        // alike).
         assert_eq!(
             out.lines()
                 .next()
                 .unwrap()
                 .split_whitespace()
                 .collect::<Vec<_>>(),
-            vec!["Name", "Id", "Prov", "Status", "Last", "active", "Tokens"]
+            vec!["Name", "Id", "Prov", "Hosting", "Status", "Last", "active", "Tokens"]
         );
         assert!(
             plain.contains("live"),
@@ -1496,17 +1548,19 @@ mod tests {
     }
 
     #[test]
-    fn human_table_is_six_columns() {
+    fn human_table_is_seven_columns() {
         let out = render_table_human_at(&fixtures(), NOW_MS);
-        // The header carries EXACTLY the six columns in order — lsview A2 added the
-        // Prov column (after Id, the wide-table slot); Tokens stays last.
+        // The header carries EXACTLY the seven columns in order — lsview A2 added the
+        // Prov column (after Id, the wide-table slot) and D1 the Hosting column
+        // (immediately after Prov, because provider + hosting IS the lane); Tokens
+        // stays last.
         let header = out.lines().next().unwrap();
         let plain: String = strip_ansi(header);
         let cols: Vec<&str> = plain.split_whitespace().collect();
-        // "Last active" is two words → header has 7 whitespace-split tokens.
+        // "Last active" is two words → header has 8 whitespace-split tokens.
         assert_eq!(
             cols,
-            vec!["Name", "Id", "Prov", "Status", "Last", "active", "Tokens"]
+            vec!["Name", "Id", "Prov", "Hosting", "Status", "Last", "active", "Tokens"]
         );
         for row in out.lines().skip(2) {
             let plain = strip_ansi(row);
@@ -1670,6 +1724,47 @@ mod tests {
         );
     }
 
+    /// D1 / X3: two sessions of the SAME provider in DIFFERENT lanes are tellable
+    /// apart at a glance. This is the entire reason the column exists — once codex
+    /// defaults to `codex/app-server` while `codex/daemon` stays reachable via
+    /// `--daemon`, a `qd ls` with both on it is an ordinary Tuesday, and the Prov
+    /// column says "codex" for both of them.
+    ///
+    /// MUTATION EVIDENCE: drop the Hosting column (or render `s.hosting` raw, which
+    /// is `None` on the unstamped row) and the two codex lines below become
+    /// indistinguishable except by name — which is the pre-D1 state this test exists
+    /// to keep from coming back.
+    #[test]
+    fn human_table_tells_two_lanes_of_one_provider_apart() {
+        let mut daemon = session(Some("cx-daemon"), Some("a01"), SessionStatus::Idle, None, 0);
+        daemon.provider = "codex".to_string();
+        daemon.hosting = Some("daemon".to_string());
+        let mut app = session(Some("cx-app"), Some("a02"), SessionStatus::Idle, None, 0);
+        app.provider = "codex".to_string();
+        app.hosting = Some("app-server".to_string());
+        // An UNSTAMPED codex row re-derives to the harness default — the same answer
+        // every acting verb routes on, so the listing cannot disagree with `qd send`.
+        let mut unstamped = session(Some("cx-old"), Some("a03"), SessionStatus::Idle, None, 0);
+        unstamped.provider = "codex".to_string();
+        // A provider qd cannot place has no lane: a dim "-", never a fabricated token.
+        let mut alien = session(Some("alien"), Some("a04"), SessionStatus::Idle, None, 0);
+        alien.provider = "not-a-harness".to_string();
+
+        let out = render_table_human_at(&[daemon, app, unstamped, alien], NOW_MS);
+        let row_for = |needle: &str| -> String {
+            out.lines()
+                .map(strip_ansi)
+                .find(|l| l.starts_with(needle))
+                .unwrap_or_else(|| panic!("row {needle} present in\n{out}"))
+        };
+        assert!(row_for("cx-daemon").contains(" daemon "), "{out}");
+        assert!(row_for("cx-app").contains(" app-server "), "{out}");
+        assert!(row_for("cx-old").contains(" daemon "), "{out}");
+        assert!(row_for("alien").contains(" -    "), "{out}");
+        // The header names the column.
+        assert!(strip_ansi(out.lines().next().unwrap()).contains("Hosting"), "{out}");
+    }
+
     #[test]
     fn human_table_golden() {
         let out = render_table_human_at(&fixtures(), NOW_MS);
@@ -1710,7 +1805,7 @@ mod tests {
         assert_eq!(lines.len(), 2, "header + separator only: {out:?}");
         assert_eq!(
             strip_ansi(lines[0]).trim_end(),
-            "Name  Id  Prov  Status  Last active  Tokens"
+            "Name  Id  Prov  Hosting  Status  Last active  Tokens"
         );
     }
 

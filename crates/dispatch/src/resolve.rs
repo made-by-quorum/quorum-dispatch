@@ -3,41 +3,21 @@
 //!
 //! Pure deciders over `&[Session]` — no I/O, no clock.
 
-use crate::model::{Session, SessionStatus};
+use crate::model::Session;
 
-/// `isLiveStatus` (src/session.ts:1165-1173).
-///
-/// A session is "live" iff it is not a tombstone. Cold (JSONL-only history) and
-/// killed (tombstoned) records are dead; idle/busy/shell are live. Single source
-/// of truth for the live/dead split used by name-resolution (NEW-1) and by
-/// the retired `spawn` verb's V5/V5b live-collision checks (historical).
-pub fn is_live_status(status: SessionStatus) -> bool {
-    status != SessionStatus::Cold && status != SessionStatus::Killed
-}
-
-/// P0 `info --json` `live` semantics (spec-w8): [`is_live_status`] AND
-/// pid-alive-where-a-pid-exists. This is the field an outside consumer joins
-/// against for liveness annotation.
-///
-/// A pid of `None` or `0` means "no pid recorded" (e.g. ZmxOnly rows) — fall
-/// back to the status-only view there, the SAME convention as the verb layer's
-/// `resolve_or_die` liveness refinement (we never call a legitimately-live
-/// pid-less row dead). `pid_alive` is the injected `effects::is_pid_alive`
-/// seam (production passes it directly; tests inject).
-///
-/// Pinned arms: stale-idle-dead-pid → `false`; cold → `false` (regardless of
-/// pid); idle + alive pid → `true`; live status + no pid → `true`.
-pub fn is_live_with_pid(
-    status: SessionStatus,
-    pid: Option<i64>,
-    pid_alive: &dyn Fn(i32) -> bool,
-) -> bool {
-    is_live_status(status)
-        && match pid {
-            Some(p) if p != 0 => pid_alive(p as i32),
-            _ => true,
-        }
-}
+// The live/dead split moved to `quorum_core::model`, beside the [`SessionStatus`]
+// it matches on (qd/qw split). Both functions are pure 3-line matches on that enum
+// with ZERO provider and ZERO resolution knowledge — they are part of what the enum
+// MEANS, not part of target resolution — and both qd and qw need them, which makes
+// the `quorum-core` LEAF their home. Target resolution itself (the tiers below) is
+// qd's job and STAYS here.
+//
+// RE-EXPORTED so every `resolve::is_live_status` / `resolve::is_live_with_pid` call
+// site keeps resolving unchanged (`ls`, `adopt`, `send_unified`, `common`,
+// `lifecycle`, `adoption`) — including this module's own tier deciders and the
+// `is_live_with_pid` pin rows in the test module below, which reach them through
+// `use super::*`.
+pub use crate::model::{is_live_status, is_live_with_pid};
 
 /// Result of resolving a query against the session list (TS returns
 /// `Session | Session[] | null`).
@@ -322,7 +302,10 @@ pub fn resolve_session_with_liveness<'a>(
 /// keep their loud `Many`: two `acp/*` rows sharing an id (acp count != 1) and
 /// two plain rows sharing an id (acp count == 0) both stand down here.
 fn acp_floor_original<'a>(matched: &[&'a Session]) -> Option<&'a Session> {
-    let mut acp_rows = matched.iter().copied().filter(|s| s.provider.starts_with("acp/"));
+    let mut acp_rows = matched
+        .iter()
+        .copied()
+        .filter(|s| s.provider.starts_with("acp/"));
     let original = acp_rows.next()?;
     if acp_rows.next().is_some() || original.session_id.is_empty() {
         return None;
@@ -369,60 +352,13 @@ fn parse_int_prefix(s: &str) -> Option<i64> {
 // the provider minting fresh on fork (claude: `--fork-session`) and (b) the engine
 // never re-registering a LIVE id under a second row.
 //
-// The join collapses two same-id LIVE rows to one (keep-newest, join.rs §dedupe) —
-// CORRECT for the legitimate stale-old-pid + new-live-pid case (e.g. codex resume
-// leaves the old row), but it HIDES a genuine collision: two distinct ALIVE
-// processes sharing an id. `resolve_or_die`'s loud `Many` path never fires for an
-// id-collision because the dedup already starved it. This pure decider runs over
-// the RAW registry's ALIVE rows (the caller filters by `is_pid_alive`) so resume /
-// attach can refuse loudly instead of silently picking a survivor.
-
-/// A LIVE registry row reduced to the fields the collision preflight needs. The
-/// caller has ALREADY confirmed `pid` is alive (`is_pid_alive`) before building
-/// this — the decider is pure and trusts that filtering.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LiveRow {
-    pub session_id: String,
-    pub name: Option<String>,
-    pub pid: i64,
-}
-
-/// Verdict of the live-id-collision preflight. Pure over the ALIVE rows.
-#[derive(Debug, PartialEq)]
-pub enum LiveIdCollision {
-    /// No ALIVE row carries the target id — genuinely resumable (truly cold, or
-    /// only stale dead-pid rows remain). Proceed.
-    Resumable,
-    /// Exactly one ALIVE row carries the target id: the session is actually live
-    /// (the deduped join may report it Cold — the SEAM-3 misread). A resume would
-    /// spawn a SECOND process on the same id → caller refuses ("already alive, use
-    /// attach"). An attach-style verb may instead attach to this pid.
-    AlreadyAlive { pid: i64 },
-    /// ≥2 ALIVE rows carry the target id: a genuine duplicate-id collision. The
-    /// caller MUST refuse loudly and surface all of them — never silently pick.
-    Collision(Vec<LiveRow>),
-}
-
-/// Classify the target id against the ALIVE registry rows (caller pre-filters by
-/// `is_pid_alive`). An empty target id never matches (the empty-id case is handled
-/// by the resume verb's own "no session ID" guard, and ZmxOnly rows carry "").
-pub fn detect_live_id_collision(target_id: &str, alive: &[LiveRow]) -> LiveIdCollision {
-    if target_id.is_empty() {
-        return LiveIdCollision::Resumable;
-    }
-    let matches: Vec<LiveRow> = alive
-        .iter()
-        .filter(|r| r.session_id == target_id)
-        .cloned()
-        .collect();
-    match matches.len() {
-        0 => LiveIdCollision::Resumable,
-        1 => LiveIdCollision::AlreadyAlive {
-            pid: matches[0].pid,
-        },
-        _ => LiveIdCollision::Collision(matches),
-    }
-}
+// The live-id-collision preflight MOVED to `quorum_qw::resume` (qd→qw), with
+// `alive_rows_with_id` / `alive_pid_for_id`, when the acp resume choreography
+// went there: that core has to run the SAME two raw-registry preflights the
+// non-acp resume path runs, and a qw module cannot reach back into this crate
+// (qd → qw → core). The decider is pure, so the move was free; re-exported here
+// so every existing `dispatch::resolve::{...}` import is untouched.
+pub use quorum_qw::resume::{detect_live_id_collision, LiveIdCollision, LiveRow};
 
 #[cfg(test)]
 mod tests {
@@ -888,69 +824,6 @@ mod tests {
         assert_eq!(parse_int_prefix("abc"), None);
         assert_eq!(parse_int_prefix(""), None);
         assert_eq!(parse_int_prefix("-5x"), Some(-5));
-    }
-
-    // --- live-id-collision preflight (Pete feedback #6) ---
-
-    fn row(id: &str, name: &str, pid: i64) -> LiveRow {
-        LiveRow {
-            session_id: id.to_string(),
-            name: Some(name.to_string()),
-            pid,
-        }
-    }
-
-    #[test]
-    fn collision_two_alive_rows_same_id_is_surfaced() {
-        // THE BUG: two distinct ALIVE processes share one id. The deduped join
-        // hides this (collapses to one row); the preflight must surface BOTH so
-        // resume refuses loudly instead of silently picking a survivor.
-        let alive = vec![
-            row("orc-13-uuid", "qd-rust-orc-13", 100),
-            row("orc-13-uuid", "qd-rust-orc-13", 200),
-        ];
-        match detect_live_id_collision("orc-13-uuid", &alive) {
-            LiveIdCollision::Collision(rows) => {
-                assert_eq!(rows.len(), 2, "both colliding rows surfaced");
-                let pids: Vec<i64> = rows.iter().map(|r| r.pid).collect();
-                assert!(pids.contains(&100) && pids.contains(&200));
-            }
-            other => panic!("expected Collision, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn one_alive_row_same_id_is_already_alive() {
-        // The SEAM-3 misread: the join may report this session Cold (dedup of a
-        // stale row), but a live pid carries its id → it is actually alive.
-        let alive = vec![row("live-uuid", "worker", 777)];
-        assert_eq!(
-            detect_live_id_collision("live-uuid", &alive),
-            LiveIdCollision::AlreadyAlive { pid: 777 }
-        );
-    }
-
-    #[test]
-    fn no_alive_row_with_id_is_resumable() {
-        // Truly cold / only stale dead-pid rows (the caller filtered them out, so
-        // they never appear here) → genuinely resumable. The legitimate
-        // codex-resume-leaves-old-row case lands here (old pid dead → not alive).
-        let alive = vec![row("other-uuid", "elsewhere", 5)];
-        assert_eq!(
-            detect_live_id_collision("cold-uuid", &alive),
-            LiveIdCollision::Resumable
-        );
-    }
-
-    #[test]
-    fn empty_target_id_never_matches() {
-        // ZmxOnly rows carry session_id ""; an empty target must not collide with
-        // them (the resume verb's own empty-id guard handles the empty case).
-        let alive = vec![row("", "zmx-only", 9), row("", "zmx-only-2", 10)];
-        assert_eq!(
-            detect_live_id_collision("", &alive),
-            LiveIdCollision::Resumable
-        );
     }
 
     // --- R5-2 (red-team round 5): the acp-original + plain-twin pair --------

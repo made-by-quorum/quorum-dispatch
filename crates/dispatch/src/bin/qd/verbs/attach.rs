@@ -1,29 +1,43 @@
-//! `qd attach <session>` — the human "get me into this
-//! session" verb. Dispatches on the row's PROVIDER HOSTING first, then liveness:
+//! `qd attach <session>` — the human "get me into this session" verb.
 //!
-//!   - `Hosting::Daemon` (codex) → LOUD redirect (no terminal to attach), exit 1.
-//!   - `Hosting::MuxPane` (claude) → live → reuse the shared attach mechanic;
-//!     cold → AUTO-REVIVE (W1 phase 2) then attach the live pane. Revive FAILS →
-//!     the revive path's own loud error, exit 1.
-//!   - opencode → parked message (mirrors lifecycle.rs run_attach).
-//!   - unknown provider → `refuse_unknown_provider`.
+//! **This verb is the first production caller of the lane layer.** It resolves the
+//! target with qd's fuzzy resolver, derives the [`Lane`](quorum_qw::lane::Lane)
+//! from the row's provider + hosting, and then does exactly three things through
+//! [`LaneOps`]: `attach`, and on a cold session `wake` followed by `attach` again.
+//! Everything else in this file is rendering, or one of the three deliberate
+//! qd-side keeps listed below.
 //!
-//! W1 phase 2: the cold→auto-revive path is LIVE. `attach_resolved` returns the
-//! cold case to this caller as [`lifecycle::AttachOutcome::Cold`] (the shared fn no
-//! longer branches on the `verb` string); attach maps Cold to
-//! [`super::resume::revive_claude`] (detached revive-to-drivable) THEN a plain
-//! `mux.attach` of the now-live pane — the human "just works" path. `qd attach`
-//! is therefore the sole live human session-entry verb.
-
-use std::path::PathBuf;
+//! # What the lane replaced
+//!
+//! Three `AttachOutcome::Cold` arms, each ELEVEN lines long, differing only in
+//! which revive they called — codex-guarded, pi-guarded, claude fall-through —
+//! followed by the identical "print, build the mux, attach the handle, map the
+//! exit code" tail. [`LaneOps::wake`] routes all six revives on `(harness, mode)`
+//! itself, so the three arms are one call, and the routing is a total match rather
+//! than a guarded if-chain whose ordering was enforced by a comment.
+//!
+//! # What deliberately stays here
+//!
+//! - **The codex-daemon viewer.** [`LaneOps::attach`] answers `NotSupported` for
+//!   every daemon lane, and `07-lane-gaps.md` ruling J says that is intentional:
+//!   the viewer does not give the daemon a terminal, it opens a SECOND CLIENT on
+//!   its app server, which is a different operation and must not be promoted into
+//!   the contract. So the viewer is tried before the lane, and a row that cannot
+//!   host one falls through to the honest redirect.
+//! - **`--no-attach`** — revive to a persistent daemon and DO NOT attach. `wake`
+//!   covers the revive; the "already live, not attaching" report and the
+//!   claude-only guard are composed here.
+//! - The id-collision preflight, `reject_if_tombstoned`, the `invoked_connect`
+//!   telemetry, and every message.
 
 use clap::ArgMatches;
 
 use dispatch::model::{Session, SessionStatus};
+use quorum_qw::contract::{LaneError, LaneOps, SessionId};
+use quorum_qw::launch::RenderMode;
 
 use super::common;
 use super::lifecycle;
-use super::lifecycle::AttachOutcome;
 use super::resume;
 
 /// Append a content-free A6 invoked line, verb `connect`, for a SUCCESSFUL
@@ -44,8 +58,23 @@ fn invoked_connect(session: &Session) {
     }
 }
 
-/// `qd attach <session>` — resolve the row, then hand to the shared attach
-/// mechanic (provider dispatch + cold-vs-live). No `--json` (interactive verb).
+/// The row's display name — what every message in this file calls it by.
+fn display_name(session: &Session) -> &str {
+    session.name.as_deref().unwrap_or(&session.session_id)
+}
+
+/// Render a successful handoff's exit code, stamping telemetry on exit 0 only
+/// (A6 §3.4: one content-free `invoked` line on the SUCCESSFUL path; read paths
+/// emit nothing, and this verb never reads).
+fn attached(session: &Session, code: i32) -> i32 {
+    if code == 0 {
+        invoked_connect(session);
+    }
+    code
+}
+
+/// `qd attach <session>` — resolve the row, then hand to the lane. No `--json`
+/// (interactive verb).
 pub fn run(m: &ArgMatches) -> i32 {
     let query = m.get_one::<String>("session").expect("required by clap");
     // --no-attach (headless revive): revive a COLD session into a PERSISTENT,
@@ -56,6 +85,11 @@ pub fn run(m: &ArgMatches) -> i32 {
     // punch item 7: per-session render mode for the auto-revive path (flag >
     // render-default config > inline). A LIVE attach is unaffected — the
     // property is launch-time only.
+    //
+    // THIS is what `LaneOps::wake` takes as its `render` argument, and passing
+    // `RenderMode::default()` there instead would silently discard the user's
+    // `--alt-screen` / `--inline` / `render-default` — the exact defect the
+    // contract revision that added the parameter existed to fix.
     let render = common::resolve_render_mode(m, &dispatch::effects::RealEnv);
 
     // attach is the human "attach OR resume" verb, so it must be able to RESOLVE
@@ -85,11 +119,11 @@ pub fn run(m: &ArgMatches) -> i32 {
     let session = &session;
 
     // --no-attach: revive-to-persistent-daemon (or report already-live) and return
-    // 0 WITHOUT ever attaching a TTY. We branch BEFORE `attach_resolved` because
-    // that shared mechanic attaches a live pane INTERNALLY before returning — so
-    // honoring "do not attach" means never entering it for a live row. A COLD row
-    // (status Cold; Killed rows were rejected above) routes to the SAME
-    // `revive_claude` seam attach uses today, then we SKIP `mux.attach`.
+    // 0 WITHOUT ever attaching a TTY. We branch BEFORE the lane because the lane's
+    // job is precisely the handoff this flag refuses — honoring "do not attach"
+    // means never calling `attach` for a live row. A COLD row (status Cold; Killed
+    // rows were rejected above) routes to the SAME `revive_claude` seam the
+    // interactive path's `wake` reaches, then we SKIP the handoff.
     if no_attach {
         // PROVIDER GUARD: the --no-attach revive/report logic is claude-code-SHAPED
         // — `revive_claude` builds a `claude … server:relay --resume <sid>` argv, and
@@ -99,13 +133,13 @@ pub fn run(m: &ArgMatches) -> i32 {
         // one falsely reported "already live". Every claude-code row carries the
         // literal provider "claude-code" (model.rs: the join defaults absent-on-disk
         // to it); codex ("codex"), acp ("acp/*"), opencode, and unknown are all a
-        // DIFFERENT provider/hosting (see lifecycle::attach_resolved / kill.rs
+        // DIFFERENT provider/hosting (see the lane derivation below / kill.rs
         // dispatch). Refuse LOUDLY and return non-zero BEFORE the revive/report
         // logic — never proceed for a non-claude-code session.
         if session.provider != "claude-code" {
-            let name = session.name.as_deref().unwrap_or(&session.session_id);
             eprintln!(
-                "qd attach --no-attach: \"{name}\" is a {} session; --no-attach supports only claude-code sessions.",
+                "qd attach --no-attach: \"{}\" is a {} session; --no-attach supports only claude-code sessions.",
+                display_name(session),
                 session.provider
             );
             return 1;
@@ -116,12 +150,11 @@ pub fn run(m: &ArgMatches) -> i32 {
             session.status,
             SessionStatus::Idle | SessionStatus::Busy | SessionStatus::Shell
         ) {
-            let name = session.name.as_deref().unwrap_or(&session.session_id);
-            println!("\"{name}\" is already live (persistent); not attaching.");
+            println!("\"{}\" is already live (persistent); not attaching.", display_name(session));
             invoked_connect(session);
             return 0;
         }
-        return match resume::revive_claude(session, None, render, false) {
+        return match resume::revive_claude(session, None, render, false, "attach") {
             Ok(handle) => {
                 println!("Revived \"{}\" (persistent, no attach)", handle.zmx_name);
                 invoked_connect(session);
@@ -132,136 +165,218 @@ pub fn run(m: &ArgMatches) -> i32 {
         };
     }
 
-    match lifecycle::attach_resolved("attach", session) {
-        AttachOutcome::Done(code) => {
-            // A6 §3.4: one content-free `invoked` line, verb `connect`, on the
-            // SUCCESSFUL (exit-0) path only — mirrors the other verbs' best-effort
-            // pattern. Read paths (`qd ls`) emit nothing; this verb never reads.
-            if code == 0 {
-                invoked_connect(session);
-            }
-            code
+    // ADD-8 residual fix — live-id-collision PREFLIGHT over the RAW registry,
+    // SHARED with resume (Pete feedback #6). The deduped join collapses two same-id
+    // LIVE rows to one, so a bare `qd attach` would silently attach to the deduped
+    // survivor. We refuse a genuine ≥2-alive collision LOUDLY here (before the lane
+    // is even derived) so attach inherits the guard. A 1-alive session is NOT
+    // refused (refuse_id_collision returns None for the single-alive case → normal
+    // attach proceeds; we do NOT use alive_pid_for_id, which would block the
+    // legitimate single-live attach).
+    //
+    // It runs FIRST, exactly where `attach_resolved` ran it: a collision is a
+    // refusal to address the session at all, so it precedes every routing question.
+    let env = dispatch::effects::RealEnv;
+    let paths = match common::paths_from_home(&env) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    if let Some(code) = common::refuse_id_collision("attach", &session.session_id, &paths.sessions_dir)
+    {
+        return code;
+    }
+
+    // codex-interactive, use case 2: a LIVE daemon-hosted codex session CAN be
+    // attached after all — not by giving the daemon a terminal, but by opening a
+    // second client on it. `attach_codex_viewer` launches the codex TUI bound to
+    // this session's own app server (`codex --remote <endpoint> resume
+    // <thread-id>`), so a human can watch and type in the very thread an agent is
+    // driving, with nothing stopped and nothing converted.
+    //
+    // KEPT IN QD ON PURPOSE (ruling J): `LaneOps::attach` answers `NotSupported`
+    // for every daemon lane and must keep doing so — the viewer is a second client
+    // on a running server, not a terminal for a session that has none, and folding
+    // it into `attach` would make the contract claim daemon lanes are attachable.
+    //
+    // `None` means this row cannot host one (no endpoint, no thread id, or a
+    // provider with no such affordance) — those fall through to the lane, which
+    // answers `NotSupported`, and qd renders the honest redirect.
+    //
+    // NARROWED (2026-08-17): a `codex/app-server` row does NOT come through here.
+    // That lane's `LaneOps::attach` opens the same viewer, so letting this special
+    // case fire first would shadow the lane with a second implementation of its
+    // own defining feature — the drift bug the split exists to prevent. The case
+    // survives ONLY for `codex/daemon`, which has no attach of its own and would
+    // otherwise lose an affordance it has today. When the two are unified, this is
+    // the half to delete.
+    let app_server_lane = quorum_qw::lane_for(&session.provider, session.hosting.as_deref())
+        .is_some_and(|l| l.is_app_server());
+    if session.provider == "codex"
+        && !app_server_lane
+        && matches!(session.status, SessionStatus::Idle | SessionStatus::Busy)
+    {
+        if let Some(code) = lifecycle::attach_codex_viewer(session) {
+            return attached(session, code);
         }
-        // W1 phase 2: a COLD claude session auto-revives, then we attach the live pane.
+    }
+
+    // The lane, from the ROW's provider + hosting. `lane_for` is the drop-in for
+    // the `row_hosting(&session.provider, session.hosting.as_deref())` this verb
+    // used to spell out three times, and is deliberately STRICTER in two places
+    // (an unknown provider is refused outright; a harness claiming a topology it
+    // cannot have degrades to its structural default) — both pinned by
+    // `dispatch::lane`'s agreement test.
+    //
+    // `None` ⇒ genuinely unknown provider ⇒ the pre-existing loud refusal. It
+    // cannot return `None` for a provider `refuse_unknown_provider` waves through
+    // (`claude-code` / `opencode` both resolve a harness), so the fallback below is
+    // unreachable; it is spelled out rather than `unwrap`ed because an unreachable
+    // arm that panics is a worse answer than an unreachable arm that exits 1.
+    let Some(lane) = quorum_qw::lane_for(&session.provider, session.hosting.as_deref()) else {
+        return common::refuse_unknown_provider("attach", session).unwrap_or(1);
+    };
+
+    let ops = dispatch::lane::open(lane, &env, paths);
+    let id = SessionId(session.session_id.clone());
+
+    match ops.attach(&id) {
+        Ok(code) => attached(session, code),
+
+        // A daemon lane has no terminal of its own. The viewer above already had
+        // its chance, so this is the honest redirect — the SAME wording, from the
+        // SAME helper, as before.
+        Err(LaneError::NotSupported { .. }) => common::daemon_redirect(display_name(session)),
+
+        // The one interesting arm, and the whole point of the rewrite: a cold
+        // pane-hosted session auto-revives and we hand over the terminal. `wake`
+        // routes to the right revive for the lane — claude / codex TUI / pi TUI —
+        // so the three provider-guarded arms this used to need are one call.
+        Err(LaneError::Cold { .. }) => wake_then_attach(ops.as_ref(), &id, session, render),
+
+        // A row qd RESOLVED that the lane cannot ADDRESS. `row_for_id` is an exact,
+        // REGISTRY-keyed lookup, while the join also emits `ColdJsonl` rows — a
+        // claude transcript with no registry record behind it (a session run
+        // outside qd, or one whose row was removed). Those show up in `qd ls` and
+        // attach has always revived them, so reporting "no such session" for one
+        // would be a capability regression, not a cleanup.
         //
-        // codex-interactive PROVIDER GUARD (the same reasoning as the --no-attach
-        // guard above, now reachable): `attach_resolved` returns Cold for ANY
-        // pane-hosted row with no live pane, and since codex gained a pane lane
-        // that set is no longer claude-only. `revive_claude` builds a `claude …
-        // --resume <sid>` argv, so feeding it a codex thread id would launch
-        // claude against a rollout uuid it cannot read. Refuse LOUDLY instead of
-        // reviving into the wrong harness.
-        // codex-interactive: a stopped pane-hosted codex session revives into the
-        // SAME thread and we hand over the terminal — the claude cold-attach
-        // experience, for codex. `revive_codex_tui` carries the row's recorded
-        // thread id into `codex resume <id>`, so this reopens the conversation
-        // rather than starting a new one under the old name.
-        AttachOutcome::Cold
-            if session.provider == "codex"
-                && dispatch::provider::row_hosting(
-                    &session.provider,
-                    session.hosting.as_deref(),
-                ) == Some(dispatch::provider::Hosting::MuxPane) =>
-        {
-            match lifecycle::revive_codex_tui(session, render, "attach") {
-                Ok(handle) => {
-                    println!("Revived \"{}\"; attaching...", handle.zmx_name);
-                    let mux = match common::real_mux() {
-                        Ok(m) => m,
-                        Err(code) => return code,
-                    };
-                    match mux.attach(&handle.socket_dir, &handle.zmx_name) {
-                        Ok(code) => {
-                            if code == 0 {
-                                invoked_connect(session);
-                            }
-                            code
-                        }
-                        Err(e) => {
-                            eprintln!("qd attach: {e}");
-                            1
-                        }
-                    }
-                }
-                // revive_codex_tui already printed its own loud error.
-                Err(code) => code,
-            }
+        // Claude-only BY CONSTRUCTION, and guarded anyway: every other provider's
+        // registry-less cold rows are daemon-hosted (`codex_cold` / `pi_cold` /
+        // the opencode gather carry no `hosting` token, so `lane_for` gives them
+        // their harness default) and are answered `NotSupported` above, before
+        // this arm is reachable.
+        Err(LaneError::NotFound { .. }) if session.provider == "claude-code" => {
+            revive_outside_the_registry(session, render)
         }
-        // pi-interactive: the same cold-attach experience for pi. `revive_pi_tui`
-        // carries the row's recorded session id into `pi --session-id <id>`, which
-        // reopens that conversation rather than starting a new one under the old
-        // name.
-        AttachOutcome::Cold
-            if session.provider == "pi"
-                && dispatch::provider::row_hosting(
-                    &session.provider,
-                    session.hosting.as_deref(),
-                ) == Some(dispatch::provider::Hosting::MuxPane) =>
-        {
-            match lifecycle::revive_pi_tui(session, render, "attach") {
-                Ok(handle) => {
-                    println!("Revived \"{}\"; attaching...", handle.zmx_name);
-                    let mux = match common::real_mux() {
-                        Ok(m) => m,
-                        Err(code) => return code,
-                    };
-                    match mux.attach(&handle.socket_dir, &handle.zmx_name) {
-                        Ok(code) => {
-                            if code == 0 {
-                                invoked_connect(session);
-                            }
-                            code
-                        }
-                        Err(e) => {
-                            eprintln!("qd attach: {e}");
-                            1
-                        }
-                    }
-                }
-                // revive_pi_tui already printed its own loud error.
-                Err(code) => code,
-            }
-        }
-        // Any OTHER non-claude provider reaching Cold: `revive_claude` builds a
-        // `claude … --resume <sid>` argv, so feeding it a foreign session id would
-        // launch the wrong harness against an id it cannot read. Refuse LOUDLY.
-        AttachOutcome::Cold if session.provider != "claude-code" => {
-            let name = session.name.as_deref().unwrap_or(&session.session_id);
+
+        // Same shape as the arm above for a NON-claude row: `revive_claude` builds
+        // a `claude … --resume <sid>` argv, so feeding it a foreign session id
+        // would launch the wrong harness against an id it cannot read.
+        Err(LaneError::NotFound { .. }) => {
             eprintln!(
-                "qd attach: \"{name}\" is a stopped {} session and qd cannot revive it in \
+                "qd attach: \"{}\" is a stopped {} session and qd cannot revive it in \
                  place. Start a fresh one with \"qd start <name> --provider {}\".",
-                session.provider, session.provider
+                display_name(session),
+                session.provider,
+                session.provider
             );
             1
         }
-        AttachOutcome::Cold => match resume::revive_claude(session, None, render, false) {
-            Ok(handle) => {
-                // Attach the now-live pane with a plain mux.attach (NO fused
-                // `zmx attach … bash -lc` — the session is already up).
-                println!("Revived \"{}\"; attaching...", handle.zmx_name);
-                let mux = match common::real_mux() {
-                    Ok(m) => m,
-                    Err(code) => return code,
-                };
-                let dir: PathBuf = handle.socket_dir;
-                match mux.attach(&dir, &handle.zmx_name) {
-                    Ok(code) => {
-                        if code == 0 {
-                            invoked_connect(session);
-                        }
-                        code
-                    }
-                    Err(e) => {
-                        eprintln!("qd attach: {e}");
-                        1
-                    }
+
+        // Transport / Refused / the rest: the lane's own words, exit 1.
+        Err(e) => {
+            eprintln!("qd attach: {e}");
+            1
+        }
+    }
+}
+
+/// The cold path: revive, then hand over the terminal.
+///
+/// The revive is `LaneOps::wake`, which keeps the session's id and routes on
+/// `(harness, mode)`; the handoff is `LaneOps::attach` again, re-resolving by that
+/// same STABLE id so it targets the pane the revive just built rather than a
+/// handle captured before it existed.
+fn wake_then_attach(
+    ops: &dyn LaneOps,
+    id: &SessionId,
+    session: &Session,
+    render: RenderMode,
+) -> i32 {
+    // `None` for --cwd: `qd attach` has no such flag. It is `qd resume`'s, and
+    // passing an invented value here would relocate a session the user never
+    // asked to relocate.
+    if let Err(e) = ops.wake(id, render, None) {
+        // The lane's revives return TYPED errors and do not print — so the loud,
+        // `qd attach:`-prefixed line is emitted HERE, carrying the core's own
+        // message. Nothing is appended after it: a second pointer telling the user
+        // to re-run the command that just failed is circular on the human verb.
+        match e {
+            // ATTRIBUTION, restored. `detail` is the revive core's own message
+            // and `self_attributed` says whether it is already a complete line
+            // (an `ERROR: …` refusal, a resident's `qd resume: …` Display) — so
+            // the line a user reads is exactly the one `revive_claude(…,
+            // "attach")` printed before the lane existed. The lane used to stamp
+            // `qd wake:` on the body and wrap it in "could not revive claude
+            // session …", which named a command nobody can type.
+            //
+            // The core's `exit_code` rides on the error now; this verb keeps
+            // answering 1, which is what its handoff has always answered.
+            LaneError::WakeFailed {
+                detail,
+                self_attributed,
+                ..
+            } => {
+                if self_attributed {
+                    eprintln!("{detail}");
+                } else {
+                    eprintln!("qd attach: {detail}");
                 }
             }
-            // revive_claude already printed its own loud, `qd attach:`-prefixed
-            // error explaining the failure. Return that code as-is — do NOT append
-            // a second recovery pointer that merely tells the user to re-run
-            // the command that just failed — circular/confusing on the human verb.
-            Err(code) => code,
-        },
+            other => eprintln!("qd attach: {other}"),
+        }
+        return 1;
+    }
+    println!("Revived \"{}\"; attaching...", display_name(session));
+    match ops.attach(id) {
+        Ok(code) => attached(session, code),
+        Err(e) => {
+            eprintln!("qd attach: {e}");
+            1
+        }
+    }
+}
+
+/// Revive a claude row the REGISTRY does not carry — the `ColdJsonl` join branch.
+///
+/// The lane cannot do this and should not pretend to: `LaneOps` is addressed by
+/// [`SessionId`] and resolves it against the registry, which is what makes its
+/// lookup cheap and unambiguous. A transcript-only row has no registry record to
+/// find, so qd revives it from the row IT already holds — the one the join built —
+/// and then attaches the handle the revive returns directly, since there is still
+/// no registry row for a re-resolution to find.
+fn revive_outside_the_registry(session: &Session, render: RenderMode) -> i32 {
+    match resume::revive_claude(session, None, render, false, "attach") {
+        Ok(handle) => {
+            // Attach the now-live pane with a plain mux.attach (NO fused
+            // `zmx attach … bash -lc` — the session is already up).
+            println!("Revived \"{}\"; attaching...", handle.zmx_name);
+            let mux = match common::real_mux() {
+                Ok(m) => m,
+                Err(code) => return code,
+            };
+            match mux.attach(&handle.socket_dir, &handle.zmx_name) {
+                Ok(code) => attached(session, code),
+                Err(e) => {
+                    eprintln!("qd attach: {e}");
+                    1
+                }
+            }
+        }
+        // revive_claude already printed its own loud, `qd attach:`-prefixed error
+        // explaining the failure. Return that code as-is — do NOT append a second
+        // recovery pointer that merely tells the user to re-run the command that
+        // just failed — circular/confusing on the human verb.
+        Err(code) => code,
     }
 }

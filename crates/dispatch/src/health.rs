@@ -155,12 +155,7 @@ mod tests {
 
     const NOW: i64 = 1_000_000;
 
-    fn classify(
-        live: LifecycleState,
-        status: SessionStatus,
-        a: bool,
-        b: bool,
-    ) -> Health {
+    fn classify(live: LifecycleState, status: SessionStatus, a: bool, b: bool) -> Health {
         classify_health(live, status, a, b, DaemonLiveness::Up, true, NOW)
     }
 
@@ -169,7 +164,12 @@ mod tests {
     #[test]
     fn wedged_iff_both_signals_stale() {
         assert_eq!(
-            classify(LifecycleState::AliveWorking, SessionStatus::Busy, true, true),
+            classify(
+                LifecycleState::AliveWorking,
+                SessionStatus::Busy,
+                true,
+                true
+            ),
             Health::Wedged
         );
     }
@@ -192,7 +192,12 @@ mod tests {
     #[test]
     fn silent_but_within_tau_is_busy() {
         assert_eq!(
-            classify(LifecycleState::AliveWorking, SessionStatus::Busy, false, true),
+            classify(
+                LifecycleState::AliveWorking,
+                SessionStatus::Busy,
+                false,
+                true
+            ),
             Health::Busy
         );
     }
@@ -201,7 +206,12 @@ mod tests {
     #[test]
     fn fresh_busy_is_busy() {
         assert_eq!(
-            classify(LifecycleState::AliveWorking, SessionStatus::Busy, false, false),
+            classify(
+                LifecycleState::AliveWorking,
+                SessionStatus::Busy,
+                false,
+                false
+            ),
             Health::Busy
         );
     }

@@ -17,6 +17,27 @@ use crate::help;
 /// Version string (index.ts:32 — `program.version("0.1.0")`).
 pub const VERSION: &str = "0.1.0";
 
+/// The commit `qd` was built from, resolved by `build.rs` (live `git rev-parse`,
+/// else the `.build-sha` file the `build-sha` workflow keeps current, else
+/// `unknown`). 12 hex chars, or the literal `"unknown"` — never empty.
+pub const BUILD_SHA: &str = env!("QD_BUILD_SHA");
+
+/// What `qd --version` prints: `0.1.0 (92acbe35bc60)`.
+///
+/// The sha is APPENDED, never substituted. `VERSION` stays the bare `0.1.0`
+/// that every other surface renders (`qd doctor`'s `qd: 0.1.0`, the dry-run
+/// goldens' `binary: … (0.1.0)`), so this change is confined to the one line a
+/// human reads when asking which build they are running. When the sha could not
+/// be resolved the line degrades to exactly the old bytes — the TS-parity output
+/// (index.ts:32) is the floor, not a special case.
+pub fn version_line() -> String {
+    if BUILD_SHA == "unknown" {
+        VERSION.to_string()
+    } else {
+        format!("{VERSION} ({BUILD_SHA})")
+    }
+}
+
 /// Build the full clap command tree. Builder API per spec §2 (NOT derive).
 ///
 /// Layout choices: `disable_version_flag(false)` keeps `-V/--version`;
@@ -24,27 +45,45 @@ pub const VERSION: &str = "0.1.0";
 /// has no `help` subcommand). We map errors ourselves, so we suppress clap's own
 /// error/exit by using `try_get_matches_from` at the call site.
 pub fn build_cli() -> Command {
-    Command::new("qd")
+    let cmd = Command::new("qd")
         .about("Claude Sessions — manage Claude Code sessions")
         .version(VERSION)
-        // Top-level help is hand-written for commander-layout parity (H1, spec §2):
-        // `Usage: qd [options] [command]`, two-space command table, `ls|list` alias
-        // style, config/survey listed, spawn absent (sanctioned), bootstrap as the
-        // engine-only one-liner (harness-normalized per the orc ruling).
-        .override_help(help::TOP)
         // We render version/help text but map exits ourselves.
         .disable_help_subcommand(true)
         .subcommand_required(false)
         .arg_required_else_help(false)
         .allow_external_subcommands(false)
-        .subcommands(subcommands())
+        .subcommands(subcommands());
+    // FTUE punch R4: the top-level help is GENERATED from the tree we just
+    // built, not hand-written. It keeps the commander layout (H1, spec §2:
+    // `Usage: qd [options] [command]`, two-space table, `ls|list` alias style)
+    // — only the SOURCE of the bytes changed. The predecessor was a
+    // `help::TOP` const, and it had drifted: three live unhidden verbs
+    // (`dispositions`, `mark`, `delivery:recover`) were missing from it.
+    // `subcommands()` below is now the one place a verb is declared, so that
+    // drift cannot recur. See `help::render_top`.
+    let top = help::render_top(&cmd, false);
+    cmd.override_help(top)
 }
 
-/// All 26 verb registrations + aliases (spec §3 + qb spec-cli §11). The default
+/// Every verb registration + aliases (spec §3 + qb spec-cli §11). The default
 /// action (bare `qd` → ls) is handled in `verbs::dispatch` when no subcommand
 /// matched.
+///
+/// FTUE punch R14 — the ONE hide site. The human CLI is four session verbs plus
+/// the first-run `setup` (`help::SESSION_VERBS` / `help::FIRST_RUN_VERBS`);
+/// everything else is `.hide(true)` HERE, in one pass over the list, rather
+/// than sprinkled across thirty builder functions where it would be one more
+/// thing to forget. `.hide(true)` is a HELP-ONLY property in clap: it drops the
+/// row from the rendered table and changes nothing about parsing, aliases,
+/// conflicts, or dispatch. So the hidden verbs are hidden-but-WORKING (the C1
+/// resolution): `qd send:relay …` behaves exactly as before, and
+/// `qd --help-all` prints the whole surface.
 fn subcommands() -> Vec<Command> {
-    vec![
+    let human_facing = |name: &str| {
+        help::SESSION_VERBS.contains(&name) || help::FIRST_RUN_VERBS.contains(&name)
+    };
+    let registrations = vec![
         cmd_ls(),
         cmd_attach(),
         cmd_connect(),
@@ -68,12 +107,22 @@ fn subcommands() -> Vec<Command> {
         cmd_info(),
         cmd_gc(),
         cmd_init(),
+        cmd_setup(),
         cmd_bootstrap(),
         cmd_update(),
         cmd_ping(),
         cmd_mark(),
         cmd_delivery_recover(),
-    ]
+        cmd_config(),
+        cmd_survey(),
+    ];
+    registrations
+        .into_iter()
+        .map(|c| {
+            let hide = !human_facing(c.get_name());
+            c.hide(hide)
+        })
+        .collect()
 }
 
 // --- 1. ls (alias list), index.ts:36-44 ---
@@ -180,14 +229,19 @@ fn cmd_connect() -> Command {
 // --- 3. resume <session>, commands/lifecycle.ts:400-404 ---
 fn cmd_resume() -> Command {
     Command::new("resume")
-        .about("Resume a dead session (wraps in zmx by default)")
+        .about("Resume a cold session to a drivable state (agent-facing)")
         .override_help(help::RESUME)
         .arg(positional("session"))
-        // commander `--no-zmx`/`--no-attach` register negatable booleans; we model
-        // them as plain long flags (the parse surface the corpus checks).
-        .arg(long_flag("no-zmx", "Don't wrap in a zmx session"))
+        // FTUE punch R1 (zmx retirement): `--no-zmx` and `--zmx-name` are GONE.
+        // They were parked flags — registered so TS-era scripted callers would
+        // not break, read by NOTHING (`verbs/resume.rs` revives through the
+        // shared `revive_claude` seam, which derives its own mux name), and
+        // documented in `qd resume --help` as if they worked. A flag that is
+        // advertised and inert is worse than an absent one, so removing them
+        // makes `qd resume --no-zmx` an honest `error: unknown option`.
+        // `--no-attach` stays: commander registers it as a negatable boolean and
+        // we model it as a plain long flag (the parse surface the corpus checks).
         .arg(long_flag("no-attach", "Start detached (background)"))
-        .arg(long_val("zmx-name", "name", "Custom zmx session name"))
         // F3 cwd override (commands/lifecycle.ts:404): `--cwd <dir>` lets a resume
         // relocate when the recorded project dir is gone (the reality-check escape).
         .arg(long_val(
@@ -259,7 +313,7 @@ fn cmd_kill() -> Command {
 // of the old cmd_new, including the claudeArgs trailing-var-arg semantics.
 fn cmd_start() -> Command {
     Command::new("start")
-        .about("Create a new session (Claude Code in zmx, or OpenCode server)")
+        .about("Create a new session (claude-code by default; also codex, pi, opencode)")
         .override_help(help::START)
         .arg(positional("name"))
         // claudeArgs...: variadic trailing positional. `trailing_var_arg(true)`
@@ -352,15 +406,85 @@ fn cmd_start() -> Command {
         // codex-interactive / pi-interactive: for `--provider codex` and
         // `--provider pi` this flag does not merely override the auto-detect
         // (which never routed either) — it selects a different TOPOLOGY: that
-        // harness's own TUI in an attachable mux pane instead of its daemon.
-        // Explicit-only by design, so a bare `qd start --provider codex|pi` keeps
-        // spawning the daemon for every caller.
+        // harness's PLAIN TUI in an attachable mux pane. It used to be described
+        // as "instead of its daemon", which stopped being true when the defaults
+        // moved: it is now instead of `codex/app-server` and instead of
+        // `pi/extension`, and for pi the difference is specifically the absence
+        // of the control channel — the same pane, minus the socket.
         .arg(long_flag(
             "interactive",
             "Force the interactive native-TUI launch (override the driver auto-detect). \
-             With --provider codex or pi, runs that harness's TUI in an attachable pane \
-             instead of its daemon",
+             With --provider codex or pi, runs that harness's plain TUI in an attachable \
+             pane (no control channel)",
         ))
+        // pi/extension: pi's alone. Like --interactive it runs pi's own TUI in an
+        // attachable pane; unlike --interactive the pane also carries a control
+        // channel, so the same session can be driven by `qd send` while a human
+        // types into it. Conflicts with --interactive because the two name
+        // different lanes and silently preferring one would be the create-routing
+        // bug `Lane::for_create` exists to prevent.
+        //
+        // It now names pi's DEFAULT lane, so passing it is redundant — and it is
+        // kept anyway, deliberately (16-default-lane-switch.md §5): existing
+        // scripts pass it, it costs nothing, and "the default" and "this lane"
+        // are two different requests even when they currently agree.
+        .arg(
+            long_flag(
+                "extension",
+                "pi only (and pi's default lane): run pi's TUI in an attachable pane WITH \
+                 the quorum control channel, so `qd send` drives the same session a human \
+                 is typing into",
+            )
+            .conflicts_with("interactive")
+            .conflicts_with("headless"),
+        )
+        // `--daemon`: the ESCAPE HATCH, and the reason the default flip did not
+        // delete two lanes (16-default-lane-switch.md, DEC-2/DEC-4). A bare
+        // `qd start --provider codex|pi` used to mean "the headless resident";
+        // it now means `codex/app-server` / `pi/extension`, and this flag is the
+        // ONLY spelling left for `codex/daemon` and `pi/daemon` — the lanes CI,
+        // a bare ssh session and any no-mux context need, because neither
+        // default can be built without a mux pane (pi) or wants one.
+        //
+        // Conflicts with --interactive and --extension for the same reason those
+        // two conflict with each other: each names a different lane, and
+        // silently preferring one would be the create-routing bug
+        // `Lane::for_create` exists to prevent. It does NOT conflict with
+        // --headless, which is claude's driver selector and inert on the two
+        // harnesses this flag is for.
+        .arg(
+            long_flag(
+                "daemon",
+                "codex/pi only: run the headless daemon rather than the default lane \
+                 (codex/app-server, pi/extension) — no mux pane, no TTY, for CI and ssh",
+            )
+            .conflicts_with("interactive")
+            .conflicts_with("extension")
+            .conflicts_with("app-server"),
+        )
+        // `--app-server`: codex's default, nameable. It exists for the same
+        // reason `--extension` survives now that it names pi's default (§5 of
+        // 16-default-lane-switch.md): "the default is app-server" and
+        // "app-server is requestable by name" are two different assertions, and
+        // a script that means the second should not have to rely on the first.
+        // The defaults just moved once; a caller that pins the lane explicitly
+        // is unaffected the next time they move.
+        //
+        // Without it `CreateTopology::AppServer` has no producer at all —
+        // `Default` resolves to app-server for codex through
+        // `create_default_mode`, and the wire's `lane` field does not route
+        // through `for_create` — so the variant would be a documented no-op,
+        // which is exactly the dead-arm shape this enum exists to avoid.
+        .arg(
+            long_flag(
+                "app-server",
+                "codex only: run the app-server lane explicitly (the default) — a \
+                 headless resident a human can still \"qd attach\" a viewer onto",
+            )
+            .conflicts_with("interactive")
+            .conflicts_with("extension")
+            .conflicts_with("daemon"),
+        )
         // Lifecycle-collapse A-1 (spec D4): machine-readable identity output.
         // Exit 0 with --json guarantees the printed id is BOUND (A-2); on a
         // bind-arm failure a machine-readable error object rides stdout.
@@ -416,7 +540,7 @@ fn cmd_new() -> Command {
 // --- 6. reconcile, commands/lifecycle.ts:813-816 ---
 fn cmd_reconcile() -> Command {
     Command::new("reconcile")
-        .about("Detect and repair drift across registry / zmx / process (idempotent)")
+        .about("Detect and repair drift across registry / mux / process (idempotent)")
         .override_help(help::RECONCILE)
         .arg(long_flag(
             "dry-run",
@@ -494,7 +618,7 @@ fn cmd_send() -> Command {
 // --- 8. send:pty <session> <message>, commands/send.ts:52-58 ---
 fn cmd_send_pty() -> Command {
     Command::new("send:pty")
-        .about("(compatibility/debug) Force a zmx PTY send")
+        .about("(compatibility/debug) Force a PTY send (types into the session pane)")
         .override_help(help::SEND_PTY)
         .arg(positional("session"))
         .arg(positional("message"))
@@ -666,7 +790,7 @@ fn cmd_gc() -> Command {
 }
 
 // --- 16b. init <shell> (NET-NEW, 2026-06-09 ruling) — print the shell
-// integration (claude + codex wrappers + zmx-dir pin) for eval'ing from the rc
+// integration (claude + codex wrappers + mux socket-dir pin) for eval'ing from the rc
 // file. The eval-init pattern: the wrapper body ships in the binary so it can
 // never drift from what `qd new` accepts (the retired TS bootstrap baked the
 // wrapper INTO the rc file, and it fossilized).
@@ -681,10 +805,19 @@ fn cmd_init() -> Command {
 // Description NOT ported verbatim (A3 spec §3 row 17 ruling, carried into A5 §4.1
 // + named divergence §9 item 5): the TS text carries scope-banned tokens AND A5
 // redefines engine bootstrap as ENGINE-ONLY — the qb-owned deploy steps are
-// dropped; the engine creates ~/.quorum/dispatch + ~/.quorum/dispatch/state + the zmx notice + the ADD-5
+// dropped; the engine creates ~/.quorum/dispatch + ~/.quorum/dispatch/state + the mux notice + the ADD-5
 // relay offer. This one-line engine-only description still matches the now-REAL
 // A5 behavior; matrix row = plan-sanctioned parity exclusion (flagged to
 // orchestrator). The banned-token list lives in the spec, never in this repo.
+fn cmd_setup() -> Command {
+    Command::new("setup")
+        .about("First run: set up qd's install layout and wire up your agent harnesses")
+        .arg(long_flag("fix", "Apply the fixes for everything detected (non-interactive)"))
+        .arg(long_flag("json", "Report the detected setup state as JSON"))
+        .arg(flag("yes", 'y', "Assume yes for every prompt"))
+        .override_help(help::SETUP)
+}
+
 fn cmd_bootstrap() -> Command {
     // The relay env seam is an OPERATOR surface with visibility parity (orc-3
     // ruling relay-1780662680745-11 condition c): documented together here, in
@@ -758,6 +891,34 @@ fn cmd_delivery_recover() -> Command {
         ))
 }
 
+// --- 24/25. config + survey — HAND-PARSED, dispatched pre-clap in main.rs ---
+// These two bypass clap entirely (TS `allowUnknownOption` + `allowExcessArguments`
+// + `helpOption(false)`; `main::run` intercepts them before `build_cli` is even
+// consulted, so their exit conventions survive). They are registered here ANYWAY,
+// hidden and arg-swallowing, for exactly one reason: R4 generates the command
+// table by walking `subcommands()`, so a verb that is not declared here cannot
+// appear in `qd --help-all`. `config` is how a human stores their OpenRouter key
+// — it has to be findable. The registration is inert: nothing can reach clap
+// dispatch for these names.
+fn cmd_config() -> Command {
+    Command::new("config")
+        .about(
+            "Manage stored secrets (e.g. `qd config set openrouter-key`). Tiered backend: \
+             macOS Keychain when available, else a chmod-600 ~/.quorum/dispatch/config.toml. \
+             Env var overrides.",
+        )
+        .arg(trailing_passthrough())
+}
+
+fn cmd_survey() -> Command {
+    Command::new("survey")
+        .about(
+            "Fan an artifact out to a panel of LLMs via OpenRouter and collect responses \
+             (the panel-review / panel-ideate mechanic). Requires OPENROUTER_API_KEY.",
+        )
+        .arg(trailing_passthrough())
+}
+
 // --- arg builder helpers ---
 
 /// A required positional argument.
@@ -806,7 +967,9 @@ fn long_val_default(
 /// reached regardless of what was typed.
 fn trailing_passthrough() -> Arg {
     Arg::new("rest")
-        .value_name("rest")
+        // The value name is what the generated help table renders (`[args...]`),
+        // so it names what a caller types, not the bucket it lands in.
+        .value_name("args")
         .num_args(0..)
         .trailing_var_arg(true)
         .allow_hyphen_values(true)
@@ -824,26 +987,18 @@ fn trailing_passthrough() -> Arg {
 ///
 /// The exact strings live in ONE place ([`commander_message`]); the M3 corpus
 /// refines them with a single-site edit.
-/// Number of top-level positional operands in argv (used to render commander's
-/// "too many arguments" count for an unknown verb). Everything from the first
-/// non-flag token onward is an operand to the default `ls` action; we count
-/// tokens that are not options (don't start with `-`). `argv[0]` is the program
-/// name and is skipped.
-fn count_operands(argv: &[String]) -> usize {
-    argv.iter().skip(1).filter(|a| !a.starts_with('-')).count()
-}
-
-/// Map a clap parse error, given the full argv (so an unknown-verb error renders
-/// commander's "too many arguments" count, per the M3 corpus — there is NO
-/// "unknown command" in TS qd: a bad first token is an excess operand to the
-/// default ls action).
+///
+/// Map a clap parse error, given the full argv (the unknown-verb arm names the
+/// token the user actually typed, so it needs argv when clap's context is empty).
 pub fn map_clap_error_with_argv(e: clap::Error, argv: &[String]) -> i32 {
     match e.kind() {
         // commander's `.version("0.1.0")` prints JUST the version string (TS
         // `qd --version` → "0.1.0"); clap would prepend the bin name ("qd 0.1.0").
-        // Print the bare version for parity (index.ts:32), exit 0.
+        // We keep that shape — no bin-name prefix — and append the build sha
+        // (`version_line`), so the answer to "which build is this?" is in the
+        // one place people already look. Exit 0.
         ErrorKind::DisplayVersion => {
-            println!("{VERSION}");
+            println!("{}", version_line());
             0
         }
         ErrorKind::DisplayHelp | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
@@ -851,11 +1006,17 @@ pub fn map_clap_error_with_argv(e: clap::Error, argv: &[String]) -> i32 {
             0
         }
         ErrorKind::InvalidSubcommand => {
-            // Unknown top-level verb → default ls action receives N excess operands
-            // (corpus 32-* / coordinator correction): commander prints
-            // `error: too many arguments. Expected 0 arguments but got N.` exit 1.
-            let n = count_operands(argv);
-            eprintln!("error: too many arguments. Expected 0 arguments but got {n}.");
+            // FTUE punch R7 — a mistyped verb SAYS SO. This arm used to re-render
+            // the typo as commander's `error: too many arguments. Expected 0
+            // arguments but got N.`, on the TS-parity reasoning that there is no
+            // "unknown command" in TS qd: a bad first token was an excess operand
+            // to the default `ls` action, so an argument-COUNT error was the
+            // faithful port. R7 overrode that corpus phrasing deliberately —
+            // faithful or not, telling someone who typed `qd lss` that they
+            // passed too many arguments describes qd's internals instead of their
+            // mistake, and gives them nothing to do next. Exit 1 is unchanged.
+            eprintln!("error: unknown command '{}'", unknown_verb_token(&e, argv));
+            eprintln!("Run `qd --help` for the list of commands.");
             1
         }
         _ => {
@@ -874,9 +1035,9 @@ fn commander_message(e: &clap::Error) -> String {
     let ctx = |k: ContextKind| e.get(k).map(|v| v.to_string());
 
     match e.kind() {
-        // NB: there is NO "unknown command" in TS qd (corpus correction): a bad
-        // top-level verb is an excess operand handled in `map_clap_error_with_argv`,
-        // never reaching here.
+        // NB: an unknown top-level verb never reaches here — R7 owns it in
+        // `map_clap_error_with_argv`, which has the argv it needs to name the
+        // token.
 
         // Unknown option (commander: "error: unknown option '<--x>'").
         ErrorKind::UnknownArgument => {
@@ -908,6 +1069,23 @@ fn commander_message(e: &clap::Error) -> String {
             format!("error: {stripped}")
         }
     }
+}
+
+/// The token a user typed where a verb belonged. clap normally hands it over in
+/// the error context; if it ever does not, fall back to the first non-option
+/// token in argv (`argv[0]` is the program name and is skipped) — which is the
+/// same token clap rejected, because an unknown SUBCOMMAND error can only be
+/// raised by the first operand.
+fn unknown_verb_token(e: &clap::Error, argv: &[String]) -> String {
+    e.get(clap::error::ContextKind::InvalidSubcommand)
+        .map(|v| v.to_string())
+        .or_else(|| {
+            argv.iter()
+                .skip(1)
+                .find(|a| !a.starts_with('-'))
+                .cloned()
+        })
+        .unwrap_or_default()
 }
 
 /// clap renders a missing-required context value as e.g. `<session>` or a list;
@@ -1096,8 +1274,11 @@ mod tests {
         assert!(help::SEND_PTY.contains("Compatibility/debug control"));
         assert!(help::SEND_RELAY.contains("Compatibility/debug control"));
         assert!(help::SEND_HTTP.contains("Compatibility/debug control"));
-        assert!(help::TOP.contains("send <session> <message>"));
-        assert!(help::TOP.contains("(compatibility/debug) Force a zmx PTY send"));
+        // The carriers are off the human table now (R14) but still described in
+        // the generated full surface, with the compat/debug label intact.
+        let all = help::render_top(&build_cli(), true);
+        assert!(all.contains("send [options] [session] [message]"));
+        assert!(all.contains("(compatibility/debug) Force a PTY send"));
     }
 
     #[test]
@@ -1403,16 +1584,26 @@ mod tests {
         assert_eq!(msg, "error: unknown option '--nosuchopt'");
     }
 
+    /// FTUE punch R7: a mistyped verb is reported as a MISTYPED VERB. The old
+    /// contract rendered it as commander's "too many arguments. Expected 0
+    /// arguments but got N." (the typo read as an excess operand to the default
+    /// `ls` action) — an argument-count error for a spelling mistake. The
+    /// operand count is gone; the token the user typed is what gets named, and
+    /// the number of trailing words never changes the message.
     #[test]
-    fn unknown_verb_renders_too_many_arguments() {
-        // No "unknown command" anywhere (corpus correction): a bad first token is
-        // an excess operand → "too many arguments. Expected 0 arguments but got N.".
-        let argv: Vec<String> = vec!["qd".into(), "nosuchverb".into()];
-        let e = build_cli().try_get_matches_from(&argv).unwrap_err();
-        assert_eq!(e.kind(), ErrorKind::InvalidSubcommand);
-        // The full mapping (exit 1 + the counted message) is exercised via
-        // map_clap_error_with_argv; here assert the operand count.
-        assert_eq!(count_operands(&argv), 1);
+    fn unknown_verb_says_unknown_command() {
+        for argv in [
+            vec!["qd".to_string(), "lss".to_string()],
+            vec!["qd".to_string(), "lss".to_string(), "wk".to_string()],
+            vec!["qd".to_string(), "lss".to_string(), "wk".to_string(), "x".to_string()],
+        ] {
+            let e = build_cli().try_get_matches_from(&argv).unwrap_err();
+            assert_eq!(e.kind(), ErrorKind::InvalidSubcommand, "{argv:?}");
+            // The message names the typed token, not a count of what followed it.
+            assert_eq!(unknown_verb_token(&e, &argv), "lss", "{argv:?}");
+            // Exit 1 (commander), never clap's 2.
+            assert_eq!(map_clap_error_with_argv(e, &argv), 1, "{argv:?}");
+        }
     }
 
     #[test]
@@ -1430,6 +1621,28 @@ mod tests {
     #[test]
     fn version_string_is_0_1_0() {
         assert_eq!(VERSION, "0.1.0");
+    }
+
+    #[test]
+    fn build_sha_is_twelve_hex_or_unknown() {
+        assert!(
+            BUILD_SHA == "unknown"
+                || (BUILD_SHA.len() == 12 && BUILD_SHA.chars().all(|c| c.is_ascii_hexdigit())),
+            "build.rs emitted an unusable sha: {BUILD_SHA:?}"
+        );
+    }
+
+    #[test]
+    fn version_line_appends_the_sha_and_degrades_to_bare_version() {
+        let line = version_line();
+        // The bare version is always the prefix — every consumer that scraped
+        // `qd --version` for "0.1.0" still finds it at the front.
+        assert!(line.starts_with(VERSION), "{line:?}");
+        if BUILD_SHA == "unknown" {
+            assert_eq!(line, VERSION);
+        } else {
+            assert_eq!(line, format!("0.1.0 ({BUILD_SHA})"));
+        }
     }
 
     #[test]
@@ -1460,10 +1673,19 @@ mod tests {
             "info",
             "gc",
             "init",
+            "setup",
             "bootstrap",
             "update",
             "ping",
             "mark",
+            // The three the hand-maintained `help::TOP` had silently dropped —
+            // the drift FTUE punch R4 exists to make impossible.
+            "dispositions",
+            "delivery:recover",
+            // Hand-parsed pre-clap (main.rs), registered here so R4's generated
+            // table can list them.
+            "config",
+            "survey",
         ] {
             assert!(names.contains(&v), "missing verb {v}");
         }
@@ -1478,8 +1700,10 @@ mod tests {
         // delivery/receipt contract (D1) added `delivery:recover`, the
         // dead-dangling recovery verb; the qd–qf transition W5 added
         // `dispositions`, the stateless JSONL read verb; config + survey are
-        // dispatched pre-clap (hand-parsed).
-        assert_eq!(names.len(), 28);
+        // dispatched pre-clap (hand-parsed) but registered here so R4's
+        // generated help table can see them; the first-run `setup` verb (R15)
+        // is the 29th.
+        assert_eq!(names.len(), 31);
     }
 
     #[test]
@@ -1523,9 +1747,166 @@ mod tests {
         assert!(help::ADOPT.contains("(renamed — use qd wrap)"));
         assert!(help::WRAP.contains("Wrap a live bare Claude Code session"));
         assert!(!help::WRAP.contains("(renamed"));
-        // The hidden alias stays out of the top-level command list, like `connect`.
-        assert!(help::TOP.contains("wrap <session>"));
-        assert!(!help::TOP.contains("adopt <session>"));
+        // R14: `wrap` and its `adopt` alias are BOTH off the human table now —
+        // the four session verbs plus `setup` are the whole of it. Both are still
+        // registered, so both are on the `--help-all` surface.
+        let cmd = build_cli();
+        let top = help::render_top(&cmd, false);
+        assert!(!top.contains("wrap ["), "wrap is off the human table: {top}");
+        assert!(!top.contains("adopt ["), "adopt is off the human table: {top}");
+        let all = help::render_top(&cmd, true);
+        assert!(all.contains("wrap [options] <session>"));
+        assert!(all.contains("adopt [options] <session>"));
+    }
+
+    // === FTUE punch R14 / R4 — the generated, four-verb help surface ===
+
+    /// R14: `qd --help` shows EXACTLY the four session verbs plus the first-run
+    /// `setup`, and `setup` gets its own section so it never reads as a fifth
+    /// session verb. Everything else is hidden.
+    ///
+    /// MUTATION EVIDENCE: unhiding any other verb reds the "Other commands:"
+    /// assert (the safety-net section it would land in); dropping a name from
+    /// `help::SESSION_VERBS` reds its row assert.
+    #[test]
+    fn visible_help_table_is_the_four_session_verbs_plus_setup() {
+        use std::collections::BTreeSet;
+        let cmd = build_cli();
+        let visible: BTreeSet<&str> = cmd
+            .get_subcommands()
+            .filter(|c| !c.is_hide_set())
+            .map(|c| c.get_name())
+            .collect();
+        let expected: BTreeSet<&str> = ["ls", "start", "stop", "attach", "setup"].into();
+        assert_eq!(visible, expected, "the human surface is R14's five rows");
+
+        let top = help::render_top(&cmd, false);
+        // Commander layout is preserved — only the source of the bytes changed.
+        assert!(top.starts_with("Usage: qd [options] [command]\n"));
+        assert!(top.contains("  -h, --help"));
+        assert!(top.contains("display help for command"));
+        // The four session verbs, in the ruled order, with the `ls|list` alias style.
+        let commands = top.split("\nCommands:\n").nth(1).expect("a Commands: section");
+        let rows: Vec<&str> = commands.lines().take_while(|l| l.starts_with("  ")).collect();
+        assert_eq!(rows.len(), 4, "exactly four session verbs: {rows:?}");
+        assert!(rows[0].starts_with("  ls|list [options]"), "{rows:?}");
+        assert!(rows[1].starts_with("  start [options] <name> [claudeArgs...]"), "{rows:?}");
+        assert!(rows[2].starts_with("  stop [options] <session>"), "{rows:?}");
+        assert!(rows[3].starts_with("  attach [options] <session>"), "{rows:?}");
+        // setup is its own section, not a fifth command row.
+        assert!(top.contains("\nFirst run:\n  setup [options]"), "{top}");
+        // No hidden verb leaks a row, and the safety-net section stays empty.
+        for hidden in ["send:relay", "reconcile", "dispositions", "bootstrap", "gc ", "wrap ["] {
+            assert!(!top.contains(hidden), "{hidden} must not be on the human table: {top}");
+        }
+        assert!(!top.contains("Other commands:"), "nothing unclassified is visible: {top}");
+        // The hidden surface is DISCOVERABLE (R4 trailer).
+        assert!(top.contains("qd --help-all"), "{top}");
+    }
+
+    /// R14's load-bearing claim: `.hide(true)` is help-only. Every hidden verb
+    /// still PARSES to itself, so dispatch is untouched — hidden-but-working.
+    /// The table is checked against the built tree, so a newly hidden verb fails
+    /// here until someone adds its parse check.
+    #[test]
+    fn hidden_verbs_still_parse_and_reach_their_own_dispatch_arm() {
+        use std::collections::BTreeSet;
+        let invocations: [(&str, &[&str]); 26] = [
+            ("connect", &["connect", "wk"]),
+            ("resume", &["resume", "wk"]),
+            ("wrap", &["wrap", "wk"]),
+            ("adopt", &["adopt", "wk"]),
+            ("kill", &["kill", "wk"]),
+            ("new", &["new", "wk"]),
+            ("reconcile", &["reconcile"]),
+            ("send", &["send", "wk", "hi"]),
+            ("send:pty", &["send:pty", "wk", "hi"]),
+            ("send:relay", &["send:relay", "wk", "hi"]),
+            ("send:http", &["send:http", "wk", "hi"]),
+            ("relay", &["relay"]),
+            ("whoami", &["whoami"]),
+            ("dispositions", &["dispositions"]),
+            ("wait", &["wait", "wk"]),
+            ("live", &["live"]),
+            ("info", &["info", "wk"]),
+            ("gc", &["gc"]),
+            ("init", &["init", "bash"]),
+            ("bootstrap", &["bootstrap"]),
+            ("update", &["update"]),
+            ("ping", &["ping"]),
+            ("mark", &["mark", "wk", "{}"]),
+            ("delivery:recover", &["delivery:recover"]),
+            ("config", &["config"]),
+            ("survey", &["survey"]),
+        ];
+        let covered: BTreeSet<&str> = invocations.iter().map(|(n, _)| *n).collect();
+        let cmd = build_cli();
+        let hidden: BTreeSet<&str> = cmd
+            .get_subcommands()
+            .filter(|c| c.is_hide_set())
+            .map(|c| c.get_name())
+            .collect();
+        assert_eq!(
+            hidden, covered,
+            "every hidden verb needs a parse check here (hide must not break dispatch)"
+        );
+        for (name, argv) in invocations {
+            let m = parse(argv).unwrap_or_else(|e| panic!("hidden verb {name} must parse: {e}"));
+            assert_eq!(m.subcommand_name(), Some(name), "{argv:?}");
+        }
+        // Aliases survive hiding too (`qd name` still routes to whoami).
+        assert_eq!(parse(&["name"]).unwrap().subcommand_name(), Some("whoami"));
+    }
+
+    /// R4: `qd --help-all` prints the SAME generated table with the hidden rows
+    /// restored — so the full surface stays reachable and no registration can go
+    /// undocumented. This is the assertion the hand-maintained `help::TOP` could
+    /// not make: it had silently lost `dispositions`, `mark` and
+    /// `delivery:recover`.
+    #[test]
+    fn help_all_lists_every_registered_verb() {
+        let cmd = build_cli();
+        let all = help::render_top(&cmd, true);
+        for sub in cmd.get_subcommands() {
+            let name = sub.get_name();
+            assert!(
+                all.contains(&format!("\n  {name}")),
+                "--help-all must carry a row for {name}:\n{all}"
+            );
+        }
+        for lost in ["dispositions [options]", "mark <session> <payload>", "delivery:recover [options]"] {
+            assert!(all.contains(lost), "the drifted-away verbs are listed: {all}");
+        }
+        assert!(all.contains("Hidden from `qd --help`"), "{all}");
+        // The pointer is for the SHORT help only — this IS the full surface.
+        assert!(!all.contains("prints the full surface"), "{all}");
+    }
+
+    /// R1: no `qd` help surface names the retired mux, and `resume`'s two dead
+    /// parked flags are gone from the parser as well as from the help.
+    #[test]
+    fn zmx_is_gone_from_the_help_surface_and_the_resume_flags() {
+        let all = help::render_top(&build_cli(), true);
+        assert!(!all.to_lowercase().contains("zmx"), "{all}");
+        for (surface, text) in [
+            ("RESUME", help::RESUME),
+            ("START", help::START),
+            ("RECONCILE", help::RECONCILE),
+            ("SEND_PTY", help::SEND_PTY),
+            ("ATTACH", help::ATTACH),
+        ] {
+            assert!(
+                !text.to_lowercase().contains("zmx"),
+                "{surface} help still names zmx: {text}"
+            );
+        }
+        // The parked flags refuse instead of pretending to work.
+        for argv in [vec!["resume", "wk", "--no-zmx"], vec!["resume", "wk", "--zmx-name", "z"]] {
+            let e = parse(&argv).unwrap_err();
+            assert_eq!(e.kind(), ErrorKind::UnknownArgument, "{argv:?}");
+        }
+        // --no-attach is NOT a zmx flag and still parses.
+        assert!(parse(&["resume", "wk", "--no-attach"]).is_ok());
     }
 
     #[test]

@@ -20,9 +20,7 @@
 use std::collections::BTreeMap;
 
 use super::evidence::{CommissioningHeader, RunArtifactBuilder, RunMode};
-use super::ids::{
-    AggregationVersion, BoxId, CellId, Lane, LaneScope, RunId, RunKind,
-};
+use super::ids::{AggregationVersion, BoxId, CellId, Lane, LaneScope, RunId, RunKind};
 use super::journal::{
     AuthorityJournal, ContextActivationKind, DesignationBasisKind, DesignationEvent,
     DesignationKind, TerminalState,
@@ -41,16 +39,39 @@ const RUNNER: &str = "runner-1 (bbbb2222)";
 
 fn base_battery() -> Battery {
     let cells = vec![
-        Cell { id: CellId("d1.g".into()), dimension: Dimension::D1Lifecycle, title: "gating d1".into() },
-        Cell { id: CellId("d6.g".into()), dimension: Dimension::D6FailureHonesty, title: "gating d6".into() },
-        Cell { id: CellId("d3.n".into()), dimension: Dimension::D3BusyQueue, title: "non-gating d3".into() },
-        Cell { id: CellId("d5.n".into()), dimension: Dimension::D5Transcript, title: "non-gating d5".into() },
+        Cell {
+            id: CellId("d1.g".into()),
+            dimension: Dimension::D1Lifecycle,
+            title: "gating d1".into(),
+        },
+        Cell {
+            id: CellId("d6.g".into()),
+            dimension: Dimension::D6FailureHonesty,
+            title: "gating d6".into(),
+        },
+        Cell {
+            id: CellId("d3.n".into()),
+            dimension: Dimension::D3BusyQueue,
+            title: "non-gating d3".into(),
+        },
+        Cell {
+            id: CellId("d5.n".into()),
+            dimension: Dimension::D5Transcript,
+            title: "non-gating d5".into(),
+        },
     ];
     let mut applicability = BTreeMap::new();
     for c in ["d1.g", "d6.g", "d3.n", "d5.n"] {
-        applicability.insert((Lane::Pi.provider_id().to_string(), c.to_string()), Applicability::Required);
+        applicability.insert(
+            (Lane::Pi.provider_id().to_string(), c.to_string()),
+            Applicability::Required,
+        );
     }
-    Battery { cells, applicability, aggregation_version: AggregationVersion("agg-v1".into()) }
+    Battery {
+        cells,
+        applicability,
+        aggregation_version: AggregationVersion("agg-v1".into()),
+    }
 }
 
 /// A clean W=3 all-Pass corpus on the designated box → GA. The base every
@@ -59,7 +80,9 @@ fn ga_corpus() -> Corpus {
     let battery = base_battery();
     let mut journal = AuthorityJournal::new();
     journal.activate_context(ContextActivationKind::Manifest(battery.manifest_digest()));
-    journal.activate_context(ContextActivationKind::AggregationVersion(battery.aggregation_version.clone()));
+    journal.activate_context(ContextActivationKind::AggregationVersion(
+        battery.aggregation_version.clone(),
+    ));
     journal.designate(DesignationEvent {
         kind: DesignationKind::Designate,
         lane: Lane::Pi,
@@ -90,28 +113,49 @@ fn ga_corpus() -> Corpus {
             )
             .unwrap();
         let launch = journal
-            .start_run_at(&tuple.run, RUNNER, "2026-07-14T00:00:00Z", &mut || format!("nonce-{nonce}"))
+            .start_run_at(&tuple.run, RUNNER, "2026-07-14T00:00:00Z", &mut || {
+                format!("nonce-{nonce}")
+            })
             .unwrap();
         let header = CommissioningHeader::new(tuple, launch);
         let mut b = RunArtifactBuilder::new(header, "2026-07-14T00:00:00Z");
         let mut applicable = Vec::new();
         for cell in &battery.cells {
             let cid = cell.id.clone();
-            b.observe(Lane::Pi, cid.clone(), RunMode::Automated, b.runner().pass(vec!["cmd".into()], "observed state"));
+            b.observe(
+                Lane::Pi,
+                cid.clone(),
+                RunMode::Automated,
+                b.runner().pass(vec!["cmd".into()], "observed state"),
+            );
             applicable.push((Lane::Pi, cid));
         }
         let artifact = b.build(&applicable).unwrap();
         let digest = artifact.content_digest();
         journal
-            .mark_terminal(&RunId(run.into()), TerminalState::Completed { artifact_digest: digest.clone() })
+            .mark_terminal(
+                &RunId(run.into()),
+                TerminalState::Completed {
+                    artifact_digest: digest.clone(),
+                },
+            )
             .unwrap();
         index.push(IndexedArtifact { digest, artifact });
     }
-    let head = ArtifactIndex { artifacts: index.clone() }.head_digest();
+    let head = ArtifactIndex {
+        artifacts: index.clone(),
+    }
+    .head_digest();
     journal.publish_snapshot(head, SNAP);
     let mut commits = BTreeMap::new();
     commits.insert(COMMIT.to_string(), CommitContext { battery });
-    Corpus { journal, index: ArtifactIndex { artifacts: index }, attributions: Vec::new(), commits, roles: RoleRegistry::default() }
+    Corpus {
+        journal,
+        index: ArtifactIndex { artifacts: index },
+        attributions: Vec::new(),
+        commits,
+        roles: RoleRegistry::default(),
+    }
 }
 
 /// Re-serialize the journal, mutate it as raw JSON, deserialize back — the way
@@ -125,7 +169,10 @@ fn mutate_journal(corpus: &mut Corpus, f: impl FnOnce(&mut serde_json::Value)) {
 /// Re-anchor the snapshot to the current index head (after mutating the index).
 fn reanchor(corpus: &mut Corpus) {
     mutate_journal(corpus, |v| {
-        v["entries"].as_array_mut().unwrap().retain(|e| e["body"]["event"] != "publication-snapshot");
+        v["entries"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|e| e["body"]["event"] != "publication-snapshot");
     });
     let head = corpus.index.head_digest();
     corpus.journal.publish_snapshot(head, SNAP);
@@ -160,7 +207,11 @@ fn assert_computes(corpus: &Corpus) {
 #[test]
 fn positive_wellformed_corpus_computes_ga() {
     let comp = compute_tier(&ga_corpus(), Lane::Pi, COMMIT, &TierParams::gated());
-    assert_eq!(comp.verdict, TierVerdict::Ga, "a well-formed all-Pass W=3 corpus computes GA");
+    assert_eq!(
+        comp.verdict,
+        TierVerdict::Ga,
+        "a well-formed all-Pass W=3 corpus computes GA"
+    );
 }
 
 // ---- REGISTRATION gaps ----------------------------------------------------
@@ -207,7 +258,9 @@ fn r3_register_only_completed_below_cutoff_rejected() {
     // index → terminal completeness fails (never a quietly smaller window).
     let mut c = ga_corpus();
     // Drop run-1's artifact from the index; its completion still cites the digest.
-    c.index.artifacts.retain(|a| a.artifact.header.tuple.run.0 != "run-1");
+    c.index
+        .artifacts
+        .retain(|a| a.artifact.header.tuple.run.0 != "run-1");
     reanchor(&mut c);
     // Whatever the exact site (v4 completeness or v2 cited-digest), it must be
     // INVALID_EVIDENCE — the window is not quietly shrunk to skip run-1.
@@ -229,11 +282,27 @@ fn r6a_conflicting_terminal_transition_rejected_at_append() {
     let mut journal = AuthorityJournal::new();
     journal.activate_context(ContextActivationKind::Manifest(battery.manifest_digest()));
     journal
-        .commission_run(RunId("run-x".into()), LaneScope::one(Lane::Pi), BoxId(BOX.into()), COMMIT,
-            battery.manifest_digest(), battery.aggregation_version.clone(), RunKind::Evidence, COORD, &mut || "tok-x".into())
+        .commission_run(
+            RunId("run-x".into()),
+            LaneScope::one(Lane::Pi),
+            BoxId(BOX.into()),
+            COMMIT,
+            battery.manifest_digest(),
+            battery.aggregation_version.clone(),
+            RunKind::Evidence,
+            COORD,
+            &mut || "tok-x".into(),
+        )
         .unwrap();
     // No run-start → cancellation-pre-execution is a VALID first terminal.
-    journal.mark_terminal(&RunId("run-x".into()), TerminalState::CancelledPreExecution { reason: "first".into() }).unwrap();
+    journal
+        .mark_terminal(
+            &RunId("run-x".into()),
+            TerminalState::CancelledPreExecution {
+                reason: "first".into(),
+            },
+        )
+        .unwrap();
     // A SECOND terminal transition for the same run is refused (one-way
     // disposition; corrections are new events, never overwrites — N-1).
     let second = journal.mark_terminal(
@@ -244,7 +313,10 @@ fn r6a_conflicting_terminal_transition_rejected_at_append() {
         }),
     );
     let err = second.expect_err("a second terminal transition must be refused");
-    assert!(err.contains("already terminal"), "expected an already-terminal refusal, got {err:?}");
+    assert!(
+        err.contains("already terminal"),
+        "expected an already-terminal refusal, got {err:?}"
+    );
 }
 
 #[test]
@@ -273,14 +345,26 @@ fn r6c_honest_voided_entry_validates() {
     let mut c = ga_corpus();
     let battery = base_battery();
     c.journal
-        .commission_run(RunId("run-void".into()), LaneScope::one(Lane::Pi), BoxId(BOX.into()), COMMIT,
-            battery.manifest_digest(), battery.aggregation_version.clone(), RunKind::Evidence, COORD, &mut || "tok-void".into())
+        .commission_run(
+            RunId("run-void".into()),
+            LaneScope::one(Lane::Pi),
+            BoxId(BOX.into()),
+            COMMIT,
+            battery.manifest_digest(),
+            battery.aggregation_version.clone(),
+            RunKind::Evidence,
+            COORD,
+            &mut || "tok-void".into(),
+        )
         .unwrap();
     c.journal
-        .mark_terminal(&RunId("run-void".into()), TerminalState::Voided(super::journal::VoidRuling {
-            authorized_by: "void-seat (cccc3333)".into(),
-            no_artifact_evidence: "registrar confirms no artifact was produced".into(),
-        }))
+        .mark_terminal(
+            &RunId("run-void".into()),
+            TerminalState::Voided(super::journal::VoidRuling {
+                authorized_by: "void-seat (cccc3333)".into(),
+                no_artifact_evidence: "registrar confirms no artifact was produced".into(),
+            }),
+        )
         .unwrap();
     reanchor(&mut c);
     assert_computes(&c);
@@ -292,12 +376,26 @@ fn add_cancelled_run(corpus: &mut Corpus, run: &str) {
     let battery = base_battery();
     corpus
         .journal
-        .commission_run(RunId(run.into()), LaneScope::one(Lane::Pi), BoxId(BOX.into()), COMMIT,
-            battery.manifest_digest(), battery.aggregation_version.clone(), RunKind::Evidence, COORD, &mut || format!("tok-{run}"))
+        .commission_run(
+            RunId(run.into()),
+            LaneScope::one(Lane::Pi),
+            BoxId(BOX.into()),
+            COMMIT,
+            battery.manifest_digest(),
+            battery.aggregation_version.clone(),
+            RunKind::Evidence,
+            COORD,
+            &mut || format!("tok-{run}"),
+        )
         .unwrap();
     corpus
         .journal
-        .mark_terminal(&RunId(run.into()), TerminalState::CancelledPreExecution { reason: "box unavailable before any cell executed".into() })
+        .mark_terminal(
+            &RunId(run.into()),
+            TerminalState::CancelledPreExecution {
+                reason: "box unavailable before any cell executed".into(),
+            },
+        )
         .unwrap();
     reanchor(corpus);
 }
@@ -311,8 +409,16 @@ fn r12_cited_artifact_is_consumed() {
     // ga_corpus already cites every artifact via its completion events — so the
     // positive-control is that all three cited artifacts are consumed into GA.
     let comp = compute_tier(&ga_corpus(), Lane::Pi, COMMIT, &TierParams::gated());
-    assert_eq!(comp.verdict, TierVerdict::Ga, "cited artifacts are consumed into the computed window");
-    assert_eq!(comp.window.len(), 3, "all three cited runs are in the window (consumed, not invisible)");
+    assert_eq!(
+        comp.verdict,
+        TierVerdict::Ga,
+        "cited artifacts are consumed into the computed window"
+    );
+    assert_eq!(
+        comp.window.len(),
+        3,
+        "all three cited runs are in the window (consumed, not invisible)"
+    );
 }
 
 // ---- ASSEMBLY-BINDING gap (r13b) ------------------------------------------
@@ -404,9 +510,15 @@ fn p1_index_head_differs_from_snapshot_attested_digest_rejected() {
     // equals the true index head → v7 limb 2, in isolation.
     let mut c = ga_corpus();
     mutate_journal(&mut c, |v| {
-        v["entries"].as_array_mut().unwrap().retain(|e| e["body"]["event"] != "publication-snapshot");
+        v["entries"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|e| e["body"]["event"] != "publication-snapshot");
     });
-    c.journal.publish_snapshot(super::ids::ArtifactDigest("sha256:wrong-attested-head".into()), SNAP);
+    c.journal.publish_snapshot(
+        super::ids::ArtifactDigest("sha256:wrong-attested-head".into()),
+        SNAP,
+    );
     assert_invalid(&c, "does not equal the snapshot's attested digest");
 }
 
@@ -426,7 +538,10 @@ fn exercise_kind_run_is_foreclosed_from_the_window() {
         "an Exercise-kind run must be foreclosed from the window (R5-O3), window={:?}",
         with_ex.window
     );
-    assert_eq!(base.window, with_ex.window, "the Exercise run leaves the window unchanged (foreclosed, not counted)");
+    assert_eq!(
+        base.window, with_ex.window,
+        "the Exercise run leaves the window unchanged (foreclosed, not counted)"
+    );
 }
 
 /// Append a COMPLETED Exercise-kind run with a full Pass grid + artifact.
@@ -434,22 +549,52 @@ fn add_completed_exercise_run(corpus: &mut Corpus, run: &str) {
     let battery = base_battery();
     let tuple = corpus
         .journal
-        .commission_run(RunId(run.into()), LaneScope::one(Lane::Pi), BoxId(BOX.into()), COMMIT,
-            battery.manifest_digest(), battery.aggregation_version.clone(), RunKind::Exercise, COORD, &mut || format!("tok-{run}"))
+        .commission_run(
+            RunId(run.into()),
+            LaneScope::one(Lane::Pi),
+            BoxId(BOX.into()),
+            COMMIT,
+            battery.manifest_digest(),
+            battery.aggregation_version.clone(),
+            RunKind::Exercise,
+            COORD,
+            &mut || format!("tok-{run}"),
+        )
         .unwrap();
-    let launch = corpus.journal.start_run_at(&tuple.run, RUNNER, "2026-07-14T12:00:00Z", &mut || format!("nonce-{run}")).unwrap();
+    let launch = corpus
+        .journal
+        .start_run_at(&tuple.run, RUNNER, "2026-07-14T12:00:00Z", &mut || {
+            format!("nonce-{run}")
+        })
+        .unwrap();
     let header = CommissioningHeader::new(tuple, launch);
     let mut b = RunArtifactBuilder::new(header, "2026-07-14T12:00:00Z");
     let mut applicable = Vec::new();
     for cell in &battery.cells {
         let cid = cell.id.clone();
-        b.observe(Lane::Pi, cid.clone(), RunMode::Automated, b.runner().pass(vec!["cmd".into()], "observed"));
+        b.observe(
+            Lane::Pi,
+            cid.clone(),
+            RunMode::Automated,
+            b.runner().pass(vec!["cmd".into()], "observed"),
+        );
         applicable.push((Lane::Pi, cid));
     }
     let artifact = b.build(&applicable).unwrap();
     let digest = artifact.content_digest();
-    corpus.journal.mark_terminal(&RunId(run.into()), TerminalState::Completed { artifact_digest: digest.clone() }).unwrap();
-    corpus.index.artifacts.push(IndexedArtifact { digest, artifact });
+    corpus
+        .journal
+        .mark_terminal(
+            &RunId(run.into()),
+            TerminalState::Completed {
+                artifact_digest: digest.clone(),
+            },
+        )
+        .unwrap();
+    corpus
+        .index
+        .artifacts
+        .push(IndexedArtifact { digest, artifact });
     reanchor(corpus);
 }
 
@@ -462,47 +607,94 @@ fn flip_corpus(n_brano: usize) -> (Corpus, Vec<String>) {
     let battery = base_battery();
     let mut journal = AuthorityJournal::new();
     journal.activate_context(ContextActivationKind::Manifest(battery.manifest_digest()));
-    journal.activate_context(ContextActivationKind::AggregationVersion(battery.aggregation_version.clone()));
+    journal.activate_context(ContextActivationKind::AggregationVersion(
+        battery.aggregation_version.clone(),
+    ));
     journal.designate(DesignationEvent {
-        kind: DesignationKind::Designate, lane: Lane::Pi, box_id: BoxId(BOX.into()),
+        kind: DesignationKind::Designate,
+        lane: Lane::Pi,
+        box_id: BoxId(BOX.into()),
         basis_kind: Some(DesignationBasisKind::GreaterRunnability),
-        policy_basis: "greater runnability".into(), rationale: "base designation".into(),
-        authorized_by: "designation-seat (dddd4444)".into(), timestamp: "2026-07-13T00:00:00Z".into(),
+        policy_basis: "greater runnability".into(),
+        rationale: "base designation".into(),
+        authorized_by: "designation-seat (dddd4444)".into(),
+        timestamp: "2026-07-13T00:00:00Z".into(),
     });
     journal.designate(DesignationEvent {
-        kind: DesignationKind::PendingReplacement, lane: Lane::Pi, box_id: BoxId("brano".into()),
+        kind: DesignationKind::PendingReplacement,
+        lane: Lane::Pi,
+        box_id: BoxId("brano".into()),
         basis_kind: Some(DesignationBasisKind::GreaterRunnability),
-        policy_basis: "greater runnability".into(), rationale: "pending replacement".into(),
-        authorized_by: "designation-seat (dddd4444)".into(), timestamp: "2026-07-13T06:00:00Z".into(),
+        policy_basis: "greater runnability".into(),
+        rationale: "pending replacement".into(),
+        authorized_by: "designation-seat (dddd4444)".into(),
+        timestamp: "2026-07-13T06:00:00Z".into(),
     });
     let mut index = Vec::new();
     let mut brano_runs = Vec::new();
     for i in 0..n_brano {
         let run = format!("brano-run-{i}");
         let tuple = journal
-            .commission_run(RunId(run.clone()), LaneScope::one(Lane::Pi), BoxId("brano".into()), COMMIT,
-                battery.manifest_digest(), battery.aggregation_version.clone(), RunKind::Evidence, COORD, &mut || format!("tok-{run}"))
+            .commission_run(
+                RunId(run.clone()),
+                LaneScope::one(Lane::Pi),
+                BoxId("brano".into()),
+                COMMIT,
+                battery.manifest_digest(),
+                battery.aggregation_version.clone(),
+                RunKind::Evidence,
+                COORD,
+                &mut || format!("tok-{run}"),
+            )
             .unwrap();
-        let launch = journal.start_run_at(&tuple.run, RUNNER, "2026-07-14T00:00:00Z", &mut || format!("nonce-{run}")).unwrap();
+        let launch = journal
+            .start_run_at(&tuple.run, RUNNER, "2026-07-14T00:00:00Z", &mut || {
+                format!("nonce-{run}")
+            })
+            .unwrap();
         let header = CommissioningHeader::new(tuple, launch);
         let mut b = RunArtifactBuilder::new(header, "2026-07-14T00:00:00Z");
         let mut applicable = Vec::new();
         for cell in &battery.cells {
             let cid = cell.id.clone();
-            b.observe(Lane::Pi, cid.clone(), RunMode::Automated, b.runner().pass(vec!["cmd".into()], "observed"));
+            b.observe(
+                Lane::Pi,
+                cid.clone(),
+                RunMode::Automated,
+                b.runner().pass(vec!["cmd".into()], "observed"),
+            );
             applicable.push((Lane::Pi, cid));
         }
         let artifact = b.build(&applicable).unwrap();
         let digest = artifact.content_digest();
-        journal.mark_terminal(&RunId(run.clone()), TerminalState::Completed { artifact_digest: digest.clone() }).unwrap();
+        journal
+            .mark_terminal(
+                &RunId(run.clone()),
+                TerminalState::Completed {
+                    artifact_digest: digest.clone(),
+                },
+            )
+            .unwrap();
         index.push(IndexedArtifact { digest, artifact });
         brano_runs.push(run);
     }
-    let head = ArtifactIndex { artifacts: index.clone() }.head_digest();
+    let head = ArtifactIndex {
+        artifacts: index.clone(),
+    }
+    .head_digest();
     journal.publish_snapshot(head, SNAP);
     let mut commits = BTreeMap::new();
     commits.insert(COMMIT.to_string(), CommitContext { battery });
-    (Corpus { journal, index: ArtifactIndex { artifacts: index }, attributions: Vec::new(), commits, roles: RoleRegistry::default() }, brano_runs)
+    (
+        Corpus {
+            journal,
+            index: ArtifactIndex { artifacts: index },
+            attributions: Vec::new(),
+            commits,
+            roles: RoleRegistry::default(),
+        },
+        brano_runs,
+    )
 }
 
 #[test]
@@ -512,20 +704,35 @@ fn d4_promotion_derives_at_the_wth_run_terminal_ordinal_exactly() {
     // Wth eligible run's terminal-completion ordinal EXACTLY. Pin it, + 2-reader.
     let (c, brano) = flip_corpus(3);
     let comp = compute_tier(&c, Lane::Pi, COMMIT, &TierParams::gated());
-    assert_eq!(comp.active_box.as_deref(), Some("brano"), "at W the promotion flips the active box to brano");
+    assert_eq!(
+        comp.active_box.as_deref(),
+        Some("brano"),
+        "at W the promotion flips the active box to brano"
+    );
     let wth = &brano[2];
     let jv = serde_json::to_value(&c.journal).unwrap();
-    let wth_terminal_ord = jv["entries"].as_array().unwrap().iter()
-        .find(|e| e["body"]["event"] == "terminal" && e["body"]["run"].as_str() == Some(wth.as_str()))
+    let wth_terminal_ord = jv["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| {
+            e["body"]["event"] == "terminal" && e["body"]["run"].as_str() == Some(wth.as_str())
+        })
         .and_then(|e| e["ordinal"].as_u64());
-    assert!(wth_terminal_ord.is_some(), "the Wth brano run has a terminal-completion event");
+    assert!(
+        wth_terminal_ord.is_some(),
+        "the Wth brano run has a terminal-completion event"
+    );
     assert_eq!(
         comp.promotion_ordinal, wth_terminal_ord,
         "the promotion must derive AT the Wth run's terminal-completion ordinal, exactly (not merely is_some)"
     );
     // Two independent readers derive the identical computation (byte-identical replay).
     let comp2 = compute_tier(&c, Lane::Pi, COMMIT, &TierParams::gated());
-    assert_eq!(comp, comp2, "two independent readers derive the identical promotion");
+    assert_eq!(
+        comp, comp2,
+        "two independent readers derive the identical promotion"
+    );
 }
 
 // ---- PUBLICATION historical byte-identity (p2 gap) ------------------------
@@ -548,11 +755,41 @@ fn p2_historical_rendering_reproduces_byte_identically() {
     // historical rendering (legality + banner are covered there; byte-match is not).
     let current = ga_corpus();
     let mut history = PublicationHistory::default();
-    publish_tier_document(&current, COMMIT, &TierParams::gated(), PublicationMode::Current, &registrar_of(&current), &mut history).unwrap();
-    let doc1 = publish_tier_document(&current, COMMIT, &TierParams::gated(), PublicationMode::Historical, &registrar_of(&current), &mut history).unwrap();
-    let doc2 = publish_tier_document(&current, COMMIT, &TierParams::gated(), PublicationMode::Historical, &registrar_of(&current), &mut history).unwrap();
-    assert!(doc1.contains("HISTORICAL RENDERING"), "the historical rendering carries its banner");
-    assert_eq!(doc1, doc2, "the historical rendering reproduces BYTE-IDENTICALLY across two renders (R6-5)");
+    publish_tier_document(
+        &current,
+        COMMIT,
+        &TierParams::gated(),
+        PublicationMode::Current,
+        &registrar_of(&current),
+        &mut history,
+    )
+    .unwrap();
+    let doc1 = publish_tier_document(
+        &current,
+        COMMIT,
+        &TierParams::gated(),
+        PublicationMode::Historical,
+        &registrar_of(&current),
+        &mut history,
+    )
+    .unwrap();
+    let doc2 = publish_tier_document(
+        &current,
+        COMMIT,
+        &TierParams::gated(),
+        PublicationMode::Historical,
+        &registrar_of(&current),
+        &mut history,
+    )
+    .unwrap();
+    assert!(
+        doc1.contains("HISTORICAL RENDERING"),
+        "the historical rendering carries its banner"
+    );
+    assert_eq!(
+        doc1, doc2,
+        "the historical rendering reproduces BYTE-IDENTICALLY across two renders (R6-5)"
+    );
 }
 
 // ---- DESIGNATION race (d1) + stale-ref (d2) -------------------------------
@@ -567,37 +804,72 @@ fn push_completed_run(
     tok_n: u64,
 ) {
     let tuple = journal
-        .commission_run(RunId(run.into()), LaneScope::one(Lane::Pi), BoxId(box_name.into()), COMMIT,
-            battery.manifest_digest(), battery.aggregation_version.clone(), RunKind::Evidence, COORD, &mut || format!("tok-{tok_n}"))
+        .commission_run(
+            RunId(run.into()),
+            LaneScope::one(Lane::Pi),
+            BoxId(box_name.into()),
+            COMMIT,
+            battery.manifest_digest(),
+            battery.aggregation_version.clone(),
+            RunKind::Evidence,
+            COORD,
+            &mut || format!("tok-{tok_n}"),
+        )
         .unwrap();
-    let launch = journal.start_run_at(&tuple.run, RUNNER, "2026-07-14T00:00:00Z", &mut || format!("nonce-{tok_n}")).unwrap();
+    let launch = journal
+        .start_run_at(&tuple.run, RUNNER, "2026-07-14T00:00:00Z", &mut || {
+            format!("nonce-{tok_n}")
+        })
+        .unwrap();
     let header = CommissioningHeader::new(tuple, launch);
     let mut b = RunArtifactBuilder::new(header, "2026-07-14T00:00:00Z");
     let mut applicable = Vec::new();
     for cell in &battery.cells {
         let cid = cell.id.clone();
-        b.observe(Lane::Pi, cid.clone(), RunMode::Automated, b.runner().pass(vec!["cmd".into()], "observed"));
+        b.observe(
+            Lane::Pi,
+            cid.clone(),
+            RunMode::Automated,
+            b.runner().pass(vec!["cmd".into()], "observed"),
+        );
         applicable.push((Lane::Pi, cid));
     }
     let artifact = b.build(&applicable).unwrap();
     let digest = artifact.content_digest();
-    journal.mark_terminal(&RunId(run.into()), TerminalState::Completed { artifact_digest: digest.clone() }).unwrap();
+    journal
+        .mark_terminal(
+            &RunId(run.into()),
+            TerminalState::Completed {
+                artifact_digest: digest.clone(),
+            },
+        )
+        .unwrap();
     index.push(IndexedArtifact { digest, artifact });
 }
 
 fn designate(journal: &mut AuthorityJournal, kind: DesignationKind, box_name: &str, ts: &str) {
     journal.designate(DesignationEvent {
-        kind, lane: Lane::Pi, box_id: BoxId(box_name.into()),
+        kind,
+        lane: Lane::Pi,
+        box_id: BoxId(box_name.into()),
         basis_kind: Some(DesignationBasisKind::GreaterRunnability),
-        policy_basis: "greater runnability".into(), rationale: "designation".into(),
-        authorized_by: "designation-seat (dddd4444)".into(), timestamp: ts.into(),
+        policy_basis: "greater runnability".into(),
+        rationale: "designation".into(),
+        authorized_by: "designation-seat (dddd4444)".into(),
+        timestamp: ts.into(),
     });
 }
 
 fn wrap_corpus(journal: AuthorityJournal, index: Vec<IndexedArtifact>, battery: Battery) -> Corpus {
     let mut commits = BTreeMap::new();
     commits.insert(COMMIT.to_string(), CommitContext { battery });
-    Corpus { journal, index: ArtifactIndex { artifacts: index }, attributions: Vec::new(), commits, roles: RoleRegistry::default() }
+    Corpus {
+        journal,
+        index: ArtifactIndex { artifacts: index },
+        attributions: Vec::new(),
+        commits,
+        roles: RoleRegistry::default(),
+    }
 }
 
 #[test]
@@ -609,19 +881,42 @@ fn d1_runs_land_on_the_correct_side_of_the_pending_boundary() {
     let battery = base_battery();
     let mut journal = AuthorityJournal::new();
     journal.activate_context(ContextActivationKind::Manifest(battery.manifest_digest()));
-    journal.activate_context(ContextActivationKind::AggregationVersion(battery.aggregation_version.clone()));
-    designate(&mut journal, DesignationKind::Designate, BOX, "2026-07-13T00:00:00Z");
+    journal.activate_context(ContextActivationKind::AggregationVersion(
+        battery.aggregation_version.clone(),
+    ));
+    designate(
+        &mut journal,
+        DesignationKind::Designate,
+        BOX,
+        "2026-07-13T00:00:00Z",
+    );
     let mut index = Vec::new();
     push_completed_run(&mut journal, &mut index, &battery, "lima-pre", BOX, 0); // before pending
-    designate(&mut journal, DesignationKind::PendingReplacement, "brano", "2026-07-13T06:00:00Z");
+    designate(
+        &mut journal,
+        DesignationKind::PendingReplacement,
+        "brano",
+        "2026-07-13T06:00:00Z",
+    );
     push_completed_run(&mut journal, &mut index, &battery, "brano-0", "brano", 1); // after pending
     push_completed_run(&mut journal, &mut index, &battery, "brano-1", "brano", 2);
-    let head = ArtifactIndex { artifacts: index.clone() }.head_digest();
+    let head = ArtifactIndex {
+        artifacts: index.clone(),
+    }
+    .head_digest();
     journal.publish_snapshot(head, SNAP);
     let c = wrap_corpus(journal, index, battery);
     let comp = compute_tier(&c, Lane::Pi, COMMIT, &TierParams::gated());
-    assert_eq!(comp.active_box.as_deref(), Some("lima"), "below W the active box stays lima (runs landed on the correct side)");
-    assert_eq!(comp.pending_box.as_deref(), Some("brano"), "brano is the pending box");
+    assert_eq!(
+        comp.active_box.as_deref(),
+        Some("lima"),
+        "below W the active box stays lima (runs landed on the correct side)"
+    );
+    assert_eq!(
+        comp.pending_box.as_deref(),
+        Some("brano"),
+        "brano is the pending box"
+    );
     assert_eq!(comp.accumulation, 2, "exactly the 2 post-pending brano runs accumulate; the pre-pending lima run is on the old side");
 }
 
@@ -636,13 +931,33 @@ fn d2_stale_designation_reference_rejected() {
     let battery = base_battery();
     let mut journal = AuthorityJournal::new();
     journal.activate_context(ContextActivationKind::Manifest(battery.manifest_digest()));
-    journal.activate_context(ContextActivationKind::AggregationVersion(battery.aggregation_version.clone()));
-    designate(&mut journal, DesignationKind::Designate, BOX, "2026-07-13T00:00:00Z");
-    designate(&mut journal, DesignationKind::PendingReplacement, "brano", "2026-07-13T06:00:00Z");
-    designate(&mut journal, DesignationKind::PendingReplacement, "carbo", "2026-07-13T07:00:00Z"); // 2nd pending
+    journal.activate_context(ContextActivationKind::AggregationVersion(
+        battery.aggregation_version.clone(),
+    ));
+    designate(
+        &mut journal,
+        DesignationKind::Designate,
+        BOX,
+        "2026-07-13T00:00:00Z",
+    );
+    designate(
+        &mut journal,
+        DesignationKind::PendingReplacement,
+        "brano",
+        "2026-07-13T06:00:00Z",
+    );
+    designate(
+        &mut journal,
+        DesignationKind::PendingReplacement,
+        "carbo",
+        "2026-07-13T07:00:00Z",
+    ); // 2nd pending
     let mut index = Vec::new();
     push_completed_run(&mut journal, &mut index, &battery, "run-1", BOX, 0);
-    let head = ArtifactIndex { artifacts: index.clone() }.head_digest();
+    let head = ArtifactIndex {
+        artifacts: index.clone(),
+    }
+    .head_digest();
     journal.publish_snapshot(head, SNAP);
     let c = wrap_corpus(journal, index, battery);
     // Positive-control: NAME the intended check (per the (d) why-holder ruling
@@ -665,17 +980,41 @@ fn d6_promotion_under_an_earlier_manifest_replays_legal_under_its_epoch() {
     let mut journal = AuthorityJournal::new();
     // Epoch A: activate A, designate under A, run 3 brano runs (manifest A).
     journal.activate_context(ContextActivationKind::Manifest(battery_a.manifest_digest()));
-    journal.activate_context(ContextActivationKind::AggregationVersion(battery_a.aggregation_version.clone()));
-    designate(&mut journal, DesignationKind::Designate, BOX, "2026-07-13T00:00:00Z");
-    designate(&mut journal, DesignationKind::PendingReplacement, "brano", "2026-07-13T06:00:00Z");
+    journal.activate_context(ContextActivationKind::AggregationVersion(
+        battery_a.aggregation_version.clone(),
+    ));
+    designate(
+        &mut journal,
+        DesignationKind::Designate,
+        BOX,
+        "2026-07-13T00:00:00Z",
+    );
+    designate(
+        &mut journal,
+        DesignationKind::PendingReplacement,
+        "brano",
+        "2026-07-13T06:00:00Z",
+    );
     let mut index = Vec::new();
     for i in 0..3 {
-        push_completed_run(&mut journal, &mut index, &battery_a, &format!("brano-{i}"), "brano", i as u64);
+        push_completed_run(
+            &mut journal,
+            &mut index,
+            &battery_a,
+            &format!("brano-{i}"),
+            "brano",
+            i as u64,
+        );
     }
     // Epoch B: activate the later manifest B (release context becomes B).
     journal.activate_context(ContextActivationKind::Manifest(battery_b.manifest_digest()));
-    journal.activate_context(ContextActivationKind::AggregationVersion(battery_b.aggregation_version.clone()));
-    let head = ArtifactIndex { artifacts: index.clone() }.head_digest();
+    journal.activate_context(ContextActivationKind::AggregationVersion(
+        battery_b.aggregation_version.clone(),
+    ));
+    let head = ArtifactIndex {
+        artifacts: index.clone(),
+    }
+    .head_digest();
     journal.publish_snapshot(head, SNAP);
     let c = wrap_corpus(journal, index, battery_b); // release-derived context = B
     let comp = compute_tier(&c, Lane::Pi, COMMIT, &TierParams::gated());

@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # the A5 names + the exit-70 wrong-pin gate; test_scan_secrets.sh exercises the
 # return-based scan_secrets_* names + the corpus-safe pattern set. Both now source
 # the single survivor.
-TESTS="test_normalize.sh test_jail_refusal.sh test_timeout_budget.sh test_record_gate.sh test_secret_scan.sh test_scan_secrets.sh test_fetch_zmx.sh test_fmt_check.sh test_fixture_admit.sh test_double_record.sh test_record_host_lock.sh test_prep_pinned_ts.sh test_stub_claude.sh"
+TESTS="test_normalize.sh test_jail_refusal.sh test_timeout_budget.sh test_record_gate.sh test_secret_scan.sh test_scan_secrets.sh test_fmt_check.sh test_fixture_admit.sh test_double_record.sh test_record_host_lock.sh test_prep_pinned_ts.sh test_stub_claude.sh"
 FAILED=""
 
 for t in $TESTS; do

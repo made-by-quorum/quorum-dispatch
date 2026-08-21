@@ -235,10 +235,13 @@ impl Builder {
         match step {
             Step::ActivateContext => {
                 self.journal
-                    .activate_context(ContextActivationKind::Manifest(self.battery.manifest_digest()));
-                self.journal.activate_context(ContextActivationKind::AggregationVersion(
-                    self.battery.aggregation_version.clone(),
-                ));
+                    .activate_context(ContextActivationKind::Manifest(
+                        self.battery.manifest_digest(),
+                    ));
+                self.journal
+                    .activate_context(ContextActivationKind::AggregationVersion(
+                        self.battery.aggregation_version.clone(),
+                    ));
             }
             Step::Designate {
                 lane,
@@ -333,9 +336,12 @@ impl Builder {
             let n = self.nonce;
             Some(
                 self.journal
-                    .start_run_at(&tuple.run, spec.runner.clone(), started_at.clone(), &mut || {
-                        format!("nonce-{n}")
-                    })
+                    .start_run_at(
+                        &tuple.run,
+                        spec.runner.clone(),
+                        started_at.clone(),
+                        &mut || format!("nonce-{n}"),
+                    )
                     .unwrap(),
             )
         } else {
@@ -349,7 +355,12 @@ impl Builder {
                 let artifact = self.build_artifact(header, &spec);
                 let digest = artifact.content_digest();
                 self.journal
-                    .mark_terminal(&tuple.run, TerminalState::Completed { artifact_digest: digest.clone() })
+                    .mark_terminal(
+                        &tuple.run,
+                        TerminalState::Completed {
+                            artifact_digest: digest.clone(),
+                        },
+                    )
                     .unwrap();
                 self.index.push(IndexedArtifact { digest, artifact });
             }
@@ -369,7 +380,8 @@ impl Builder {
                         &tuple.run,
                         TerminalState::Voided(VoidRuling {
                             authorized_by: "void-seat (cccc3333)".into(),
-                            no_artifact_evidence: "registrar confirms no artifact was produced".into(),
+                            no_artifact_evidence: "registrar confirms no artifact was produced"
+                                .into(),
                         }),
                     )
                     .unwrap();
@@ -380,7 +392,8 @@ impl Builder {
                         &tuple.run,
                         TerminalState::Aborted(AbortRuling {
                             authorized_by: "void-seat (cccc3333)".into(),
-                            no_artifact_evidence: "harness crash record ref-9 — infra failure".into(),
+                            no_artifact_evidence: "harness crash record ref-9 — infra failure"
+                                .into(),
                         }),
                     )
                     .unwrap();
@@ -422,7 +435,8 @@ impl Builder {
                             lane,
                             cid.clone(),
                             RunMode::Automated,
-                            b.runner().fail(vec!["cmd".into()], "observed state", detail),
+                            b.runner()
+                                .fail(vec!["cmd".into()], "observed state", detail),
                         ),
                         Cellcome::Blocked => b.observe(
                             lane,
@@ -521,9 +535,12 @@ fn unregistered_artifact() -> IndexedArtifact {
         )
         .unwrap();
     let nonce = j
-        .start_run_at(&tuple.run, "runner-x (ffff6666)", "2026-07-14T00:00:00Z", &mut || {
-            "nonce-unreg".to_string()
-        })
+        .start_run_at(
+            &tuple.run,
+            "runner-x (ffff6666)",
+            "2026-07-14T00:00:00Z",
+            &mut || "nonce-unreg".to_string(),
+        )
         .unwrap();
     let header = CommissioningHeader::new(tuple, nonce);
     let mut b = RunArtifactBuilder::new(header, "2026-07-14T00:00:00Z");
@@ -578,7 +595,11 @@ fn assert_reproduces(corpus: &Corpus, lane: Lane) -> TierComputation {
     let json = serde_json::to_string(corpus).unwrap();
     let reparsed: Corpus = serde_json::from_str(&json).unwrap();
     let b = compute_tier(&reparsed, lane, COMMIT, &P);
-    assert_eq!(bytes(&a), bytes(&b), "byte-match reproduction failed for {lane:?}");
+    assert_eq!(
+        bytes(&a),
+        bytes(&b),
+        "byte-match reproduction failed for {lane:?}"
+    );
     a
 }
 
@@ -586,7 +607,12 @@ fn assert_reproduces(corpus: &Corpus, lane: Lane) -> TierComputation {
 fn positive_corpus_reproduces_ga_byte_for_byte() {
     let corpus = positive_corpus();
     let c = assert_reproduces(&corpus, Lane::Pi);
-    assert_eq!(c.verdict, TierVerdict::Ga, "expected GA, got {:?}", c.verdict);
+    assert_eq!(
+        c.verdict,
+        TierVerdict::Ga,
+        "expected GA, got {:?}",
+        c.verdict
+    );
     assert_eq!(c.tier, Tier::Ga);
     // The window is exactly the 3 completed eligible runs, in (sequence, run-id)
     // order — never timestamp (run-1 and run-2 share a descriptive timestamp).
@@ -597,7 +623,13 @@ fn positive_corpus_reproduces_ga_byte_for_byte() {
     assert_eq!(c.evidence_run.as_ref().unwrap().0, "run-3");
     // Lane projection: Pi's pool is 3 runs × 4 Pi cells = 12, all pass (the
     // multi-lane run-2 contributes only its 4 Pi cells, not its Codex cells).
-    assert_eq!(c.rate, Some(RateValue::Rate { passes: 12, pool: 12 }));
+    assert_eq!(
+        c.rate,
+        Some(RateValue::Rate {
+            passes: 12,
+            pool: 12
+        })
+    );
     assert!(!c.stale);
     // Citation carries all six inputs.
     assert_citation_complete(&c.citation);
@@ -633,7 +665,11 @@ fn the_same_inflight_entry_reanchored_past_delta_suppresses() {
     let c = compute_tier(&corpus, Lane::Pi, COMMIT, &P);
     match &c.verdict {
         TierVerdict::Suppressed { entries, .. } => {
-            assert!(entries.iter().any(|e| e.0 == "run-inflight"), "{:?}", entries);
+            assert!(
+                entries.iter().any(|e| e.0 == "run-inflight"),
+                "{:?}",
+                entries
+            );
         }
         other => panic!("expected suppression, got {other:?}"),
     }
@@ -756,7 +792,12 @@ fn neg_conflicting_same_id_artifacts() {
     let mut c = minimal_corpus();
     // A second, different artifact for run-3's id (a different timestamp → a
     // different content digest), filed alongside the canonical one.
-    let idx = c.index.artifacts.iter().position(|a| a.artifact.header.tuple.run.0 == "run-3").unwrap();
+    let idx = c
+        .index
+        .artifacts
+        .iter()
+        .position(|a| a.artifact.header.tuple.run.0 == "run-3")
+        .unwrap();
     let mut other = c.index.artifacts[idx].clone();
     other.artifact.timestamp = "9999-01-01T00:00:00Z".into();
     other.digest = other.artifact.content_digest();
@@ -813,7 +854,11 @@ fn neg_extra_non_manifest_observation() {
         let mut res = art.grid.get(&pi_key).unwrap().clone();
         if let super::evidence::CellResolution::Observed(o) = &mut res {
             o.cell = CellId("d9.not-in-manifest".into());
-            o.id = ObservationId::derive(&art.header.tuple.run, Lane::Pi, &CellId("d9.not-in-manifest".into()));
+            o.id = ObservationId::derive(
+                &art.header.tuple.run,
+                Lane::Pi,
+                &CellId("d9.not-in-manifest".into()),
+            );
         }
         art.grid.insert(key, res);
     });
@@ -827,7 +872,9 @@ fn neg_missing_manifest_context_at_release_commit() {
     let comp = compute_tier(&c, Lane::Pi, "commit-does-not-exist", &P);
     match &comp.verdict {
         TierVerdict::InvalidEvidence { failed_checks } => assert!(
-            failed_checks.iter().any(|s| s.contains("no manifest/scheme-version context artifact")),
+            failed_checks
+                .iter()
+                .any(|s| s.contains("no manifest/scheme-version context artifact")),
             "{failed_checks:#?}"
         ),
         other => panic!("expected INVALID, got {other:?}"),
@@ -857,7 +904,8 @@ fn neg_journal_latest_activation_disagrees_with_release_context() {
             if e["body"]["event"] == "context-activation"
                 && e["body"]["activation"]["activates"] == "manifest"
             {
-                e["body"]["activation"]["context"] = serde_json::Value::String("sha256:wrong".into());
+                e["body"]["activation"]["context"] =
+                    serde_json::Value::String("sha256:wrong".into());
             }
         }
     });
@@ -891,7 +939,12 @@ fn neg_forged_promotion_event() {
     // Inject a Designation event of kind "promotion" — no such event kind exists.
     mutate_journal(&mut c, |v| {
         let arr = v["entries"].as_array_mut().unwrap();
-        let next = arr.iter().map(|e| e["ordinal"].as_u64().unwrap()).max().unwrap() + 1;
+        let next = arr
+            .iter()
+            .map(|e| e["ordinal"].as_u64().unwrap())
+            .max()
+            .unwrap()
+            + 1;
         arr.push(serde_json::json!({
             "ordinal": next,
             "body": {
@@ -966,7 +1019,11 @@ fn neg_commissioning_identity_equals_runner_identity() {
             }
         }
     });
-    assert_invalid(&c, Lane::Pi, "commissioning identity equals runner identity");
+    assert_invalid(
+        &c,
+        Lane::Pi,
+        "commissioning identity equals runner identity",
+    );
 }
 
 #[test]
@@ -1048,7 +1105,9 @@ fn neg_abort_ruling_by_non_independent_seat() {
         // Also drop run-3's index artifact so the abort doesn't shadow it — we are
         // testing the SEAT independence, not the shadow rule.
     });
-    c.index.artifacts.retain(|a| a.artifact.header.tuple.run.0 != "run-3");
+    c.index
+        .artifacts
+        .retain(|a| a.artifact.header.tuple.run.0 != "run-3");
     reanchor(&mut c, SNAP_TIME);
     assert_invalid(&c, Lane::Pi, "independent void-and-abort seat");
 }
@@ -1154,7 +1213,13 @@ fn a_non_gating_fail_on_the_evidence_run_demotes_ga_to_beta() {
     let comp = assert_reproduces(&c, Lane::Pi);
     assert_eq!(comp.verdict, TierVerdict::Beta, "got {:?}", comp.verdict);
     // 11/12 = 91.6% ≥ 80% (beta) but < 95% and not all-green (no GA).
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 11, pool: 12 }));
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 11,
+            pool: 12
+        })
+    );
 }
 
 #[test]
@@ -1182,7 +1247,13 @@ fn a_valid_harness_attribution_removes_a_fail_from_the_pool() {
     });
     let comp = assert_reproduces(&c, Lane::Pi);
     // The fail is removed from num AND denom → pool 11/11.
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 11, pool: 11 }));
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 11,
+            pool: 11
+        })
+    );
     // Still not GA — on the evidence run a harness-removed fail is UNMEASURED, not
     // green (A5) → beta.
     assert_eq!(comp.verdict, TierVerdict::Beta);
@@ -1207,7 +1278,13 @@ fn an_attribution_by_the_runs_executor_is_unauthorized_and_ignored() {
     });
     let comp = assert_reproduces(&c, Lane::Pi);
     // The unauthorized ruling never governs — the fail stays product-counted (A6).
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 11, pool: 12 }));
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 11,
+            pool: 12
+        })
+    );
 }
 
 // ===========================================================================
@@ -1267,7 +1344,11 @@ fn mid_transition_at_w_derives_the_promotion_flip() {
     // Three eligible brano runs (= W) → promotion derives, brano becomes active.
     let c = Builder::new().run(designation_steps(3, None));
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.active_box.as_deref(), Some("brano"), "promotion should flip active box");
+    assert_eq!(
+        comp.active_box.as_deref(),
+        Some("brano"),
+        "promotion should flip active box"
+    );
     assert_eq!(comp.pending_box, None);
     assert!(comp.promotion_ordinal.is_some());
 }
@@ -1280,7 +1361,10 @@ fn a_quiet_window_withdrawal_is_valid() {
     // experimental, NOT invalid — proving the withdrawal was accepted.
     let c = Builder::new().run(designation_steps(
         0,
-        Some(("designation-seat (dddd4444)", DesignationBasisKind::DurablyUnreachable)),
+        Some((
+            "designation-seat (dddd4444)",
+            DesignationBasisKind::DurablyUnreachable,
+        )),
     ));
     let comp = assert_reproduces(&c, Lane::Pi);
     assert!(
@@ -1288,7 +1372,10 @@ fn a_quiet_window_withdrawal_is_valid() {
         "expected a clean experimental, got {:?}",
         comp.verdict
     );
-    assert_eq!(comp.pending_box, None, "the withdrawal retired the pending slot");
+    assert_eq!(
+        comp.pending_box, None,
+        "the withdrawal retired the pending slot"
+    );
 }
 
 #[test]
@@ -1297,10 +1384,21 @@ fn an_outcome_dependent_withdrawal_is_invalid() {
     // actor can only null it (the descriptive text is not machine-checked). INVALID.
     let mut c = Builder::new().run(designation_steps(
         0,
-        Some(("designation-seat (dddd4444)", DesignationBasisKind::DurablyUnreachable)),
+        Some((
+            "designation-seat (dddd4444)",
+            DesignationBasisKind::DurablyUnreachable,
+        )),
     ));
-    null_basis_kind(&mut c, "withdrawal", "the pending window had the worse pass rate");
-    assert_invalid(&c, Lane::Pi, "not an admissible outcome-independent withdrawal kind");
+    null_basis_kind(
+        &mut c,
+        "withdrawal",
+        "the pending window had the worse pass rate",
+    );
+    assert_invalid(
+        &c,
+        Lane::Pi,
+        "not an admissible outcome-independent withdrawal kind",
+    );
 }
 
 #[test]
@@ -1341,7 +1439,10 @@ fn a_post_promotion_withdrawal_is_invalid() {
     // Three brano runs promote; a withdrawal after the derived promotion ordinal.
     let c = Builder::new().run(designation_steps(
         3,
-        Some(("designation-seat (dddd4444)", DesignationBasisKind::DurablyUnreachable)),
+        Some((
+            "designation-seat (dddd4444)",
+            DesignationBasisKind::DurablyUnreachable,
+        )),
     ));
     assert_invalid(&c, Lane::Pi, "at or after the derived promotion ordinal");
 }
@@ -1370,9 +1471,15 @@ fn a_pending_with_no_active_designation_is_invalid() {
 #[test]
 fn provider_badge_is_the_lanes_tier() {
     let c = minimal_corpus();
-    assert_eq!(super::tier::provider_badge(&c, "pi", COMMIT, &P), Some(Tier::Ga));
+    assert_eq!(
+        super::tier::provider_badge(&c, "pi", COMMIT, &P),
+        Some(Tier::Ga)
+    );
     // codex has no runs on its (absent) designated box → experimental.
-    assert_eq!(super::tier::provider_badge(&c, "codex", COMMIT, &P), Some(Tier::Experimental));
+    assert_eq!(
+        super::tier::provider_badge(&c, "codex", COMMIT, &P),
+        Some(Tier::Experimental)
+    );
 }
 
 #[test]
@@ -1395,7 +1502,10 @@ fn t4_document_makes_the_interpretation_fidelity_visible() {
     // Deterministic: identical render on a re-parse of the corpus.
     let json = serde_json::to_string(&c).unwrap();
     let reparsed: Corpus = serde_json::from_str(&json).unwrap();
-    assert_eq!(doc, super::tier_doc::render_tier_document(&reparsed, COMMIT, &P));
+    assert_eq!(
+        doc,
+        super::tier_doc::render_tier_document(&reparsed, COMMIT, &P)
+    );
 }
 
 // ---- additional cardinality / terminal-state fixtures ----------------------
@@ -1466,9 +1576,12 @@ fn artifact_for_run(run: &str) -> IndexedArtifact {
         )
         .unwrap();
     let nonce = j
-        .start_run_at(&tuple.run, "runner-x (ffff6666)", "2026-07-14T00:00:00Z", &mut || {
-            format!("nonce-{run}")
-        })
+        .start_run_at(
+            &tuple.run,
+            "runner-x (ffff6666)",
+            "2026-07-14T00:00:00Z",
+            &mut || format!("nonce-{run}"),
+        )
         .unwrap();
     let header = CommissioningHeader::new(tuple, nonce);
     let mut b = RunArtifactBuilder::new(header, "2026-07-14T00:00:00Z");
@@ -1511,7 +1624,12 @@ fn an_aborted_entry_with_a_valid_ruling_validates_cleanly() {
         Step::Snapshot(SNAP_TIME),
     ]);
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.verdict, TierVerdict::Ga, "aborted entry must not block GA: {:?}", comp.verdict);
+    assert_eq!(
+        comp.verdict,
+        TierVerdict::Ga,
+        "aborted entry must not block GA: {:?}",
+        comp.verdict
+    );
     // The aborted run is not in the window.
     assert!(!comp.window.iter().any(|r| r.0 == "run-abort"));
 }
@@ -1552,7 +1670,10 @@ fn an_exercise_run_never_enters_the_window() {
 fn generate_reference_tier_document() {
     let corpus = positive_corpus();
     let banner = "<!--\nREFERENCE RENDERING — NOT LIVE TIERS. This document is rendered by\n`tier_doc::render_tier_document` from the C-3 canonical *reproduction fixture*\ncorpus (a synthetic `commit-r9` corpus, not the real conformance evidence). It\nexists so a reader can inspect the T4 document's shape and see the tier scheme's\noutput end-to-end. The LIVE public tier document is regenerated from the real\nrecorded evidence corpus once the battery has accumulated eligible runs on each\nlane's designated evidence box (post-C-5). Do not cite these tiers as qd's actual\nconformance state.\n-->\n\n";
-    let doc = format!("{banner}{}", super::tier_doc::render_tier_document(&corpus, COMMIT, &P));
+    let doc = format!(
+        "{banner}{}",
+        super::tier_doc::render_tier_document(&corpus, COMMIT, &P)
+    );
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../doc/conformance/reference-tier-document.md"
@@ -1612,7 +1733,13 @@ fn window_selection_orders_by_sequence_not_timestamp() {
     assert_eq!(comp.evidence_run.as_ref().unwrap().0, "run-4");
     // GA: run-1's non-gating fail is OUTSIDE the sequence window → 12/12.
     assert_eq!(comp.verdict, TierVerdict::Ga, "got {:?}", comp.verdict);
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 12, pool: 12 }));
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 12,
+            pool: 12
+        })
+    );
     // NEGATIVE CONTROL (documented): under sort-by-timestamp the window would be
     // [run-1, run-2, run-3] / evrun run-3, run-1's fail INSIDE → beta 11/12, so
     // every assertion above flips — the fixture cannot pass under the F-3 bug.
@@ -1628,20 +1755,43 @@ fn window_selection_orders_by_sequence_not_timestamp() {
 fn coverage_battery() -> Battery {
     use super::registry::{Applicability, Cell, Dimension};
     let cells = vec![
-        Cell { id: CellId(C_D1.into()), dimension: Dimension::D1Lifecycle, title: "gating d1".into() },
-        Cell { id: CellId(C_D6.into()), dimension: Dimension::D6FailureHonesty, title: "gating d6".into() },
-        Cell { id: CellId(C_D3.into()), dimension: Dimension::D3BusyQueue, title: "non-gating d3".into() },
-        Cell { id: CellId("d5.cov".into()), dimension: Dimension::D5Transcript, title: "coverage non-gating".into() },
+        Cell {
+            id: CellId(C_D1.into()),
+            dimension: Dimension::D1Lifecycle,
+            title: "gating d1".into(),
+        },
+        Cell {
+            id: CellId(C_D6.into()),
+            dimension: Dimension::D6FailureHonesty,
+            title: "gating d6".into(),
+        },
+        Cell {
+            id: CellId(C_D3.into()),
+            dimension: Dimension::D3BusyQueue,
+            title: "non-gating d3".into(),
+        },
+        Cell {
+            id: CellId("d5.cov".into()),
+            dimension: Dimension::D5Transcript,
+            title: "coverage non-gating".into(),
+        },
     ];
     let mut applicability = BTreeMap::new();
     for c in [C_D1, C_D6, C_D3] {
-        applicability.insert((Lane::Pi.provider_id().to_string(), c.to_string()), Applicability::Required);
+        applicability.insert(
+            (Lane::Pi.provider_id().to_string(), c.to_string()),
+            Applicability::Required,
+        );
     }
     applicability.insert(
         (Lane::Pi.provider_id().to_string(), "d5.cov".to_string()),
         Applicability::CoveragePermitted,
     );
-    Battery { cells, applicability, aggregation_version: AggregationVersion("agg-v1".into()) }
+    Battery {
+        cells,
+        applicability,
+        aggregation_version: AggregationVersion("agg-v1".into()),
+    }
 }
 
 /// A battery where a GATING cell (d6.cov, D6) is CoveragePermitted for Pi —
@@ -1649,19 +1799,38 @@ fn coverage_battery() -> Battery {
 fn coverage_gating_battery() -> Battery {
     use super::registry::{Applicability, Cell, Dimension};
     let cells = vec![
-        Cell { id: CellId(C_D1.into()), dimension: Dimension::D1Lifecycle, title: "gating d1".into() },
-        Cell { id: CellId("d6.cov".into()), dimension: Dimension::D6FailureHonesty, title: "coverage GATING".into() },
-        Cell { id: CellId(C_D3.into()), dimension: Dimension::D3BusyQueue, title: "non-gating d3".into() },
+        Cell {
+            id: CellId(C_D1.into()),
+            dimension: Dimension::D1Lifecycle,
+            title: "gating d1".into(),
+        },
+        Cell {
+            id: CellId("d6.cov".into()),
+            dimension: Dimension::D6FailureHonesty,
+            title: "coverage GATING".into(),
+        },
+        Cell {
+            id: CellId(C_D3.into()),
+            dimension: Dimension::D3BusyQueue,
+            title: "non-gating d3".into(),
+        },
     ];
     let mut applicability = BTreeMap::new();
     for c in [C_D1, C_D3] {
-        applicability.insert((Lane::Pi.provider_id().to_string(), c.to_string()), Applicability::Required);
+        applicability.insert(
+            (Lane::Pi.provider_id().to_string(), c.to_string()),
+            Applicability::Required,
+        );
     }
     applicability.insert(
         (Lane::Pi.provider_id().to_string(), "d6.cov".to_string()),
         Applicability::CoveragePermitted,
     );
-    Battery { cells, applicability, aggregation_version: AggregationVersion("agg-v1".into()) }
+    Battery {
+        cells,
+        applicability,
+        aggregation_version: AggregationVersion("agg-v1".into()),
+    }
 }
 
 fn coverage_steps() -> Vec<Step> {
@@ -1687,8 +1856,17 @@ fn a_coverage_record_is_excluded_from_the_pool_and_blocks_ga() {
     //  (2) an applicable coverage cell fails GA's all-green clause → beta, not GA.
     let c = Builder::with_battery(coverage_battery()).run(coverage_steps());
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 9, pool: 9 }), "coverage cell must be OUT of the pool");
-    assert_eq!(comp.verdict, TierVerdict::Beta, "coverage cell must block GA all-green: {:?}", comp.verdict);
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate { passes: 9, pool: 9 }),
+        "coverage cell must be OUT of the pool"
+    );
+    assert_eq!(
+        comp.verdict,
+        TierVerdict::Beta,
+        "coverage cell must block GA all-green: {:?}",
+        comp.verdict
+    );
     // NEGATIVE CONTROL: if coverage were counted in the pool it'd be 9/12 or
     // 12/12; if it didn't block GA all-green the verdict would be GA. Both flip.
 }
@@ -1757,20 +1935,39 @@ fn registrar_of(corpus: &Corpus) -> super::tier_doc::RegistrarAttestation {
 
 #[test]
 fn a_current_refresh_rolling_back_to_an_earlier_snapshot_is_invalid() {
-    use super::tier_doc::{publish_tier_document, PublicationHistory, PublicationMode, PublishError};
+    use super::tier_doc::{
+        publish_tier_document, PublicationHistory, PublicationMode, PublishError,
+    };
     let (early, late) = early_and_late_corpora();
     let mut history = PublicationHistory::default();
     // Publish the later corpus as CURRENT (registrar = its own latest) — establishes
     // the published high-water.
-    publish_tier_document(&late, COMMIT, &P, PublicationMode::Current, &registrar_of(&late), &mut history)
-        .unwrap();
+    publish_tier_document(
+        &late,
+        COMMIT,
+        &P,
+        PublicationMode::Current,
+        &registrar_of(&late),
+        &mut history,
+    )
+    .unwrap();
     // A CURRENT refresh anchored at the EARLIER snapshot (the truncated prefix). We
     // supply early's OWN registrar attestation so obligation (2) passes and the
     // NO-ROLLBACK check is the one on trial: earlier ordinal < published floor →
     // INVALID (v7/R6-5).
-    let err = publish_tier_document(&early, COMMIT, &P, PublicationMode::Current, &registrar_of(&early), &mut history)
-        .unwrap_err();
-    assert!(matches!(err, PublishError::RollBack { .. }), "expected RollBack, got {err:?}");
+    let err = publish_tier_document(
+        &early,
+        COMMIT,
+        &P,
+        PublicationMode::Current,
+        &registrar_of(&early),
+        &mut history,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, PublishError::RollBack { .. }),
+        "expected RollBack, got {err:?}"
+    );
     // NEGATIVE CONTROL: remove the no-rollback check and this call returns Ok —
     // `unwrap_err()` then panics, failing the fixture.
 }
@@ -1781,21 +1978,40 @@ fn a_current_publication_anchored_at_a_stale_intermediate_snapshot_is_invalid() 
     // an earlier snapshot, published "current" while the REGISTRAR attests a fresher
     // latest → NotAnchoredAtLatest. History is empty, so no-rollback cannot fire —
     // ONLY obligation (2) has teeth here (the favorable-intermediate case).
-    use super::tier_doc::{publish_tier_document, PublicationHistory, PublicationMode, PublishError};
+    use super::tier_doc::{
+        publish_tier_document, PublicationHistory, PublicationMode, PublishError,
+    };
     let (early, late) = early_and_late_corpora();
     let mut history = PublicationHistory::default();
     // early's anchor (its own snapshot 1) ≠ the registrar's true latest (late's
     // snapshot 2). No prior rows → no-rollback is silent.
-    let err = publish_tier_document(&early, COMMIT, &P, PublicationMode::Current, &registrar_of(&late), &mut history)
-        .unwrap_err();
+    let err = publish_tier_document(
+        &early,
+        COMMIT,
+        &P,
+        PublicationMode::Current,
+        &registrar_of(&late),
+        &mut history,
+    )
+    .unwrap_err();
     assert!(
         matches!(err, PublishError::NotAnchoredAtLatest { .. }),
         "expected NotAnchoredAtLatest (stale intermediate anchor), got {err:?}"
     );
-    assert!(history.rows.is_empty(), "an invalid publication must not be recorded");
+    assert!(
+        history.rows.is_empty(),
+        "an invalid publication must not be recorded"
+    );
     // The MATCHED case (anchor == registrar's latest) passes — a genuine current.
-    publish_tier_document(&late, COMMIT, &P, PublicationMode::Current, &registrar_of(&late), &mut history)
-        .unwrap();
+    publish_tier_document(
+        &late,
+        COMMIT,
+        &P,
+        PublicationMode::Current,
+        &registrar_of(&late),
+        &mut history,
+    )
+    .unwrap();
     // NEGATIVE CONTROL: revert obligation (2) to the corpus-internal tautology (or
     // drop the check) → the first publish returns Ok, `unwrap_err()` panics.
 }
@@ -1805,15 +2021,32 @@ fn the_same_earlier_anchor_rendered_as_historical_is_legal() {
     use super::tier_doc::{publish_tier_document, PublicationHistory, PublicationMode};
     let (early, late) = early_and_late_corpora();
     let mut history = PublicationHistory::default();
-    publish_tier_document(&late, COMMIT, &P, PublicationMode::Current, &registrar_of(&late), &mut history)
-        .unwrap();
+    publish_tier_document(
+        &late,
+        COMMIT,
+        &P,
+        PublicationMode::Current,
+        &registrar_of(&late),
+        &mut history,
+    )
+    .unwrap();
     // The SAME earlier anchor, published as an explicitly HISTORICAL rendering, is
     // legal (exempt from no-rollback AND from obligation (2) — it does not claim to
     // be current) and carries a visible HISTORICAL banner. The registrar attestation
     // is ignored for a historical rendering.
-    let doc = publish_tier_document(&early, COMMIT, &P, PublicationMode::Historical, &registrar_of(&late), &mut history)
-        .unwrap();
-    assert!(doc.contains("HISTORICAL RENDERING"), "historical rendering must be banner-marked");
+    let doc = publish_tier_document(
+        &early,
+        COMMIT,
+        &P,
+        PublicationMode::Historical,
+        &registrar_of(&late),
+        &mut history,
+    )
+    .unwrap();
+    assert!(
+        doc.contains("HISTORICAL RENDERING"),
+        "historical rendering must be banner-marked"
+    );
     assert!(doc.contains("Historical rendering as of"));
 }
 
@@ -1825,10 +2058,24 @@ fn a_forward_current_refresh_is_allowed_and_recorded() {
     // early (earlier anchor) then late (later anchor) — strictly forward, both OK.
     // Each supplies its own registrar attestation (each is genuinely current at its
     // publication time).
-    publish_tier_document(&early, COMMIT, &P, PublicationMode::Current, &registrar_of(&early), &mut history)
-        .unwrap();
-    publish_tier_document(&late, COMMIT, &P, PublicationMode::Current, &registrar_of(&late), &mut history)
-        .unwrap();
+    publish_tier_document(
+        &early,
+        COMMIT,
+        &P,
+        PublicationMode::Current,
+        &registrar_of(&early),
+        &mut history,
+    )
+    .unwrap();
+    publish_tier_document(
+        &late,
+        COMMIT,
+        &P,
+        PublicationMode::Current,
+        &registrar_of(&late),
+        &mut history,
+    )
+    .unwrap();
     assert_eq!(history.rows.len(), 2);
     assert!(history.rows[1].snapshot_ordinal > history.rows[0].snapshot_ordinal);
 }
@@ -1836,11 +2083,15 @@ fn a_forward_current_refresh_is_allowed_and_recorded() {
 #[test]
 fn an_unanchored_corpus_cannot_be_published() {
     use super::tier_doc::{
-        publish_tier_document, PublicationHistory, PublicationMode, PublishError, RegistrarAttestation,
+        publish_tier_document, PublicationHistory, PublicationMode, PublishError,
+        RegistrarAttestation,
     };
     let mut c = minimal_corpus();
     mutate_journal(&mut c, |v| {
-        v["entries"].as_array_mut().unwrap().retain(|e| e["body"]["event"] != "publication-snapshot");
+        v["entries"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|e| e["body"]["event"] != "publication-snapshot");
     });
     let mut history = PublicationHistory::default();
     let dummy = RegistrarAttestation {
@@ -1848,8 +2099,15 @@ fn an_unanchored_corpus_cannot_be_published() {
         attested_head_digest: super::ids::ArtifactDigest("sha256:none".into()),
         observed_at: String::new(),
     };
-    let err = publish_tier_document(&c, COMMIT, &P, PublicationMode::Current, &dummy, &mut history)
-        .unwrap_err();
+    let err = publish_tier_document(
+        &c,
+        COMMIT,
+        &P,
+        PublicationMode::Current,
+        &dummy,
+        &mut history,
+    )
+    .unwrap_err();
     assert_eq!(err, PublishError::NotAnchored);
 }
 
@@ -1862,7 +2120,12 @@ fn an_unanchored_corpus_cannot_be_published() {
 /// run's executor, governing `observation`, but declaring a (possibly decoy)
 /// `rec_run`. With a decoy run absent from the journal, A8's executor/coordinator
 /// exclusion (keyed on rec.run) is skipped — the pre-v9 bypass.
-fn harness_attr(id: &str, rec_run: &str, observation: ObservationId, issuer: &str) -> AttributionRecord {
+fn harness_attr(
+    id: &str,
+    rec_run: &str,
+    observation: ObservationId,
+    issuer: &str,
+) -> AttributionRecord {
     AttributionRecord {
         id: RecordId(id.into()),
         sequence: AttributionSeq::new(1),
@@ -1884,10 +2147,21 @@ fn attr_executor_ruling_with_matching_run_is_rejected_by_authority() {
     // rejects it (issuer == the run's executor) → the fail STAYS product-counted.
     let mut c = corpus_with_evrun_fail(C_D3); // run-3 d3.n fails → 11/12
     let obs = ObservationId::derive(&RunId("run-3".into()), Lane::Pi, &CellId(C_D3.into()));
-    c.attributions.push(harness_attr("attr-ctl", "run-3", obs, "runner-1 (bbbb2222)"));
+    c.attributions.push(harness_attr(
+        "attr-ctl",
+        "run-3",
+        obs,
+        "runner-1 (bbbb2222)",
+    ));
     let comp = assert_reproduces(&c, Lane::Pi);
     // The fail is NOT laundered — still in the pool.
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 11, pool: 12 }));
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 11,
+            pool: 12
+        })
+    );
     assert_eq!(comp.verdict, TierVerdict::Beta);
 }
 
@@ -1899,7 +2173,12 @@ fn attr_decoy_run_cannot_launder_a_fail_out_of_the_pool() {
     // declares run "run-decoy" → malformed → INVALID_EVIDENCE (fail STAYS counted).
     let mut c = corpus_with_evrun_fail(C_D3);
     let obs = ObservationId::derive(&RunId("run-3".into()), Lane::Pi, &CellId(C_D3.into()));
-    c.attributions.push(harness_attr("attr-decoy", "run-decoy", obs, "runner-1 (bbbb2222)"));
+    c.attributions.push(harness_attr(
+        "attr-decoy",
+        "run-decoy",
+        obs,
+        "runner-1 (bbbb2222)",
+    ));
     assert_invalid(&c, Lane::Pi, "decoy run cannot launder");
     // NEGATIVE CONTROL: remove v9 and this corpus computes beta (11/11 laundered)
     // instead of INVALID — the fixture then fails.
@@ -1928,7 +2207,12 @@ fn attr_decoy_run_cannot_escalate_a_gating_fail_to_ga() {
         Step::Snapshot(SNAP_TIME),
     ]);
     let obs = ObservationId::derive(&RunId("run-1".into()), Lane::Pi, &CellId(C_D1.into()));
-    c.attributions.push(harness_attr("attr-esc", "run-decoy", obs, "runner-1 (bbbb2222)"));
+    c.attributions.push(harness_attr(
+        "attr-esc",
+        "run-decoy",
+        obs,
+        "runner-1 (bbbb2222)",
+    ));
     assert_invalid(&c, Lane::Pi, "decoy run cannot launder");
     // NEGATIVE CONTROL: remove v9 → this corpus computes GA (gating fail laundered)
     // instead of INVALID — the fixture then fails.
@@ -2002,7 +2286,8 @@ fn corpus_with_fail_on(run: &'static str, cell: &'static str) -> Corpus {
     let mut spec3 = RunSpec::evidence("run-3");
     for s in [&mut spec1, &mut spec2, &mut spec3] {
         if s.run == run {
-            s.overrides.push((Lane::Pi, cell, Cellcome::Fail("injected".into())));
+            s.overrides
+                .push((Lane::Pi, cell, Cellcome::Fail("injected".into())));
         }
     }
     Builder::new().run(vec![
@@ -2027,8 +2312,19 @@ fn rate_demotes_ga_to_beta_via_the_pooled_rate_not_the_evidence_run() {
     // the pooled rate 11/12 = 91.6% < 95% (the 95 threshold, decided by the rate).
     let c = corpus_with_fail_on("run-1", C_D3);
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 11, pool: 12 }));
-    assert_eq!(comp.verdict, TierVerdict::Beta, "91.6% must be beta (rate < 95), got {:?}", comp.verdict);
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 11,
+            pool: 12
+        })
+    );
+    assert_eq!(
+        comp.verdict,
+        TierVerdict::Beta,
+        "91.6% must be beta (rate < 95), got {:?}",
+        comp.verdict
+    );
 }
 
 #[test]
@@ -2056,8 +2352,18 @@ fn rate_below_beta_is_experimental() {
         Step::Snapshot(SNAP_TIME),
     ]);
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 9, pool: 12 }));
-    assert!(matches!(comp.verdict, TierVerdict::Experimental { .. }), "75% must be experimental: {:?}", comp.verdict);
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 9,
+            pool: 12
+        })
+    );
+    assert!(
+        matches!(comp.verdict, TierVerdict::Experimental { .. }),
+        "75% must be experimental: {:?}",
+        comp.verdict
+    );
 }
 
 /// A 5-cell battery (2 gating, 3 non-gating, all Required for Pi) so a window pool
@@ -2065,17 +2371,44 @@ fn rate_below_beta_is_experimental() {
 fn rate_battery() -> Battery {
     use super::registry::{Applicability, Cell, Dimension};
     let cells = vec![
-        Cell { id: CellId(C_D1.into()), dimension: Dimension::D1Lifecycle, title: "gating".into() },
-        Cell { id: CellId(C_D6.into()), dimension: Dimension::D6FailureHonesty, title: "gating".into() },
-        Cell { id: CellId(C_D3.into()), dimension: Dimension::D3BusyQueue, title: "n".into() },
-        Cell { id: CellId(C_D5.into()), dimension: Dimension::D5Transcript, title: "n".into() },
-        Cell { id: CellId("d3.n2".into()), dimension: Dimension::D3BusyQueue, title: "n".into() },
+        Cell {
+            id: CellId(C_D1.into()),
+            dimension: Dimension::D1Lifecycle,
+            title: "gating".into(),
+        },
+        Cell {
+            id: CellId(C_D6.into()),
+            dimension: Dimension::D6FailureHonesty,
+            title: "gating".into(),
+        },
+        Cell {
+            id: CellId(C_D3.into()),
+            dimension: Dimension::D3BusyQueue,
+            title: "n".into(),
+        },
+        Cell {
+            id: CellId(C_D5.into()),
+            dimension: Dimension::D5Transcript,
+            title: "n".into(),
+        },
+        Cell {
+            id: CellId("d3.n2".into()),
+            dimension: Dimension::D3BusyQueue,
+            title: "n".into(),
+        },
     ];
     let mut applicability = BTreeMap::new();
     for c in [C_D1, C_D6, C_D3, C_D5, "d3.n2"] {
-        applicability.insert((Lane::Pi.provider_id().to_string(), c.to_string()), Applicability::Required);
+        applicability.insert(
+            (Lane::Pi.provider_id().to_string(), c.to_string()),
+            Applicability::Required,
+        );
     }
-    Battery { cells, applicability, aggregation_version: AggregationVersion("agg-v1".into()) }
+    Battery {
+        cells,
+        applicability,
+        aggregation_version: AggregationVersion("agg-v1".into()),
+    }
 }
 
 #[test]
@@ -2103,8 +2436,19 @@ fn rate_exactly_at_beta_threshold_is_beta() {
         Step::Snapshot(SNAP_TIME),
     ]);
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 12, pool: 15 })); // 80.0%
-    assert_eq!(comp.verdict, TierVerdict::Beta, "exactly 80% must be beta: {:?}", comp.verdict);
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 12,
+            pool: 15
+        })
+    ); // 80.0%
+    assert_eq!(
+        comp.verdict,
+        TierVerdict::Beta,
+        "exactly 80% must be beta: {:?}",
+        comp.verdict
+    );
 }
 
 #[test]
@@ -2131,10 +2475,26 @@ fn rate_exactly_at_ga_threshold_is_ga() {
     ]);
     let a = compute_tier(&c, Lane::Pi, COMMIT, &params);
     let json = serde_json::to_string(&c).unwrap();
-    let b = compute_tier(&serde_json::from_str::<Corpus>(&json).unwrap(), Lane::Pi, COMMIT, &params);
+    let b = compute_tier(
+        &serde_json::from_str::<Corpus>(&json).unwrap(),
+        Lane::Pi,
+        COMMIT,
+        &params,
+    );
     assert_eq!(bytes(&a), bytes(&b));
-    assert_eq!(a.rate, Some(RateValue::Rate { passes: 19, pool: 20 })); // 95.0%
-    assert_eq!(a.verdict, TierVerdict::Ga, "exactly 95% must be GA: {:?}", a.verdict);
+    assert_eq!(
+        a.rate,
+        Some(RateValue::Rate {
+            passes: 19,
+            pool: 20
+        })
+    ); // 95.0%
+    assert_eq!(
+        a.verdict,
+        TierVerdict::Ga,
+        "exactly 95% must be GA: {:?}",
+        a.verdict
+    );
 }
 
 // ===========================================================================
@@ -2166,7 +2526,12 @@ fn a_declared_blocked_gap_is_beta_but_an_empty_reason_is_invalid_corpus_wide() {
     ]);
     // Twin: a declared (non-empty reason) Blocked gap on the evidence run → beta.
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.verdict, TierVerdict::Beta, "declared blocked gap → beta: {:?}", comp.verdict);
+    assert_eq!(
+        comp.verdict,
+        TierVerdict::Beta,
+        "declared blocked gap → beta: {:?}",
+        comp.verdict
+    );
 
     // Forge the blocked reason empty → INVALID (v5, corpus-wide QS-2).
     let mut c2 = c.clone();
@@ -2248,8 +2613,15 @@ fn a_quiet_withdrawal_before_the_wth_run_retires_the_pending() {
         comp.verdict
     );
     assert_eq!(comp.pending_box, None, "the withdrawal retired the pending");
-    assert_eq!(comp.active_box.as_deref(), Some("lima"), "active box unchanged by the withdrawn pending");
-    assert_eq!(comp.promotion_ordinal, None, "no promotion — the withdrawal preempted it");
+    assert_eq!(
+        comp.active_box.as_deref(),
+        Some("lima"),
+        "active box unchanged by the withdrawn pending"
+    );
+    assert_eq!(
+        comp.promotion_ordinal, None,
+        "no promotion — the withdrawal preempted it"
+    );
     // NEGATIVE CONTROL: without the preempt check, eager promotion fires at brano-3
     // and the withdrawal is rejected → the corpus computes INVALID_EVIDENCE, so the
     // Experimental assertion fails.
@@ -2284,7 +2656,8 @@ fn attr_double_colon_run_id_defeats_v9_prefix_and_is_rejected() {
         Step::Snapshot(SNAP_TIME),
     ]);
     let obs = ObservationId::derive(&RunId("X::Y".into()), Lane::Pi, &CellId(C_D3.into()));
-    c.attributions.push(harness_attr("attr-inj", "X", obs, "runner-1 (bbbb2222)"));
+    c.attributions
+        .push(harness_attr("attr-inj", "X", obs, "runner-1 (bbbb2222)"));
     assert_invalid(&c, Lane::Pi, "contains the reserved delimiter");
     // NEGATIVE CONTROL: with v0 (and the v9 local guard) removed, this corpus
     // launders the fail and computes GA (11/11) instead of INVALID.
@@ -2298,7 +2671,12 @@ fn attr_double_colon_decoy_rec_run_is_rejected() {
     // rec.run → INVALID.
     let mut c = corpus_with_evrun_fail(C_D3); // run-3 d3.n fails
     let obs = ObservationId::derive(&RunId("run-3".into()), Lane::Pi, &CellId(C_D3.into()));
-    c.attributions.push(harness_attr("attr-sym", "run-3::pi", obs, "runner-1 (bbbb2222)"));
+    c.attributions.push(harness_attr(
+        "attr-sym",
+        "run-3::pi",
+        obs,
+        "runner-1 (bbbb2222)",
+    ));
     assert_invalid(&c, Lane::Pi, "reserved delimiter");
 }
 
@@ -2309,9 +2687,21 @@ fn attr_colon_free_honest_attribution_still_validates_cleanly() {
     // over-reject legitimate corpora.
     let mut c = corpus_with_evrun_fail(C_D3); // run-3 d3.n fails → 11/12
     let obs = ObservationId::derive(&RunId("run-3".into()), Lane::Pi, &CellId(C_D3.into()));
-    c.attributions.push(harness_attr("attr-honest", "run-3", obs, "attributor (99998888)"));
+    c.attributions.push(harness_attr(
+        "attr-honest",
+        "run-3",
+        obs,
+        "attributor (99998888)",
+    ));
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.rate, Some(RateValue::Rate { passes: 11, pool: 11 }), "valid harness removal → 11/11");
+    assert_eq!(
+        comp.rate,
+        Some(RateValue::Rate {
+            passes: 11,
+            pool: 11
+        }),
+        "valid harness removal → 11/11"
+    );
     assert_eq!(comp.verdict, TierVerdict::Beta);
 }
 
@@ -2379,7 +2769,11 @@ fn a_withdrawal_naming_the_pending_box_retires_it_cleanly() {
         Step::Snapshot(SNAP_TIME),
     ]);
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert!(matches!(comp.verdict, TierVerdict::Experimental { .. }), "clean retire: {:?}", comp.verdict);
+    assert!(
+        matches!(comp.verdict, TierVerdict::Experimental { .. }),
+        "clean retire: {:?}",
+        comp.verdict
+    );
     assert_eq!(comp.pending_box, None, "the pending was retired");
 }
 
@@ -2465,7 +2859,11 @@ fn neg_pending_replacement_with_no_valid_basis_kind_is_rejected() {
         "pending-replacement",
         "pick brano — its window aced the runs; раss-heavy; p a s s e d best", // all 3 bypasses
     );
-    assert_invalid(&c, Lane::Pi, "not an admissible outcome-independent re-designation kind");
+    assert_invalid(
+        &c,
+        Lane::Pi,
+        "not an admissible outcome-independent re-designation kind",
+    );
     // NEGATIVE CONTROL: loosen the typed check to accept any kind → the null-kind
     // (outcome-dependent) re-designation is accepted → experimental not INVALID.
 }
@@ -2490,7 +2888,12 @@ fn each_valid_basis_kind_validates_on_its_arm() {
         Step::Snapshot(SNAP_TIME),
     ]);
     let comp = assert_reproduces(&c, Lane::Pi);
-    assert_eq!(comp.pending_box.as_deref(), Some("brano"), "valid pending stands: {:?}", comp.verdict);
+    assert_eq!(
+        comp.pending_box.as_deref(),
+        Some("brano"),
+        "valid pending stands: {:?}",
+        comp.verdict
+    );
 
     // Withdraw accepts Decommissioned (a leave-reason):
     let c2 = Builder::new().run(vec![
@@ -2516,7 +2919,11 @@ fn each_valid_basis_kind_validates_on_its_arm() {
         Step::Snapshot(SNAP_TIME),
     ]);
     let comp2 = assert_reproduces(&c2, Lane::Pi);
-    assert_eq!(comp2.pending_box, None, "the valid withdrawal retired the pending: {:?}", comp2.verdict);
+    assert_eq!(
+        comp2.pending_box, None,
+        "the valid withdrawal retired the pending: {:?}",
+        comp2.verdict
+    );
 }
 
 #[test]
@@ -2545,7 +2952,11 @@ fn a_withdrawal_citing_a_toward_kind_is_rejected_cross_arm() {
         },
         Step::Snapshot(SNAP_TIME),
     ]);
-    assert_invalid(&c, Lane::Pi, "not an admissible outcome-independent withdrawal kind");
+    assert_invalid(
+        &c,
+        Lane::Pi,
+        "not an admissible outcome-independent withdrawal kind",
+    );
 }
 
 #[test]
@@ -2562,7 +2973,11 @@ fn an_initial_designation_citing_a_leave_kind_is_rejected_cross_arm() {
         },
         Step::Snapshot(SNAP_TIME),
     ]);
-    assert_invalid(&c, Lane::Pi, "not an admissible outcome-independent designation kind");
+    assert_invalid(
+        &c,
+        Lane::Pi,
+        "not an admissible outcome-independent designation kind",
+    );
 }
 
 #[test]

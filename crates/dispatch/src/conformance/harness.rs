@@ -154,7 +154,9 @@ fn boot_readiness_via_cli_with_args(
             "qd start did not succeed",
         );
     }
-    let info = qd(path_prefix).args(["info", session_name, "--json"]).output();
+    let info = qd(path_prefix)
+        .args(["info", session_name, "--json"])
+        .output();
     let outcome = match info {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
@@ -385,7 +387,10 @@ fn liveness_process_alive_via_cli(
         Some(p) => {
             commands.push(format!("ps -p {p}"));
             if os_pid_alive(p) {
-                runner.pass(commands, format!("pid {p} confirmed alive via `ps -p` while live"))
+                runner.pass(
+                    commands,
+                    format!("pid {p} confirmed alive via `ps -p` while live"),
+                )
             } else {
                 runner.fail(
                     commands,
@@ -435,7 +440,10 @@ fn reconnect_resolves_via_cli(
         {
             runner.pass(
                 commands,
-                format!("two independent qd info reads agree: pid {:?}, both live", pid_of(a)),
+                format!(
+                    "two independent qd info reads agree: pid {:?}, both live",
+                    pid_of(a)
+                ),
             )
         }
         _ => runner.fail(
@@ -467,8 +475,11 @@ fn resume_same_session_id_via_cli(
         Err(o) => return o,
     };
     commands.push(format!("qd info {session_name} --json"));
-    let original_session_id = fetch_info_json(session_name, path_prefix)
-        .and_then(|v| v.get("sessionId").and_then(serde_json::Value::as_str).map(str::to_string));
+    let original_session_id = fetch_info_json(session_name, path_prefix).and_then(|v| {
+        v.get("sessionId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    });
 
     // A real turn to revive INTO — structural precondition, manually
     // confirmed 2026-07-15 before writing this fix (same finding as pi's
@@ -480,7 +491,9 @@ fn resume_same_session_id_via_cli(
     // committing this driver.
     let prompt = "Reply with exactly the single word OK and nothing else. Do not use any tools.";
     let send_cmd = format!("qd send:relay {session_name} <a trivial real turn>");
-    let send = qd(path_prefix).args(["send:relay", session_name, prompt]).output();
+    let send = qd(path_prefix)
+        .args(["send:relay", session_name, prompt])
+        .output();
     commands.push(send_cmd);
     if !matches!(&send, Ok(o) if o.status.success()) {
         let stderr = match &send {
@@ -488,10 +501,16 @@ fn resume_same_session_id_via_cli(
             Err(e) => format!("spawn error: {e}"),
         };
         let _ = qd(path_prefix).args(["stop", session_name]).output();
-        return runner.fail(commands, format!("qd send:relay did not succeed; stderr/err: {stderr}"), "cannot exercise resume-same-session-id without a completed real turn to resume into");
+        return runner.fail(
+            commands,
+            format!("qd send:relay did not succeed; stderr/err: {stderr}"),
+            "cannot exercise resume-same-session-id without a completed real turn to resume into",
+        );
     }
     let wait_cmd = format!("qd wait {session_name} --timeout 45000");
-    let wait = qd(path_prefix).args(["wait", session_name, "--timeout", "45000"]).output();
+    let wait = qd(path_prefix)
+        .args(["wait", session_name, "--timeout", "45000"])
+        .output();
     commands.push(wait_cmd);
     if !matches!(&wait, Ok(o) if o.status.success()) {
         let stderr = match &wait {
@@ -499,7 +518,11 @@ fn resume_same_session_id_via_cli(
             Err(e) => format!("spawn error: {e}"),
         };
         let _ = qd(path_prefix).args(["stop", session_name]).output();
-        return runner.fail(commands, format!("qd wait did not succeed; stderr/err: {stderr}"), "the real turn must complete before stopping the resident");
+        return runner.fail(
+            commands,
+            format!("qd wait did not succeed; stderr/err: {stderr}"),
+            "the real turn must complete before stopping the resident",
+        );
     }
 
     let stop_cmd = format!("qd stop {session_name}");
@@ -565,9 +588,11 @@ fn resume_same_session_id_via_cli(
     // for the pong-turn/resume-recall drivers, just not yet applied here
     // since this driver never drew a real turn before that day.
     if provider_id == "acp/claude-code" {
-        if let Some(jsonl_path) = fetch_info_json(session_name, path_prefix)
-            .and_then(|v| v.get("jsonlPath").and_then(serde_json::Value::as_str).map(str::to_string))
-        {
+        if let Some(jsonl_path) = fetch_info_json(session_name, path_prefix).and_then(|v| {
+            v.get("jsonlPath")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        }) {
             let _ = std::fs::remove_file(&jsonl_path);
         }
     }
@@ -727,7 +752,11 @@ fn qd_bin() -> String {
 /// Cred-free, deterministic, no live gate — the door fires on registry
 /// shape alone. Uses [`qd_bin`] — this cell's behavior depends on code that
 /// may not be deployed yet (see that function's doc comment).
-fn cold_target_send_fails_via_jail(runner: &Runner, session_name: &str, provider_id: &str) -> Outcome {
+fn cold_target_send_fails_via_jail(
+    runner: &Runner,
+    session_name: &str,
+    provider_id: &str,
+) -> Outcome {
     let jail = match Jail::new(session_name) {
         Ok(j) => j,
         Err(e) => {
@@ -1102,7 +1131,12 @@ fn queue_overflow_via_host(runner: &Runner, provider_id: &str) -> Outcome {
             );
         }
     };
-    let key = SessionKey { id: &session, name: Some("c1-d3"), cwd: Some("/work/proj"), pid: None };
+    let key = SessionKey {
+        id: &session,
+        name: Some("c1-d3"),
+        cwd: Some("/work/proj"),
+        pid: None,
+    };
 
     for i in 1..=3 {
         if let Err(e) = provider.inject(&fx, &key, "m", "c1-d3-queue-test") {
@@ -1248,8 +1282,10 @@ fn cancel_maps_to_truthful_terminal_via_host(runner: &Runner) -> Outcome {
         }
         match host.next_update(std::time::Duration::from_millis(500)) {
             Ok(Some(ev)) => {
-                let is_terminal =
-                    matches!(ev, AcpEvent::Terminal { .. } | AcpEvent::TerminalError { .. });
+                let is_terminal = matches!(
+                    ev,
+                    AcpEvent::Terminal { .. } | AcpEvent::TerminalError { .. }
+                );
                 events.push(ev.clone());
                 if is_terminal {
                     break ev;
@@ -1354,7 +1390,11 @@ fn self_terminate_on_wedged_child_via_host(runner: &Runner) -> Outcome {
         Ok(l) => l,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("bind error: {e}"), "cannot exercise serve without a listener");
+            return runner.fail(
+                commands,
+                format!("bind error: {e}"),
+                "cannot exercise serve without a listener",
+            );
         }
     };
     let alive = AcpHost::spawn("sh", &["-c".to_string(), "sleep 30".to_string()], &tmp);
@@ -1362,14 +1402,22 @@ fn self_terminate_on_wedged_child_via_host(runner: &Runner) -> Outcome {
         Ok(h) => h,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("spawn error (alive stand-in): {e}"), "cannot exercise the no-false-positive arm without a live bridge stand-in");
+            return runner.fail(
+                commands,
+                format!("spawn error (alive stand-in): {e}"),
+                "cannot exercise the no-false-positive arm without a live bridge stand-in",
+            );
         }
     };
     let port1 = match listener1.local_addr() {
         Ok(a) => a.port(),
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("local_addr error: {e}"), "cannot nudge the accept loop without the bound port");
+            return runner.fail(
+                commands,
+                format!("local_addr error: {e}"),
+                "cannot nudge the accept loop without the bound port",
+            );
         }
     };
     let shutdown1 = Arc::new(AtomicBool::new(false));
@@ -1417,7 +1465,11 @@ fn self_terminate_on_wedged_child_via_host(runner: &Runner) -> Outcome {
         Ok(l) => l,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("bind error (arm 2): {e}"), "cannot exercise serve without a listener");
+            return runner.fail(
+                commands,
+                format!("bind error (arm 2): {e}"),
+                "cannot exercise serve without a listener",
+            );
         }
     };
     let dead = AcpHost::spawn("sh", &["-c".to_string(), "exit 0".to_string()], &tmp);
@@ -1425,7 +1477,11 @@ fn self_terminate_on_wedged_child_via_host(runner: &Runner) -> Outcome {
         Ok(h) => h,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("spawn error (exiting stand-in): {e}"), "cannot exercise the self-terminate arm without an exiting bridge stand-in");
+            return runner.fail(
+                commands,
+                format!("spawn error (exiting stand-in): {e}"),
+                "cannot exercise the self-terminate arm without an exiting bridge stand-in",
+            );
         }
     };
     // Wait for the reap to land before starting serve, so the guard is
@@ -1438,7 +1494,8 @@ fn self_terminate_on_wedged_child_via_host(runner: &Runner) -> Outcome {
         let _ = std::fs::remove_dir_all(&tmp);
         return runner.fail(
             commands,
-            "the exiting bridge stand-in was never confirmed dead within a 2s poll bound".to_string(),
+            "the exiting bridge stand-in was never confirmed dead within a 2s poll bound"
+                .to_string(),
             "cannot exercise the self-terminate arm without a confirmed-dead precondition",
         );
     }
@@ -1537,7 +1594,8 @@ fn queue_slot_released_via_host(runner: &Runner, provider_id: &str) -> Outcome {
 
     let commands = vec![
         format!("AcpHost::spawn_with_capacity({node}, [fake-acp-bridge.js], cap=2)"),
-        "Provider::inject x3 (fills to the bound); drain in-flight to terminal; inject again".to_string(),
+        "Provider::inject x3 (fills to the bound); drain in-flight to terminal; inject again"
+            .to_string(),
     ];
 
     let host = AcpHost::spawn_with_capacity(&node, &[fake.to_string_lossy().to_string()], &tmp, 2);
@@ -1545,18 +1603,30 @@ fn queue_slot_released_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         Ok(h) => h,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("spawn error: {e}"), "cannot exercise slot release without a live AcpHost");
+            return runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "cannot exercise slot release without a live AcpHost",
+            );
         }
     };
     if let Err(e) = host.initialize() {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("initialize error: {e}"), "cannot exercise slot release without a completed handshake");
+        return runner.fail(
+            commands,
+            format!("initialize error: {e}"),
+            "cannot exercise slot release without a completed handshake",
+        );
     }
     let session = match host.new_session(&tmp.to_string_lossy()) {
         Ok(s) => s,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("session/new error: {e}"), "cannot exercise slot release without a session");
+            return runner.fail(
+                commands,
+                format!("session/new error: {e}"),
+                "cannot exercise slot release without a session",
+            );
         }
     };
 
@@ -1582,10 +1652,19 @@ fn queue_slot_released_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         Some(p) => p,
         None => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("provider_for({provider_id:?}) returned None"), "the ACP provider must be registered under this id");
+            return runner.fail(
+                commands,
+                format!("provider_for({provider_id:?}) returned None"),
+                "the ACP provider must be registered under this id",
+            );
         }
     };
-    let key = SessionKey { id: &session, name: Some("c1-d3-slot"), cwd: Some("/work/proj"), pid: None };
+    let key = SessionKey {
+        id: &session,
+        name: Some("c1-d3-slot"),
+        cwd: Some("/work/proj"),
+        pid: None,
+    };
 
     let mut turn_ids = Vec::new();
     for i in 1..=3 {
@@ -1688,7 +1767,9 @@ struct ThreePhaseDaemon {
 
 impl Drop for ThreePhaseDaemon {
     fn drop(&mut self) {
-        let _ = Command::new("kill").arg(self.child.id().to_string()).status();
+        let _ = Command::new("kill")
+            .arg(self.child.id().to_string())
+            .status();
         let _ = self.child.wait();
     }
 }
@@ -1718,7 +1799,9 @@ fn spawn_three_phase_daemon(
     .env("HOME", home)
     .env_remove("QD_BOOT_AWAIT_RELAY")
     .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::from(logf.try_clone().map_err(|e| format!("clone log fd: {e}"))?))
+    .stdout(std::process::Stdio::from(
+        logf.try_clone().map_err(|e| format!("clone log fd: {e}"))?,
+    ))
     .stderr(std::process::Stdio::from(logf));
     match qd_home_override {
         Some(p) => {
@@ -1728,12 +1811,16 @@ fn spawn_three_phase_daemon(
             cmd.env_remove("QD_HOME");
         }
     }
-    let child = cmd.spawn().map_err(|e| format!("spawn qd acp-daemon: {e}"))?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("spawn qd acp-daemon: {e}"))?;
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut ready = false;
     while std::time::Instant::now() < deadline {
-        if let Ok(c) = crate::provider::acp::AcpConnection::connect(url, std::time::Duration::from_millis(500)) {
+        if let Ok(c) =
+            crate::provider::acp::AcpConnection::connect(url, std::time::Duration::from_millis(500))
+        {
             if matches!(c.status_session_id(), Ok(Some(_))) {
                 ready = true;
                 break;
@@ -1761,7 +1848,8 @@ fn three_phase_sequence_via_daemon(runner: &Runner, provider_id: &str) -> Outcom
         Some(n) => n,
         None => {
             return Outcome::blocked(
-                "node not found on PATH — the deterministic fake ACP bridge is a node program".to_string(),
+                "node not found on PATH — the deterministic fake ACP bridge is a node program"
+                    .to_string(),
                 "install node (or add it to PATH), then retry".to_string(),
             );
         }
@@ -1769,12 +1857,21 @@ fn three_phase_sequence_via_daemon(runner: &Runner, provider_id: &str) -> Outcom
     let root = std::env::temp_dir().join(format!(
         "c1-3phase-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     let home = root.join("home");
     let registry_dir = home.join(".claude").join("sessions");
-    let events_dir = home.join(".quorum").join("dispatch").join("state").join("sessions");
-    if std::fs::create_dir_all(&registry_dir).is_err() || std::fs::create_dir_all(&events_dir).is_err() {
+    let events_dir = home
+        .join(".quorum")
+        .join("dispatch")
+        .join("state")
+        .join("sessions");
+    if std::fs::create_dir_all(&registry_dir).is_err()
+        || std::fs::create_dir_all(&events_dir).is_err()
+    {
         return runner.fail(
             vec!["(mkdir 3phase jail)".to_string()],
             "failed to create jail dirs".to_string(),
@@ -1787,7 +1884,11 @@ fn three_phase_sequence_via_daemon(runner: &Runner, provider_id: &str) -> Outcom
         Ok(a) => a.port(),
         Err(e) => {
             let _ = std::fs::remove_dir_all(&root);
-            return runner.fail(vec!["(bind port)".to_string()], format!("bind error: {e}"), "cannot start the daemon without a free port");
+            return runner.fail(
+                vec!["(bind port)".to_string()],
+                format!("bind error: {e}"),
+                "cannot start the daemon without a free port",
+            );
         }
     };
     let url = format!("ws://127.0.0.1:{port}");
@@ -1802,7 +1903,11 @@ fn three_phase_sequence_via_daemon(runner: &Runner, provider_id: &str) -> Outcom
         Ok(d) => d,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&root);
-            return runner.fail(commands, e, "the ACP daemon must reach a ready session/new within 30s against the fake bridge");
+            return runner.fail(
+                commands,
+                e,
+                "the ACP daemon must reach a ready session/new within 30s against the fake bridge",
+            );
         }
     };
 
@@ -1819,7 +1924,11 @@ fn three_phase_sequence_via_daemon(runner: &Runner, provider_id: &str) -> Outcom
     };
     if let Err(e) = crate::registry::write_entry(&registry_dir, &entry) {
         let _ = std::fs::remove_dir_all(&root);
-        return runner.fail(commands, format!("failed to write registry row: {e}"), "cannot drive qd send:relay without a resolvable row");
+        return runner.fail(
+            commands,
+            format!("failed to write registry row: {e}"),
+            "cannot drive qd send:relay without a resolvable row",
+        );
     }
 
     let message = "C-1 d2 three-phase probe — one observed send";
@@ -1836,17 +1945,33 @@ fn three_phase_sequence_via_daemon(runner: &Runner, provider_id: &str) -> Outcom
         Ok(o) => {
             let dlog = std::fs::read_to_string(&daemon.daemon_log).unwrap_or_default();
             let _ = std::fs::remove_dir_all(&root);
-            return runner.fail(commands, format!("send:relay exit {:?}; stderr: {}; daemon log:\n{dlog}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "qd send:relay must succeed against a live resident");
+            return runner.fail(
+                commands,
+                format!(
+                    "send:relay exit {:?}; stderr: {}; daemon log:\n{dlog}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                "qd send:relay must succeed against a live resident",
+            );
         }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&root);
-            return runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd itself");
+            return runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd itself",
+            );
         }
     };
     let turn_id = String::from_utf8_lossy(&send.stdout).trim().to_string();
     if turn_id.is_empty() {
         let _ = std::fs::remove_dir_all(&root);
-        return runner.fail(commands, "send:relay printed no turn id (empty stdout)".to_string(), "send:relay must print the injected turn id (the send_id)");
+        return runner.fail(
+            commands,
+            "send:relay printed no turn id (empty stdout)".to_string(),
+            "send:relay must print the injected turn id (the send_id)",
+        );
     }
 
     let wait = Command::new(qd_bin())
@@ -1866,30 +1991,63 @@ fn three_phase_sequence_via_daemon(runner: &Runner, provider_id: &str) -> Outcom
     let _ = std::fs::remove_dir_all(&root);
 
     if !wait_ok {
-        return runner.fail(commands, format!("qd wait did not succeed; stderr: {wait_err}; log:\n{raw}"), "qd wait must return 0 on a clean end_turn terminal");
+        return runner.fail(
+            commands,
+            format!("qd wait did not succeed; stderr: {wait_err}; log:\n{raw}"),
+            "qd wait must return 0 on a clean end_turn terminal",
+        );
     }
-    let recs: Vec<serde_json::Value> = raw.lines().filter(|l| !l.trim().is_empty()).filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let recs: Vec<serde_json::Value> = raw
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
     let phase_idx = |event: &str| -> Option<usize> {
-        recs.iter().position(|r| r["event"] == event && r["send_id"].as_str() == Some(turn_id.as_str()))
+        recs.iter()
+            .position(|r| r["event"] == event && r["send_id"].as_str() == Some(turn_id.as_str()))
     };
     let i_init = match phase_idx("send-initiated") {
         Some(i) => i,
-        None => return runner.fail(commands, format!("phase 1 send-initiated (send_id={turn_id}) missing; log:\n{raw}"), "the daemon must log send-initiated for this send_id"),
+        None => {
+            return runner.fail(
+                commands,
+                format!("phase 1 send-initiated (send_id={turn_id}) missing; log:\n{raw}"),
+                "the daemon must log send-initiated for this send_id",
+            )
+        }
     };
     let i_acc = match phase_idx("turn-accepted") {
         Some(i) => i,
-        None => return runner.fail(commands, format!("phase 2 turn-accepted (send_id={turn_id}) missing; log:\n{raw}"), "the daemon must log turn-accepted for this send_id"),
+        None => {
+            return runner.fail(
+                commands,
+                format!("phase 2 turn-accepted (send_id={turn_id}) missing; log:\n{raw}"),
+                "the daemon must log turn-accepted for this send_id",
+            )
+        }
     };
     let i_seen = match phase_idx("message-seen") {
         Some(i) => i,
-        None => return runner.fail(commands, format!("phase 3 message-seen (send_id={turn_id}) missing; log:\n{raw}"), "the daemon must log message-seen for this send_id"),
+        None => {
+            return runner.fail(
+                commands,
+                format!("phase 3 message-seen (send_id={turn_id}) missing; log:\n{raw}"),
+                "the daemon must log message-seen for this send_id",
+            )
+        }
     };
     if !(i_init < i_acc && i_acc < i_seen) {
         return runner.fail(commands, format!("phases out of order: send-initiated@{i_init} turn-accepted@{i_acc} message-seen@{i_seen}; log:\n{raw}"), "the three phases must appear in strict append order: sent < delivered < terminal");
     }
-    let sha_ok = [i_init, i_acc, i_seen].iter().all(|&i| recs[i]["content_sha256"].as_str() == Some(expect_sha.as_str()));
+    let sha_ok = [i_init, i_acc, i_seen]
+        .iter()
+        .all(|&i| recs[i]["content_sha256"].as_str() == Some(expect_sha.as_str()));
     if !sha_ok {
-        return runner.fail(commands, format!("content_sha256 mismatch across phases; expected {expect_sha}; log:\n{raw}"), "all three phases must carry the same content_sha256, correlated by send_id");
+        return runner.fail(
+            commands,
+            format!("content_sha256 mismatch across phases; expected {expect_sha}; log:\n{raw}"),
+            "all three phases must carry the same content_sha256, correlated by send_id",
+        );
     }
     runner.pass(
         commands,
@@ -1914,7 +2072,8 @@ fn delivery_log_home_override_via_daemon(runner: &Runner, provider_id: &str) -> 
         Some(n) => n,
         None => {
             return Outcome::blocked(
-                "node not found on PATH — the deterministic fake ACP bridge is a node program".to_string(),
+                "node not found on PATH — the deterministic fake ACP bridge is a node program"
+                    .to_string(),
                 "install node (or add it to PATH), then retry".to_string(),
             );
         }
@@ -1922,14 +2081,23 @@ fn delivery_log_home_override_via_daemon(runner: &Runner, provider_id: &str) -> 
     let root = std::env::temp_dir().join(format!(
         "c1-3phase-qdh-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     let home = root.join("home");
     let qd_home = root.join("qd");
     let registry_dir = home.join(".claude").join("sessions");
     let qd_events_dir = qd_home.join("state").join("sessions");
-    let home_events_dir = home.join(".quorum").join("dispatch").join("state").join("sessions");
-    if std::fs::create_dir_all(&registry_dir).is_err() || std::fs::create_dir_all(&qd_events_dir).is_err() {
+    let home_events_dir = home
+        .join(".quorum")
+        .join("dispatch")
+        .join("state")
+        .join("sessions");
+    if std::fs::create_dir_all(&registry_dir).is_err()
+        || std::fs::create_dir_all(&qd_events_dir).is_err()
+    {
         return runner.fail(
             vec!["(mkdir qd-home-override jail)".to_string()],
             "failed to create jail dirs".to_string(),
@@ -1942,13 +2110,20 @@ fn delivery_log_home_override_via_daemon(runner: &Runner, provider_id: &str) -> 
         Ok(a) => a.port(),
         Err(e) => {
             let _ = std::fs::remove_dir_all(&root);
-            return runner.fail(vec!["(bind port)".to_string()], format!("bind error: {e}"), "cannot start the daemon without a free port");
+            return runner.fail(
+                vec!["(bind port)".to_string()],
+                format!("bind error: {e}"),
+                "cannot start the daemon without a free port",
+            );
         }
     };
     let url = format!("ws://127.0.0.1:{port}");
 
     let commands = vec![
-        format!("qd acp-daemon --listen {url} (QD_HOME={})", qd_home.display()),
+        format!(
+            "qd acp-daemon --listen {url} (QD_HOME={})",
+            qd_home.display()
+        ),
         "qd send:relay <name> <msg> (QD_HOME set)".to_string(),
         "qd wait <name> --timeout 30000 (QD_HOME set)".to_string(),
     ];
@@ -1974,7 +2149,11 @@ fn delivery_log_home_override_via_daemon(runner: &Runner, provider_id: &str) -> 
     };
     if let Err(e) = crate::registry::write_entry(&registry_dir, &entry) {
         let _ = std::fs::remove_dir_all(&root);
-        return runner.fail(commands, format!("failed to write registry row: {e}"), "cannot drive qd send:relay without a resolvable row");
+        return runner.fail(
+            commands,
+            format!("failed to write registry row: {e}"),
+            "cannot drive qd send:relay without a resolvable row",
+        );
     }
 
     let message = "C-1 d2 three-phase probe — under a QD_HOME override";
@@ -1991,17 +2170,33 @@ fn delivery_log_home_override_via_daemon(runner: &Runner, provider_id: &str) -> 
         Ok(o) => {
             let dlog = std::fs::read_to_string(&daemon.daemon_log).unwrap_or_default();
             let _ = std::fs::remove_dir_all(&root);
-            return runner.fail(commands, format!("send:relay exit {:?}; stderr: {}; daemon log:\n{dlog}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "qd send:relay must succeed against a live resident under QD_HOME");
+            return runner.fail(
+                commands,
+                format!(
+                    "send:relay exit {:?}; stderr: {}; daemon log:\n{dlog}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                "qd send:relay must succeed against a live resident under QD_HOME",
+            );
         }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&root);
-            return runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd itself");
+            return runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd itself",
+            );
         }
     };
     let turn_id = String::from_utf8_lossy(&send.stdout).trim().to_string();
     if turn_id.is_empty() {
         let _ = std::fs::remove_dir_all(&root);
-        return runner.fail(commands, "send:relay printed no turn id (empty stdout)".to_string(), "send:relay must print the injected turn id");
+        return runner.fail(
+            commands,
+            "send:relay printed no turn id (empty stdout)".to_string(),
+            "send:relay must print the injected turn id",
+        );
     }
 
     let wait = Command::new(qd_bin())
@@ -2023,16 +2218,29 @@ fn delivery_log_home_override_via_daemon(runner: &Runner, provider_id: &str) -> 
     let _ = std::fs::remove_dir_all(&root);
 
     if !wait_ok {
-        return runner.fail(commands, format!("qd wait did not succeed under QD_HOME; stderr: {wait_err}; log:\n{raw}"), "qd wait must return 0 under QD_HOME on a clean end_turn terminal");
+        return runner.fail(
+            commands,
+            format!("qd wait did not succeed under QD_HOME; stderr: {wait_err}; log:\n{raw}"),
+            "qd wait must return 0 under QD_HOME on a clean end_turn terminal",
+        );
     }
     if raw.trim().is_empty() {
         return runner.fail(commands, format!("QD_HOME delivery log is empty or missing at {qd_log_path:?}; orphan-log present={}", orphan_raw.is_some()), "all three phases must land in the QD_HOME-honoring log, never orphan into the from_home log");
     }
-    let recs: Vec<serde_json::Value> = raw.lines().filter(|l| !l.trim().is_empty()).filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let recs: Vec<serde_json::Value> = raw
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
     let phase_idx = |event: &str| -> Option<usize> {
-        recs.iter().position(|r| r["event"] == event && r["send_id"].as_str() == Some(turn_id.as_str()))
+        recs.iter()
+            .position(|r| r["event"] == event && r["send_id"].as_str() == Some(turn_id.as_str()))
     };
-    let (i_init, i_acc, i_seen) = match (phase_idx("send-initiated"), phase_idx("turn-accepted"), phase_idx("message-seen")) {
+    let (i_init, i_acc, i_seen) = match (
+        phase_idx("send-initiated"),
+        phase_idx("turn-accepted"),
+        phase_idx("message-seen"),
+    ) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
         other => {
             return runner.fail(
@@ -2045,7 +2253,9 @@ fn delivery_log_home_override_via_daemon(runner: &Runner, provider_id: &str) -> 
     if !(i_init < i_acc && i_acc < i_seen) {
         return runner.fail(commands, format!("phases out of order under QD_HOME: send-initiated@{i_init} turn-accepted@{i_acc} message-seen@{i_seen}; log:\n{raw}"), "the three phases must appear in strict order even under QD_HOME");
     }
-    let sha_ok = [i_init, i_acc, i_seen].iter().all(|&i| recs[i]["content_sha256"].as_str() == Some(expect_sha.as_str()));
+    let sha_ok = [i_init, i_acc, i_seen]
+        .iter()
+        .all(|&i| recs[i]["content_sha256"].as_str() == Some(expect_sha.as_str()));
     if !sha_ok {
         return runner.fail(commands, format!("content_sha256 mismatch across phases under QD_HOME; expected {expect_sha}; log:\n{raw}"), "all three phases must carry the same content_sha256 under QD_HOME too");
     }
@@ -2092,8 +2302,14 @@ fn real_bridge_script() -> std::path::PathBuf {
 /// see `claude_code::run_one_claude_code_turn`).
 fn claude_project_dir_for(cwd: &std::path::Path) -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
-    let encoded: String = cwd.to_string_lossy().chars().map(|c| if c == '/' { '-' } else { c }).collect();
-    std::path::PathBuf::from(home).join(".claude/projects").join(encoded)
+    let encoded: String = cwd
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' { '-' } else { c })
+        .collect();
+    std::path::PathBuf::from(home)
+        .join(".claude/projects")
+        .join(encoded)
 }
 
 /// Raw evidence from ONE real ACP turn, collected once and consumed by two
@@ -2140,7 +2356,8 @@ fn run_one_pong_turn(runner: &Runner, provider_id: &str) -> Result<PongTurnEvide
                 Some(n) => n,
                 None => {
                     return Err(Outcome::blocked(
-                        "node not found on PATH — the real ACP bridge is a node program".to_string(),
+                        "node not found on PATH — the real ACP bridge is a node program"
+                            .to_string(),
                         "install node (or add it to PATH), then retry".to_string(),
                     ));
                 }
@@ -2149,10 +2366,12 @@ fn run_one_pong_turn(runner: &Runner, provider_id: &str) -> Result<PongTurnEvide
             if !bridge.exists() {
                 return Err(Outcome::blocked(
                     format!("real ACP bridge script not found at {}", bridge.display()),
-                    "install the claude-code-acp bridge (see QD_ACP_BRIDGE), then retry".to_string(),
+                    "install the claude-code-acp bridge (see QD_ACP_BRIDGE), then retry"
+                        .to_string(),
                 ));
             }
-            let creds = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude/.credentials.json");
+            let creds = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+                .join(".claude/.credentials.json");
             if !creds.exists() {
                 return Err(Outcome::blocked(
                     "no ~/.claude/.credentials.json — this cell needs real claude-code credentials for an actual model turn".to_string(),
@@ -2162,26 +2381,43 @@ fn run_one_pong_turn(runner: &Runner, provider_id: &str) -> Result<PongTurnEvide
             (node, vec![bridge.to_string_lossy().to_string()])
         }
         "acp/opencode" => {
-            if Command::new("opencode").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+            if Command::new("opencode")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
                 ("opencode".to_string(), vec!["acp".to_string()])
             } else {
                 return Err(Outcome::blocked(
-                    "opencode not found on PATH — its own binary IS the ACP bridge (opencode acp)".to_string(),
+                    "opencode not found on PATH — its own binary IS the ACP bridge (opencode acp)"
+                        .to_string(),
                     "install opencode (or add it to PATH), then retry".to_string(),
                 ));
             }
         }
         other => {
-            return Err(runner.fail(vec![], format!("no real-bridge argv known for provider_id {other:?}"), "run_one_pong_turn only supports the two ACP-family lanes"));
+            return Err(runner.fail(
+                vec![],
+                format!("no real-bridge argv known for provider_id {other:?}"),
+                "run_one_pong_turn only supports the two ACP-family lanes",
+            ));
         }
     };
     let tmp = std::env::temp_dir().join(format!(
         "c1-pongturn-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     if std::fs::create_dir_all(&tmp).is_err() {
-        return Err(runner.fail(vec!["(mkdir pong-turn jail)".to_string()], "failed to create scratch dir".to_string(), "cannot spawn the real bridge without a cwd"));
+        return Err(runner.fail(
+            vec!["(mkdir pong-turn jail)".to_string()],
+            "failed to create scratch dir".to_string(),
+            "cannot spawn the real bridge without a cwd",
+        ));
     }
     let cwd = tmp.to_string_lossy().to_string();
     let prompt = "Reply with exactly the single word PONG and nothing else. Do not use any tools.";
@@ -2195,16 +2431,24 @@ fn run_one_pong_turn(runner: &Runner, provider_id: &str) -> Result<PongTurnEvide
         Ok(h) => h,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
-            return Err(runner.fail(commands, format!("spawn error: {e}"), "cannot exercise a real turn without a live AcpHost bridge"));
+            let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
+            return Err(runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "cannot exercise a real turn without a live AcpHost bridge",
+            ));
         }
     };
     let provider = match provider_for(provider_id) {
         Some(p) => p,
         None => {
             let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
-            return Err(runner.fail(commands, format!("provider_for({provider_id:?}) returned None"), "the ACP provider must be registered under this id"));
+            let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
+            return Err(runner.fail(
+                commands,
+                format!("provider_for({provider_id:?}) returned None"),
+                "the ACP provider must be registered under this id",
+            ));
         }
     };
     let env = MapEnv::default();
@@ -2228,23 +2472,40 @@ fn run_one_pong_turn(runner: &Runner, provider_id: &str) -> Result<PongTurnEvide
     if let Err(e) = provider.boot_waiter(&fx).wait_ready("c1-pong-turn") {
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
-        return Err(runner.fail(commands, format!("boot_waiter.wait_ready error: {e:?}"), "the ACP initialize handshake must succeed through the provider seam"));
+        return Err(runner.fail(
+            commands,
+            format!("boot_waiter.wait_ready error: {e:?}"),
+            "the ACP initialize handshake must succeed through the provider seam",
+        ));
     }
     let session = match host.new_session(&cwd) {
         Ok(s) => s,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
-            return Err(runner.fail(commands, format!("session/new error: {e}"), "cannot exercise a real turn without a session"));
+            let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
+            return Err(runner.fail(
+                commands,
+                format!("session/new error: {e}"),
+                "cannot exercise a real turn without a session",
+            ));
         }
     };
-    let key = SessionKey { id: &session, name: Some("c1-pong-turn"), cwd: Some(&cwd), pid: None };
+    let key = SessionKey {
+        id: &session,
+        name: Some("c1-pong-turn"),
+        cwd: Some(&cwd),
+        pid: None,
+    };
     let turn = match provider.inject(&fx, &key, prompt, "c1-pong-turn-test") {
         Ok(t) => t,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
-            return Err(runner.fail(commands, format!("inject error: {e:?}"), "cannot exercise a real turn without a successful inject"));
+            let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
+            return Err(runner.fail(
+                commands,
+                format!("inject error: {e:?}"),
+                "cannot exercise a real turn without a successful inject",
+            ));
         }
     };
 
@@ -2253,17 +2514,27 @@ fn run_one_pong_turn(runner: &Runner, provider_id: &str) -> Result<PongTurnEvide
     let terminal = loop {
         if std::time::Instant::now() >= deadline {
             let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
-            return Err(runner.fail(commands, format!("timed out before a terminal ({updates} updates seen)"), "a trivial single-word turn must resolve to a terminal within 120s"));
+            let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
+            return Err(runner.fail(
+                commands,
+                format!("timed out before a terminal ({updates} updates seen)"),
+                "a trivial single-word turn must resolve to a terminal within 120s",
+            ));
         }
         match host.next_update(std::time::Duration::from_millis(500)) {
             Ok(Some(AcpEvent::Update { .. })) => updates += 1,
-            Ok(Some(term @ (AcpEvent::Terminal { .. } | AcpEvent::TerminalError { .. }))) => break term,
+            Ok(Some(term @ (AcpEvent::Terminal { .. } | AcpEvent::TerminalError { .. }))) => {
+                break term
+            }
             Ok(None) => continue,
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
-                return Err(runner.fail(commands, format!("next_update errored before terminal: {e}"), "the transport must stay healthy through a drain-to-terminal"));
+                let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
+                return Err(runner.fail(
+                    commands,
+                    format!("next_update errored before terminal: {e}"),
+                    "the transport must stay healthy through a drain-to-terminal",
+                ));
             }
         }
     };
@@ -2271,16 +2542,21 @@ fn run_one_pong_turn(runner: &Runner, provider_id: &str) -> Result<PongTurnEvide
         AcpEvent::Terminal { turn: t, stop, .. } => (t.clone(), *stop),
         other => {
             let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
-            return Err(runner.fail(commands, format!("expected a Terminal, got {other:?}"), "a trivial single-word turn must terminate cleanly, not TerminalError"));
+            let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
+            return Err(runner.fail(
+                commands,
+                format!("expected a Terminal, got {other:?}"),
+                "a trivial single-word turn must terminate cleanly, not TerminalError",
+            ));
         }
     };
     let completion = AcpTurnCompletion::new(&host);
     let completion_visible = completion.poll_completion() == TurnCompletionProbe::Visible;
-    let completion_protocol_confirmed = completion.terminal_reason() == Some((TerminalReason::Completed, Confidence::ProtocolConfirmed));
+    let completion_protocol_confirmed = completion.terminal_reason()
+        == Some((TerminalReason::Completed, Confidence::ProtocolConfirmed));
     let assistant_text = host.assistant_text();
     let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
+    let _ = std::fs::remove_dir_all(claude_project_dir_for(&tmp));
 
     Ok(PongTurnEvidence {
         commands,
@@ -2304,16 +2580,38 @@ fn turn_correlation_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         Err(outcome) => return outcome,
     };
     if !ev.terminal_correlates {
-        return runner.fail(ev.commands, format!("the terminal turn id did not match the injected turn id (turn={})", ev.turn), "the reply must correlate back to the exact injected turn id");
+        return runner.fail(
+            ev.commands,
+            format!(
+                "the terminal turn id did not match the injected turn id (turn={})",
+                ev.turn
+            ),
+            "the reply must correlate back to the exact injected turn id",
+        );
     }
     if !ev.terminal_is_end_turn {
-        return runner.fail(ev.commands, format!("terminal stop reason was not EndTurn (turn={})", ev.turn), "a clean PONG-only turn must terminate end_turn");
+        return runner.fail(
+            ev.commands,
+            format!("terminal stop reason was not EndTurn (turn={})", ev.turn),
+            "a clean PONG-only turn must terminate end_turn",
+        );
     }
     if !ev.completion_visible {
-        return runner.fail(ev.commands, format!("poll_completion() was not Visible (turn={})", ev.turn), "completion must be independently confirmed as visible, not just a terminal event");
+        return runner.fail(
+            ev.commands,
+            format!("poll_completion() was not Visible (turn={})", ev.turn),
+            "completion must be independently confirmed as visible, not just a terminal event",
+        );
     }
     if !ev.completion_protocol_confirmed {
-        return runner.fail(ev.commands, format!("terminal_reason() was not (Completed, ProtocolConfirmed) (turn={})", ev.turn), "completion must be protocol-confirmed, not inferred");
+        return runner.fail(
+            ev.commands,
+            format!(
+                "terminal_reason() was not (Completed, ProtocolConfirmed) (turn={})",
+                ev.turn
+            ),
+            "completion must be protocol-confirmed, not inferred",
+        );
     }
     runner.pass(
         ev.commands,
@@ -2337,7 +2635,14 @@ fn transcript_tee_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         Err(outcome) => return outcome,
     };
     if !ev.assistant_text.contains("PONG") {
-        return runner.fail(ev.commands, format!("transcript tee assistant_text={:?} does not contain PONG (turn={})", ev.assistant_text, ev.turn), "the tee must capture the model's literal reply text");
+        return runner.fail(
+            ev.commands,
+            format!(
+                "transcript tee assistant_text={:?} does not contain PONG (turn={})",
+                ev.assistant_text, ev.turn
+            ),
+            "the tee must capture the model's literal reply text",
+        );
     }
     runner.pass(
         ev.commands,
@@ -2380,34 +2685,67 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         "acp/claude-code" => {
             let node = match node_program() {
                 Some(n) => n,
-                None => return Outcome::blocked("node not found on PATH — the real ACP bridge is a node program".to_string(), "install node (or add it to PATH), then retry".to_string()),
+                None => {
+                    return Outcome::blocked(
+                        "node not found on PATH — the real ACP bridge is a node program"
+                            .to_string(),
+                        "install node (or add it to PATH), then retry".to_string(),
+                    )
+                }
             };
             let bridge = real_bridge_script();
             if !bridge.exists() {
-                return Outcome::blocked(format!("real ACP bridge script not found at {}", bridge.display()), "install the claude-code-acp bridge (see QD_ACP_BRIDGE), then retry".to_string());
+                return Outcome::blocked(
+                    format!("real ACP bridge script not found at {}", bridge.display()),
+                    "install the claude-code-acp bridge (see QD_ACP_BRIDGE), then retry"
+                        .to_string(),
+                );
             }
-            let creds = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude/.credentials.json");
+            let creds = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+                .join(".claude/.credentials.json");
             if !creds.exists() {
                 return Outcome::blocked("no ~/.claude/.credentials.json — this cell needs real claude-code credentials for actual model turns".to_string(), "authenticate claude-code on this box, then retry".to_string());
             }
             (node, vec![bridge.to_string_lossy().to_string()])
         }
         "acp/opencode" => {
-            if Command::new("opencode").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+            if Command::new("opencode")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
                 ("opencode".to_string(), vec!["acp".to_string()])
             } else {
-                return Outcome::blocked("opencode not found on PATH — its own binary IS the ACP bridge (opencode acp)".to_string(), "install opencode (or add it to PATH), then retry".to_string());
+                return Outcome::blocked(
+                    "opencode not found on PATH — its own binary IS the ACP bridge (opencode acp)"
+                        .to_string(),
+                    "install opencode (or add it to PATH), then retry".to_string(),
+                );
             }
         }
-        other => return runner.fail(vec![], format!("no real-bridge argv known for provider_id {other:?}"), "resume_recall_via_host only supports the two ACP-family lanes"),
+        other => {
+            return runner.fail(
+                vec![],
+                format!("no real-bridge argv known for provider_id {other:?}"),
+                "resume_recall_via_host only supports the two ACP-family lanes",
+            )
+        }
     };
     let tmp = std::env::temp_dir().join(format!(
         "c1-resumerecall-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     if std::fs::create_dir_all(&tmp).is_err() {
-        return runner.fail(vec!["(mkdir resume-recall jail)".to_string()], "failed to create scratch dir".to_string(), "cannot spawn the real bridge without a cwd");
+        return runner.fail(
+            vec!["(mkdir resume-recall jail)".to_string()],
+            "failed to create scratch dir".to_string(),
+            "cannot spawn the real bridge without a cwd",
+        );
     }
     let cwd = tmp.to_string_lossy().to_string();
     let codeword = format!("ZEBRA-{}-QUARK", std::process::id() % 10000);
@@ -2428,7 +2766,9 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
             }
             match host.next_update(std::time::Duration::from_millis(500)) {
                 Ok(Some(AcpEvent::Update { .. })) => continue,
-                Ok(Some(term @ (AcpEvent::Terminal { .. } | AcpEvent::TerminalError { .. }))) => return Ok(term),
+                Ok(Some(term @ (AcpEvent::Terminal { .. } | AcpEvent::TerminalError { .. }))) => {
+                    return Ok(term)
+                }
                 Ok(None) => continue,
                 Err(e) => return Err(format!("next_update errored: {e}")),
             }
@@ -2440,7 +2780,11 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         Some(p) => p,
         None => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("provider_for({provider_id:?}) returned None"), "the ACP provider must be registered under this id");
+            return runner.fail(
+                commands,
+                format!("provider_for({provider_id:?}) returned None"),
+                "the ACP provider must be registered under this id",
+            );
         }
     };
 
@@ -2449,29 +2793,69 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         Ok(h) => h,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("spawn error (host1): {e}"), "cannot exercise resume-recall without a live AcpHost");
+            return runner.fail(
+                commands,
+                format!("spawn error (host1): {e}"),
+                "cannot exercise resume-recall without a live AcpHost",
+            );
         }
     };
-    let fx1 = ProviderFx { await_relay: None, env: &env, paths: &paths, socket_dir: tmp.clone(), mux: None, clock: None, sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None, acp_client: Some(&host1), pi_rpc: None, acp_pre_dispatch: None };
+    let fx1 = ProviderFx {
+        await_relay: None,
+        env: &env,
+        paths: &paths,
+        socket_dir: tmp.clone(),
+        mux: None,
+        clock: None,
+        sleeper: None,
+        relay: None,
+        relay_port: None,
+        app_server: None,
+        codex_expected_turn_id: None,
+        acp_client: Some(&host1),
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
     if let Err(e) = provider.boot_waiter(&fx1).wait_ready("c1-resume-recall-1") {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("boot_waiter.wait_ready error (host1): {e:?}"), "the ACP initialize handshake must succeed through the provider seam");
+        return runner.fail(
+            commands,
+            format!("boot_waiter.wait_ready error (host1): {e:?}"),
+            "the ACP initialize handshake must succeed through the provider seam",
+        );
     }
     let session = match host1.new_session(&cwd) {
         Ok(s) => s,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("session/new error: {e}"), "cannot exercise resume-recall without a session");
+            return runner.fail(
+                commands,
+                format!("session/new error: {e}"),
+                "cannot exercise resume-recall without a session",
+            );
         }
     };
-    let key1 = SessionKey { id: &session, name: Some("c1-resume-recall"), cwd: Some(&cwd), pid: None };
+    let key1 = SessionKey {
+        id: &session,
+        name: Some("c1-resume-recall"),
+        cwd: Some(&cwd),
+        pid: None,
+    };
     if let Err(e) = provider.inject(&fx1, &key1, &turn1_prompt, "c1-resume-recall-test") {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("inject error (turn 1): {e:?}"), "cannot exercise resume-recall without a successful first inject");
+        return runner.fail(
+            commands,
+            format!("inject error (turn 1): {e:?}"),
+            "cannot exercise resume-recall without a successful first inject",
+        );
     }
     if let Err(e) = drive(&host1, std::time::Duration::from_secs(120)) {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("turn 1 drain error: {e}"), "the codeword-stating turn must resolve to a terminal within 120s");
+        return runner.fail(
+            commands,
+            format!("turn 1 drain error: {e}"),
+            "the codeword-stating turn must resolve to a terminal within 120s",
+        );
     }
     drop(host1); // simulated daemon stop — no persist beyond the engine's own transcript.
 
@@ -2480,35 +2864,80 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         Ok(h) => h,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp);
-            return runner.fail(commands, format!("spawn error (host2): {e}"), "cannot exercise the resume half without a fresh AcpHost");
+            return runner.fail(
+                commands,
+                format!("spawn error (host2): {e}"),
+                "cannot exercise the resume half without a fresh AcpHost",
+            );
         }
     };
     if let Err(e) = host2.initialize() {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("initialize error (host2): {e}"), "the fresh bridge must complete its own handshake");
+        return runner.fail(
+            commands,
+            format!("initialize error (host2): {e}"),
+            "the fresh bridge must complete its own handshake",
+        );
     }
     if let Err(e) = host2.load_session(&session, &cwd) {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("load_session error: {e}"), "session/load must resume the prior session on the fresh bridge");
+        return runner.fail(
+            commands,
+            format!("load_session error: {e}"),
+            "session/load must resume the prior session on the fresh bridge",
+        );
     }
     let resumed_id = host2.session_id();
     if resumed_id.as_deref() != Some(session.as_str()) {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("post-load session id {resumed_id:?} != original {session:?}"), "resume must re-establish the SAME session id, never re-mint or fork");
+        return runner.fail(
+            commands,
+            format!("post-load session id {resumed_id:?} != original {session:?}"),
+            "resume must re-establish the SAME session id, never re-mint or fork",
+        );
     }
-    let fx2 = ProviderFx { await_relay: None, env: &env, paths: &paths, socket_dir: tmp.clone(), mux: None, clock: None, sleeper: None, relay: None, relay_port: None, app_server: None, codex_expected_turn_id: None, acp_client: Some(&host2), pi_rpc: None, acp_pre_dispatch: None };
-    let key2 = SessionKey { id: &session, name: Some("c1-resume-recall"), cwd: Some(&cwd), pid: None };
+    let fx2 = ProviderFx {
+        await_relay: None,
+        env: &env,
+        paths: &paths,
+        socket_dir: tmp.clone(),
+        mux: None,
+        clock: None,
+        sleeper: None,
+        relay: None,
+        relay_port: None,
+        app_server: None,
+        codex_expected_turn_id: None,
+        acp_client: Some(&host2),
+        pi_rpc: None,
+        acp_pre_dispatch: None,
+    };
+    let key2 = SessionKey {
+        id: &session,
+        name: Some("c1-resume-recall"),
+        cwd: Some(&cwd),
+        pid: None,
+    };
     if let Err(e) = provider.inject(&fx2, &key2, &turn2_prompt, "c1-resume-recall-test") {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("inject error (turn 2): {e:?}"), "cannot exercise recall without a successful second inject");
+        return runner.fail(
+            commands,
+            format!("inject error (turn 2): {e:?}"),
+            "cannot exercise recall without a successful second inject",
+        );
     }
     if let Err(e) = drive(&host2, std::time::Duration::from_secs(120)) {
         let _ = std::fs::remove_dir_all(&tmp);
-        return runner.fail(commands, format!("turn 2 drain error: {e}"), "the recall turn must resolve to a terminal within 120s");
+        return runner.fail(
+            commands,
+            format!("turn 2 drain error: {e}"),
+            "the recall turn must resolve to a terminal within 120s",
+        );
     }
     let completion = AcpTurnCompletion::new(&host2);
     let completion_ok = completion.poll_completion() == TurnCompletionProbe::Visible
-        && completion.terminal_reason() == Some((TerminalReason::Completed, Confidence::ProtocolConfirmed));
+        && completion.terminal_reason()
+            == Some((TerminalReason::Completed, Confidence::ProtocolConfirmed));
     let recall_text = host2.assistant_text();
 
     // --- Ground the claim in the underlying engine's OWN transcript,
@@ -2533,9 +2962,22 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let (jsonl_files, assistant_count) = loop {
             let files: Vec<std::path::PathBuf> = std::fs::read_dir(&project_dir)
-                .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("jsonl")).collect())
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("jsonl"))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let count = files.first().map(|p| std::fs::read_to_string(p).unwrap_or_default().lines().filter(|l| l.contains("\"role\":\"assistant\"")).count()).unwrap_or(0);
+            let count = files
+                .first()
+                .map(|p| {
+                    std::fs::read_to_string(p)
+                        .unwrap_or_default()
+                        .lines()
+                        .filter(|l| l.contains("\"role\":\"assistant\""))
+                        .count()
+                })
+                .unwrap_or(0);
             if count >= 2 || std::time::Instant::now() >= deadline {
                 break (files, count);
             }
@@ -2551,7 +2993,15 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
     let _ = std::fs::remove_dir_all(&tmp);
 
     if !completion_ok {
-        return runner.fail(commands, format!("recall turn's completion was not protocol-confirmed (poll={:?}, reason={:?})", completion.poll_completion(), completion.terminal_reason()), "the recall turn's completion must be independently confirmed, same as any other turn");
+        return runner.fail(
+            commands,
+            format!(
+                "recall turn's completion was not protocol-confirmed (poll={:?}, reason={:?})",
+                completion.poll_completion(),
+                completion.terminal_reason()
+            ),
+            "the recall turn's completion must be independently confirmed, same as any other turn",
+        );
     }
     if !recall_text.contains(&codeword) {
         return runner.fail(commands, format!("recall reply {recall_text:?} does not contain the codeword {codeword:?} — the model did not recall pre-stop context"), "post-resume, the model must recall pre-stop context (the injected codeword)");
@@ -2597,7 +3047,9 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
 /// doc comment); the accidentally-started daemon is torn down best-effort.
 fn codex_gate_probe(runner: &Runner, session_name: &str) -> Outcome {
     let start_cmd = format!("qd start {session_name} --provider codex");
-    let start = qd(None).args(["start", session_name, "--provider", "codex"]).output();
+    let start = qd(None)
+        .args(["start", session_name, "--provider", "codex"])
+        .output();
     match start {
         Ok(o) if !o.status.success() => {
             let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
@@ -2618,7 +3070,11 @@ fn codex_gate_probe(runner: &Runner, session_name: &str) -> Outcome {
                 "no real-turn/id-tagged driver is implemented for codex yet — this cell needs one built before it can Pass on a box where codex actually boots",
             )
         }
-        Err(e) => runner.fail(vec![start_cmd], format!("spawn error: {e}"), "failed to spawn qd itself"),
+        Err(e) => runner.fail(
+            vec![start_cmd],
+            format!("spawn error: {e}"),
+            "failed to spawn qd itself",
+        ),
     }
 }
 
@@ -2630,7 +3086,8 @@ fn pi_bin() -> std::path::PathBuf {
             return std::path::PathBuf::from(b);
         }
     }
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".npm-pi-global/bin/pi")
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+        .join(".npm-pi-global/bin/pi")
 }
 
 /// Symlink the REAL `~/.pi/agent` OAuth (auth.json + settings.json,
@@ -2676,7 +3133,9 @@ fn read_pi_row(sessions_dir: &std::path::Path, name: &str) -> Option<(String, St
         if p.extension().and_then(|x| x.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&p) else { continue };
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            continue;
+        };
         let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         if !compact.contains(&want_name) {
             continue;
@@ -2701,7 +3160,9 @@ fn collect_pi_assistant_text(dir: &std::path::Path) -> String {
     let mut out = String::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -2726,7 +3187,9 @@ fn count_pi_assistant_messages(dir: &std::path::Path) -> usize {
     let mut n = 0usize;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -2798,11 +3261,18 @@ fn run_one_pi_turn(runner: &Runner) -> Result<PiTurnEvidence, Outcome> {
     let home = std::env::temp_dir().join(format!(
         "c1-pi-turn-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     let sess_dir = home.join("pi-sessions");
     if std::fs::create_dir_all(&sess_dir).is_err() {
-        return Err(runner.fail(vec!["(mkdir pi-turn jail)".to_string()], "failed to create scratch dirs".to_string(), "cannot spawn a real pi resident without a cwd/session dir"));
+        return Err(runner.fail(
+            vec!["(mkdir pi-turn jail)".to_string()],
+            "failed to create scratch dirs".to_string(),
+            "cannot spawn a real pi resident without a cwd/session dir",
+        ));
     }
     if !link_real_pi_cred(&home) {
         let _ = std::fs::remove_dir_all(&home);
@@ -2815,7 +3285,10 @@ fn run_one_pi_turn(runner: &Runner) -> Result<PiTurnEvidence, Outcome> {
     let name = "c1-pi-turn";
     let qd_cmd = |args: &[&str]| -> Command {
         let mut c = Command::new(qd_bin());
-        c.args(args).env("HOME", &home).env("QD_PI_BIN", &pi).env("PI_CODING_AGENT_SESSION_DIR", &sess_dir);
+        c.args(args)
+            .env("HOME", &home)
+            .env("QD_PI_BIN", &pi)
+            .env("PI_CODING_AGENT_SESSION_DIR", &sess_dir);
         for v in SCRUB_VARS {
             c.env_remove(v);
         }
@@ -2831,11 +3304,23 @@ fn run_one_pi_turn(runner: &Runner) -> Result<PiTurnEvidence, Outcome> {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
             let _ = std::fs::remove_dir_all(&home);
-            return Err(runner.fail(commands, format!("qd start --provider pi exit {:?}; stderr: {}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "cannot exercise a real turn without a live pi resident"));
+            return Err(runner.fail(
+                commands,
+                format!(
+                    "qd start --provider pi exit {:?}; stderr: {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                "cannot exercise a real turn without a live pi resident",
+            ));
         }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&home);
-            return Err(runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd itself"));
+            return Err(runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd itself",
+            ));
         }
     }
 
@@ -2849,7 +3334,11 @@ fn run_one_pi_turn(runner: &Runner) -> Result<PiTurnEvidence, Outcome> {
         Some(r) => r,
         None => {
             stop_and_clean(&home);
-            return Err(runner.fail(commands, "no pi row with endpoint found after start".to_string(), "cannot exercise a real turn without a resolvable resident row"));
+            return Err(runner.fail(
+                commands,
+                "no pi row with endpoint found after start".to_string(),
+                "cannot exercise a real turn without a resolvable resident row",
+            ));
         }
     };
 
@@ -2866,16 +3355,29 @@ fn run_one_pi_turn(runner: &Runner) -> Result<PiTurnEvidence, Outcome> {
     let prompt = "Reply with exactly the single word PONG and nothing else. Do not use any tools.";
     let send_out = qd_cmd(&["send:relay", name, prompt]).output();
     let (send_ok, turn_id) = match &send_out {
-        Ok(o) => (o.status.success(), String::from_utf8_lossy(&o.stdout).trim().to_string()),
+        Ok(o) => (
+            o.status.success(),
+            String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        ),
         Err(e) => {
             stop_and_clean(&home);
-            return Err(runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd send:relay"));
+            return Err(runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd send:relay",
+            ));
         }
     };
     if !send_ok || turn_id.is_empty() {
-        let stderr = send_out.map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default();
+        let stderr = send_out
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+            .unwrap_or_default();
         stop_and_clean(&home);
-        return Err(runner.fail(commands, format!("qd send:relay did not mint a turn id; stderr: {stderr}"), "cannot exercise a real turn without a successful send"));
+        return Err(runner.fail(
+            commands,
+            format!("qd send:relay did not mint a turn id; stderr: {stderr}"),
+            "cannot exercise a real turn without a successful send",
+        ));
     }
     // EXCLUSIVITY PRECONDITION (see PiTurnEvidence's doc comment): exactly ONE
     // turn was ever injected against this resident — the whole
@@ -2938,13 +3440,34 @@ fn pi_turn_correlation(runner: &Runner) -> Outcome {
         Err(outcome) => return outcome,
     };
     if !ev.idle_before {
-        return runner.fail(ev.commands, format!("resident was not Idle before the send (turn={})", ev.turn_id), "the exclusivity precondition requires starting from a genuinely idle resident");
+        return runner.fail(
+            ev.commands,
+            format!(
+                "resident was not Idle before the send (turn={})",
+                ev.turn_id
+            ),
+            "the exclusivity precondition requires starting from a genuinely idle resident",
+        );
     }
     if !ev.busy_seen {
-        return runner.fail(ev.commands, format!("never observed is_streaming BUSY during the turn (turn={})", ev.turn_id), "completion must be protocol-confirmed via a busy phase, not inferred from silence");
+        return runner.fail(
+            ev.commands,
+            format!(
+                "never observed is_streaming BUSY during the turn (turn={})",
+                ev.turn_id
+            ),
+            "completion must be protocol-confirmed via a busy phase, not inferred from silence",
+        );
     }
     if !ev.idle_after {
-        return runner.fail(ev.commands, format!("resident did not return to IDLE after the turn within 90s (turn={})", ev.turn_id), "completion must be protocol-confirmed via a return to idle");
+        return runner.fail(
+            ev.commands,
+            format!(
+                "resident did not return to IDLE after the turn within 90s (turn={})",
+                ev.turn_id
+            ),
+            "completion must be protocol-confirmed via a return to idle",
+        );
     }
     let grew_by_exactly_one = ev.assistant_after == ev.assistant_before + 1;
     if !grew_by_exactly_one {
@@ -3043,18 +3566,30 @@ fn pi_self_terminate_probe(runner: &Runner, session_name: &str) -> Outcome {
 
     let start_cmd = format!("qd start {session_name} --provider pi");
     let mut commands = vec![start_cmd.clone()];
-    let start = qd(None).args(["start", session_name, "--provider", "pi"]).output();
+    let start = qd(None)
+        .args(["start", session_name, "--provider", "pi"])
+        .output();
     match start {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
             teardown(None);
             return runner.fail(
                 commands,
-                format!("qd start exit {:?}; stderr: {}", o.status.code(), String::from_utf8_lossy(&o.stderr)),
+                format!(
+                    "qd start exit {:?}; stderr: {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
                 "could not start a pi daemon to exercise the wedged-child probe",
             );
         }
-        Err(e) => return runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd start"),
+        Err(e) => {
+            return runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd start",
+            )
+        }
     }
 
     // Precondition: the session is live with a real daemon pid before we touch it.
@@ -3076,7 +3611,11 @@ fn pi_self_terminate_probe(runner: &Runner, session_name: &str) -> Outcome {
         Some(p) => p,
         None => {
             teardown(None);
-            return runner.fail(commands, "pre-kill info carried no pid".to_string(), "cannot locate the daemon's child without the daemon pid");
+            return runner.fail(
+                commands,
+                "pre-kill info carried no pid".to_string(),
+                "cannot locate the daemon's child without the daemon pid",
+            );
         }
     };
 
@@ -3116,7 +3655,9 @@ fn pi_self_terminate_probe(runner: &Runner, session_name: &str) -> Outcome {
     // Kill ONLY the child, out from under the daemon, and confirm it is genuinely
     // dead (gone, or a defunct zombie) before reading liveness.
     commands.push(format!("kill -9 {child_pid}"));
-    let _ = Command::new("kill").args(["-9", &child_pid.to_string()]).status();
+    let _ = Command::new("kill")
+        .args(["-9", &child_pid.to_string()])
+        .status();
     std::thread::sleep(std::time::Duration::from_millis(800));
     let child_stat = Command::new("ps")
         .args(["-o", "stat=", "-p", &child_pid.to_string()])
@@ -3185,16 +3726,26 @@ fn pi_resume_recall(runner: &Runner) -> Outcome {
 
     let pi = pi_bin();
     if !pi.exists() {
-        return Outcome::blocked(format!("pinned pi binary not found at {}", pi.display()), "set QD_PI_BIN to a real pi binary, then retry".to_string());
+        return Outcome::blocked(
+            format!("pinned pi binary not found at {}", pi.display()),
+            "set QD_PI_BIN to a real pi binary, then retry".to_string(),
+        );
     }
     let home = std::env::temp_dir().join(format!(
         "c1-pi-resume-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     let sess_dir = home.join("pi-sessions");
     if std::fs::create_dir_all(&sess_dir).is_err() {
-        return runner.fail(vec!["(mkdir pi-resume jail)".to_string()], "failed to create scratch dirs".to_string(), "cannot spawn a real pi resident without a cwd/session dir");
+        return runner.fail(
+            vec!["(mkdir pi-resume jail)".to_string()],
+            "failed to create scratch dirs".to_string(),
+            "cannot spawn a real pi resident without a cwd/session dir",
+        );
     }
     if !link_real_pi_cred(&home) {
         let _ = std::fs::remove_dir_all(&home);
@@ -3204,13 +3755,21 @@ fn pi_resume_recall(runner: &Runner) -> Outcome {
     let name = "c1-pi-resume";
     let qd_cmd = |args: &[&str]| -> Command {
         let mut c = Command::new(qd_bin());
-        c.args(args).env("HOME", &home).env("QD_PI_BIN", &pi).env("PI_CODING_AGENT_SESSION_DIR", &sess_dir);
+        c.args(args)
+            .env("HOME", &home)
+            .env("QD_PI_BIN", &pi)
+            .env("PI_CODING_AGENT_SESSION_DIR", &sess_dir);
         for v in SCRUB_VARS {
             c.env_remove(v);
         }
         c
     };
-    let fail_and_clean = |runner: &Runner, home: &std::path::Path, commands: Vec<String>, observed: String, why: &str| -> Outcome {
+    let fail_and_clean = |runner: &Runner,
+                          home: &std::path::Path,
+                          commands: Vec<String>,
+                          observed: String,
+                          why: &str|
+     -> Outcome {
         let _ = qd_cmd(&["stop", name]).output();
         let _ = std::fs::remove_dir_all(home);
         runner.fail(commands, observed, why)
@@ -3221,26 +3780,64 @@ fn pi_resume_recall(runner: &Runner) -> Outcome {
     let start = qd_cmd(&["start", name, "--provider", "pi", "--cwd", &cwd]).output();
     match &start {
         Ok(o) if o.status.success() => {}
-        Ok(o) => return fail_and_clean(runner, &home, commands, format!("qd start exit {:?}; stderr: {}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "cannot exercise resume-recall without a live pi resident"),
+        Ok(o) => {
+            return fail_and_clean(
+                runner,
+                &home,
+                commands,
+                format!(
+                    "qd start exit {:?}; stderr: {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                "cannot exercise resume-recall without a live pi resident",
+            )
+        }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&home);
-            return runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd itself");
+            return runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd itself",
+            );
         }
     }
 
     let sessions_dir = crate::paths::QdPaths::from_home(&home).sessions_dir;
-    let (original_session_id, endpoint1) = match read_pi_row(&sessions_dir, name).map(|(e, s)| (s, e)) {
-        Some(r) if !r.0.is_empty() => r,
-        _ => return fail_and_clean(runner, &home, commands, "no pi row with sessionId+endpoint found after start".to_string(), "cannot exercise resume-recall without a resolvable resident row"),
-    };
+    let (original_session_id, endpoint1) =
+        match read_pi_row(&sessions_dir, name).map(|(e, s)| (s, e)) {
+            Some(r) if !r.0.is_empty() => r,
+            _ => {
+                return fail_and_clean(
+                    runner,
+                    &home,
+                    commands,
+                    "no pi row with sessionId+endpoint found after start".to_string(),
+                    "cannot exercise resume-recall without a resolvable resident row",
+                )
+            }
+        };
 
     let turn1_prompt = format!("Remember this exact codeword for later: {codeword}. Just acknowledge you've noted it in one short sentence. Do not use any tools.");
     commands.push(format!("qd send:relay {name} <turn1: state codeword>"));
-    if !matches!(qd_cmd(&["send:relay", name, &turn1_prompt]).output(), Ok(o) if o.status.success()) {
-        return fail_and_clean(runner, &home, commands, "qd send:relay (turn 1) did not succeed".to_string(), "cannot exercise resume-recall without a successful first send");
+    if !matches!(qd_cmd(&["send:relay", name, &turn1_prompt]).output(), Ok(o) if o.status.success())
+    {
+        return fail_and_clean(
+            runner,
+            &home,
+            commands,
+            "qd send:relay (turn 1) did not succeed".to_string(),
+            "cannot exercise resume-recall without a successful first send",
+        );
     }
     if let Err(e) = poll_pi_idle(&endpoint1, std::time::Duration::from_secs(90)) {
-        return fail_and_clean(runner, &home, commands, format!("turn 1 did not settle idle: {e}"), "turn 1 must complete (settle idle) before stopping the resident");
+        return fail_and_clean(
+            runner,
+            &home,
+            commands,
+            format!("turn 1 did not settle idle: {e}"),
+            "turn 1 must complete (settle idle) before stopping the resident",
+        );
     }
 
     commands.push(format!("qd stop {name}"));
@@ -3249,39 +3846,92 @@ fn pi_resume_recall(runner: &Runner) -> Outcome {
     let resume = qd_cmd(&["resume", name, "--no-attach"]).output();
     match &resume {
         Ok(o) if o.status.success() => {}
-        Ok(o) => return fail_and_clean(runner, &home, commands, format!("qd resume exit {:?}; stderr: {}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "qd resume must succeed against a stopped pi session"),
+        Ok(o) => {
+            return fail_and_clean(
+                runner,
+                &home,
+                commands,
+                format!(
+                    "qd resume exit {:?}; stderr: {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                "qd resume must succeed against a stopped pi session",
+            )
+        }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&home);
-            return runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd resume");
+            return runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd resume",
+            );
         }
     }
 
-    let (resumed_session_id, endpoint2) = match read_pi_row(&sessions_dir, name).map(|(e, s)| (s, e)) {
-        Some(r) => r,
-        None => return fail_and_clean(runner, &home, commands, "no pi row found after resume".to_string(), "cannot exercise the recall turn without a resolvable resumed row"),
-    };
+    let (resumed_session_id, endpoint2) =
+        match read_pi_row(&sessions_dir, name).map(|(e, s)| (s, e)) {
+            Some(r) => r,
+            None => {
+                return fail_and_clean(
+                    runner,
+                    &home,
+                    commands,
+                    "no pi row found after resume".to_string(),
+                    "cannot exercise the recall turn without a resolvable resumed row",
+                )
+            }
+        };
     if resumed_session_id != original_session_id {
-        return fail_and_clean(runner, &home, commands, format!("post-resume sessionId {resumed_session_id:?} != original {original_session_id:?}"), "resume must re-establish the SAME session id, never re-mint or fork");
+        return fail_and_clean(
+            runner,
+            &home,
+            commands,
+            format!(
+                "post-resume sessionId {resumed_session_id:?} != original {original_session_id:?}"
+            ),
+            "resume must re-establish the SAME session id, never re-mint or fork",
+        );
     }
 
     let turn2_prompt = "What was the codeword I told you earlier? Reply with just the codeword, nothing else. Do not use any tools.".to_string();
     commands.push(format!("qd send:relay {name} <turn2: recall>"));
-    if !matches!(qd_cmd(&["send:relay", name, &turn2_prompt]).output(), Ok(o) if o.status.success()) {
-        return fail_and_clean(runner, &home, commands, "qd send:relay (turn 2) did not succeed".to_string(), "cannot exercise recall without a successful second send");
+    if !matches!(qd_cmd(&["send:relay", name, &turn2_prompt]).output(), Ok(o) if o.status.success())
+    {
+        return fail_and_clean(
+            runner,
+            &home,
+            commands,
+            "qd send:relay (turn 2) did not succeed".to_string(),
+            "cannot exercise recall without a successful second send",
+        );
     }
     if let Err(e) = poll_pi_idle(&endpoint2, std::time::Duration::from_secs(90)) {
-        return fail_and_clean(runner, &home, commands, format!("turn 2 did not settle idle: {e}"), "the recall turn must complete (settle idle)");
+        return fail_and_clean(
+            runner,
+            &home,
+            commands,
+            format!("turn 2 did not settle idle: {e}"),
+            "the recall turn must complete (settle idle)",
+        );
     }
 
     let jsonl_files: Vec<std::path::PathBuf> = std::fs::read_dir(&sess_dir)
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("jsonl")).collect())
+        .map(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("jsonl"))
+                .collect()
+        })
         .unwrap_or_default();
     let single_file = jsonl_files.len() == 1;
     let recall_ok = jsonl_files.first().is_some_and(|p| {
-        std::fs::read_to_string(p).unwrap_or_default().lines().any(|l| {
-            let compact: String = l.chars().filter(|c| !c.is_whitespace()).collect();
-            compact.contains("\"role\":\"assistant\"") && compact.contains(&codeword)
-        })
+        std::fs::read_to_string(p)
+            .unwrap_or_default()
+            .lines()
+            .any(|l| {
+                let compact: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+                compact.contains("\"role\":\"assistant\"") && compact.contains(&codeword)
+            })
     });
 
     let _ = qd_cmd(&["stop", name]).output();
@@ -3291,7 +3941,13 @@ fn pi_resume_recall(runner: &Runner) -> Outcome {
         return runner.fail(commands, format!("expected exactly 1 transcript jsonl file, found {}", jsonl_files.len()), "the transcript must grow the SAME session file across resume — never fork into a second file");
     }
     if !recall_ok {
-        return runner.fail(commands, format!("no assistant-role message contains the codeword {codeword:?} after resume+recall"), "post-resume, the model must recall pre-stop context (the injected codeword)");
+        return runner.fail(
+            commands,
+            format!(
+                "no assistant-role message contains the codeword {codeword:?} after resume+recall"
+            ),
+            "post-resume, the model must recall pre-stop context (the injected codeword)",
+        );
     }
     runner.pass(
         commands,
@@ -3311,7 +3967,8 @@ fn poll_pi_idle(endpoint: &str, budget: std::time::Duration) -> Result<(), Strin
     use crate::provider::pi::rpc::PiRpc;
     use crate::provider::pi::PiRemote;
 
-    let conn = PiRemote::connect(endpoint, std::time::Duration::from_secs(5)).map_err(|e| format!("connect error: {e}"))?;
+    let conn = PiRemote::connect(endpoint, std::time::Duration::from_secs(5))
+        .map_err(|e| format!("connect error: {e}"))?;
     let deadline = std::time::Instant::now() + budget;
     let mut busy_seen = false;
     while std::time::Instant::now() < deadline {
@@ -3350,16 +4007,26 @@ fn pi_resume_same_session_id(runner: &Runner) -> Outcome {
 
     let pi = pi_bin();
     if !pi.exists() {
-        return Outcome::blocked(format!("pinned pi binary not found at {}", pi.display()), "set QD_PI_BIN to a real pi binary, then retry".to_string());
+        return Outcome::blocked(
+            format!("pinned pi binary not found at {}", pi.display()),
+            "set QD_PI_BIN to a real pi binary, then retry".to_string(),
+        );
     }
     let home = std::env::temp_dir().join(format!(
         "c1-pi-d1resume-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     let sess_dir = home.join("pi-sessions");
     if std::fs::create_dir_all(&sess_dir).is_err() {
-        return runner.fail(vec!["(mkdir pi-d1resume jail)".to_string()], "failed to create scratch dirs".to_string(), "cannot spawn a real pi resident without a cwd/session dir");
+        return runner.fail(
+            vec!["(mkdir pi-d1resume jail)".to_string()],
+            "failed to create scratch dirs".to_string(),
+            "cannot spawn a real pi resident without a cwd/session dir",
+        );
     }
     if !link_real_pi_cred(&home) {
         let _ = std::fs::remove_dir_all(&home);
@@ -3369,13 +4036,21 @@ fn pi_resume_same_session_id(runner: &Runner) -> Outcome {
     let name = "c1-pi-d1resume";
     let qd_cmd = |args: &[&str]| -> Command {
         let mut c = Command::new(qd_bin());
-        c.args(args).env("HOME", &home).env("QD_PI_BIN", &pi).env("PI_CODING_AGENT_SESSION_DIR", &sess_dir);
+        c.args(args)
+            .env("HOME", &home)
+            .env("QD_PI_BIN", &pi)
+            .env("PI_CODING_AGENT_SESSION_DIR", &sess_dir);
         for v in SCRUB_VARS {
             c.env_remove(v);
         }
         c
     };
-    let fail_and_clean = |runner: &Runner, home: &std::path::Path, commands: Vec<String>, observed: String, why: &str| -> Outcome {
+    let fail_and_clean = |runner: &Runner,
+                          home: &std::path::Path,
+                          commands: Vec<String>,
+                          observed: String,
+                          why: &str|
+     -> Outcome {
         let _ = qd_cmd(&["stop", name]).output();
         let _ = std::fs::remove_dir_all(home);
         runner.fail(commands, observed, why)
@@ -3385,28 +4060,65 @@ fn pi_resume_same_session_id(runner: &Runner) -> Outcome {
     let start = qd_cmd(&["start", name, "--provider", "pi", "--cwd", &cwd]).output();
     match &start {
         Ok(o) if o.status.success() => {}
-        Ok(o) => return fail_and_clean(runner, &home, commands, format!("qd start exit {:?}; stderr: {}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "cannot exercise resume-same-session-id without a live pi resident"),
+        Ok(o) => {
+            return fail_and_clean(
+                runner,
+                &home,
+                commands,
+                format!(
+                    "qd start exit {:?}; stderr: {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                "cannot exercise resume-same-session-id without a live pi resident",
+            )
+        }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&home);
-            return runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd itself");
+            return runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd itself",
+            );
         }
     }
 
     let sessions_dir = crate::paths::QdPaths::from_home(&home).sessions_dir;
-    let (original_session_id, endpoint1) = match read_pi_row(&sessions_dir, name).map(|(e, s)| (s, e)) {
-        Some(r) if !r.0.is_empty() => r,
-        _ => return fail_and_clean(runner, &home, commands, "no pi row with sessionId+endpoint found after start".to_string(), "cannot exercise resume-same-session-id without a resolvable resident row"),
-    };
+    let (original_session_id, endpoint1) =
+        match read_pi_row(&sessions_dir, name).map(|(e, s)| (s, e)) {
+            Some(r) if !r.0.is_empty() => r,
+            _ => {
+                return fail_and_clean(
+                    runner,
+                    &home,
+                    commands,
+                    "no pi row with sessionId+endpoint found after start".to_string(),
+                    "cannot exercise resume-same-session-id without a resolvable resident row",
+                )
+            }
+        };
 
     // A real turn to revive INTO — structural precondition, see this fn's
     // doc comment. Content is irrelevant; only completion matters here.
     commands.push(format!("qd send:relay {name} <a trivial real turn>"));
     let prompt = "Reply with exactly the single word OK and nothing else. Do not use any tools.";
     if !matches!(qd_cmd(&["send:relay", name, prompt]).output(), Ok(o) if o.status.success()) {
-        return fail_and_clean(runner, &home, commands, "qd send:relay did not succeed".to_string(), "cannot exercise resume-same-session-id without a completed real turn to resume into");
+        return fail_and_clean(
+            runner,
+            &home,
+            commands,
+            "qd send:relay did not succeed".to_string(),
+            "cannot exercise resume-same-session-id without a completed real turn to resume into",
+        );
     }
     if let Err(e) = poll_pi_idle(&endpoint1, std::time::Duration::from_secs(90)) {
-        return fail_and_clean(runner, &home, commands, format!("the turn did not settle idle: {e}"), "the real turn must complete before stopping the resident");
+        return fail_and_clean(
+            runner,
+            &home,
+            commands,
+            format!("the turn did not settle idle: {e}"),
+            "the real turn must complete before stopping the resident",
+        );
     }
 
     commands.push(format!("qd stop {name}"));
@@ -3415,10 +4127,26 @@ fn pi_resume_same_session_id(runner: &Runner) -> Outcome {
     let resume = qd_cmd(&["resume", name, "--no-attach"]).output();
     match &resume {
         Ok(o) if o.status.success() => {}
-        Ok(o) => return fail_and_clean(runner, &home, commands, format!("qd resume exit {:?}; stderr: {}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "qd resume must succeed against a stopped pi session with a real prior turn"),
+        Ok(o) => {
+            return fail_and_clean(
+                runner,
+                &home,
+                commands,
+                format!(
+                    "qd resume exit {:?}; stderr: {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                "qd resume must succeed against a stopped pi session with a real prior turn",
+            )
+        }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&home);
-            return runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd resume");
+            return runner.fail(
+                commands,
+                format!("spawn error: {e}"),
+                "failed to spawn qd resume",
+            );
         }
     }
 
@@ -3476,7 +4204,9 @@ fn teardown_reaps_via_cli(
             "qd start did not succeed",
         );
     }
-    let info = qd(path_prefix).args(["info", session_name, "--json"]).output();
+    let info = qd(path_prefix)
+        .args(["info", session_name, "--json"])
+        .output();
     let pid = match info {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
@@ -3503,13 +4233,21 @@ fn teardown_reaps_via_cli(
         Ok(o) if o.status.success() => {
             if os_pid_alive(pid) {
                 runner.fail(
-                    vec![start_cmd, format!("qd info {session_name} --json"), stop_cmd],
+                    vec![
+                        start_cmd,
+                        format!("qd info {session_name} --json"),
+                        stop_cmd,
+                    ],
                     format!("pid {pid} still alive at the OS level after qd stop reported success"),
                     "teardown must genuinely reap the process, not just mark the row stopped",
                 )
             } else {
                 runner.pass(
-                    vec![start_cmd, format!("qd info {session_name} --json"), stop_cmd],
+                    vec![
+                        start_cmd,
+                        format!("qd info {session_name} --json"),
+                        stop_cmd,
+                    ],
                     format!("pid {pid} confirmed dead via `ps -p` after qd stop"),
                 )
             }
@@ -3601,7 +4339,9 @@ pub mod pi {
     /// `d6.bridge-death-detection-no-false-positive` on the `pi` lane:
     /// `NotApplicable`, matching the registry's declared reason.
     pub fn bridge_death_detection(_runner: &Runner, _session_name: &str) -> Outcome {
-        Outcome::not_applicable("pi has no ACP bridge child process for this liveness primitive to apply to")
+        Outcome::not_applicable(
+            "pi has no ACP bridge child process for this liveness primitive to apply to",
+        )
     }
 
     /// `d6.cancel-maps-to-truthful-terminal` on the `pi` lane: `NotApplicable`,
@@ -3627,13 +4367,17 @@ pub mod pi {
     /// `d3.queue-overflow-honors-configured-capacity` on the `pi` lane:
     /// `NotApplicable`, matching the registry's declared reason.
     pub fn queue_overflow(_runner: &Runner, _session_name: &str) -> Outcome {
-        Outcome::not_applicable("pi has no measured analogous outbound-queue/in-flight primitive to the ACP host's")
+        Outcome::not_applicable(
+            "pi has no measured analogous outbound-queue/in-flight primitive to the ACP host's",
+        )
     }
 
     /// `d3.queue-slot-released-no-leak` on the `pi` lane: `NotApplicable`,
     /// matching the registry's declared reason.
     pub fn queue_slot_released(_runner: &Runner, _session_name: &str) -> Outcome {
-        Outcome::not_applicable("pi has no measured analogous outbound-queue/in-flight primitive to the ACP host's")
+        Outcome::not_applicable(
+            "pi has no measured analogous outbound-queue/in-flight primitive to the ACP host's",
+        )
     }
 
     /// `d2.turn-correlation-and-completion` on the `pi` lane. REAL model
@@ -3744,7 +4488,9 @@ pub mod codex {
     /// `d6.bridge-death-detection-no-false-positive` on the `codex` lane:
     /// `NotApplicable`, matching the registry's declared reason.
     pub fn bridge_death_detection(_runner: &Runner, _session_name: &str) -> Outcome {
-        Outcome::not_applicable("codex has no ACP bridge child process for this liveness primitive to apply to")
+        Outcome::not_applicable(
+            "codex has no ACP bridge child process for this liveness primitive to apply to",
+        )
     }
 
     /// `d6.cancel-maps-to-truthful-terminal` on the `codex` lane:
@@ -3770,13 +4516,17 @@ pub mod codex {
     /// `d3.queue-overflow-honors-configured-capacity` on the `codex` lane:
     /// `NotApplicable`, matching the registry's declared reason.
     pub fn queue_overflow(_runner: &Runner, _session_name: &str) -> Outcome {
-        Outcome::not_applicable("codex has no measured analogous outbound-queue/in-flight primitive to the ACP host's")
+        Outcome::not_applicable(
+            "codex has no measured analogous outbound-queue/in-flight primitive to the ACP host's",
+        )
     }
 
     /// `d3.queue-slot-released-no-leak` on the `codex` lane:
     /// `NotApplicable`, matching the registry's declared reason.
     pub fn queue_slot_released(_runner: &Runner, _session_name: &str) -> Outcome {
-        Outcome::not_applicable("codex has no measured analogous outbound-queue/in-flight primitive to the ACP host's")
+        Outcome::not_applicable(
+            "codex has no measured analogous outbound-queue/in-flight primitive to the ACP host's",
+        )
     }
 
     /// `d2.turn-correlation-and-completion` on the `codex` lane. Codex's
@@ -3841,39 +4591,74 @@ pub mod acp {
 
     /// `d1.teardown-reaps-process-group` on the `acp/claude-code` lane.
     pub fn teardown_reaps(runner: &Runner, session_name: &str) -> Outcome {
-        teardown_reaps_via_cli(runner, session_name, "acp/claude-code", Some(&bridge_bin_dir()))
+        teardown_reaps_via_cli(
+            runner,
+            session_name,
+            "acp/claude-code",
+            Some(&bridge_bin_dir()),
+        )
     }
 
     /// `d1.launch-addressing` on the `acp/claude-code` lane.
     pub fn launch_addressing(runner: &Runner, session_name: &str) -> Outcome {
-        launch_addressing_via_cli(runner, session_name, "acp/claude-code", Some(&bridge_bin_dir()))
+        launch_addressing_via_cli(
+            runner,
+            session_name,
+            "acp/claude-code",
+            Some(&bridge_bin_dir()),
+        )
     }
 
     /// `d1.transport-is-our-daemon` on the `acp/claude-code` lane.
     pub fn transport_is_our_daemon(runner: &Runner, session_name: &str) -> Outcome {
-        transport_is_our_daemon_via_cli(runner, session_name, "acp/claude-code", Some(&bridge_bin_dir()))
+        transport_is_our_daemon_via_cli(
+            runner,
+            session_name,
+            "acp/claude-code",
+            Some(&bridge_bin_dir()),
+        )
     }
 
     /// `d1.liveness-process-alive` on the `acp/claude-code` lane.
     pub fn liveness_process_alive(runner: &Runner, session_name: &str) -> Outcome {
-        liveness_process_alive_via_cli(runner, session_name, "acp/claude-code", Some(&bridge_bin_dir()))
+        liveness_process_alive_via_cli(
+            runner,
+            session_name,
+            "acp/claude-code",
+            Some(&bridge_bin_dir()),
+        )
     }
 
     /// `d1.reconnect-resolves-via-registry` on the `acp/claude-code` lane.
     pub fn reconnect_resolves(runner: &Runner, session_name: &str) -> Outcome {
-        reconnect_resolves_via_cli(runner, session_name, "acp/claude-code", Some(&bridge_bin_dir()))
+        reconnect_resolves_via_cli(
+            runner,
+            session_name,
+            "acp/claude-code",
+            Some(&bridge_bin_dir()),
+        )
     }
 
     /// `d1.resume-same-session-id` on the `acp/claude-code` lane.
     pub fn resume_same_session_id(runner: &Runner, session_name: &str) -> Outcome {
-        resume_same_session_id_via_cli(runner, session_name, "acp/claude-code", Some(&bridge_bin_dir()))
+        resume_same_session_id_via_cli(
+            runner,
+            session_name,
+            "acp/claude-code",
+            Some(&bridge_bin_dir()),
+        )
     }
 
     /// `d1.multiplex-concurrent-distinct-residents` on the `acp/claude-code`
     /// lane. NOT yet cleared to run live (mc-5 greenlit pi only, 2026-07-14 —
     /// re-check before firing this on any heavier lane).
     pub fn multiplex_concurrent(runner: &Runner, session_name: &str) -> Outcome {
-        multiplex_concurrent_via_cli(runner, session_name, "acp/claude-code", Some(&bridge_bin_dir()))
+        multiplex_concurrent_via_cli(
+            runner,
+            session_name,
+            "acp/claude-code",
+            Some(&bridge_bin_dir()),
+        )
     }
 
     /// `d6.cold-target-send-fails-loud-with-terminal` on the `acp/claude-code`
@@ -4197,7 +4982,12 @@ pub mod claude_code {
         };
         // Best-effort teardown — never overrides the already-decided outcome.
         let _ = Command::new("bond")
-            .args(["decommission", session_name, "--note", "C-1 d1.boot-readiness probe"])
+            .args([
+                "decommission",
+                session_name,
+                "--note",
+                "C-1 d1.boot-readiness probe",
+            ])
             .output();
         outcome
     }
@@ -4260,7 +5050,12 @@ pub mod claude_code {
         };
         let decommission_cmd = format!("bond decommission {session_name}");
         let decommission = Command::new("bond")
-            .args(["decommission", session_name, "--note", "C-1 d1.teardown-reaps probe"])
+            .args([
+                "decommission",
+                session_name,
+                "--note",
+                "C-1 d1.teardown-reaps probe",
+            ])
             .output();
         match decommission {
             Ok(o) if o.status.success() => {
@@ -4272,7 +5067,11 @@ pub mod claude_code {
                     )
                 } else {
                     runner.pass(
-                        vec![commission_cmd, format!("qd info {session_name} --json"), decommission_cmd],
+                        vec![
+                            commission_cmd,
+                            format!("qd info {session_name} --json"),
+                            decommission_cmd,
+                        ],
                         format!("pid {pid} confirmed dead via `ps -p` after bond decommission"),
                     )
                 }
@@ -4423,7 +5222,10 @@ pub mod claude_code {
             Some(p) => {
                 commands.push(format!("ps -p {p}"));
                 if os_pid_alive(p) {
-                    runner.pass(commands, format!("pid {p} confirmed alive via `ps -p` while live"))
+                    runner.pass(
+                        commands,
+                        format!("pid {p} confirmed alive via `ps -p` while live"),
+                    )
                 } else {
                     runner.fail(
                         commands,
@@ -4464,7 +5266,10 @@ pub mod claude_code {
             {
                 runner.pass(
                     commands,
-                    format!("two independent qd info reads agree: pid {:?}, both live", pid_of(a)),
+                    format!(
+                        "two independent qd info reads agree: pid {:?}, both live",
+                        pid_of(a)
+                    ),
                 )
             }
             _ => runner.fail(
@@ -4497,29 +5302,50 @@ pub mod claude_code {
             Ok(c) => c,
             Err(o) => return o,
         };
-        let fail_and_clean = |runner: &Runner, commands: Vec<String>, observed: String, why: &str| -> Outcome {
-            decommission_best_effort(session_name);
-            runner.fail(commands, observed, why)
-        };
+        let fail_and_clean =
+            |runner: &Runner, commands: Vec<String>, observed: String, why: &str| -> Outcome {
+                decommission_best_effort(session_name);
+                runner.fail(commands, observed, why)
+            };
 
-        let original_session_id = fetch_info_json(session_name, None)
-            .and_then(|v| v.get("sessionId").and_then(serde_json::Value::as_str).map(str::to_string));
+        let original_session_id = fetch_info_json(session_name, None).and_then(|v| {
+            v.get("sessionId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
         commands.push(format!("qd info {session_name} --json"));
         let original_session_id = match original_session_id {
             Some(id) => id,
-            None => return fail_and_clean(runner, commands, "could not capture the original sessionId after commission".to_string(), "cannot verify resume continuity without a starting sessionId"),
+            None => {
+                return fail_and_clean(
+                    runner,
+                    commands,
+                    "could not capture the original sessionId after commission".to_string(),
+                    "cannot verify resume continuity without a starting sessionId",
+                )
+            }
         };
 
         // A real turn to revive INTO — structural precondition, see this
         // fn's doc comment (matches pi's identical finding).
-        let prompt = "Reply with exactly the single word OK and nothing else. Do not use any tools.";
-        commands.push(format!("qd send:relay {session_name} <a trivial real turn>"));
-        if !matches!(Command::new(qd_bin()).args(["send:relay", session_name, prompt]).output(), Ok(o) if o.status.success()) {
+        let prompt =
+            "Reply with exactly the single word OK and nothing else. Do not use any tools.";
+        commands.push(format!(
+            "qd send:relay {session_name} <a trivial real turn>"
+        ));
+        if !matches!(Command::new(qd_bin()).args(["send:relay", session_name, prompt]).output(), Ok(o) if o.status.success())
+        {
             return fail_and_clean(runner, commands, "qd send:relay did not succeed".to_string(), "cannot exercise resume-same-session-id without a completed real turn to resume into");
         }
         commands.push(format!("qd wait {session_name} --timeout 120000"));
-        if !matches!(Command::new(qd_bin()).args(["wait", session_name, "--timeout", "120000"]).output(), Ok(o) if o.status.success()) {
-            return fail_and_clean(runner, commands, "qd wait did not succeed".to_string(), "the real turn must complete before decommissioning");
+        if !matches!(Command::new(qd_bin()).args(["wait", session_name, "--timeout", "120000"]).output(), Ok(o) if o.status.success())
+        {
+            return fail_and_clean(
+                runner,
+                commands,
+                "qd wait did not succeed".to_string(),
+                "the real turn must complete before decommissioning",
+            );
         }
 
         // The real turn above wrote this session's transcript to the CALLER's
@@ -4529,8 +5355,11 @@ pub mod claude_code {
         // remove only THIS run's own file on every exit path below — never
         // rm -rf the shared dir. Same residue class as `run_one_claude_code_turn`
         // and 94c4065; this specific driver was missed.
-        let jsonl_path = fetch_info_json(session_name, None)
-            .and_then(|v| v.get("jsonlPath").and_then(serde_json::Value::as_str).map(str::to_string));
+        let jsonl_path = fetch_info_json(session_name, None).and_then(|v| {
+            v.get("jsonlPath")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
         let clean_projects_file = || {
             if let Some(p) = &jsonl_path {
                 let _ = std::fs::remove_file(p);
@@ -4540,7 +5369,9 @@ pub mod claude_code {
         commands.push(format!("bond decommission {session_name}"));
         decommission_best_effort(session_name);
         commands.push(format!("qd resume {session_name} --no-attach"));
-        let resume = Command::new(qd_bin()).args(["resume", session_name, "--no-attach"]).output();
+        let resume = Command::new(qd_bin())
+            .args(["resume", session_name, "--no-attach"])
+            .output();
         match &resume {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
@@ -4549,7 +5380,11 @@ pub mod claude_code {
             }
             Err(e) => {
                 clean_projects_file();
-                return runner.fail(commands, format!("spawn error resuming: {e}"), "failed to spawn qd resume");
+                return runner.fail(
+                    commands,
+                    format!("spawn error resuming: {e}"),
+                    "failed to spawn qd resume",
+                );
             }
         }
 
@@ -4614,7 +5449,9 @@ pub mod claude_code {
     /// lane: `NotApplicable`, same correction — no `session/cancel` RPC to
     /// map.
     pub fn cancel_maps_to_truthful_terminal(_runner: &Runner, _session_name: &str) -> Outcome {
-        Outcome::not_applicable("claude-code (bare) has no measured ACP session/cancel-equivalent primitive")
+        Outcome::not_applicable(
+            "claude-code (bare) has no measured ACP session/cancel-equivalent primitive",
+        )
     }
 
     /// `d2.turn-phase-sequence-strict-order` on the bare `claude-code`
@@ -4753,45 +5590,76 @@ pub mod claude_code {
         // (the success-path remove_file below only fires when wait returns 0).
         // `jsonlPath` is lazy, so this is a no-op when no turn has written yet.
         let clean_projects_residue = || {
-            if let Some(p) = fetch_info_json(session_name, None)
-                .and_then(|v| v.get("jsonlPath").and_then(serde_json::Value::as_str).map(str::to_string))
-            {
+            if let Some(p) = fetch_info_json(session_name, None).and_then(|v| {
+                v.get("jsonlPath")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            }) {
                 let _ = std::fs::remove_file(p);
             }
         };
 
-        let prompt = "Reply with exactly the single word PONG and nothing else. Do not use any tools.";
+        let prompt =
+            "Reply with exactly the single word PONG and nothing else. Do not use any tools.";
         let send_cmd = format!("qd send:relay {session_name} <prompt>");
-        let send = Command::new(qd_bin()).args(["send:relay", session_name, prompt]).output();
+        let send = Command::new(qd_bin())
+            .args(["send:relay", session_name, prompt])
+            .output();
         commands.push(send_cmd);
         match &send {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
                 clean_projects_residue();
                 decommission_best_effort(session_name);
-                return Err(runner.fail(commands, format!("send:relay exit {:?}; stderr: {}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "qd send:relay must succeed against a live commissioned session"));
+                return Err(runner.fail(
+                    commands,
+                    format!(
+                        "send:relay exit {:?}; stderr: {}",
+                        o.status.code(),
+                        String::from_utf8_lossy(&o.stderr)
+                    ),
+                    "qd send:relay must succeed against a live commissioned session",
+                ));
             }
             Err(e) => {
                 clean_projects_residue();
                 decommission_best_effort(session_name);
-                return Err(runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd send:relay"));
+                return Err(runner.fail(
+                    commands,
+                    format!("spawn error: {e}"),
+                    "failed to spawn qd send:relay",
+                ));
             }
         }
 
         let wait_cmd = format!("qd wait {session_name} --timeout 120000");
-        let wait = Command::new(qd_bin()).args(["wait", session_name, "--timeout", "120000"]).output();
+        let wait = Command::new(qd_bin())
+            .args(["wait", session_name, "--timeout", "120000"])
+            .output();
         commands.push(wait_cmd);
         match &wait {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
                 clean_projects_residue();
                 decommission_best_effort(session_name);
-                return Err(runner.fail(commands, format!("qd wait exit {:?}; stderr: {}", o.status.code(), String::from_utf8_lossy(&o.stderr)), "qd wait must return 0 once the turn completes"));
+                return Err(runner.fail(
+                    commands,
+                    format!(
+                        "qd wait exit {:?}; stderr: {}",
+                        o.status.code(),
+                        String::from_utf8_lossy(&o.stderr)
+                    ),
+                    "qd wait must return 0 once the turn completes",
+                ));
             }
             Err(e) => {
                 clean_projects_residue();
                 decommission_best_effort(session_name);
-                return Err(runner.fail(commands, format!("spawn error: {e}"), "failed to spawn qd wait"));
+                return Err(runner.fail(
+                    commands,
+                    format!("spawn error: {e}"),
+                    "failed to spawn qd wait",
+                ));
             }
         }
 
@@ -4799,13 +5667,20 @@ pub mod claude_code {
         // written to the transcript — confirmed live: absent right after
         // commission, present after send+wait) — fetched here, post-turn,
         // not before.
-        let jsonl_path = fetch_info_json(session_name, None)
-            .and_then(|v| v.get("jsonlPath").and_then(serde_json::Value::as_str).map(str::to_string));
+        let jsonl_path = fetch_info_json(session_name, None).and_then(|v| {
+            v.get("jsonlPath")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
         let jsonl_path = match jsonl_path {
             Some(p) => p,
             None => {
                 decommission_best_effort(session_name);
-                return Err(runner.fail(commands, "qd info --json carried no jsonlPath even after send+wait".to_string(), "cannot read the transcript without its path"));
+                return Err(runner.fail(
+                    commands,
+                    "qd info --json carried no jsonlPath even after send+wait".to_string(),
+                    "cannot read the transcript without its path",
+                ));
             }
         };
         let raw = std::fs::read_to_string(&jsonl_path).unwrap_or_default();
@@ -4824,11 +5699,15 @@ pub mod claude_code {
         let mut last_text = String::new();
         let mut last_stop = None;
         for line in raw.lines() {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
             if v.get("type").and_then(serde_json::Value::as_str) != Some("assistant") {
                 continue;
             }
-            let Some(msg) = v.get("message") else { continue };
+            let Some(msg) = v.get("message") else {
+                continue;
+            };
             if msg.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
                 continue;
             }
@@ -4836,10 +5715,16 @@ pub mod claude_code {
             last_text = msg
                 .get("content")
                 .and_then(serde_json::Value::as_array)
-                .and_then(|arr| arr.iter().find_map(|c| c.get("text").and_then(serde_json::Value::as_str)))
+                .and_then(|arr| {
+                    arr.iter()
+                        .find_map(|c| c.get("text").and_then(serde_json::Value::as_str))
+                })
                 .unwrap_or_default()
                 .to_string();
-            last_stop = msg.get("stop_reason").and_then(serde_json::Value::as_str).map(str::to_string);
+            last_stop = msg
+                .get("stop_reason")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
         }
 
         Ok(ClaudeCodeTurnEvidence {
@@ -4866,10 +5751,24 @@ pub mod claude_code {
             return runner.fail(ev.commands, format!("expected exactly 1 assistant message on a fresh commission, found {}", ev.assistant_count), "the exclusivity-inferred correlation requires exactly one new assistant message for the one turn injected");
         }
         if ev.stop_reason.as_deref() != Some("end_turn") {
-            return runner.fail(ev.commands, format!("stop_reason was {:?}, expected Some(\"end_turn\")", ev.stop_reason), "a clean PONG-only turn must terminate end_turn");
+            return runner.fail(
+                ev.commands,
+                format!(
+                    "stop_reason was {:?}, expected Some(\"end_turn\")",
+                    ev.stop_reason
+                ),
+                "a clean PONG-only turn must terminate end_turn",
+            );
         }
         if !ev.assistant_text.contains("PONG") {
-            return runner.fail(ev.commands, format!("assistant_text={:?} does not contain PONG", ev.assistant_text), "the landed reply must match what was asked");
+            return runner.fail(
+                ev.commands,
+                format!(
+                    "assistant_text={:?} does not contain PONG",
+                    ev.assistant_text
+                ),
+                "the landed reply must match what was asked",
+            );
         }
         runner.pass(
             ev.commands,
@@ -4921,69 +5820,128 @@ pub mod claude_code {
             Ok(c) => c,
             Err(o) => return o,
         };
-        let fail_and_clean = |runner: &Runner, commands: Vec<String>, observed: String, why: &str| -> Outcome {
-            decommission_best_effort(session_name);
-            runner.fail(commands, observed, why)
-        };
+        let fail_and_clean =
+            |runner: &Runner, commands: Vec<String>, observed: String, why: &str| -> Outcome {
+                decommission_best_effort(session_name);
+                runner.fail(commands, observed, why)
+            };
 
         let codeword = format!("ZEBRA-{}-QUARK", std::process::id() % 10000);
         let turn1 = format!("Remember this exact codeword for later: {codeword}. Just acknowledge you've noted it in one short sentence. Do not use any tools.");
-        commands.push(format!("qd send:relay {session_name} <turn1: state codeword>"));
-        if !matches!(Command::new(qd_bin()).args(["send:relay", session_name, &turn1]).output(), Ok(o) if o.status.success()) {
-            return fail_and_clean(runner, commands, "qd send:relay (turn 1) did not succeed".to_string(), "cannot exercise resume-recall without a successful first send");
+        commands.push(format!(
+            "qd send:relay {session_name} <turn1: state codeword>"
+        ));
+        if !matches!(Command::new(qd_bin()).args(["send:relay", session_name, &turn1]).output(), Ok(o) if o.status.success())
+        {
+            return fail_and_clean(
+                runner,
+                commands,
+                "qd send:relay (turn 1) did not succeed".to_string(),
+                "cannot exercise resume-recall without a successful first send",
+            );
         }
         commands.push(format!("qd wait {session_name} --timeout 120000"));
-        if !matches!(Command::new(qd_bin()).args(["wait", session_name, "--timeout", "120000"]).output(), Ok(o) if o.status.success()) {
-            return fail_and_clean(runner, commands, "qd wait (turn 1) did not succeed".to_string(), "qd wait must return 0 once turn 1 completes");
+        if !matches!(Command::new(qd_bin()).args(["wait", session_name, "--timeout", "120000"]).output(), Ok(o) if o.status.success())
+        {
+            return fail_and_clean(
+                runner,
+                commands,
+                "qd wait (turn 1) did not succeed".to_string(),
+                "qd wait must return 0 once turn 1 completes",
+            );
         }
 
         commands.push(format!("bond decommission {session_name}"));
         decommission_best_effort(session_name);
         commands.push(format!("qd resume {session_name} --no-attach"));
-        let resume = Command::new(qd_bin()).args(["resume", session_name, "--no-attach"]).output();
+        let resume = Command::new(qd_bin())
+            .args(["resume", session_name, "--no-attach"])
+            .output();
         if !matches!(&resume, Ok(o) if o.status.success()) {
             let stderr = match &resume {
                 Ok(o) => String::from_utf8_lossy(&o.stderr).into_owned(),
                 Err(e) => format!("spawn error: {e}"),
             };
-            return runner.fail(commands, format!("qd resume did not succeed; stderr/err: {stderr}"), "qd resume must succeed against a decommissioned claude-code-bare session");
+            return runner.fail(
+                commands,
+                format!("qd resume did not succeed; stderr/err: {stderr}"),
+                "qd resume must succeed against a decommissioned claude-code-bare session",
+            );
         }
 
         let turn2 = "What was the codeword I told you earlier? Reply with just the codeword, nothing else. Do not use any tools.".to_string();
         commands.push(format!("qd send:relay {session_name} <turn2: recall>"));
-        if !matches!(Command::new(qd_bin()).args(["send:relay", session_name, &turn2]).output(), Ok(o) if o.status.success()) {
-            return fail_and_clean(runner, commands, "qd send:relay (turn 2) did not succeed".to_string(), "cannot exercise recall without a successful second send");
+        if !matches!(Command::new(qd_bin()).args(["send:relay", session_name, &turn2]).output(), Ok(o) if o.status.success())
+        {
+            return fail_and_clean(
+                runner,
+                commands,
+                "qd send:relay (turn 2) did not succeed".to_string(),
+                "cannot exercise recall without a successful second send",
+            );
         }
         commands.push(format!("qd wait {session_name} --timeout 120000"));
-        if !matches!(Command::new(qd_bin()).args(["wait", session_name, "--timeout", "120000"]).output(), Ok(o) if o.status.success()) {
-            return fail_and_clean(runner, commands, "qd wait (turn 2) did not succeed".to_string(), "qd wait must return 0 once the recall turn completes");
+        if !matches!(Command::new(qd_bin()).args(["wait", session_name, "--timeout", "120000"]).output(), Ok(o) if o.status.success())
+        {
+            return fail_and_clean(
+                runner,
+                commands,
+                "qd wait (turn 2) did not succeed".to_string(),
+                "qd wait must return 0 once the recall turn completes",
+            );
         }
 
-        let jsonl_path = fetch_info_json(session_name, None)
-            .and_then(|v| v.get("jsonlPath").and_then(serde_json::Value::as_str).map(str::to_string));
+        let jsonl_path = fetch_info_json(session_name, None).and_then(|v| {
+            v.get("jsonlPath")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
         let jsonl_path = match jsonl_path {
             Some(p) => p,
-            None => return fail_and_clean(runner, commands, "qd info --json carried no jsonlPath after both turns".to_string(), "cannot read the transcript without its path"),
+            None => {
+                return fail_and_clean(
+                    runner,
+                    commands,
+                    "qd info --json carried no jsonlPath after both turns".to_string(),
+                    "cannot read the transcript without its path",
+                )
+            }
         };
         let raw = std::fs::read_to_string(&jsonl_path).unwrap_or_default();
         decommission_best_effort(session_name);
         let _ = std::fs::remove_file(&jsonl_path);
 
         let recall_found = raw.lines().any(|l| {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(l) else { return false };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(l) else {
+                return false;
+            };
             if v.get("type").and_then(serde_json::Value::as_str) != Some("assistant") {
                 return false;
             }
-            let Some(msg) = v.get("message") else { return false };
+            let Some(msg) = v.get("message") else {
+                return false;
+            };
             if msg.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
                 return false;
             }
             msg.get("content")
                 .and_then(serde_json::Value::as_array)
-                .is_some_and(|arr| arr.iter().any(|c| c.get("text").and_then(serde_json::Value::as_str).is_some_and(|t| t.contains(&codeword))))
+                .is_some_and(|arr| {
+                    arr.iter().any(|c| {
+                        c.get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|t| t.contains(&codeword))
+                    })
+                })
         });
         if !recall_found {
-            return runner.fail(commands, format!("no assistant message contains the codeword {codeword:?} across both turns"), "post-resume, the model must recall pre-stop context (the injected codeword)");
+            return runner.fail(
+                commands,
+                format!(
+                    "no assistant message contains the codeword {codeword:?} across both turns"
+                ),
+                "post-resume, the model must recall pre-stop context (the injected codeword)",
+            );
         }
         runner.pass(
             commands,
@@ -5007,7 +5965,9 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::AcpClaudeCode, "d1.boot-readiness") => {
             Some(acp::boot_readiness(runner, session_name))
         }
-        (Lane::Opencode, "d1.boot-readiness") => Some(opencode::boot_readiness(runner, session_name)),
+        (Lane::Opencode, "d1.boot-readiness") => {
+            Some(opencode::boot_readiness(runner, session_name))
+        }
         (Lane::ClaudeCode, "d1.boot-readiness") => {
             Some(claude_code::boot_readiness(runner, session_name))
         }
@@ -5027,7 +5987,9 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
             Some(claude_code::teardown_reaps(runner, session_name))
         }
         (Lane::Pi, "d1.launch-addressing") => Some(pi::launch_addressing(runner, session_name)),
-        (Lane::Codex, "d1.launch-addressing") => Some(codex::launch_addressing(runner, session_name)),
+        (Lane::Codex, "d1.launch-addressing") => {
+            Some(codex::launch_addressing(runner, session_name))
+        }
         (Lane::AcpClaudeCode, "d1.launch-addressing") => {
             Some(acp::launch_addressing(runner, session_name))
         }
@@ -5180,33 +6142,33 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::AcpClaudeCode, "d6.cancel-maps-to-truthful-terminal") => {
             Some(acp::cancel_maps_to_truthful_terminal(runner, session_name))
         }
-        (Lane::Opencode, "d6.cancel-maps-to-truthful-terminal") => {
-            Some(opencode::cancel_maps_to_truthful_terminal(runner, session_name))
-        }
+        (Lane::Opencode, "d6.cancel-maps-to-truthful-terminal") => Some(
+            opencode::cancel_maps_to_truthful_terminal(runner, session_name),
+        ),
         (Lane::Pi, "d6.cancel-maps-to-truthful-terminal") => {
             Some(pi::cancel_maps_to_truthful_terminal(runner, session_name))
         }
-        (Lane::Codex, "d6.cancel-maps-to-truthful-terminal") => {
-            Some(codex::cancel_maps_to_truthful_terminal(runner, session_name))
-        }
-        (Lane::ClaudeCode, "d6.cancel-maps-to-truthful-terminal") => {
-            Some(claude_code::cancel_maps_to_truthful_terminal(runner, session_name))
-        }
+        (Lane::Codex, "d6.cancel-maps-to-truthful-terminal") => Some(
+            codex::cancel_maps_to_truthful_terminal(runner, session_name),
+        ),
+        (Lane::ClaudeCode, "d6.cancel-maps-to-truthful-terminal") => Some(
+            claude_code::cancel_maps_to_truthful_terminal(runner, session_name),
+        ),
         (Lane::AcpClaudeCode, "d6.self-terminate-on-wedged-child") => {
             Some(acp::self_terminate_on_wedged_child(runner, session_name))
         }
-        (Lane::Opencode, "d6.self-terminate-on-wedged-child") => {
-            Some(opencode::self_terminate_on_wedged_child(runner, session_name))
-        }
+        (Lane::Opencode, "d6.self-terminate-on-wedged-child") => Some(
+            opencode::self_terminate_on_wedged_child(runner, session_name),
+        ),
         (Lane::Pi, "d6.self-terminate-on-wedged-child") => {
             Some(pi::self_terminate_on_wedged_child(runner, session_name))
         }
         (Lane::Codex, "d6.self-terminate-on-wedged-child") => {
             Some(codex::self_terminate_on_wedged_child(runner, session_name))
         }
-        (Lane::ClaudeCode, "d6.self-terminate-on-wedged-child") => {
-            Some(claude_code::self_terminate_on_wedged_child(runner, session_name))
-        }
+        (Lane::ClaudeCode, "d6.self-terminate-on-wedged-child") => Some(
+            claude_code::self_terminate_on_wedged_child(runner, session_name),
+        ),
         // Pi/Codex have no analogous serve-loop/child-confirmed-dead
         // self-terminate mechanism (registry NaPermitted, ruled 2026-07-15
         // — see the driver's doc comment) — no driver needed.
@@ -5252,9 +6214,9 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::Codex, "d2.delivery-log-consistency-under-home-override") => {
             Some(codex::delivery_log_home_override(runner, session_name))
         }
-        (Lane::ClaudeCode, "d2.delivery-log-consistency-under-home-override") => {
-            Some(claude_code::delivery_log_home_override(runner, session_name))
-        }
+        (Lane::ClaudeCode, "d2.delivery-log-consistency-under-home-override") => Some(
+            claude_code::delivery_log_home_override(runner, session_name),
+        ),
         (Lane::AcpClaudeCode, "d2.turn-correlation-and-completion") => {
             Some(acp::turn_correlation(runner, session_name))
         }
@@ -5314,9 +6276,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
             Some(c2::detach_chord_reaches_qrmux(runner))
         }
         (Lane::ClaudeCode, "d7.mouse-passthrough") => Some(c2::mouse_passthrough(runner)),
-        (Lane::ClaudeCode, "d7.term-terminfo-honest") => {
-            Some(c2::term_terminfo_honest(runner))
-        }
+        (Lane::ClaudeCode, "d7.term-terminfo-honest") => Some(c2::term_terminfo_honest(runner)),
         (Lane::ClaudeCode, "d7.altscreen-enter-exit-across-nesting") => {
             Some(c2::altscreen_enter_exit(runner))
         }
@@ -5344,7 +6304,9 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d6.sender-killed-mid-send") => Some(c2::na_sender_killed_cc()),
         (Lane::ClaudeCode, "d6.wedged-daemon") => Some(c2::na_wedged_cc()),
         (l, "d6.wedged-daemon") => Some(c2::wedged_daemon(runner, l, session_name)),
-        (l, "d6.sender-killed-mid-send") => Some(c2::sender_killed_mid_send(runner, l, session_name)),
+        (l, "d6.sender-killed-mid-send") => {
+            Some(c2::sender_killed_mid_send(runner, l, session_name))
+        }
 
         _ => None,
     }
@@ -5717,10 +6679,7 @@ pub mod c2 {
                 "the curated help advertises a flag as a working feature (no unsupported/deprecated/no-op disclosure) while the handler unconditionally rejects it as unsupported — an advertised-surface honesty FAILURE (doc-drift). start --attach / start --port are the live instances; stop --force is the honest-disclosure PASS arm that proves the detector discriminates",
             )
         } else {
-            runner.pass(
-                commands,
-                observed,
-            )
+            runner.pass(commands, observed)
         }
     }
 
@@ -5937,10 +6896,20 @@ pub mod c2 {
     pub fn nested_render_correctness(runner: &Runner) -> Outcome {
         let mux = match NestedMux::new("render", 80, 24) {
             Ok(m) => m,
-            Err(e) => return runner.fail(vec!["(nested-mux setup)".into()], e, "cannot stage the nested mux"),
+            Err(e) => {
+                return runner.fail(
+                    vec!["(nested-mux setup)".into()],
+                    e,
+                    "cannot stage the nested mux",
+                )
+            }
         };
         if let Err(e) = mux.qrmux_new() {
-            return runner.fail(vec!["qrmux new (nested in tmux)".into()], e, "qrmux did not attach nested in tmux");
+            return runner.fail(
+                vec!["qrmux new (nested in tmux)".into()],
+                e,
+                "qrmux did not attach nested in tmux",
+            );
         }
         let marker = format!("RENDERMARK{}", std::process::id());
         // Wrap the OUTPUT in [[…]] so the assertion matches the rendered output,
@@ -5974,7 +6943,13 @@ pub mod c2 {
     pub fn detach_chord_reaches_qrmux(runner: &Runner) -> Outcome {
         let mux = match NestedMux::new("detach", 80, 24) {
             Ok(m) => m,
-            Err(e) => return runner.fail(vec!["(nested-mux setup)".into()], e, "cannot stage the nested mux"),
+            Err(e) => {
+                return runner.fail(
+                    vec!["(nested-mux setup)".into()],
+                    e,
+                    "cannot stage the nested mux",
+                )
+            }
         };
         if let Err(e) = mux.qrmux_new() {
             return runner.fail(vec!["qrmux new (nested)".into()], e, "qrmux did not attach");
@@ -5999,7 +6974,10 @@ pub mod c2 {
             format!("qrmux new {} (nested)", mux.inner),
             "send 0x78 (non-chord) → assert still attached".into(),
             "send 0x1c (detach chord) → assert detached".into(),
-            format!("qrmux attach {} → assert resident survived (marker present)", mux.inner),
+            format!(
+                "qrmux attach {} → assert resident survived (marker present)",
+                mux.inner
+            ),
         ];
         let observed = format!(
             "non-chord-byte-kept-attached={still_attached_after_plain}; chord-detached={detached}; \
@@ -6018,7 +6996,13 @@ pub mod c2 {
     pub fn term_terminfo_honest(runner: &Runner) -> Outcome {
         let mux = match NestedMux::new("term", 80, 24) {
             Ok(m) => m,
-            Err(e) => return runner.fail(vec!["(nested-mux setup)".into()], e, "cannot stage the nested mux"),
+            Err(e) => {
+                return runner.fail(
+                    vec!["(nested-mux setup)".into()],
+                    e,
+                    "cannot stage the nested mux",
+                )
+            }
         };
         if let Err(e) = mux.qrmux_new() {
             return runner.fail(vec!["qrmux new (nested)".into()], e, "qrmux did not attach");
@@ -6041,7 +7025,8 @@ pub mod c2 {
             "printf '$TERM' (inner shell)".into(),
             "tmux capture-pane -p".into(),
         ];
-        let observed = format!("inner TERM line={line:?}; pinned-xterm-256color(pty.rs:82)-honest={honest}");
+        let observed =
+            format!("inner TERM line={line:?}; pinned-xterm-256color(pty.rs:82)-honest={honest}");
         if honest {
             runner.pass(commands, observed)
         } else {
@@ -6055,7 +7040,13 @@ pub mod c2 {
     pub fn altscreen_enter_exit(runner: &Runner) -> Outcome {
         let mux = match NestedMux::new("alt", 80, 24) {
             Ok(m) => m,
-            Err(e) => return runner.fail(vec!["(nested-mux setup)".into()], e, "cannot stage the nested mux"),
+            Err(e) => {
+                return runner.fail(
+                    vec!["(nested-mux setup)".into()],
+                    e,
+                    "cannot stage the nested mux",
+                )
+            }
         };
         if let Err(e) = mux.qrmux_new() {
             return runner.fail(vec!["qrmux new (nested)".into()], e, "qrmux did not attach");
@@ -6104,7 +7095,13 @@ pub mod c2 {
     pub fn mouse_passthrough(runner: &Runner) -> Outcome {
         let mux = match NestedMux::new("mouse", 80, 24) {
             Ok(m) => m,
-            Err(e) => return runner.fail(vec!["(nested-mux setup)".into()], e, "cannot stage the nested mux"),
+            Err(e) => {
+                return runner.fail(
+                    vec!["(nested-mux setup)".into()],
+                    e,
+                    "cannot stage the nested mux",
+                )
+            }
         };
         // Enable tmux's own mouse so the outer pane reflects the inner request.
         mux.tmux(&["set", "-t", &mux.outer, "mouse", "on"]);
@@ -6411,8 +7408,7 @@ pub mod c2 {
 
     impl Drop for HangServer {
         fn drop(&mut self) {
-            self.stop
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
             if let Some(h) = self.handle.take() {
                 let _ = h.join();
             }
@@ -6627,17 +7623,20 @@ pub mod c2 {
             }
         };
         let hang_port = hang.port;
-        let (jail, mut identity, session_id, name) =
-            match daemon_wedge_fixture(session_name, lane, hang_port) {
-                Ok(v) => v,
-                Err(e) => {
-                    drop(hang);
-                    return Outcome::blocked(
+        let (jail, mut identity, session_id, name) = match daemon_wedge_fixture(
+            session_name,
+            lane,
+            hang_port,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                drop(hang);
+                return Outcome::blocked(
                         format!("could not stage the wedged-daemon fixture (identity daemon not cmdline-verifiable): {e} — a fixture-faithfulness fault, not a conformance verdict"),
                         "rerun; if persistent, check python3 availability + the identity-process cmdline readiness probe timing",
                     );
-                }
-            };
+            }
+        };
         // Ceiling well above the 5s inject connect bound; codex's unbounded hang
         // exceeds it → group-killed → truthful FAIL.
         let ceiling = std::time::Duration::from_secs(15);
@@ -6842,7 +7841,9 @@ pub mod c2 {
             ),
             format!("qd send:relay {name} <msg> (spawned own pgroup; blocks on the camped wedge)"),
             kill_cmd,
-            format!("read {session_id}.events.jsonl → assert no message-seen/turn-anchored terminal"),
+            format!(
+                "read {session_id}.events.jsonl → assert no message-seen/turn-anchored terminal"
+            ),
         ];
         let observed = format!(
             "lane={}; wedge accepted={accepted} (>0 ⇒ the kill landed in a real mid-send window); sender killed mid-send (parked in the ws handshake); delivery-log success-terminals found={:?} (expect none); log lines={}",
@@ -6909,7 +7910,11 @@ pub mod c2 {
         let found = raw.lines().any(|l| {
             serde_json::from_str::<serde_json::Value>(l)
                 .ok()
-                .and_then(|v| v.get("event").and_then(|e| e.as_str()).map(|s| s == "send-failed"))
+                .and_then(|v| {
+                    v.get("event")
+                        .and_then(|e| e.as_str())
+                        .map(|s| s == "send-failed")
+                })
                 .unwrap_or(false)
         });
         (found, raw)
@@ -7003,7 +8008,9 @@ pub mod c2 {
         let name = format!("c2dr{}", std::process::id());
         let session_id = format!("c2-deadrelay-{name}");
         // A definitely-closed port: bind then drop → connect refuses.
-        let dead_port = match std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()) {
+        let dead_port = match std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+        {
             Ok(a) => a.port(),
             Err(e) => {
                 reap_parent(&mut parent);
@@ -7041,7 +8048,12 @@ pub mod c2 {
             "qd send:relay {name} <msg> (jailed; sidecar child pid {child_pid} under session pid {session_pid} → DEAD port {dead_port})"
         );
         // Bounded — a dead port refuses immediately, but never risk a hang.
-        let run = bounded_send(&jail, &name, "c2 dead-relay-sidecar probe", std::time::Duration::from_secs(15));
+        let run = bounded_send(
+            &jail,
+            &name,
+            "c2 dead-relay-sidecar probe",
+            std::time::Duration::from_secs(15),
+        );
         reap_parent(&mut parent);
         let run = match run {
             Ok(r) => r,
@@ -7086,13 +8098,21 @@ pub mod c2 {
             };
             let _ = crate::registry::write_entry(&cj.registry_dir, &centry);
             // NO relay sidecar written → resolve_relay_port falls to no_relay_exit.
-            let _ = bounded_send(cj, &cname, "c2 no-relay control", std::time::Duration::from_secs(15));
+            let _ = bounded_send(
+                cj,
+                &cname,
+                "c2 no-relay control",
+                std::time::Duration::from_secs(15),
+            );
             if let Some(mut c) = csleep.take() {
                 let _ = c.kill();
                 let _ = c.wait();
             }
             let (found, _) = has_send_failed(&cj.events_dir, &csid);
-            (found, format!("no-relay control wrote send-failed terminal={found}"))
+            (
+                found,
+                format!("no-relay control wrote send-failed terminal={found}"),
+            )
         } else {
             (false, "control jail unavailable".to_string())
         };

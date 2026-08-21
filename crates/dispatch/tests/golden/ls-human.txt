@@ -1,7 +1,7 @@
-Name           Id   Prov   Status  Last active  Tokens
-─────────────  ───  ─────  ──────  ───────────  ──────
-claude-worker  [36mab3[0m  [36mCC[0m     [36midle[0m    30s ago       45.2k
-codex-worker   [36mab4[0m  codex  [33mbusy[0m    1m ago         1.2M
-[2mdead-one[0m       [36mef[0m   [36mCC[0m     [31mkilled[0m  2h ago         1.5k
-cold-row       [36mgh[0m   [36mCC[0m     [2mcold[0m    1h ago          999
-no-code-row    [2m---[0m  [36mCC[0m     [36midle[0m    -                 0
+Name           Id   Prov   Hosting   Status  Last active  Tokens
+─────────────  ───  ─────  ────────  ──────  ───────────  ──────
+claude-worker  [36mab3[0m  [36mCC[0m     mux-pane  [36midle[0m    30s ago       45.2k
+codex-worker   [36mab4[0m  codex  daemon    [33mbusy[0m    1m ago         1.2M
+[2mdead-one[0m       [36mef[0m   [36mCC[0m     mux-pane  [31mkilled[0m  2h ago         1.5k
+cold-row       [36mgh[0m   [36mCC[0m     mux-pane  [2mcold[0m    1h ago          999
+no-code-row    [2m---[0m  [36mCC[0m     mux-pane  [36midle[0m    -                 0

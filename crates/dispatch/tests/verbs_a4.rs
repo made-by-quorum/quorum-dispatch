@@ -203,6 +203,78 @@ fn wait_idle_session_reports_idle_exit_0() {
 }
 
 // ===========================================================================
+// VERB ATTRIBUTION (2026-08) — every user-facing refusal on these paths names
+// the command that produced it. These pin the BYTES the fix moved, driving the
+// real `qd` (which spawns the real `qw`) against a jailed HOME.
+// ===========================================================================
+
+/// A live-but-pid-less row is `LaneError::Cold`, and the verb's rendering of it
+/// used to be the ONE refusal on `qd wait` that named no command at all (its two
+/// siblings — the `Transport` arm and the generic arm — have always opened
+/// `qd wait: `). Pins the prefixed line.
+#[test]
+fn wait_cold_row_refusal_is_qd_wait_attributed() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions = temp.path().join("home").join(".claude").join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    // pid 0 = "no pid recorded" (the resolver keeps such a row on its status
+    // alone), status busy so the entry-idle gate does not short-circuit.
+    std::fs::write(
+        sessions.join("90101.json"),
+        r#"{"pid":0,"sessionId":"sid-cold-0001","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"busy","name":"coldwk","version":"0.1.0","kind":"claude-code","entrypoint":"claude"}"#,
+    )
+    .unwrap();
+
+    let (code, _out, err) = run_qd(temp.path(), &["wait", "coldwk"]);
+    assert_eq!(code, 1, "cold row → exit 1 (stderr: {err})");
+    assert!(
+        err.contains("qd wait: Session has no PID (cold/dead). Nothing to wait for."),
+        "the cold refusal must name its verb, got: {err}"
+    );
+}
+
+/// `acp_loss::preserve_identity`'s observability line is written by the `qw`
+/// child and is SHARED by two seams, so it carries the CALLER's verb — the one
+/// the user typed — and matches the refusal it immediately precedes. It used to
+/// open with a bare `qd:` on both. Drives both seams against the same row.
+#[test]
+fn acp_identity_preserved_line_names_the_verb_on_both_seams() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions = temp.path().join("home").join(".claude").join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("90102.json"),
+        r#"{"pid":0,"sessionId":"019ea0b3-04d3-7400-8d95-acpcase2cell","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"busy","name":"acpwk","version":"0.1.0","kind":"claude-code","entrypoint":"claude","provider":"acp/claude-code"}"#,
+    )
+    .unwrap();
+
+    // The WAIT seam (`quorum_qw::idle::await_idle_acp`).
+    let (code, _out, err) = run_qd(temp.path(), &["wait", "acpwk"]);
+    assert_eq!(code, 1, "acp transport loss → exit 1 (stderr: {err})");
+    assert!(
+        err.contains("qd wait: acp: session \"acpwk\" identity preserved at "),
+        "the wait seam's identity line must open `qd wait:`, got: {err}"
+    );
+    assert!(
+        !err.contains("qd: acp:"),
+        "the pre-fix bare `qd:` prefix must be gone, got: {err}"
+    );
+
+    // The SEND seam (`quorum_qw::delivery::acp::send_acp`), same body, same row,
+    // the other command — and the same verb its refusal line carries.
+    let (code, _out, err) = run_qd(temp.path(), &["send:relay", "acpwk", "hello"]);
+    assert_eq!(code, 1, "acp transport loss → exit 1 (stderr: {err})");
+    assert!(
+        err.contains("qd send:relay: acp: session \"acpwk\" identity preserved at "),
+        "the send seam's identity line must open `qd send:relay:`, got: {err}"
+    );
+    assert!(
+        !err.contains("qd: acp:"),
+        "the pre-fix bare `qd:` prefix must be gone, got: {err}"
+    );
+}
+
+// ===========================================================================
 // qd–qf W3: unified `qd send` origin-mode surface (write-then-deliver +
 // --expires + the Refusal {class,reason} type). These drive the REAL binary
 // through cheap, hermetic paths (a malformed --expires SYNC refusal; a valid
@@ -575,8 +647,16 @@ fn send_correlation_id_with_inbound_envelope_is_refused_args() {
 /// and (in this empty-zmx jail) no joined mux pane still refuses IMMEDIATELY with
 /// the transport-shape "no live receive path" message and exit 1 — NO wake, NO
 /// envelope logged, NO failed{wake}. The live path is byte-identical to W3a: a
-/// live target that select_carrier can't route is a plain exit-1 refusal, not a
-/// resume-and-deliver.
+/// live target the lane can't route (asked of `LaneOps::receive_path`, before any
+/// envelope is written) is a plain exit-1 refusal, not a resume-and-deliver.
+///
+/// It is also THE fixture that splits the repo's two liveness readings: pid 90101
+/// with `"status":"idle"` is forged dead, so `send_unified::is_live` (the status
+/// enum alone) calls it LIVE while `LaneOps::health` (status plus
+/// `(pid, start_time)`) calls it COLD. That disagreement is why the live path
+/// passes `wake_if_cold: false` and why `deliver` ATTEMPTS on `false` instead of
+/// refusing `Cold` — see `LaneOps::deliver`'s docs. Reconciling the two readings
+/// is deliberately a separate, user-visible commit.
 #[test]
 fn send_live_unroutable_claude_is_unchanged_no_wake_no_envelope() {
     let temp = tempfile::tempdir().unwrap();
@@ -596,12 +676,21 @@ fn send_live_unroutable_claude_is_unchanged_no_wake_no_envelope() {
 }
 
 /// Live/slow: a COLD CLAUDE target REACHES the real revive machinery (the wake
-/// runs `resume::revive_claude`, which drives the detached boot + ADR-0005
+/// runs the claude pane revive, which drives the detached boot + ADR-0005
 /// ready-wait to a genuine ~40-60s timeout under a forged row with no real
 /// claude). The load-bearing observation: the send WAKES (does not refuse) and its
 /// failure is a `failed{wake}` carrying the revive's own error — proving the
 /// claude arm of the wake table is wired to the actual revive. `#[ignore]`d in the
 /// fast lane exactly like `cold_claude_attach_attempts_revive_then_fails_loudly`.
+///
+/// **The revive's error is now the CORE's own, and that is the improvement.**
+/// `qd send` used to route its wake through `send_unified::RealWaker`, whose
+/// claude arm DISCARDED the revive's typed error and answered the fixed string
+/// `could not revive claude session "<name>"` — a sentence that named the session
+/// and said nothing about what went wrong. The wake is `LaneOps::wake` now, and
+/// `LaneError::WakeFailed` carries `ReviveClaudeError::body()` out unchanged, so
+/// the line says which failure it was. The class (`failed{wake}`) and the exit
+/// (12) are unmoved.
 ///
 /// Run: `cargo test -p quorum-dispatch --test verbs_a4 -- --ignored send_cold_claude`.
 #[test]
@@ -614,9 +703,20 @@ fn send_cold_claude_wakes_via_real_revive_then_failed_wake() {
     // It WOKE (did not refuse as stopped) and the wake ultimately failed.
     assert_eq!(code, 12, "cold claude whose revive fails → failed{{wake}} exit 12 (stderr: {err})");
     assert!(err.contains("failed{wake}"), "expected failed{{wake}}, got: {err}");
+    // The REVIVE's own body, not a wrapper. Which of `ReviveClaudeError`'s bodies
+    // lands depends on what the host is missing (no zmx on PATH vs. a launch that
+    // never confirms ready), so accept the set — the point is that ONE of the
+    // core's sentences is what the user reads.
     assert!(
-        err.contains("could not revive claude session"),
-        "the wake ran the real claude revive (its failure surfaced), got: {err}"
+        ["did not confirm ready", "could not launch zmx", "Failed to resume session"]
+            .iter()
+            .any(|m| err.contains(m)),
+        "the wake ran the real claude revive and carried ITS error out, got: {err}"
+    );
+    assert!(
+        !err.contains("could not revive claude session"),
+        "the retired RealWaker wrapper must not come back — it discarded the \
+         revive's typed error, got: {err}"
     );
     // Write-then-deliver still held: envelope logged, funnel stamped through to
     // the delivery-failed{wake} event.

@@ -4,148 +4,34 @@ use std::path::PathBuf;
 
 use clap::ArgMatches;
 
-use std::cell::Cell;
-
-use dispatch::boot::{RealSleeper, Sleeper};
-use dispatch::create::{run_new as create_run_new, NewDeps, NewError, NewParams};
+use dispatch::boot::RealSleeper;
 use dispatch::effects::{Clock, Env, RealClock, RealEnv};
-use dispatch::events::{self, Anchor, EventWriter, Payload, WatchGuard};
+use dispatch::events;
 use dispatch::exec::RealExec;
 use dispatch::join::JoinOpts;
 use dispatch::launch::capture_backend_env;
 use dispatch::model::{Session, SessionStatus};
-use dispatch::mux::Mux;
+use dispatch::provider::codex::pane::CodexTuiError;
+use dispatch::provider::pi::pane::PiTuiError;
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
+use quorum_qw::delivery::{priming, render_notes, CarrierError};
 
 use super::common;
 
 // --- attach mechanic (commands/lifecycle.ts:355-395) ---
-// The shared attach mechanic below backs the live `attach` verb.
-
-/// The cold-vs-done outcome of [`attach_resolved`] (W1 phase 2). A `MuxPane`
-/// (claude) session with no live pane is `Cold` — the SHARED mechanic returns it to
-/// the CALLER instead of deciding: `attach` maps it to auto-revive-then-attach.
-/// Every other path (daemon redirect — incl. codex + acp/opencode, unknown-provider
-/// refusal, collision refusal, live attach) is a terminal `Done(code)`.
-pub enum AttachOutcome {
-    Done(i32),
-    Cold,
-}
-
-/// The shared attach mechanic (ADD-26): provider dispatch + the zmx live-handoff,
-/// called by `attach::run`. `verb` names the caller for the
-/// opencode/unknown-provider wording.
-///
-/// Dispatch order: collision refusal → daemon redirect (codex + acp/opencode)
-/// → unknown-provider refusal → cold-vs-live. Cold (`MuxPane`, no live pane) is
-/// returned to the CALLER as [`AttachOutcome::Cold`] (W1 phase 2): `attach`
-/// maps it to auto-revive-then-attach. All other outcomes are terminal
-/// [`AttachOutcome::Done`].
-pub fn attach_resolved(verb: &str, session: &Session) -> AttachOutcome {
-    // ADD-8 residual fix (W1 phase 2) — live-id-collision PREFLIGHT over the RAW
-    // registry, SHARED with resume (Pete feedback #6). The deduped join collapses
-    // two same-id LIVE rows to one, so a bare `qd attach` would
-    // silently attach to the deduped survivor. We refuse a genuine ≥2-alive
-    // collision LOUDLY here (before provider dispatch) so attach inherits the
-    // guard. A 1-alive session is NOT refused (refuse_id_collision
-    // returns None for the single-alive case → normal attach proceeds; we do NOT use
-    // alive_pid_for_id, which would block the legitimate single-live attach).
-    {
-        let env = RealEnv;
-        if let Ok(paths) = common::paths_from_home(&env) {
-            if let Some(code) =
-                common::refuse_id_collision(verb, &session.session_id, &paths.sessions_dir)
-            {
-                return AttachOutcome::Done(code);
-            }
-        }
-    }
-    // A-OC.1: opencode is un-parked — an `acp/opencode` row is daemon-hosted, so it flows
-    // through the shared daemon-redirect below (provider_for resolves it; Hosting::Daemon →
-    // "no terminal to attach, drive with send:relay"), exactly like codex/acp/claude-code.
-    // codex (Hosting::Daemon) IS supported but has no terminal to attach — the
-    // shared LOUD redirect, NOT the wrong "unknown provider" refusal (latent fix).
-    //
-    // codex-interactive: the hosting question is asked of the ROW, not the
-    // provider id. codex now has BOTH topologies — the app-server daemon (no
-    // terminal, redirect) and the `--interactive` TUI pane (a terminal, attach) —
-    // so `row_hosting` reads the row's recorded `hosting` and only falls back to
-    // the provider's structural answer when the row does not say. Every
-    // pre-existing row is silent on it, so every pre-existing row redirects
-    // exactly as before.
-    if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref())
-        == Some(dispatch::provider::Hosting::Daemon)
-    {
-        // codex-interactive, use case 2: a LIVE daemon-hosted codex session CAN be
-        // attached after all — not by giving the daemon a terminal, but by opening
-        // a second client on it. `attach_codex_viewer` launches the codex TUI
-        // bound to this session's own app server (`codex --remote <endpoint>
-        // resume <thread-id>`), so a human can watch and type in the very thread
-        // an agent is driving, with nothing stopped and nothing converted.
-        //
-        // `None` means this row cannot host one (no endpoint, no thread id, or a
-        // provider with no such affordance) — those still get the honest redirect.
-        if session.provider == "codex" && matches!(session.status, SessionStatus::Idle | SessionStatus::Busy) {
-            if let Some(code) = attach_codex_viewer(session) {
-                return AttachOutcome::Done(code);
-            }
-        }
-        let name = session.name.as_deref().unwrap_or(&session.session_id);
-        return AttachOutcome::Done(common::daemon_redirect(name));
-    }
-    // Unknown provider (not claude/opencode/codex) → refuse LOUDLY.
-    //
-    // codex-interactive: SCOPED to rows whose hosting could not be resolved at
-    // all — i.e. genuinely unknown providers. A row that reached here with a
-    // resolved MuxPane hosting is a known provider hosted in a pane, and the pane
-    // handoff below is exactly the right thing for it; running the refusal
-    // unconditionally would reject an interactive codex row for being "unknown"
-    // (this helper's allow-list predates codex having a pane at all) after we just
-    // established what it is.
-    if dispatch::provider::row_hosting(&session.provider, session.hosting.as_deref()).is_none() {
-        if let Some(code) = common::refuse_unknown_provider(verb, session) {
-            return AttachOutcome::Done(code);
-        }
-    }
-
-    // P4DB drive-burn (C2): the drive-coupled WP-B5-i headless-observe resolver
-    // (read the `entrypoint` discriminant → `run_headless_observe` for a live
-    // headless target) is REMOVED with the `claude -p` drive. No row resolves to a
-    // live headless agent anymore (the HEADLESS_ENTRYPOINT mint writer is gone), so
-    // a claude session is either a live interactive pane (attach below) or cold
-    // (returned to the caller for auto-revive-then-attach via the surviving
-    // `revive_claude` seam).
-
-    // MuxPane (claude) cold → return Cold to the CALLER (W1 phase 2): no business
-    // branch on the `verb` string here. attach → auto-revive-then-attach.
-    let Some(zmx_name) = session.zmx_name.as_deref() else {
-        return AttachOutcome::Cold;
-    };
-
-    // Target the session's recorded socket dir (Bug D), falling back to canonical
-    // when it has none (commands/lifecycle.ts:387-391: `session.socketDir ?? canonicalZmxDir()`).
-    let env = RealEnv;
-    let canonical = resolve_zmx_dir(&env);
-    let dir = session
-        .socket_dir
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or(canonical);
-
-    // Backend-selected mux (C1 D3). An attachable session carries its socket_dir
-    // (tagged by the backend's list), so the embedded lane targets the qrmux dir.
-    let mux = match common::real_mux() {
-        Ok(m) => m,
-        Err(code) => return AttachOutcome::Done(code),
-    };
-    AttachOutcome::Done(match mux.attach(&dir, zmx_name) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("qd {verb}: {e}");
-            1
-        }
-    })
-}
+//
+// `attach_resolved` + `AttachOutcome` USED to live here: a shared mechanic that
+// ran the id-collision preflight, the daemon redirect (with the codex-viewer
+// exception), the unknown-provider refusal and the live pane handoff, then handed
+// the COLD case back to its one caller to route.
+//
+// Both are DELETED. `qd attach` is the lane layer's first production caller now:
+// it derives the `Lane` from the row and the handoff is `LaneOps::attach`, whose
+// `NotSupported` / `Cold` answers replace the outcome enum. The three pieces that
+// are genuinely qd's — the collision preflight, the codex viewer
+// ([`attach_codex_viewer`], kept per ruling J) and every message — moved to
+// `verbs/attach.rs`, which was their only caller. Nothing here was shared: the
+// "shared mechanic" had exactly one call site for its whole life.
 
 /// The backend-selected create dirs (C1 D2/D3): `(canonical, legacy)`.
 ///
@@ -341,6 +227,44 @@ fn seed_fork_transcript(
     Ok((fork_uuid, resolved.staleness_report()))
 }
 
+/// The `--provider` names the unknown-provider refusal lists — **derived from
+/// `Harness::ALL`, so the advertised list and the accepted set cannot drift.**
+///
+/// The accepted set is qw's (`Harness::from_provider_id`, which is also what
+/// `Lane::for_create` routes on); this is the same set, spelled for a human. A
+/// line that advertised a provider the engine refuses — or refused one it
+/// advertises — is exactly the drift a hand-maintained literal invites, and this
+/// engine had two copies of that literal.
+///
+/// The BYTES are unchanged. `DISPLAY_ORDER` is the order the message has always
+/// used (not `Harness::ALL`'s), and the `match` is exhaustive with no wildcard —
+/// so adding a harness in qw fails to compile HERE until someone decides how it
+/// is named to a user. `supported_provider_names_covers_every_harness` asserts
+/// the order list is the full set.
+fn supported_provider_names() -> String {
+    use quorum_qw::lane::Harness;
+    const DISPLAY_ORDER: [Harness; 5] = [
+        Harness::ClaudeCode,
+        Harness::Codex,
+        Harness::AcpClaudeCode,
+        Harness::Pi,
+        Harness::Opencode,
+    ];
+    DISPLAY_ORDER
+        .iter()
+        .map(|h| match h {
+            // The CLI ergonomic is the name a user TYPES; the internal id follows
+            // in parens, exactly as this line has always read. Both spellings
+            // resolve — `from_provider_id` accepts the alias.
+            Harness::Opencode => format!("opencode (= {})", h.provider_id()),
+            Harness::ClaudeCode | Harness::Codex | Harness::AcpClaudeCode | Harness::Pi => {
+                h.provider_id().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub fn run_new(m: &ArgMatches) -> i32 {
     let env = RealEnv;
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
@@ -405,6 +329,11 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // WP-B-CS-1 (D2): the driver-mode override flags (auto-detect escape hatch).
     let headless_flag = m.get_flag("headless");
     let interactive_flag = m.get_flag("interactive");
+    let extension_flag = m.get_flag("extension");
+    // DEC-2: the opt-back-in to the headless resident, now that it is not what a
+    // flagless start makes. See the topology block below.
+    let daemon_flag = m.get_flag("daemon");
+    let app_server_flag = m.get_flag("app-server");
     let agent = m.get_one::<String>("agent").cloned();
     // `qd start --agent <name>` is RETIRED. The old static-agent path resolved
     // `~/.quorum/dispatch/plugins/core/agents/<name>.md` and fail-closed booted that role;
@@ -462,17 +391,19 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // BEFORE preflight/claim (no state). None / "claude-code" / "codex" proceed
     // (the opencode/--port honest-error above stays FIRST + byte-identical). codex
     // P2 W4: codex is now a supported value (GATE-R RULED (A) daemon-thread).
+    //
+    // The SET is qw's and the WORDING is qd's, and that split is the point.
+    // `Harness::from_provider_id` accepts exactly these six spellings (five
+    // harnesses plus the `opencode` CLI alias) and is what `Lane::for_create`
+    // routes on, so asking it here means the accept-set can no longer drift from
+    // the set that actually has lanes. The message text and the exit code stay on
+    // this side, where user-facing wording belongs — and it names the same set
+    // because `supported_provider_names` derives it from `Harness::ALL`.
     if let Some(p) = provider.as_deref() {
-        if p != "claude-code"
-            && p != "codex"
-            && p != "acp/claude-code"
-            && p != "pi"
-            && p != "opencode"
-            && p != "acp/opencode"
-        {
+        if quorum_qw::lane::Harness::from_provider_id(p).is_none() {
             eprintln!(
-                "qd start: unknown provider \"{p}\" — this engine supports: claude-code, codex, \
-                 acp/claude-code, pi, opencode (= acp/opencode)."
+                "qd start: unknown provider \"{p}\" — this engine supports: {}.",
+                supported_provider_names()
             );
             return 1;
         }
@@ -486,8 +417,8 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     let provider_id = provider.as_deref().unwrap_or("claude-code");
     let Some(provider_impl) = dispatch::provider::provider_for(provider_id) else {
         eprintln!(
-            "qd start: unknown provider \"{provider_id}\" — this engine supports: claude-code, codex, \
-             acp/claude-code, pi, opencode (= acp/opencode)."
+            "qd start: unknown provider \"{provider_id}\" — this engine supports: {}.",
+            supported_provider_names()
         );
         return 1;
     };
@@ -613,295 +544,478 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         eprintln!("qd start: {notice}");
     }
 
-    // codex P2 W4 (codex-p2-spec §7.1): the FIRST PRODUCTION `hosting()` consult,
-    // sanctioned by GATE-R RULED (A) daemon-thread FINAL + the per-session
-    // topology (orc ruling 02:18 06-07). MuxPane → the existing claude
-    // choreography below, UNTOUCHED (blast-radius rule). Daemon → a NEW sibling
-    // create path (no daemon logic threads through create.rs). The daemon path
-    // does NOT use the zmx/qrmux backend selection, mux, or boot waiter — its
-    // readiness is the app-server initialize handshake, not a pid-file/went-busy.
-    // scoped-ACP-CC daemon-residence (S5): an `acp/*` row is Daemon-hosted like codex,
-    // but its residence is a dispatch-OWNED adapter process (the bridge speaks stdio, not
-    // ws) — a distinct create path from the codex app-server. Branch it BEFORE the codex
-    // daemon arm (both are Hosting::Daemon).
-    if provider_impl.id().starts_with("acp/") {
-        return run_new_acp_daemon(provider_impl, &env, &home, &paths, &name, &cwd, prompt.clone());
-    }
-    // WS-A.2: pi is Daemon-hosted but, like acp/* and UNLIKE codex, its residence is
-    // a dispatch-OWNED adapter (pi speaks stdio, has no --listen) — so it takes its
-    // OWN create path (run_new_pi_daemon), NOT the codex app-server daemon arm below.
-    // Branch it BEFORE the codex daemon arm (both are Hosting::Daemon).
-    // pi-interactive: `--provider pi --interactive` takes the MUX-PANE lane rather
-    // than the resident-adapter arm below — the real `pi` TUI in a pane a human
-    // drives with `qd attach`.
+    // --- THE LANE, AND THE ONE CREATE CALL ---------------------------------
     //
-    // Placed BEFORE the pi daemon arm and gated on the EXPLICIT flag only, the
-    // codex-interactive routing call: a bare `qd start --provider pi` still spawns
-    // the resident adapter for every caller, human or agent, exactly as today.
-    if provider_impl.id() == "pi" && interactive_flag {
-        return run_new_pi_tui(&env, &home, &paths, &name, &cwd, render, prompt.clone());
-    }
-    if provider_impl.id() == "pi" {
-        return run_new_pi_daemon(&env, &home, &paths, &name, &cwd, prompt.clone());
-    }
-    // codex-interactive: `--provider codex --interactive` takes the MUX-PANE lane
-    // instead of the app-server daemon arm below — the real `codex` TUI in a pane
-    // a human drives with `qd attach`, the claude-session shape for codex.
+    // A five-arm ordered `if`-chain stood here, and below it five per-lane create
+    // wrappers. All of it is GONE. Every one of those wrappers assembled the same
+    // shape — resolve the backend / socket dirs / mux / ids store out of the
+    // environment, build the core's deps struct, call the core, print — and that
+    // assembly is qw's work, not a verb's: `quorum_qw::lanes` has held all seven
+    // create arms since stage-2 phase 3 and until now had **no caller at all**.
     //
-    // Placed BEFORE the codex daemon arm, and gated on the EXPLICIT flag only:
-    // the driver auto-detect deliberately does NOT reach here (Pete's routing
-    // call), so a bare `qd start --provider codex` still spawns the daemon for
-    // every caller, human or agent, exactly as it does today.
-    if provider_impl.id() == "codex" && interactive_flag {
-        return run_new_codex_tui(
-            &env,
-            &home,
-            &paths,
-            &name,
-            &cwd,
-            render,
-            prompt.clone(),
+    // `qd start` was the last lane operation a qd verb performed in-process, and
+    // the one neither gate could see: `dispatch::lane::gate` scans for the
+    // in-process lane constructor, and create never went through a lane to begin
+    // with, so it passed VACUOUSLY for this verb. It does not any more — see
+    // `dispatch::lane::create_gate`, which counts the qw session-management cores a
+    // verb still names directly.
+    //
+    // WHAT STAYS ON THIS SIDE is everything above and below this block, and it is
+    // exactly the inventory `quorum_qw::lanes`' own header lists: the clap parse
+    // and the `claudeArgs` forbidden-flag chokepoint, the parked `--port`/`--attach`
+    // refusals, `--fork` target resolution and its transcript seed (they need qd's
+    // fuzzy resolver), the driver auto-detect and its `Headless` refusal, `--via`
+    // credential materialisation, every `--json` emission, the bind phase, the
+    // relay-presence warning, telemetry, and the claude lane's post-boot `-p`
+    // delivery with its went-busy exit mapping.
+    //
+    // WHY THE ROUTING IS NOT A BARE `Lane::for_create(provider_id, interactive)`.
+    // The chain it replaces sent every `acp/*` create to the daemon arm even under
+    // `--interactive`: the loud refusal above tests the string the USER typed, so
+    // `--provider acp/claude-code --interactive` is caught, while `--provider
+    // opencode --interactive` — the CLI alias for the same harness — slips past it
+    // and silently gets a daemon. That is today's behaviour, and this is not the
+    // change that repairs it, so the flag is masked for acp exactly where the chain
+    // masked it. (Repairing it means widening the refusal above, which moves bytes.)
+    let interactive_lane = interactive_flag && !provider_impl.id().starts_with("acp/");
+    // The topologies, as ONE value. `--daemon`, `--extension` and `--interactive`
+    // are pairwise conflicting at parse, so at most one arm's condition is ever
+    // true and this chain's ORDER is not load-bearing — it reads top-down as
+    // "the most specific request wins" and clap has already guaranteed there is
+    // only one. See `Lane::for_create` on why the parameter is an enum rather
+    // than a row of bools.
+    //
+    // `--daemon` is listed first because it is the one that undoes a DEFAULT
+    // rather than overriding another flag: it is how `codex/daemon` and
+    // `pi/daemon` are reached at all now that a bare start makes
+    // `codex/app-server` and `pi/extension` (DEC-2/DEC-4).
+    let topology = if daemon_flag {
+        quorum_qw::lane::CreateTopology::Daemon
+    } else if app_server_flag {
+        quorum_qw::lane::CreateTopology::AppServer
+    } else if extension_flag {
+        quorum_qw::lane::CreateTopology::Extension
+    } else if interactive_lane {
+        quorum_qw::lane::CreateTopology::Interactive
+    } else {
+        quorum_qw::lane::CreateTopology::Default
+    };
+    let Some(lane) = quorum_qw::lane::Lane::for_create(provider_impl.id(), topology) else {
+        // `--extension` on a harness that has no extension lane lands here, and
+        // it is one of the two reachable cases: every other path was validated
+        // above. Named specifically, because "unknown provider" would be a lie
+        // about a provider the engine supports perfectly well.
+        if extension_flag {
+            eprintln!(
+                "qd start: --extension is pi's alone (provider \"{}\" has no extension lane). \
+                 It rides pi's own extension loader, which no other harness here has.",
+                provider_impl.id()
+            );
+            return 1;
+        }
+        // The other one: `--daemon` on claude-code. It is REFUSED rather than
+        // ignored, and the refusal is not a check — it is `Lane::new` answering
+        // `None` for `(ClaudeCode, Daemon)`, the same mechanism that refuses
+        // `--interactive` for `acp/*`. Ignoring it would be the exact failure
+        // `Lane::for_create` was built to make unrepresentable: the caller asks
+        // for a headless resident, gets an attached pane, exit 0.
+        // `--app-server` on a harness that has no app-server lane. Same
+        // mechanism as the two below: `Lane::new` answers `None`, and naming the
+        // provider beats "unknown provider" for a provider the engine supports.
+        if app_server_flag {
+            eprintln!(
+                "qd start: --app-server is codex's alone (provider \"{}\" has no app-server \
+                 lane). It names a specific residence — `codex app-server --listen ws://…` \
+                 with a `codex --remote` viewer able to join it — which no other harness \
+                 here has.",
+                provider_impl.id()
+            );
+            return 1;
+        }
+        if daemon_flag {
+            eprintln!(
+                "qd start: --daemon is not supported with --provider {} — claude-code has \
+                 no daemon lane at all. It is a TUI in a mux pane and nothing else: there \
+                 is no headless claude to host, so \"claude-code/daemon\" is not a lane \
+                 this engine can build. Start it without --daemon. (--daemon is for \
+                 --provider codex and pi, whose default lanes are codex/app-server and \
+                 pi/extension.)",
+                provider_impl.id()
+            );
+            return 1;
+        }
+        // Structurally unreachable: the accept-set was validated above against the
+        // SAME `Harness::from_provider_id` that `for_create` routes on. Fail closed
+        // with the same loud line rather than panic — the defensive-arm posture the
+        // `provider_for` lookup directly above already takes.
+        eprintln!(
+            "qd start: unknown provider \"{}\" — this engine supports: {}.",
+            provider_impl.id(),
+            supported_provider_names()
         );
-    }
-    if provider_impl.hosting() == dispatch::provider::Hosting::Daemon {
-        return run_new_codex_daemon(
-            provider_impl,
-            &env,
-            &home,
-            &paths,
-            &name,
-            &cwd,
-            agent.clone(),
-            prompt.clone(),
-        );
-    }
+        return 1;
+    };
+    // claude-code has exactly ONE lane, so this is "the claude lane" — and it is the
+    // only one with anything after the create. The bind phase, the relay-presence
+    // warning, the telemetry stamp and the `-p` priming send all belong to it and to
+    // nothing else; the other five render one line and return.
+    let claude_lane = lane.harness == quorum_qw::lane::Harness::ClaudeCode;
 
     // --- WP-B-CS-1 (D2): driver auto-detect routing (claude lane only) ---------
     // I/O mode follows who DRIVES (S-B-COMMAND-SURFACE-RULINGS). A HUMAN caller →
-    // today's interactive native-TUI create path BELOW, byte-unchanged. An AGENT
-    // caller → the headless stream-json launch (the LaunchHeadless client helper).
-    // `--headless`/`--interactive` override the auto-detect. Codex (daemon-hosted)
-    // already returned above, so this governs only the claude/mux lane.
-    match crate::driver::start_route(
-        crate::driver::resolve_driver_real(
-            crate::driver::DriverOverride::from_flags(headless_flag, interactive_flag),
-            &env,
-        ),
-        prompt.is_some(),
-    ) {
-        // Human → fall through to the interactive create path below (unchanged).
-        crate::driver::StartRoute::Interactive => {}
-        // Fork B: a bare agent/headless start with no `-p` is a usage error (a
-        // headless `claude -p ""` is a degenerate no-op turn). Teach the working
-        // re-entry verbs.
-        crate::driver::StartRoute::RefuseNoPrompt => {
-            eprintln!(
-                "qd start: agent/headless start requires -p <prompt> (a bare headless \
-                 start is a no-op turn). To re-enter an existing session use \
-                 \"qd resume <name>\" or \"qd attach <name>\"."
-            );
-            return 1;
-        }
-        // Agent + prompt → P4DB drive-burn (§6): the vestigial `qd start`→headless
-        // lane spawned a one-off `claude -p … --output-format stream-json` run. That
-        // drive is REMOVED. Refuse at the routing level with a teaching error,
-        // consistent with A5PW's refuse-one-off-print philosophy (the E2 chokepoint
-        // at the top of this fn already refuses `-p`/`--print` in the trailing
-        // claudeArgs; this closes the remaining auto-detected agent-launch path).
-        // Nothing is spawned; nonzero exit.
-        crate::driver::StartRoute::Headless => {
-            eprintln!(
-                "qd start: dispatch does not spawn one-off `claude -p` stream-json runs. \
-                 For a one-off print run, invoke `claude -p \"<prompt>\"` directly. To start a \
-                 tracked, attachable session use an interactive start (`qd start <name> \
-                 --interactive`); to re-enter an existing session use `qd resume <name>` or \
-                 `qd attach <name>`."
-            );
-            return 1;
+    // today's interactive native-TUI create path. An AGENT caller → refused below.
+    // `--headless`/`--interactive` override the auto-detect. It runs ONLY for the
+    // claude lane and it runs HERE, after the routing decision, because that is
+    // where the old chain reached it: the five daemon/pane arms returned above it
+    // and never consulted the driver at all.
+    //
+    // `crate::driver` reads WHO IS DRIVING — a qd-binary fact, never a lane concern
+    // — which is why it stays on this side of the call.
+    if claude_lane {
+        match crate::driver::start_route(
+            crate::driver::resolve_driver_real(
+                crate::driver::DriverOverride::from_flags(headless_flag, interactive_flag),
+                &env,
+            ),
+            prompt.is_some(),
+        ) {
+            // Human → fall through to the create below (unchanged).
+            crate::driver::StartRoute::Interactive => {}
+            // Fork B: a bare agent/headless start with no `-p` is a usage error (a
+            // headless `claude -p ""` is a degenerate no-op turn). Teach the working
+            // re-entry verbs.
+            crate::driver::StartRoute::RefuseNoPrompt => {
+                eprintln!(
+                    "qd start: agent/headless start requires -p <prompt> (a bare headless \
+                     start is a no-op turn). To re-enter an existing session use \
+                     \"qd resume <name>\" or \"qd attach <name>\"."
+                );
+                return 1;
+            }
+            // Agent + prompt → P4DB drive-burn (§6): the vestigial `qd start`→headless
+            // lane spawned a one-off `claude -p … --output-format stream-json` run. That
+            // drive is REMOVED. Refuse at the routing level with a teaching error,
+            // consistent with A5PW's refuse-one-off-print philosophy (the E2 chokepoint
+            // at the top of this fn already refuses `-p`/`--print` in the trailing
+            // claudeArgs; this closes the remaining auto-detected agent-launch path).
+            // Nothing is spawned; nonzero exit.
+            crate::driver::StartRoute::Headless => {
+                eprintln!(
+                    "qd start: dispatch does not spawn one-off `claude -p` stream-json runs. \
+                     For a one-off print run, invoke `claude -p \"<prompt>\"` directly. To start a \
+                     tracked, attachable session use an interactive start (`qd start <name> \
+                     --interactive`); to re-enter an existing session use `qd resume <name>` or \
+                     `qd attach <name>`."
+                );
+                return 1;
+            }
         }
     }
 
-    // Backend-selected create dirs (C1 D2/D3). ONE QD_MUX parse drives the canonical
-    // dir, the legacy list, AND the mux below — the embedded lane creates the
-    // session in its single qrmux dir (legacy EMPTY); the zmx lane keeps the
-    // canonical + cross-dir legacy scan (Bug-D). A bogus QD_MUX exits loudly here.
-    let backend = match common::select_backend(&env) {
-        Ok(b) => b,
-        Err(code) => return code,
-    };
-    let (canonical, legacy) = match resolve_create_dirs(backend, &home, &env) {
-        Ok(dirs) => dirs,
-        Err(code) => return code,
-    };
+    // A bogus QD_MUX is qd's refusal to WORD and qd's exit code to choose — the
+    // split `common::build_mux`'s own doc draws ("what stays HERE is what has always
+    // been qd's half and only qd's half: printing the failure and choosing the exit
+    // code"). It is a pure parse of one env var, no session touched.
+    //
+    // CLAUDE LANE ONLY, and the placement is the reason: the old chain reached
+    // `select_backend` exactly here, AFTER the driver route and BEFORE the `--via`
+    // composition, so a bogus QD_MUX beat a bad `--via` to stderr. The pane lanes
+    // deliberately do NOT get this preflight — `pi/mux-pane`'s `--session-id`
+    // capability refusal has to land ahead of any backend resolution (the order its
+    // arm pins), so their selector failure comes back through the lane instead,
+    // carrying `QD_MUX_INVALID_EXIT` on `LaneError::StartFailed::exit_code`.
+    if claude_lane {
+        if let Err(code) = common::select_backend(&env) {
+            return code;
+        }
+    }
+
     // --- F1 capture + --via composition (spec §2.2 + §3.2) -------------------
     // Capture the caller's backend env (lifecycle.ts:874) via the injected Env
     // seam (L9a — never raw std::env). When --via is given, overlay the resolved
     // backends.json profile (profile-wins, §3.2.3). The result is the env-key set
-    // create.rs writes to the 0600 self-deleting file. EMPTY ⇒ byte-zero change.
-    let (backend_env, backend_env_unset) = match compose_backend_env(&env, &home, via.as_deref()) {
-        Ok(set) => set,
-        Err(code) => return code, // the helper already printed the loud error.
-    };
-
-    let exec = RealExec;
-    // Backend-selected mux (C1 D3): the create path drives whichever backend
-    // QD_MUX names. NewDeps.mux + EventBootWaiter.mux are `&dyn Mux`, so we pass
-    // the boxed mux by reference.
-    let mux = match common::build_mux(backend, &home, &env) {
-        Ok(m) => m,
-        Err(code) => return code,
-    };
-    let clock = RealClock;
-
-    // --- P0 wave-2 (spec-w2-env D1): pre-mint the stable id BEFORE launch -----
-    // The id must exist at env-bake time. EVERY start (fresh or forked) boots a
-    // session whose provider UUID does not exist yet — a fork mints a NEW UUID
-    // at boot — so the identity flow is always mint UNBOUND now, `bind` after
-    // the boot waiter confirms the registry row (idstore module doc, "mint
-    // timing at qd start"; the wave-2 pre_bound mint_or_get arm died with
-    // `--resume`). A mint failure is fail-closed: never boot a session whose
-    // env would silently miss its identity (the EnvFileWriteFailed posture).
-    let ids_path = match common::ids_store_path(&env) {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    // WP-B5-iii option A (interactive fork): a fork's claude session-id is the
-    // pre-minted `fork_uuid` (the seeded transcript) — known PRE-spawn — so mint
-    // the fork's OWN qdId from it via `mint_or_get` (RESUME-path parity, row↔env
-    // match at spawn, NEVER the parent's). A non-fork start keeps the unbound
-    // pre-mint (bound at boot-confirm). (The headless fork path mints identically
-    // inside the daemon via `mint_or_get(resume_session_id=fork_uuid)`.)
-    let minted = match &fork_uuid {
-        Some(uuid) => dispatch::idstore::mint_or_get(&ids_path, uuid, Some(&name), &clock),
-        None => dispatch::idstore::mint_unbound(&ids_path, Some(&name), &clock),
-    };
-    let qd_session_id = match minted {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("qd start: could not mint a stable session id: {e}. No session was created.");
-            return 1;
+    // the create writes to the 0600 self-deleting file. EMPTY ⇒ byte-zero change.
+    //
+    // qd RESOLVES and qw RECEIVES — the rule `StartRequest::env`'s doc states: a
+    // `--via` profile's credentials are env pairs that by contract never touch
+    // argv, and the resolver (`dispatch::secrets`, backends.json) is qd's.
+    //
+    // Claude lane only, because that is the only create that has ever consumed it:
+    // `--via` on a codex/pi/acp start has always been a no-op, and composing it
+    // here would newly bake credentials into a resident's env.
+    let (backend_env, backend_env_unset) = if claude_lane {
+        match compose_backend_env(&env, &home, via.as_deref()) {
+            Ok(set) => set,
+            Err(code) => return code, // the helper already printed the loud error.
         }
+    } else {
+        (Vec::new(), Vec::new())
     };
 
-    let sleeper = RealSleeper;
-    // codex P1 W3 (codex-p1-spec section 7.1 step 4): obtain the boot waiter
-    // THROUGH the provider seam. `provider.boot_waiter(fx)` borrows mux/clock/
-    // sleeper/socket_dir out of `fx` and returns the SAME EventBootWaiter the bin
-    // verb used to construct inline (claude's impl is a 1:1 delegate to
-    // `EventBootWaiter::new` with the same args) — so the boot wait routes through
-    // the seam while create.rs keeps driving the injected `BootWaiter` trait. `fx`
-    // must outlive the box + the create_run_new call, so it is bound here. The
-    // launch-only members (relay/relay_port) are None; boot consumes mux/clock/
-    // sleeper/socket_dir/paths.sessions_dir.
-    let boot_fx = dispatch::provider::ProviderFx {
-        // A-3 (spec D5): the START verb's explicit relay-wait decision —
-        // default ON, `--no-await-relay` opts out. Some(...) overrides the
-        // legacy env opt-in inside the claude boot_waiter.
-        await_relay: Some(await_relay),
-        env: &env,
-        paths: &paths,
-        socket_dir: canonical.clone(),
-        mux: Some(mux.as_ref()),
-        clock: Some(&clock),
-        sleeper: Some(&sleeper),
-        relay: None,
-        relay_port: None,
-        // codex-only transport; the claude boot path has no app-server.
-        app_server: None,
-        codex_expected_turn_id: None,
-        acp_client: None,
-        pi_rpc: None,
-        acp_pre_dispatch: None,
-    };
-    let boot_waiter = provider_impl.boot_waiter(&boot_fx);
+    // --- `-p` at create: which lanes take it, and what qd says when they do not ---
+    //
+    // The set is `quorum_qw::lanes::create_prompt_refusal`, NOT a list kept here.
+    // Three lanes deliver the first turn in-core (codex/daemon and both acp/*), and
+    // for them the prompt rides the request. The other four refuse it, and qd does
+    // NOT simply forward and print the refusal: for the three pane/daemon lanes it
+    // says the session was created anyway and where to type the prompt, and for
+    // claude it runs the whole post-boot priming send itself (see the `-p` block at
+    // the bottom of this function, and `quorum_qw::delivery::priming`'s header for
+    // why that send can be neither `start` nor `deliver`).
+    //
+    // So the decision is "does this lane take one", and it has exactly one owner.
+    let prompt_refused = quorum_qw::lanes::create_prompt_refusal(lane).is_some();
+    if prompt.as_deref().is_some_and(|s| !s.is_empty()) && prompt_refused && !claude_lane {
+        // The wording is qd's — a lane has no user to talk to — and each line names
+        // the lane's own reason plus the working re-entry. Unchanged, verbatim, from
+        // the three wrappers this replaced.
+        match (lane.harness, lane.mode) {
+            (quorum_qw::lane::Harness::Codex, quorum_qw::lane::Mode::Pane) => eprintln!(
+                "qd start: --provider codex --interactive ignores -p at create (the codex TUI has \
+                 no verifiable submit path yet). The session is created; type the prompt after \
+                 \"qd attach {name}\"."
+            ),
+            (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::Pane) => eprintln!(
+                "qd start: --provider pi --interactive ignores -p at create (pi writes no \
+                 transcript until its first assistant reply, so a create-time submit cannot be \
+                 verified). The session is created; type the prompt after \"qd attach {name}\"."
+            ),
+            (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::Daemon) => eprintln!(
+                "qd start: --provider pi ignores -p at create (tier-a create is turn-free). To drive a \
+                 pi turn, send to the running session: qd send:relay {name} \"<prompt>\"."
+            ),
+            // No other lane both refuses a prompt and reaches here — claude is
+            // excluded above because it DELIVERS the prompt, just not at create.
+            _ => {}
+        }
+    }
 
-    let deps = NewDeps {
-        mux: mux.as_ref(),
-        exec: &exec,
-        env: &env,
-        clock: &clock,
-        paths: &paths,
-        canonical_dir: canonical.clone(),
-        legacy_dirs: legacy,
-        boot_waiter: boot_waiter.as_ref(),
-        provider: provider_impl,
-        backend,
-    };
-    let params = NewParams {
+    let req = quorum_qw::contract::StartRequest {
+        cwd: cwd.clone(),
         name: name.clone(),
-        agent,
-        // WP-B5-iii Mechanism S: a fork resumes the qd-SEEDED transcript by its
-        // pre-minted `fork_uuid` with a PLAIN `--resume` (NO `--fork-session` — qd
-        // already did the faithful copy/rekey/truncate; the fidelity gate proves
-        // it equivalent to native). `fork=false` ⇒ launch_plan emits `--resume
-        // <fork_uuid>` only. Non-fork start: resume=None (byte-identical to today).
-        fork: false,
-        resume: fork_uuid,
-        claude_args,
-        // warranty #2: --model is now a LAUNCH FLAG (birth property), not a
-        // post-boot /model slash command. Carried into the claude argv via
-        // build_new_extra_args; the post-boot delivery below is GONE.
         model: model.clone(),
-        cwd,
-        backend_env,
-        backend_env_unset,
-        qd_session_id: Some(qd_session_id.clone()),
+        // `--fork` is a CLAUDE mechanism end to end: the seed is a claude transcript,
+        // rekeyed at a fresh uuid and resumed by a PLAIN `--resume`. codex refuses it
+        // loudly above; pi and acp have always DROPPED it silently, and handing a
+        // claude fork uuid to `pi --load-session` would ask pi to load a session that
+        // does not exist. So it reaches the request only on the lane that has one.
+        resume: fork_uuid
+            .clone()
+            .filter(|_| claude_lane)
+            .map(quorum_qw::contract::SessionId),
+        // Same rule. `claudeArgs` is the claude launch's trailing argv; the codex
+        // DAEMON arm has always been handed an EMPTY passthrough and the other four
+        // cores have no passthrough field at all, so forwarding it here would newly
+        // push a `--` tail into codex's app-server argv.
+        passthrough: if claude_lane {
+            claude_args.clone()
+        } else {
+            Vec::new()
+        },
+        prompt: if prompt_refused { None } else { prompt.clone() },
+        await_relay,
+        env: backend_env,
+        env_unset: backend_env_unset,
         render,
-        // This is the claude native-TUI create path — only `StartRoute::Interactive`
-        // reaches it — so `true` is the honest answer. INERT for claude:
-        // `ClaudeProvider::launch_plan` does not read the field (claude's only
-        // launch shape is the interactive one), so the assembled cmd is
-        // byte-identical either way. It matters for codex, whose TUI and
-        // app-server lanes are different argv.
-        interactive: true,
     };
 
-    let out = match create_run_new(&deps, &params) {
-        Ok(out) => out,
+    // The SAME constructor every other verb uses: a create goes over the wire and
+    // executes inside `qw`. It went through `dispatch::lane::open_for_create` — the
+    // in-process lane — for exactly as long as ruling D6 was outstanding, because
+    // six of the seven create arms re-exec `current_exe()` into `qrmux-server`,
+    // `acp-daemon` or `pi-daemon` and the `qw` binary carried none of the three. It
+    // carries all three now, so the seam had nothing left to decide.
+    let ops = dispatch::lane::open(lane, &env, paths.clone());
+    let handle = match ops.start(&req) {
+        Ok(h) => h,
         Err(e) => {
-            // P0 wave-2: a BootTimeout leaves the session in place (not reaped) —
-            // its row may still appear. Best-effort bind of the pre-minted id so
-            // a late-booting session's env id matches what `ls` will surface.
-            // Silent: the loud boot error below stays byte-stable.
-            if let NewError::BootTimeout { .. } = &e {
-                bind_minted_id_best_effort(&ids_path, &qd_session_id, &paths, &name, &clock);
-            }
+            let (line, code, boot_phase) = start_failure(&e);
             // §5.1 / D6: a BootTimeout on the -p flow emits a positive
             // priming-readiness-timeout to the BYNAME file (no sessionId exists on
             // a failed boot) BEFORE the existing loud exit. ONLY when -p was
             // requested (a bare `qd new` boot timeout keeps today's behavior
             // exactly). The existing stderr/exit are UNCHANGED.
+            //
+            // `phase` arrives TYPED on the error — `LaneError::StartFailed::boot_phase`
+            // — which is the whole point of `boot::BootPhase` (m-4, ack3-spec §8): the
+            // old `detail.contains("did not reach idle")` string-match is gone and a
+            // process boundary must not quietly restore it.
+            //
+            // The best-effort bind of the pre-minted id that used to sit beside this
+            // is now the MINTER's, in the lane's claude arm: it owns the ids path and
+            // the id, and neither survives on the error a caller receives.
             if prompt.is_some() {
-                if let NewError::BootTimeout { phase, .. } = &e {
-                    emit_priming_timeout(&home, &env, &clock, &name, *phase);
+                if let Some(phase) = boot_phase {
+                    priming::emit_priming_timeout(&env, &RealClock, &home, &name, phase);
                 }
             }
-            eprintln!("{e}");
+            eprintln!("{line}");
+            // THE ESCAPE-HATCH POINTER (16-default-lane-switch.md, DEC-2 / B2).
+            //
+            // Both new default lanes need something the old defaults did not:
+            // `pi/extension` needs a mux pane, a live pty and a drained
+            // terminal, and `codex/app-server` wants a mux to put a viewer in.
+            // A create that fails in a no-mux context — CI, a bare ssh session,
+            // a container — is therefore failing for a reason the caller can fix
+            // in one flag, and saying so is the difference between a default
+            // change and a capability that just disappeared.
+            //
+            // Only on the two flipped lanes, and only when the flag was not
+            // already given: `--daemon` cannot be the remedy for a failure the
+            // daemon lane itself produced, and repeating a flag the caller
+            // passed reads as the engine not listening. The lane is the key, as
+            // everywhere else here — not the provider id, because
+            // `--provider codex --interactive` failing has nothing to do with
+            // this.
+            let flipped_default = matches!(
+                (lane.harness, lane.mode),
+                (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::Extension)
+                    | (
+                        quorum_qw::lane::Harness::Codex,
+                        quorum_qw::lane::Mode::AppServer
+                    )
+            );
+            if flipped_default && !daemon_flag {
+                eprintln!(
+                    "qd start: \"{}\" is the default lane for --provider {}, and it needs a \
+                     mux pane. If this is CI, a bare ssh session or any no-mux context, \
+                     \"qd start {} --provider {} --daemon\" starts the headless {} lane \
+                     instead — no pane, no TTY, nothing to attach.",
+                    lane.id(),
+                    lane.harness.provider_id(),
+                    name,
+                    lane.harness.provider_id(),
+                    quorum_qw::lane::Mode::Daemon.hosting_token(),
+                );
+            }
             // A-1: a --json caller always gets one machine object on stdout.
             // Pre-bind create/boot failures use the catch-all class
             // "start-failed" (the three RULED classes — unbound | ambiguous |
             // diverged — are the bind phase's, below); the recipe treats any
-            // other class as fail-to-operator.
-            if json_out {
+            // other class as fail-to-operator. CLAUDE LANE ONLY, exactly as
+            // before: no other create arm has ever emitted a --json object.
+            if json_out && claude_lane {
                 let obj = serde_json::json!({
                     "error": {
                         "class": "start-failed",
                         "session": { "name": name, "pid": serde_json::Value::Null },
-                        "message": e.to_string(),
+                        "message": line,
                     }
                 });
                 println!("{obj}");
             }
-            return e.exit_code();
+            return code;
         }
     };
+
+    // Non-fatal notices the create produced, VERBATIM and already attributed.
+    // Today's only producer is the acp arm, whose two `AcpWarning`s the verb used
+    // to receive through a `warn` callback — see `SessionHandle::notes` for why a
+    // lane returns them instead of printing them.
+    for note in &handle.notes {
+        eprintln!("{note}");
+    }
+
+    if !claude_lane {
+        // The seven lanes with nothing after the create. One line each, byte-for-byte
+        // the line its wrapper printed, and exit 0.
+        //
+        // EXHAUSTIVE, deliberately. This was a six-arm match with a `_ => {}`
+        // catch-all, and the catch-all is what let `pi/extension` and
+        // `codex/app-server` ship printing NOTHING: an opt-in lane whose success
+        // was silence, which became a visible regression the moment both became
+        // defaults. A wildcard here does not merely permit that — it guarantees
+        // it, because adding a lane is the one edit that will never make the
+        // compiler mention this file. The impossible pairs get named arms too
+        // (see `verbs/resume.rs`, whose match is exhaustive for the same
+        // reason), so that "there is no such lane" is written down rather than
+        // absorbed.
+        match (lane.harness, lane.mode) {
+            (quorum_qw::lane::Harness::Codex, quorum_qw::lane::Mode::Pane) => println!(
+                "Started codex session \"{name}\" — attach with \"qd attach {name}\""
+            ),
+            (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::Pane) => println!(
+                "Started pi session \"{name}\" (session {}) — attach with \"qd attach {name}\"",
+                // ALWAYS present on this lane — a pi row is identified from birth,
+                // which is exactly what the codex pane outcome cannot claim.
+                handle.id.as_ref().map(|i| i.0.as_str()).unwrap_or_default()
+            ),
+            (quorum_qw::lane::Harness::Codex, quorum_qw::lane::Mode::Daemon) => {
+                println!("Started detached codex session \"{name}\"")
+            }
+            (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::Daemon) => {
+                println!("Started detached pi session \"{name}\"")
+            }
+            (
+                quorum_qw::lane::Harness::AcpClaudeCode | quorum_qw::lane::Harness::Opencode,
+                quorum_qw::lane::Mode::Daemon,
+            ) => println!("Started detached acp session \"{name}\""),
+            // The extension lane names BOTH channels, because it is the one lane
+            // that has both: a human attaches to the pane, and an agent drives
+            // the same session over its control channel without attaching to
+            // anything. A line naming only `qd attach` would read as "this is
+            // the pi TUI lane", which is exactly the confusion the lane exists to
+            // resolve — and it is the wording `qd resume` already uses for it
+            // (`verbs/resume.rs`). The session id rides along for the same reason
+            // it does on the pane arm: a pi row is identified from birth.
+            (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::Extension) => println!(
+                "Started pi session \"{name}\" (session {}) — attach with \"qd attach {name}\", \
+                 or drive it with \"qd send {name}\"",
+                handle.id.as_ref().map(|i| i.0.as_str()).unwrap_or_default()
+            ),
+            // The one daemon lane with a terminal to open. Everything else about
+            // the create is `codex/daemon`'s — same spawn, same process — so the
+            // verdict line is byte-identical to it and only the follow-on
+            // differs. Telling a user to `qd send` to a session they could also
+            // be WATCHING leaves the whole affordance unmentioned, which is why
+            // `qd resume` prints the same second line.
+            (quorum_qw::lane::Harness::Codex, quorum_qw::lane::Mode::AppServer) => {
+                println!("Started detached codex session \"{name}\"");
+                println!("Open a terminal on it with \"qd attach {name}\".");
+            }
+            // claude is excluded by the enclosing `if` — it has four phases after
+            // the create and prints its own line down there, not here.
+            (quorum_qw::lane::Harness::ClaudeCode, _) => {}
+            // Not lanes; `Lane::new` refuses each of these, so `for_create` cannot
+            // have produced one. Named rather than wildcarded so that making any
+            // of them real is an edit somebody has to make HERE, on purpose.
+            (quorum_qw::lane::Harness::Codex, quorum_qw::lane::Mode::Extension)
+            | (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::AppServer)
+            | (
+                quorum_qw::lane::Harness::AcpClaudeCode | quorum_qw::lane::Harness::Opencode,
+                quorum_qw::lane::Mode::Pane
+                | quorum_qw::lane::Mode::Extension
+                | quorum_qw::lane::Mode::AppServer,
+            ) => {}
+        }
+        return 0;
+    }
+
+    // =======================================================================
+    // The claude lane's four phases AFTER the create. None of them is a lane
+    // operation; every one is qd's own.
+    // =======================================================================
+
+    let clock = RealClock;
+    let sleeper = RealSleeper;
+    let exec = RealExec;
+    // The stable id the create MINTED, read off its return value. Before
+    // `SessionHandle::qd_id` the only way to learn it was to have minted it — which
+    // is what put the mint on the wrong side of this call for the four lanes whose
+    // cores mint internally.
+    let qd_session_id = handle.qd_id.clone().unwrap_or_default();
+    let ids_path = match common::ids_store_path(&env) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+
     // Under --json the human line moves to stderr: stdout carries exactly one
     // machine object (the identity on success, the A-2 error object on a
     // bind-arm failure). Human output without the flag is byte-unchanged.
     if json_out {
-        eprintln!("Started detached session \"{}\"", out.name);
+        eprintln!("Started detached session \"{name}\"");
     } else {
-        println!("Started detached session \"{}\"", out.name);
+        println!("Started detached session \"{name}\"");
     }
 
     // --- Lifecycle-collapse A-2: the FOURTH boot micro-phase — bind --------
@@ -1001,7 +1115,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             .map(|p| dispatch::effects::is_pid_alive(p as i32))
             .unwrap_or(true);
         let obj = serde_json::json!({
-            "name": out.name,
+            "name": name,
             "qdId": qd_session_id,
             "sessionId": bound.session_id,
             "status": bound.status,
@@ -1100,283 +1214,136 @@ pub fn run_new(m: &ArgMatches) -> i32 {
 
     // -p → deliver_prompt with DELIVER_TIMEOUT_S (15 — NOT send:pty's 120, N9).
     if let Some(p) = &prompt {
-        // --- ACK-2 §9 (M3): engine event emission for the -p send (best-effort) -
-        // events key: sessionId if resolvable NOW (the existing non-blocking
-        // registry read), else byname(name) — the key choice is STICKY for ALL of
-        // this send's events (§4.1). state_dir honors QD_HOME (§4.1 / ADD-14).
-        let ev_state = dispatch::paths::QdPaths::from_home_env(&home, &env).state_dir;
+        // TWO RECORDS, ONE ID — ruling D11, and the ONE half of this send that is
+        // qd's. `qd delivery:recover`'s sweep reads qd's INTENT log, so without the
+        // record below a `new -p` priming send would silently drop out of recovery
+        // altogether. It is written FIRST and hands its id to the body, because an
+        // intent record can only correlate with an id that already exists (D10).
+        //
+        // Everything the send then DOES — the delivery-log `send-initiated` with
+        // its recovery keys, the chunked type-through, `chunks-delivered`, the W8
+        // verify and its two positive terminals, and the WatchGuard across both —
+        // is `quorum_qw::delivery::priming`'s. It is qw-owned delivery work and it
+        // was the last of it still running out of a qd verb; that module's header
+        // records why it could not instead become a `LaneOps::start` or
+        // `LaneOps::deliver` call.
+        //
+        // THE MUX AND THE SOCKET DIR. The mux is built HERE and only here, because
+        // this send — not the create — is what still needs one on qd's side. The
+        // socket dir is NOT re-resolved: it is `SessionHandle::socket_dir`, the
+        // canonical dir the create actually landed in, carried back for exactly this
+        // (a re-resolved `ZMX_DIR` may point elsewhere — ADR 0009, Bug D).
+        //
+        // events key: sessionId if resolvable NOW (a non-blocking registry read),
+        // else byname(name) — the key choice is STICKY for ALL of this send's
+        // events (§4.1), across BOTH logs, which is why it is resolved once HERE
+        // and handed to the body rather than read again on the other side.
         let ev_session_id = dispatch::registry::read_entries(&paths.sessions_dir, false)
             .into_iter()
             .find(|s| s.entry.name.as_deref() == Some(name.as_str()))
             .and_then(|s| s.entry.session_id);
-        let ev_key = ev_session_id
-            .clone()
-            .unwrap_or_else(|| events::byname_key(&name));
-        let writer = EventWriter::for_key(
-            &ev_state,
-            &ev_key,
-            ev_session_id.clone(),
-            Some(name.clone()),
-        );
-        let send_id = events::mint_send_id(&clock);
-
-        // D10 (R6/R7): the transcript+offset snapshot is UNCONDITIONAL-when-
-        // resolvable (not only when payload_needs_verify). The verify step still
-        // uses the SAME offset; a single-chunk send simply doesn't run verify.
-        let ev_transcript = resolve_new_p_transcript(&paths, &name);
-        let snapshot_offset: u64 = ev_transcript
-            .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok().map(|m| m.len()))
-            .unwrap_or(0);
-        // The verify window offset = the snapshot when verify runs, else unused.
-        let verify_offset: u64 = if dispatch::submit::payload_needs_verify(p) {
-            snapshot_offset
-        } else {
-            0
-        };
-
-        // §2.3.1 send-initiated (verb:"new-p", send_path:"idle"): minted BEFORE
-        // the first chunk write. Per-chunk + content shas from the production
-        // splitter; transcript/offset present when resolvable (D10).
-        let chunks_vec = dispatch::submit::chunk_text(p, dispatch::events::CHUNK_BYTES);
-        let chunk_sha256s: Vec<String> = chunks_vec
-            .iter()
-            .map(|c| events::sha256_hex(c.as_bytes()))
-            .collect();
-        let ev_transcript_str = ev_transcript.as_ref().map(|p| p.display().to_string());
-        let ev_transcript_offset = ev_transcript.as_ref().map(|_| snapshot_offset);
-        events::warn_emit(
-            &writer,
+        let send_id = super::intent::record_send_intent(
+            &env,
             &clock,
-            &Payload::SendInitiated {
-                send_id: send_id.clone(),
-                verb: events::verb_str(true).to_string(),
-                send_path: "idle".to_string(),
-                content_sha256: events::sha256_hex(p.as_bytes()),
-                content_len: p.len() as u64,
-                chunks: chunks_vec.len() as u32,
-                chunk_sha256s,
-                chunk_sha256s_capped: false,
-                transcript: ev_transcript_str,
-                transcript_offset: ev_transcript_offset,
-                // ADD-20 (§6.2): redacted ≤256B preview of the -p prompt text.
-                content_preview: Some(dispatch::redact::redact_for_preview(
-                    p,
-                    dispatch::events::PREVIEW_CAP_BYTES,
-                )),
-            },
+            ev_session_id.as_deref(),
+            Some(&name),
+            events::verb_str(true),
+            p,
         );
 
-        // §9: the deliver runs through a RECORDING DeliverDeps (Real* binding +
-        // per-chunk ack capture; the DeliverDeps trait + pure deliver_prompt core
-        // are UNTOUCHED). chunks-delivered emits when EVERY text chunk acked.
-        let deliver = RecordingDeliverDeps {
-            inner: dispatch::submit::RealDeliverDeps {
-                mux: mux.as_ref(),
-                clock: &clock,
-                sleeper: &sleeper,
-                zmx_name: name.clone(),
-                session_name: name.clone(),
-                sessions_dir: paths.sessions_dir.clone(),
-                dir: out.socket_dir.clone(),
-            },
-            mux: mux.as_ref(),
-            dir: out.socket_dir.clone(),
-            zmx_name: name.clone(),
-            sleeper: &sleeper,
-            total: Cell::new(0),
-            acked: Cell::new(0),
+        let backend = match common::select_backend(&env) {
+            Ok(b) => b,
+            Err(code) => return code,
         };
-
-        // rev C row 24 WatchGuard: armed across the deliver-acceptance watch +
-        // verify; an early return / panic without a terminal Drops it →
-        // pending-abandoned{watch-interrupted}. Disarmed on every terminal below.
-        let guard = WatchGuard::arm(&writer, &clock, &send_id);
-
-        let outcome =
-            dispatch::submit::deliver_prompt(&deliver, p, dispatch::submit::DELIVER_TIMEOUT_S);
-
-        // §2.3.2 chunks-delivered: all text chunks acked → emit.
-        let acks_total = deliver.total.get();
-        let acks_acked = deliver.acked.get();
-        if acks_total > 0 && acks_acked == acks_total {
-            events::warn_emit(
-                &writer,
-                &clock,
-                &Payload::ChunksDelivered {
-                    send_id: send_id.clone(),
-                    chunks_acked: acks_acked,
-                    // -p delivery is the embedded/zmx backend per the create lane;
-                    // name the channel honestly via the shared label.
-                    ack_source: new_p_ack_source().to_string(),
-                },
+        let mux = match common::build_mux(backend, &home, &env) {
+            Ok(m) => m,
+            Err(code) => return code,
+        };
+        let Some(socket_dir) = handle.socket_dir.as_deref() else {
+            // Unreachable: every pane create fills it. Refuse rather than guess a
+            // dir — typing a prompt into the wrong pane is worse than not typing it.
+            eprintln!(
+                "qd start: session \"{name}\" was created but the lane reported no socket \
+                 dir, so the -p prompt was not delivered. The session IS RUNNING; type \
+                 the prompt after \"qd attach {name}\"."
             );
-        }
-
-        // W8 verify-after-submit: CHUNKED deliveries that went busy get a bounded
-        // payload read-back (M11 sanctioned; ADR-0012). Loud exit-1 ONLY on
-        // POSITIVE truncation evidence; resolution failure / no record / foreign
-        // records DEGRADE to one warn (this path's transcript may simply not be
-        // resolvable yet — false-fails are the design enemy, red-team R1).
-        // Single-chunk prompts: behavior byte-for-byte unchanged (scope guard).
-        if outcome == dispatch::submit::DeliverOutcome::Accepted
-            && dispatch::submit::payload_needs_verify(p)
-        {
-            let deps = NewPVerifyDeps {
-                paths: &paths,
-                name: &name,
-                offset: verify_offset,
-                clock: &clock,
-                sleeper: &sleeper,
-            };
-            match dispatch::submit::verify_chunked_payload(
-                &deps,
-                p,
-                dispatch::submit::VERIFY_TIMEOUT_S,
-                dispatch::submit::VERIFY_POLL_MS,
-            ) {
-                dispatch::submit::PayloadVerifyOutcome::Verified => {
-                    // §9 anchored: a Verified read-back IS the landed signal.
-                    // recovered false; attribution absent; the anchor uses the
-                    // verify-window offset, line_index 0 (verify returns texts, not
-                    // indices — documented unknown).
-                    emit_new_p_anchored(
-                        &writer,
-                        &clock,
-                        &send_id,
-                        p,
-                        ev_transcript.as_deref(),
-                        verify_offset,
-                    );
-                    guard.disarm();
-                    return map_deliver_outcome(outcome, &name);
-                }
-                dispatch::submit::PayloadVerifyOutcome::Truncated { expected, recorded } => {
-                    // §2.3.4 anchored-mismatch (terminal): the lengths come from the
-                    // outcome; actual_sha is re-derived HERE (re-read past the offset
-                    // + longest truncation signature). Emitted BEFORE the unchanged
-                    // exit-1.
-                    emit_new_p_mismatch(
-                        &writer,
-                        &clock,
-                        &send_id,
-                        p,
-                        ev_transcript.as_deref(),
-                        verify_offset,
-                        expected,
-                        recorded,
-                    );
-                    guard.disarm();
-                    // The turn STARTED (went busy) — this fires AFTER acceptance
-                    // as a distinct named error in the EXISTING exit-1 failure
-                    // class (ADR-0008 codes untouched; ADR-0012). NO auto-retry:
-                    // the truncated turn already reached the model (M11 §2).
-                    eprintln!(
-                        "ERROR: payload truncated in delivery to \"{name}\": expected {expected} bytes, \
-                         recorded {recorded}.\n  The turn started (went busy) — do NOT blindly resend \
-                         (double-submit risk).\n  Attach: qd attach {name}"
-                    );
-                    return 1;
-                }
-                dispatch::submit::PayloadVerifyOutcome::Unattributable => {
-                    // No terminal (spec §9: NoRecord/Unattributable/SourceUnavailable
-                    // → stays dangling). The send remains outstanding by design.
-                    eprintln!(
-                        "WARNING: could not attribute the delivered payload in \"{name}\"'s \
-                         transcript — check: qd attach {name}"
-                    );
-                }
-                dispatch::submit::PayloadVerifyOutcome::NoRecord
-                | dispatch::submit::PayloadVerifyOutcome::SourceUnavailable(_) => {
-                    eprintln!(
-                        "WARNING: could not verify payload delivery to \"{name}\" \
-                         (transcript not yet resolvable) — check: qd attach {name}"
-                    );
-                }
+            return 1;
+        };
+        let deps = priming::PrimingDeps {
+            env: &env,
+            clock: &clock,
+            sleeper: &sleeper,
+            mux: mux.as_ref(),
+            paths: &paths,
+            home: &home,
+            socket_dir,
+        };
+        let params = priming::PrimingParams {
+            name: &name,
+            prompt: p,
+            session_id: ev_session_id.as_deref(),
+            send_id: &send_id,
+        };
+        // `map_err` + print — the wrapper this whole split is made of. The notes
+        // are the two degraded-verify WARNINGs; the refusal is the ONE loud
+        // truncation error, and its exit code is the core's, not this verb's guess.
+        return match priming::prime_new_session(&deps, &params) {
+            Ok(primed) => {
+                render_notes(&primed.notes);
+                map_deliver_outcome(primed.deliver, &name)
             }
-        }
-
-        // §9 / §C2 (R5 seam ruling 01KX88WKGP + amend rider 3, red-team finding G):
-        // the deliver outcome mints NO foreclosing terminal on ANY arm. All three
-        // outcomes fire in the SAME post-deliver-attempt match, and deliver_prompt
-        // writes the message to the pty (send_message: chunks + `\r`, submit.rs:579 /
-        // lifecycle.rs RecordingDeliverDeps::send_message) BEFORE it can reach ANY of
-        // these outcomes — so each is a post-wire, possibly-LANDED priming send whose
-        // fate is in-band-undeterminable here:
-        //   - Accepted (single-chunk, or chunked-with-degraded-verify): NO terminal —
-        //     written+accepted; the anchor comes from verify only (the two verify arms
-        //     above already emitted turn-anchored / -mismatch on POSITIVE observation).
-        //   - Stalled: the deliver budget (DELIVER_TIMEOUT_S) expired while watching for
-        //     turn-start — the bytes were written + `\r` submitted, so the turn may yet
-        //     commit. An `anchor-timeout` here would FALSE-FAIL a possibly-landed prime
-        //     and FORECLOSE recovery (same class as the send:pty TimedOut arm).
-        //   - PidFileMissing: `find_pid_file` returned None AFTER send_message already
-        //     wrote the chunks + `\r` (deliver_prompt: send_message at submit.rs:579
-        //     precedes the None return at :583-584) — the registry row vanished
-        //     post-write, so the bytes may have landed before the session died. A
-        //     `pending-abandoned{session-died}` here would FALSE-FAIL a possibly-landed
-        //     prime and FORECLOSE recovery (same class as the send:pty Died arm). This
-        //     CORRECTS the door-inventory's "priming send already covered" — only the
-        //     Accepted arm was non-foreclosing; its failure arms foreclosed.
-        // So NO terminal on any arm: the priming send stays dead-dangling once the
-        // caller exits, and `qd delivery:recover` (its sweep includes verb "new-p")
-        // closes it from the transcript — turn-anchored{recovered} if it landed, else
-        // pending-abandoned{recovery-no-candidate}. The LOUD operator signal + exit
-        // codes (Stalled → 10 WARNING; PidFileMissing → 1 ERROR) from
-        // map_deliver_outcome are UNCHANGED — the C1 account is the standing
-        // send-initiated + that loud synchronous exit + C2's PENDING-closable state.
-        // The exhaustive match is kept so any future DeliverOutcome variant is forced
-        // back through this same discriminator (F3's coverage-hole lesson).
-        match outcome {
-            dispatch::submit::DeliverOutcome::Stalled => {}
-            dispatch::submit::DeliverOutcome::PidFileMissing => {}
-            dispatch::submit::DeliverOutcome::Accepted => {}
-        }
-        guard.disarm();
-        return map_deliver_outcome(outcome, &name);
+            Err(refused) => {
+                render_notes(&refused.notes);
+                if let Some(line) = refused.error.line("start") {
+                    eprintln!("{line}");
+                }
+                refused.error.exit_code()
+            }
+        };
     }
 
     0
 }
 
-/// P0 wave-2: best-effort bind of a pre-minted unbound id after a BootTimeout
-/// (the session is NOT reaped — its row may already exist or appear late). One
-/// non-blocking registry read by name; every failure is silent (the loud boot
-/// error owns stderr, byte-stable). P0 redfix F1: the row pick is the SAME
-/// liveness-filtered helper as the boot-confirm site (pick_live_named_row) —
-/// no-row and ambiguous both mean "don't bind", silently here by this path's
-/// contract.
-fn bind_minted_id_best_effort(
-    ids_path: &std::path::Path,
-    qd_session_id: &str,
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-    clock: &RealClock,
-) {
-    let rows = dispatch::registry::read_entries(&paths.sessions_dir, false);
-    let alive = |pid: i64| dispatch::effects::is_pid_alive(pid as i32);
-    if let dispatch::registry::LiveNamePick::One { session_id: sid } =
-        dispatch::registry::pick_live_named_row(&rows, name, &alive)
-    {
-        let _ = dispatch::idstore::bind(ids_path, qd_session_id, &sid, clock);
+/// The LINE, the EXIT CODE and the BOOT PHASE a failed create reports.
+///
+/// Three facts, and the reason each one is carried rather than derived is on
+/// [`quorum_qw::contract::LaneError::StartFailed`]. What is here is only the
+/// fallback: `start` answers `StartFailed` for every real create failure, and the
+/// other arm exists because two of `LaneError`'s variants are still reachable —
+/// `NotSupported` from a lane combination that does not exist, and `Transport` from
+/// a lane that could not be opened at all. Printing a `{e:?}` for either would put
+/// a Rust enum in front of a user.
+fn start_failure(
+    e: &quorum_qw::contract::LaneError,
+) -> (String, i32, Option<dispatch::boot::BootPhase>) {
+    match e {
+        quorum_qw::contract::LaneError::StartFailed {
+            detail,
+            exit_code,
+            boot_phase,
+        } => (detail.clone(), *exit_code, *boot_phase),
+        other => (format!("qd start: {other}"), 1, None),
     }
 }
 
-/// codex-interactive, use case 2: the mux name hosting a HUMAN VIEWER onto a
-/// daemon-hosted session.
-///
-/// Distinct from the session's own name because a viewer is NOT the session — it
-/// is a second process looking at it, with its own lifetime.
-///
-/// `.view` rather than something unmintable: qrmux restricts pane names to
-/// `a-zA-Z0-9_-.`, so there is no separator available that a session name could
-/// not also contain. A user COULD therefore have a real session literally named
-/// `foo.view`, and reusing a pane on name alone would attach them to that instead
-/// of a viewer on `foo`. So reuse is gated on the pane's COMMAND matching our
-/// viewer argv, never on the name — see [`attach_codex_viewer`].
-pub fn viewer_pane_name(session_name: &str) -> String {
-    format!("{session_name}.view")
-}
+// `bind_minted_id_best_effort` lived HERE. It is GONE, and it moved rather than
+// died: it is `quorum_qw::lanes::LaneImpl::bind_minted_id_best_effort` now, in
+// the claude create arm, because it is the MINTER's repair. The verb no longer
+// holds the ids-store path or the pre-minted id — the create mints internally and
+// reports the id back on `SessionHandle::qd_id` — and neither survives on the
+// error a failed create hands back. It stayed silent across the move: the loud
+// boot error still owns stderr, byte-stable.
+
+// codex-interactive, use case 2: the viewer PANE NAME moved to
+// `dispatch::provider::codex::pane::viewer_pane_name`, together with the
+// `reap_viewer_pane` that stage-2 phase 3 handed to the codex lane's `kill` — a
+// viewer is a codex affordance, and both halves of it belong on the same side of
+// the boundary. Its war story travelled with it: qrmux's pane-name charset leaves
+// no separator a session name could not also contain, so pane REUSE is gated on
+// the pane's COMMAND matching our viewer argv and NEVER on its name (see
+// [`attach_codex_viewer`]).
+use dispatch::provider::codex::pane::viewer_pane_name;
 
 /// codex-interactive, use case 2: attach a human TUI to a LIVE daemon-hosted
 /// codex session, WITHOUT stopping or converting it.
@@ -1515,1305 +1482,71 @@ pub fn attach_codex_viewer(session: &Session) -> Option<i32> {
     })
 }
 
-/// codex-interactive: the shared MUX-PANE create choreography for a codex TUI —
-/// driven by `qd start --interactive` (fresh) and by the revive seam (resume).
+/// Stamp the CLI verb onto a [`CodexTuiError`] (and, below, a [`PiTuiError`]).
 ///
-/// WHY THIS REUSES `create::run_new` RATHER THAN COPYING THE DAEMON ARM. The
-/// mux-pane create pipeline is already provider-generic — it builds its launch
-/// command through `provider.launch_plan` and drives an injected `BootWaiter` — so
-/// hosting a codex TUI needs no new pipeline, only a different argv (via
-/// `NewParams::interactive`). Everything a pane session must get right and is easy
-/// to get wrong — the atomic name claim, the scan-under-claim, the zmx preflight,
-/// the I6 attachability verify, the socket-dir-split detection, the
-/// stale-ended-pane reap — is thereby the SAME code claude sessions have been
-/// hardened on, not a second implementation of it.
+/// The pre-split `create_codex_tui`/`revive_codex_tui` threaded a `verb: &str`
+/// through every `eprintln!` so one body could say `qd start:` / `qd resume:` /
+/// `qd attach:` / `qd send:` depending on the caller. The verb names the command
+/// the USER typed, so it stayed on this side of the split when the choreography
+/// moved to `dispatch::provider::codex::pane`: the error variants carry the facts,
+/// this formatter carries the attribution.
 ///
-/// WHY BOOT DOES NOT WAIT FOR THE THREAD ID (measured; see `codex::tui`'s module
-/// doc for the numbers). A codex TUI opens its rollout at the FIRST INTERACTION,
-/// not at launch — a session left sitting at its composer was observed running 164
-/// seconds with nothing on disk. So session EXISTENCE and thread IDENTITY are
-/// separate events, and waiting for the second would mean blocking until a human
-/// typed. The pane, however, is usable the instant it is up, so readiness is
-/// exactly that: `create::run_new` verifies the pane is registered and ATTACHABLE
-/// (its I6 step) BEFORE it calls the boot waiter, which is why the waiter here is
-/// the trivial [`OkBootWaiter`].
-///
-/// `resume_thread` is what separates the two callers, and it decides identity:
-///   - `None` (fresh start) — argv is a bare `codex`, and the row is written with
-///     NO `sessionId`; the gather step binds one later
-///     (`join::backfill_codex_thread_ids`).
-///   - `Some(id)` (revive) — argv is `codex resume <id>` (verified against the
-///     codex CLI: a positional session UUID on the `resume` subcommand bypasses
-///     the picker and reopens that thread interactively), and the row is written
-///     WITH that id. A revived session is identified from birth: we are not
-///     discovering identity, we are carrying it forward, so no backfill and no
-///     window in which the session cannot be addressed.
-///
-/// THE ONE THING THE PIPELINE CANNOT DO FOR US is the registry row. claude writes
-/// its own (the create path merely waits for it to appear); the codex TUI knows
-/// nothing about qd, so this writes it.
-#[allow(clippy::too_many_arguments)]
-fn create_codex_tui(
-    env: &RealEnv,
-    home: &std::path::Path,
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-    cwd: &std::path::Path,
-    render: dispatch::launch::RenderMode,
-    resume_thread: Option<&str>,
-    verb: &str,
-) -> Result<CodexTuiOutcome, i32> {
-    let clock = RealClock;
-    let exec = RealExec;
-
-    // THE DISCOVERY FLOOR, sampled BEFORE anything is launched and persisted as
-    // the row's `startedAt`. On a fresh start the backfill compares it against
-    // each rollout's OWN recorded start time, so a thread that predates this
-    // session — the codex the user already had open in this repo — can never be
-    // mistaken for ours no matter how long identification takes.
-    let since_ms = clock.now_ms();
-
-    let backend = common::select_backend(env)?;
-    let (canonical, legacy) = resolve_create_dirs(backend, home, env)?;
-    let mux = common::build_mux(backend, home, env)?;
-
-    // Pre-mint the stable id: it must exist at env-bake time so the pane's env
-    // file can export QD_SESSION_ID (a `qd` run from inside the session then knows
-    // which session it is). Fail-closed, like the claude lane.
-    let ids_path = common::ids_store_path(env)?;
-    let minted = match resume_thread {
-        // A revive already knows the provider session id, so bind the stable id to
-        // it directly (the resume-path parity the claude lane uses): the row and
-        // the env agree from the first instant.
-        Some(tid) => dispatch::idstore::mint_or_get(&ids_path, tid, Some(name), &clock),
-        None => dispatch::idstore::mint_unbound(&ids_path, Some(name), &clock),
-    };
-    let qd_session_id = match minted {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("qd {verb}: could not mint a stable session id: {e}. Nothing was created.");
-            return Err(1);
-        }
-    };
-
-    let cwd_str = cwd.to_string_lossy().into_owned();
-    // Readiness IS the I6 attachability verify that runs before this waiter.
-    let boot_waiter = dispatch::create::OkBootWaiter;
-
-    let deps = NewDeps {
-        mux: mux.as_ref(),
-        exec: &exec,
-        env,
-        clock: &clock,
-        paths,
-        canonical_dir: canonical.clone(),
-        legacy_dirs: legacy,
-        boot_waiter: &boot_waiter,
-        provider: &dispatch::provider::codex::CODEX_PROVIDER,
-        backend,
-    };
-    let params = NewParams {
-        name: name.to_string(),
-        agent: None,
-        resume: resume_thread.map(str::to_string),
-        // `fork` is meaningless for codex (one thread appends to one rollout), and
-        // the codex launch_plan ignores it.
-        fork: false,
-        claude_args: vec![],
-        model: None,
-        cwd: cwd.to_path_buf(),
-        // No F1 backend-env capture on this lane: those pairs are claude-backend
-        // credentials (`--via` profiles), meaningless to codex. The env file is
-        // still written, carrying QD_SESSION_ID + the render birth property.
-        backend_env: vec![],
-        backend_env_unset: vec![],
-        qd_session_id: Some(qd_session_id.clone()),
-        render,
-        interactive: true,
-    };
-
-    // Claim → scan-under-claim → preflight → launch the pane → I6 verify. A live
-    // pane already holding this name fails HERE, loudly, which is also the guard
-    // that keeps a revive from starting a second process on one session.
-    let out = match create_run_new(&deps, &params) {
-        Ok(out) => out,
-        Err(e) => {
-            eprintln!("{e}");
-            return Err(e.exit_code());
-        }
-    };
-
-    // Key the row by the LIVE pane's pid. Everything downstream — liveness,
-    // `qd stop`, the ls join — reads pid, and the pane process IS the session's
-    // process here (there is no daemon and no self-registering child).
-    let Some(pane) = mux
-        .list(&canonical)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|z| z.name == name)
-    else {
-        eprintln!(
-            "qd {verb}: codex session \"{name}\" booted but its pane vanished from {} before \
-             the registry row could be written. Nothing is tracked; retrying is safe.",
-            canonical.display()
-        );
-        return Err(1);
-    };
-
-    // The row. `hosting: "mux-pane"` is the load-bearing field — it tells attach to
-    // hand over the terminal instead of printing the daemon redirect, and stop to
-    // reap the pane instead of group-killing an app-server that was never spawned.
-    // NO endpoint (an interactive pane has no ws). On a FRESH start `sessionId` is
-    // absent, which is the honest record of the moment: codex will not disclose a
-    // thread until someone types.
-    let entry = dispatch::registry::RegistryEntry {
-        pid: Some(pane.pid as i64),
-        session_id: resume_thread.map(str::to_string),
-        cwd: Some(cwd_str),
-        started_at: Some(since_ms),
-        updated_at: Some(clock.now_ms()),
-        status: Some("idle".to_string()),
-        name: Some(name.to_string()),
-        version: None,
-        kind: None,
-        entrypoint: None,
-        backend: None,
-        spawned_by: None,
-        provider: Some("codex".to_string()),
-        endpoint: None,
-        transport: None,
-        structured_send_issued: None,
-        hosting: Some(dispatch::provider::Hosting::MuxPane.as_str().to_string()),
-    };
-    if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
-        eprintln!(
-            "qd {verb}: codex session \"{name}\" is running but its registry row could not be \
-             written ({e}), so qd cannot track it. Attach with \"qd attach {name}\" or stop \
-             the pane and retry."
-        );
-        return Err(1);
-    }
-
-    Ok(CodexTuiOutcome {
-        name: out.name,
-        zmx_name: name.to_string(),
-        socket_dir: canonical,
-        thread_id: resume_thread.map(str::to_string),
-    })
-}
-
-/// What [`create_codex_tui`] produced. `thread_id` is `None` on a fresh start (the
-/// gather step binds it later) and `Some` on a revive (carried forward).
-pub struct CodexTuiOutcome {
-    pub name: String,
-    pub zmx_name: String,
-    pub socket_dir: PathBuf,
-    pub thread_id: Option<String>,
-}
-
-/// codex-interactive: `qd start --provider codex --interactive` — a FRESH pane.
-fn run_new_codex_tui(
-    env: &RealEnv,
-    home: &std::path::Path,
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-    cwd: &std::path::Path,
-    render: dispatch::launch::RenderMode,
-    prompt: Option<String>,
-) -> i32 {
-    // A create-time prompt would have to be typed into the TUI's composer, and
-    // codex's PTY acceptance is deliberately NOT confirmable yet (the harness has
-    // no pollable busy/idle signal, so the attended-send path gates itself off
-    // rather than report a delivery it cannot verify). Claiming `-p` worked here
-    // would be exactly that unverifiable claim, so say plainly that it was not
-    // delivered — the session itself is still created.
-    if prompt.as_deref().is_some_and(|s| !s.is_empty()) {
-        eprintln!(
-            "qd start: --provider codex --interactive ignores -p at create (the codex TUI has \
-             no verifiable submit path yet). The session is created; type the prompt after \
-             \"qd attach {name}\"."
-        );
-    }
-    match create_codex_tui(env, home, paths, name, cwd, render, None, "start") {
-        Ok(out) => {
-            println!(
-                "Started codex session \"{}\" — attach with \"qd attach {name}\"",
-                out.name
-            );
-            0
-        }
-        Err(code) => code,
+/// The `Create` arm is printed VERBATIM. Its inner `create::NewError` is already
+/// attributed (`qd start: …` / `ERROR: …`) and the pre-split verb printed it with
+/// a bare `eprintln!("{e}")` from EVERY caller — so re-stamping it here would
+/// change a line the move is meant to leave byte-identical.
+pub(super) fn codex_tui_failure_line(verb: &str, e: &CodexTuiError) -> String {
+    if e.is_self_attributed() {
+        format!("{e}")
+    } else {
+        format!("qd {verb}: {e}")
     }
 }
 
-/// codex-interactive: revive a STOPPED pane-hosted codex session into the SAME
-/// thread, detached — the codex twin of [`super::resume::revive_claude`], and
-/// deliberately the same shape so `attach`'s cold arm can call either.
-///
-/// Identity is carried, not rediscovered: the row's recorded `session_id` becomes
-/// `codex resume <id>`, so the revived pane reopens that conversation and the new
-/// row is addressable immediately.
-///
-/// The old tombstone is consumed on success, so one session never leaves two rows
-/// behind (the `run_acp_resume` precedent).
-pub fn revive_codex_tui(
-    session: &Session,
-    render: dispatch::launch::RenderMode,
-    verb: &str,
-) -> Result<super::resume::ReviveHandle, i32> {
-    let env = RealEnv;
-    let name = match session.name.as_deref().filter(|n| !n.is_empty()) {
-        Some(n) => n.to_string(),
-        None => {
-            eprintln!(
-                "qd {verb}: this codex session has no name, so there is nothing to revive it \
-                 under. Start a fresh one with \"qd start <name> --provider codex --interactive\"."
-            );
-            return Err(1);
-        }
-    };
-    if session.session_id.is_empty() {
-        // It was never used, so codex never opened a thread — there is no
-        // conversation to reopen. Say so rather than launching a bare `codex` and
-        // silently handing back a DIFFERENT session under the same name.
-        eprintln!(
-            "qd {verb}: \"{name}\" was never used, so codex never opened a thread for it — \
-             there is no conversation to resume. Start a fresh session with \
-             \"qd start {name} --provider codex --interactive\"."
-        );
-        return Err(1);
-    }
-    let home = match env.var("HOME").filter(|s| !s.is_empty()) {
-        Some(h) => PathBuf::from(h),
-        None => {
-            eprintln!("qd {verb}: HOME is not set — cannot resolve the session state dir.");
-            return Err(1);
-        }
-    };
-    let paths = dispatch::paths::QdPaths::from_home(&home);
-    let cwd = session
-        .cwd
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-    let out = create_codex_tui(
-        &env,
-        &home,
-        &paths,
-        &name,
-        &cwd,
-        render,
-        Some(&session.session_id),
-        verb,
-    )?;
-
-    // Consume the prior tombstone (`<old_pid>.json.tombstoned`) so one session does
-    // not leave a dangling second row. Best-effort: a missing tombstone is fine (a
-    // session stopped a different way), and the new live row is authoritative.
-    if let Some(old_pid) = session.pid.filter(|&p| p != 0) {
-        let _ = std::fs::remove_file(paths.sessions_dir.join(format!("{old_pid}.json.tombstoned")));
-    }
-
-    Ok(super::resume::ReviveHandle {
-        socket_dir: out.socket_dir,
-        zmx_name: out.zmx_name,
-    })
-}
+// `revive_codex_tui` — the verb-layer codex-pane revive wrapper — lived HERE,
+// and is DELETED rather than left unused, exactly as its pi twin `revive_pi_tui`
+// was one lane over. The note below `revive_pi_tui` used to say this one
+// survived ONLY because `send_unified::RealWaker` called it; `RealWaker` is gone
+// with the rest of qd's duplicated routing, so the last caller went with it.
+// [`quorum_qw::contract::LaneOps::wake`]'s `(Codex, Pane)` arm drives the SAME
+// `dispatch::provider::codex::pane::revive_codex_tui` core this wrapped.
 
 // ===========================================================================
 // pi-interactive — the mux-pane pi TUI lane (`--provider pi --interactive`).
 // ===========================================================================
 
-/// pi-interactive: the shared MUX-PANE create choreography for a pi TUI — driven
-/// by `qd start --interactive` (fresh) and by the revive seam (`qd resume` /
-/// `qd attach` on a stopped row).
-///
-/// THE SAME REUSE ARGUMENT AS [`create_codex_tui`], for the same reason: the
-/// mux-pane create pipeline is provider-generic (it builds its launch command
-/// through `provider.launch_plan` and drives an injected `BootWaiter`), so hosting
-/// a pi TUI needs no new pipeline, only a different argv. The atomic name claim,
-/// the scan-under-claim, the zmx preflight, the I6 attachability verify, the
-/// socket-dir-split detection and the stale-ended-pane reap are therefore the SAME
-/// code claude and codex sessions have been hardened on.
-///
-/// WHERE THIS DIVERGES FROM CODEX, AND WHY IT IS SIMPLER. codex forced identity to
-/// be discovered after the fact — its TUI opens no rollout until a human types, so
-/// `create_codex_tui` writes a row with NO `sessionId` and the gather step binds
-/// one later by attribution. pi's `--session-id` NAMES the session at launch
-/// ("creating it if missing"), so this path knows the id BEFORE it spawns
-/// anything:
-///
-///   - `session_id = None` (fresh start) — mint a v4 UUID and pass it. The row is
-///     identified from its first instant: no unidentified window, no backfill, and
-///     structurally no way to adopt a stranger's conversation.
-///   - `session_id = Some(id)` (revive) — pass the row's recorded id back, and pi
-///     reopens that exact conversation.
-///
-/// Both are the same argv, so unlike codex there is no fresh-vs-revive branch in
-/// the launch at all — only in where the id comes from.
-///
-/// BOOT DOES NOT WAIT FOR A TRANSCRIPT, and must not. pi writes no session file
-/// until the first assistant reply (the persist law recorded in
-/// [`dispatch::provider::pi::tui`]), so waiting for one would mean blocking `qd
-/// start` until a human typed AND a model answered. The pane is usable the instant
-/// it is up, and `create::run_new` has already verified it is registered and
-/// ATTACHABLE (its I6 step) before the boot waiter runs — which is why the waiter
-/// here is the trivial [`dispatch::create::OkBootWaiter`]. Identity does not
-/// depend on the transcript either way; only transcript-derived surfaces (turns,
-/// preview) are blank until that first reply, and they say so honestly.
-///
-/// THE ONE THING THE PIPELINE CANNOT DO FOR US is the registry row: claude writes
-/// its own, the pi TUI knows nothing about qd, so this writes it.
-#[allow(clippy::too_many_arguments)]
-fn create_pi_tui(
-    env: &RealEnv,
-    home: &std::path::Path,
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-    cwd: &std::path::Path,
-    render: dispatch::launch::RenderMode,
-    session_id: Option<&str>,
-    verb: &str,
-) -> Result<PiTuiOutcome, i32> {
-    use dispatch::provider::pi::tui;
-
-    let clock = RealClock;
-    let exec = RealExec;
-    let since_ms = clock.now_ms();
-
-    // CAPABILITY PREFLIGHT, before a name is claimed or a pane is spawned.
-    //
-    // The whole lane rides `pi --session-id`, and that flag is not ancient: pi
-    // 0.74.2 answers `Error: Unknown option: --session-id` and exits. Without this
-    // check that failure happens INSIDE a freshly-spawned pane nobody is attached
-    // to — pi dies instantly, the pane dies with it, and `qd start` reports
-    // whatever its attachability verify happened to see, which says nothing about
-    // the actual cause. Refusing here turns a mysterious dead pane into a sentence
-    // naming the binary, its version, and the fix.
-    //
-    // Reported verbatim when we cannot TELL (missing/unrunnable binary), rather
-    // than guessing in either direction: blessing an unknown binary would restore
-    // the dead-pane failure, and refusing one would block a working setup we
-    // simply could not probe.
-    let bin = dispatch::provider::pi::pi_bin(env);
-    match dispatch::provider::pi::tui::supports_session_id(std::path::Path::new(&bin)) {
-        Ok(true) => {}
-        Ok(false) => {
-            let found = dispatch::provider::pi::tui::probe_version(std::path::Path::new(&bin))
-                .map(|v| format!(" (reports version {v})"))
-                .unwrap_or_default();
-            eprintln!(
-                "qd {verb}: the pi binary {bin:?}{found} does not support --session-id, which \
-                 this lane needs to name and re-open the session. qd pins {}. Nothing was \
-                 created.\n  \
-                 If a newer pi is installed elsewhere, an older one is earlier on PATH — point \
-                 qd at the right one with QD_PI_BIN=/path/to/pi, or fix the PATH order.",
-                dispatch::provider::pi::pin::PIN_SPEC
-            );
-            return Err(1);
-        }
-        Err(why) => {
-            eprintln!(
-                "qd {verb}: could not check the pi binary {bin:?} before starting a session: \
-                 {why}. Nothing was created. Install pi ({}) and make sure it is on PATH, or \
-                 set QD_PI_BIN=/path/to/pi.",
-                dispatch::provider::pi::pin::PIN_SPEC
-            );
-            return Err(1);
-        }
-    }
-
-    // CANONICALIZE THE CWD ONCE, and use the SAME string for the launch and the
-    // row. pi encodes the cwd its process resolved into the session DIRECTORY NAME
-    // (`--private-tmp-foo--`), so a row storing the caller's spelling (`/tmp/foo`)
-    // would send every later transcript lookup into a directory that does not
-    // exist — not a mismatch that degrades, a lookup that can never succeed. codex
-    // hit the string-compare form of this in end-to-end validation; pi's encoding
-    // makes it structural.
-    let cwd_str = dispatch::provider::canonical_dir(&cwd.to_string_lossy());
-    let cwd = PathBuf::from(&cwd_str);
-
-    // The id: carried on a revive, minted on a fresh start. `is_fresh` is captured
-    // here because the anti-adoption guard below applies to a MINTED id only.
-    let is_fresh = session_id.is_none();
-    let session_id = match session_id {
-        Some(id) => id.to_string(),
-        None => tui::mint_session_id(),
-    };
-    if !tui::is_valid_session_id(&session_id) {
-        // Only reachable from a revive carrying a row written by something else —
-        // a fresh mint is valid by construction (unit-pinned). pi would
-        // `process.exit(1)` on this argv inside the new pane, so the pane would
-        // flash and die and the failure would name nothing useful.
-        eprintln!(
-            "qd {verb}: \"{name}\" records the session id {session_id:?}, which pi will not \
-             accept (ids must be alphanumeric with '.', '_' or '-' inside, and start and end \
-             alphanumeric). Start a fresh session with \"qd start <name> --provider pi \
-             --interactive\"."
-        );
-        return Err(1);
-    }
-
-    // THE ANTI-ADOPTION GUARD, and it only applies to a FRESH id. `--session-id`
-    // OPENS an existing session of that id rather than failing, so launching onto
-    // one we did not create would silently point this row's transcript, turns and
-    // `qd stop` at another conversation. A v4 UUID makes that essentially
-    // impossible; this makes it impossible. On a REVIVE the id being present is
-    // the entire point, so the check is deliberately not run there.
-    if is_fresh {
-        if let Some(root) = dispatch::provider::pi::sessions_root(env) {
-            if tui::session_id_is_taken(&root, &cwd_str, &session_id) {
-                eprintln!(
-                    "qd {verb}: refusing to start \"{name}\" — the freshly minted session id \
-                     {session_id} already exists under {}. Nothing was created; retrying \
-                     mints a different id.",
-                    root.display()
-                );
-                return Err(1);
-            }
-        }
-    }
-
-    let backend = common::select_backend(env)?;
-    let (canonical, legacy) = resolve_create_dirs(backend, home, env)?;
-    let mux = common::build_mux(backend, home, env)?;
-
-    // Pre-mint the stable id, bound to the pi session id we already know. Unlike
-    // codex's fresh lane there is no `mint_unbound` case: pi identity exists
-    // before the pane does, so the row and the pane env agree from the first
-    // instant on BOTH ids.
-    let ids_path = common::ids_store_path(env)?;
-    let qd_session_id = match dispatch::idstore::mint_or_get(
-        &ids_path,
-        &session_id,
-        Some(name),
-        &clock,
-    ) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("qd {verb}: could not mint a stable session id: {e}. Nothing was created.");
-            return Err(1);
-        }
-    };
-
-    // Readiness IS the I6 attachability verify that runs before this waiter.
-    let boot_waiter = dispatch::create::OkBootWaiter;
-
-    let deps = NewDeps {
-        mux: mux.as_ref(),
-        exec: &exec,
-        env,
-        clock: &clock,
-        paths,
-        canonical_dir: canonical.clone(),
-        legacy_dirs: legacy,
-        boot_waiter: &boot_waiter,
-        provider: &dispatch::provider::pi::PI_PROVIDER,
-        backend,
-    };
-    let params = NewParams {
-        name: name.to_string(),
-        agent: None,
-        // `resume` is how the id reaches `PiProvider::launch_plan`, on BOTH lanes
-        // — pi's `--session-id` creates-or-opens, so "the id this launch binds to"
-        // is one concept with one flag. See that method's doc.
-        resume: Some(session_id.clone()),
-        // pi's `--fork` forks an EXISTING session into a new one, which is a
-        // different verb's job; this lane never forks.
-        fork: false,
-        claude_args: vec![],
-        model: None,
-        cwd: cwd.to_path_buf(),
-        // No F1 backend-env capture on this lane: those pairs are claude-backend
-        // credentials (`--via` profiles), meaningless to pi. The env file is still
-        // written, carrying QD_SESSION_ID + the render birth property.
-        backend_env: vec![],
-        backend_env_unset: vec![],
-        qd_session_id: Some(qd_session_id.clone()),
-        render,
-        interactive: true,
-    };
-
-    // Claim → scan-under-claim → preflight → launch the pane → I6 verify. A live
-    // pane already holding this name fails HERE, loudly, which is also the guard
-    // that keeps a revive from starting a second process on one session.
-    let out = match create_run_new(&deps, &params) {
-        Ok(out) => out,
-        Err(e) => {
-            eprintln!("{e}");
-            return Err(e.exit_code());
-        }
-    };
-
-    // Key the row by the LIVE pane's pid: the pane process IS the session's process
-    // here (no daemon, no self-registering child), and everything downstream —
-    // liveness, `qd stop`, the ls join — reads pid.
-    let Some(pane) = mux
-        .list(&canonical)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|z| z.name == name)
-    else {
-        eprintln!(
-            "qd {verb}: pi session \"{name}\" booted but its pane vanished from {} before the \
-             registry row could be written. Nothing is tracked; retrying is safe.",
-            canonical.display()
-        );
-        return Err(1);
-    };
-
-    // The row. `hosting: "mux-pane"` is the load-bearing field — it tells attach to
-    // hand over the terminal instead of printing the daemon redirect, stop to reap
-    // the pane instead of group-killing a resident that was never spawned, and send
-    // to use the pane's PTY instead of a ws endpoint. NO endpoint (an interactive
-    // pane has no resident front). `sessionId` is present from birth — the whole
-    // point of the `--session-id` lane.
-    let entry = dispatch::registry::RegistryEntry {
-        pid: Some(pane.pid as i64),
-        session_id: Some(session_id.clone()),
-        cwd: Some(cwd_str),
-        started_at: Some(since_ms),
-        updated_at: Some(clock.now_ms()),
-        status: Some("idle".to_string()),
-        name: Some(name.to_string()),
-        version: None,
-        kind: None,
-        entrypoint: None,
-        backend: None,
-        spawned_by: None,
-        provider: Some("pi".to_string()),
-        endpoint: None,
-        transport: None,
-        structured_send_issued: None,
-        hosting: Some(dispatch::provider::Hosting::MuxPane.as_str().to_string()),
-    };
-    if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
-        eprintln!(
-            "qd {verb}: pi session \"{name}\" is running but its registry row could not be \
-             written ({e}), so qd cannot track it. Attach with \"qd attach {name}\" or stop \
-             the pane and retry."
-        );
-        return Err(1);
-    }
-
-    Ok(PiTuiOutcome {
-        name: out.name,
-        zmx_name: name.to_string(),
-        socket_dir: canonical,
-        session_id,
-    })
-}
-
-/// What [`create_pi_tui`] produced. `session_id` is ALWAYS present — a pi row is
-/// identified from birth on both the fresh and the revive lane (contrast
-/// [`CodexTuiOutcome::thread_id`], which is `None` until a codex rollout appears).
-pub struct PiTuiOutcome {
-    pub name: String,
-    pub zmx_name: String,
-    pub socket_dir: PathBuf,
-    pub session_id: String,
-}
-
-/// pi-interactive: `qd start <name> --provider pi --interactive` — a FRESH pane.
-fn run_new_pi_tui(
-    env: &RealEnv,
-    home: &std::path::Path,
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-    cwd: &std::path::Path,
-    render: dispatch::launch::RenderMode,
-    prompt: Option<String>,
-) -> i32 {
-    // A create-time prompt would have to be typed into the TUI's composer, and this
-    // lane's first message is exactly the one the attended-send path cannot yet
-    // confirm: pi writes no session file until its first assistant reply, so there
-    // is nothing on disk to verify a landing against. Claiming `-p` worked would be
-    // precisely that unverifiable claim, so say plainly it was not delivered — the
-    // session itself is still created.
-    if prompt.as_deref().is_some_and(|s| !s.is_empty()) {
-        eprintln!(
-            "qd start: --provider pi --interactive ignores -p at create (pi writes no \
-             transcript until its first assistant reply, so a create-time submit cannot be \
-             verified). The session is created; type the prompt after \"qd attach {name}\"."
-        );
-    }
-    match create_pi_tui(env, home, paths, name, cwd, render, None, "start") {
-        Ok(out) => {
-            println!(
-                "Started pi session \"{}\" (session {}) — attach with \"qd attach {name}\"",
-                out.name, out.session_id
-            );
-            0
-        }
-        Err(code) => code,
+/// Stamp the CLI verb onto a [`PiTuiError`] — the pi twin of
+/// [`codex_tui_failure_line`], and self-attributed `Create` errors are printed
+/// verbatim for the same reason. See that function's doc.
+pub(super) fn pi_tui_failure_line(verb: &str, e: &PiTuiError) -> String {
+    if e.is_self_attributed() {
+        format!("{e}")
+    } else {
+        format!("qd {verb}: {e}")
     }
 }
 
-/// pi-interactive: revive a STOPPED pane-hosted pi session into the SAME session,
-/// detached — the pi twin of [`revive_codex_tui`], and deliberately the same shape
-/// so `attach`'s cold arm can call either.
-///
-/// Identity is carried, not rediscovered: the row's recorded id becomes `pi
-/// --session-id <id>`, which reopens that conversation.
-///
-/// WHY THIS HAS NO "never used" REFUSAL, unlike the codex twin. `revive_codex_tui`
-/// must refuse a session that was never used, because codex only mints a thread id
-/// once someone types — an unused codex row has NO id, and launching a bare `codex`
-/// would silently hand back a different conversation under the old name. A pi row
-/// has had its id since birth, so reviving an unused one is well defined: pi
-/// recreates a session under that same id (its file having never been written), and
-/// the row keeps addressing the same thing it always did. There is nothing to
-/// refuse.
-///
-/// The old tombstone is consumed on success, so one session never leaves two rows
-/// behind (the `run_acp_resume` precedent).
-pub fn revive_pi_tui(
-    session: &Session,
-    render: dispatch::launch::RenderMode,
-    verb: &str,
-) -> Result<super::resume::ReviveHandle, i32> {
-    let env = RealEnv;
-    let name = match session.name.as_deref().filter(|n| !n.is_empty()) {
-        Some(n) => n.to_string(),
-        None => {
-            eprintln!(
-                "qd {verb}: this pi session has no name, so there is nothing to revive it \
-                 under. Start a fresh one with \"qd start <name> --provider pi --interactive\"."
-            );
-            return Err(1);
-        }
-    };
-    if session.session_id.is_empty() {
-        // Not reachable through this lane's own create path (which always writes an
-        // id), so this is a row from somewhere else. Refuse rather than mint a new
-        // id and pretend it is the old session.
-        eprintln!(
-            "qd {verb}: \"{name}\" has no recorded pi session id, so there is no conversation \
-             to reopen. Start a fresh session with \"qd start {name} --provider pi \
-             --interactive\"."
-        );
-        return Err(1);
-    }
-    let home = match env.var("HOME").filter(|s| !s.is_empty()) {
-        Some(h) => PathBuf::from(h),
-        None => {
-            eprintln!("qd {verb}: HOME is not set — cannot resolve the session state dir.");
-            return Err(1);
-        }
-    };
-    let paths = dispatch::paths::QdPaths::from_home(&home);
-    let cwd = session
-        .cwd
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+// `revive_pi_tui` — the verb-layer pi-pane revive wrapper — lived HERE, and is
+// DELETED rather than left unused: `qd resume` was its last caller, and
+// [`quorum_qw::contract::LaneOps::wake`]'s `(Pi, Pane)` arm is what that verb calls
+// now. Its codex twin `revive_codex_tui` is gone too, one stage later: it
+// survived only while `send_unified::RealWaker` still called it, and that waker
+// died with qd's duplicated routing. The two refusals it ran ahead of dep
+// resolution —
+// the ORDER pin its doc named — are kept, in `verbs/resume.rs`, ahead of the lane
+// call.
 
-    let out = create_pi_tui(
-        &env,
-        &home,
-        &paths,
-        &name,
-        &cwd,
-        render,
-        Some(&session.session_id),
-        verb,
-    )?;
-
-    // Consume the prior tombstone (`<old_pid>.json.tombstoned`) so one session does
-    // not leave a dangling second row. Best-effort: a missing tombstone is fine (a
-    // session stopped a different way), and the new live row is authoritative.
-    if let Some(old_pid) = session.pid.filter(|&p| p != 0) {
-        let _ = std::fs::remove_file(paths.sessions_dir.join(format!("{old_pid}.json.tombstoned")));
-    }
-
-    Ok(super::resume::ReviveHandle {
-        socket_dir: out.socket_dir,
-        zmx_name: out.zmx_name,
-    })
-}
-
-/// codex P2 W4 (codex-p2-spec §7.2): the daemon-hosted `qd new` arm. Assembles
-/// the REAL [`dispatch::create_daemon::DaemonDeps`] seams (the daemon analog of how the
-/// claude arm assembles `NewDeps`) and drives the lib-side
-/// [`dispatch::create_daemon::run_new_daemon`], then maps the outcome/error to the
-/// verb's stdout/stderr + exit code. The daemon path is self-contained: no zmx/
-/// qrmux backend, no `EventBootWaiter`, no F1 env-file — its readiness IS the
-/// app-server initialize handshake, and the row is written by the lib itself.
-#[allow(clippy::too_many_arguments)]
-fn run_new_codex_daemon(
-    provider_impl: &'static dyn dispatch::provider::Provider,
-    env: &RealEnv,
-    home: &std::path::Path,
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-    cwd: &std::path::Path,
-    agent: Option<String>,
-    prompt: Option<String>,
-) -> i32 {
-    use dispatch::create_daemon::{real_alloc_port, DaemonDeps, DaemonParams, RealDaemonSpawner};
-    use dispatch::provider::codex::{AppServerRpc, RpcError, WsAppServer};
-
-    let exec = RealExec;
-    let clock = RealClock;
-    let spawner = RealDaemonSpawner;
-    // The connector: open a real ws client to the recorded endpoint. Boxed as the
-    // injected `RpcConnector` so the lib drives it without holding a transport
-    // type (the contract-stays-the-contract seam — ADD-5 pattern). The connect
-    // timeout floor matches the lib's connect-retry granularity.
-    let connect = |url: &str| -> Result<Box<dyn AppServerRpc>, RpcError> {
-        WsAppServer::connect(url, std::time::Duration::from_secs(5)).map(|c| {
-            let boxed: Box<dyn AppServerRpc> = Box::new(c);
-            boxed
-        })
-    };
-    let alloc = real_alloc_port;
-
-    // W9 FIX M-2: the claims dir for the atomic name-claim — `<.claude>/claims`,
-    // alongside `sessions/` (the claude create-path layout). Derived from the
-    // sessions dir's parent so the claim shares the registry's state root.
-    let claims_dir = paths
-        .sessions_dir
-        .parent()
-        .map(|p| p.join("claims"))
-        .unwrap_or_else(|| home.join(".claude").join("claims"));
-
-    // P0 wave-2: the shared ids store (semantics: ids_store_path's doc).
-    let ids_path = match common::ids_store_path(env) {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-
-    let deps = DaemonDeps {
-        provider: provider_impl,
-        env,
-        exec: &exec,
-        clock: &clock,
-        sessions_dir: paths.sessions_dir.clone(),
-        claims_dir,
-        // The daemon's stdout/stderr log root: `<qd_home>/.quorum/dispatch/log` (codex-p2-spec
-        // §3.2). Resolved off the injected home so a jailed HOME points the log
-        // into the jail (L9a). The file is `codex-<name>.log`.
-        log_dir: home.join(".quorum").join("dispatch").join("log"),
-        spawner: &spawner,
-        connect: &connect,
-        alloc_port: &alloc,
-        ids_path,
-    };
-    let params = DaemonParams {
-        name: name.to_string(),
-        cwd: cwd.to_path_buf(),
-        agent,
-        passthrough: vec![],
-        prompt,
-    };
-
-    match dispatch::create_daemon::run_new_daemon(&deps, &params) {
-        Ok(out) => {
-            println!("Started detached codex session \"{}\"", out.name);
-            0
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            e.exit_code()
-        }
-    }
-}
-
-/// WS-A.2 pi daemon-residence create path. Thin verb-layer adapter: resolves the
-/// deps (self-exe, the pinned pi via `QD_PI_BIN`, `PI_CODING_AGENT_SESSION_DIR`,
-/// the registry sessions/claims/log dirs off the injected home) and delegates the
-/// whole choreography (name-claim → port-alloc → spawn the `pi-daemon` resident
-/// DETACHED → connect_ready → read birth-id → write the row) to
-/// [`dispatch::provider::pi::daemon::create_pi_session`]. The row + the resident's
-/// status sink are written by the lib; the resident OUTLIVES this verb (residence).
-fn run_new_pi_daemon(
-    env: &RealEnv,
-    home: &std::path::Path,
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-    cwd: &std::path::Path,
-    prompt: Option<String>,
-) -> i32 {
-    use dispatch::create_daemon::RealDaemonSpawner;
-    use dispatch::provider::pi::daemon::{create_pi_session, PiCreateDeps, PiCreateParams};
-
-    // A create-time prompt would be a model TURN (tier-b / OAuth); pi tier-a create is
-    // credential-free + turn-free by design, so `-p` is not driven at create. The pi turn
-    // path is now live via SEND — point the caller at it rather than advertising an unwired
-    // future (A5 wired the send arm; start / send / wait / kill / resume are all live now).
-    if prompt.as_deref().is_some_and(|s| !s.is_empty()) {
-        eprintln!(
-            "qd start: --provider pi ignores -p at create (tier-a create is turn-free). To drive a \
-             pi turn, send to the running session: qd send:relay {name} \"<prompt>\"."
-        );
-    }
-
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("qd start: cannot resolve own executable for pi adapter: {e}");
-            return 1;
-        }
-    };
-    let clock = RealClock;
-    let now_ms = || clock.now_ms();
-    let spawner = RealDaemonSpawner;
-    // The claims dir alongside `sessions/` (the create-path layout), off the sessions
-    // dir's parent so the claim shares the registry's state root.
-    let claims_dir = paths
-        .sessions_dir
-        .parent()
-        .map(|p| p.join("claims"))
-        .unwrap_or_else(|| home.join(".claude").join("claims"));
-
-    // WS-A.2 identity parity (mirrors the ACP arm, ~line 1505): mint an UNBOUND
-    // stable id BEFORE the spawn so the resident carries THIS session's
-    // `QD_SESSION_ID` — not the commissioner's, which the detached spawn would
-    // otherwise leak through the inherited env. pi's provider UUID (the get_state
-    // birth-id) is not known until after readiness, so `bind()` attaches it inside
-    // `create_pi_session`. Fail-closed: nothing spawns if the mint fails.
-    let ids_path = dispatch::idstore::ids_path(&paths.state_dir);
-    let qd_session_id = match dispatch::idstore::mint_unbound(&ids_path, Some(name), &clock) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("qd start: could not mint stable id for pi session: {e}");
-            return 1;
-        }
-    };
-
-    let deps = PiCreateDeps {
-        exe,
-        // The pinned pi binary (NOT on PATH) + pi's own session storage, off the env SEAM.
-        pi_bin: env.var("QD_PI_BIN").filter(|s| !s.is_empty()),
-        session_dir: env.var("PI_CODING_AGENT_SESSION_DIR").filter(|s| !s.is_empty()),
-        sessions_dir: paths.sessions_dir.clone(),
-        claims_dir,
-        log_dir: home.join(".quorum").join("dispatch").join("log"),
-        spawner: &spawner,
-        now_ms: &now_ms,
-        ids_path,
-    };
-    let params = PiCreateParams {
-        name: name.to_string(),
-        cwd: cwd.to_path_buf(),
-        load_session: None,
-        qd_session_id: Some(qd_session_id),
-    };
-    match create_pi_session(&deps, &params) {
-        Ok(out) => {
-            println!("Started detached pi session \"{}\"", out.name);
-            0
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            e.exit_code()
-        }
-    }
-}
-
-/// Drive the optional create-time prompt over `conn`, returning whether a structured
-/// send was DISPATCHED (bytes confirmed on the wire — `AcpClient::prompt`'s
-/// `on_dispatched`, fired before the reply is read). Factored out of
-/// `run_new_acp_daemon` (Child B, opencode D1, F1 fix) so the dispatch-to-marker
-/// wiring is unit-testable against a fake `AcpClient`, without a real acp
-/// connection: the caller must persist the returned bool into the freshly-created
-/// row's `structured_send_issued` (`Some(true)` iff dispatched), or a session
-/// created with `--prompt` carries a false "never sent" wire-history forever
-/// (in the retired Child-B auto-degrade era that meant double-delivery risk;
-/// under Child D every loss refuses and the marker is durable history — the
-/// resume seam consumes it; registry.rs's field doc carries the framing).
-fn drive_create_prompt(
-    conn: &dyn dispatch::provider::acp::AcpClient,
-    session_id: &str,
-    prompt: Option<&str>,
-    name: &str,
-) -> bool {
-    let dispatched = std::cell::Cell::new(false);
-    if let Some(p) = prompt.filter(|s| !s.is_empty()) {
-        let mark_dispatched = || dispatched.set(true);
-        if let Err(e) = conn.prompt(session_id, p, name, &mark_dispatched) {
-            eprintln!("qd start: acp create-prompt enqueue failed: {e}");
-            // The session is up; do not tear it down over a prompt-enqueue error.
-        }
-    }
-    dispatched.get()
-}
-
-/// scoped-ACP-CC daemon-residence create path (S5). Allocates a loopback port, spawns the
-/// resident `qd acp-daemon` adapter DETACHED (reusing the codex `RealDaemonSpawner`'s
-/// `process_group(0)` discipline — so a later group-kill reaps adapter + bridge together),
-/// polls it to readiness (the resident ACP session established), writes the registry row
-/// with the recorded `endpoint` (S5) so later verbs reconnect, and optionally drives the
-/// create-time prompt over the SAME connection. The adapter OUTLIVES this verb — that is
-/// cross-process residence. On a readiness failure the adapter is group-killed (no orphan).
-#[allow(clippy::too_many_arguments)]
-fn run_new_acp_daemon(
-    provider_impl: &'static dyn dispatch::provider::Provider,
-    _env: &RealEnv,
-    home: &std::path::Path,
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-    cwd: &std::path::Path,
-    prompt: Option<String>,
-) -> i32 {
-    use dispatch::acp_residence::{build_adapter_argv, connect_ready};
-    use dispatch::create_daemon::{real_alloc_port, DaemonSpawner, RealDaemonSpawner};
-    use dispatch::effects::Clock;
-
-    // 1. allocate a loopback port → the resident ws endpoint.
-    let port = match real_alloc_port() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("qd start: acp port allocation failed: {e}");
-            return 1;
-        }
-    };
-    let endpoint = format!("ws://127.0.0.1:{port}");
-
-    // 2. self-exec: the adapter IS this binary under the hidden `acp-daemon` verb.
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("qd start: cannot resolve own executable for acp adapter: {e}");
-            return 1;
-        }
-    };
-
-    // 3. spawn the adapter DETACHED (codex RealDaemonSpawner reuse: process_group(0),
-    //    stdin null, stdout/stderr → log). The bridge child inherits the group.
-    // create path: no `--load-session` (a brand-new session/new, not a resume).
-    // A-OC.1: resolve THIS provider's bridge — acp/claude-code keeps the BRIDGE_BIN default
-    // (bridge_cmd None → build_adapter_argv emits NO `--bridge-cmd`, byte-identical); acp/opencode
-    // yields `--bridge-cmd opencode --bridge-arg acp` so the residence spawns `opencode acp`.
-    let acp = dispatch::provider::acp::acp_provider_for(provider_impl.id());
-    let bridge_cmd = acp.and_then(|p| p.bridge_cmd());
-    let bridge_args: Vec<String> = acp
-        .map(|p| p.bridge_args().iter().map(|a| a.to_string()).collect())
-        .unwrap_or_default();
-    let argv = build_adapter_argv(&exe, &endpoint, cwd, bridge_cmd, &bridge_args, None);
-    let log_path = home
-        .join(".quorum")
-        .join("dispatch")
-        .join("log")
-        .join(format!("acp-{name}.log"));
-    // Mint an unbound stable id for this ACP session (mirrors the Codex create path).
-    // The ACP session UUID is not known until after readiness; mint_unbound creates a
-    // stable id entry with session_id=null; bind() attaches the UUID after the adapter
-    // is ready. Fail-closed: nothing spawns if the mint fails.
-    let ids_path = dispatch::idstore::ids_path(&paths.state_dir);
-    let acp_qd_id =
-        match dispatch::idstore::mint_unbound(&ids_path, Some(name), &RealClock) {
-            Ok(id) => id,
-            Err(e) => {
-                eprintln!("qd start: could not mint stable id for acp session: {e}");
-                return 1;
-            }
-        };
-    let acp_env = vec![("QD_SESSION_ID".to_string(), acp_qd_id.clone())];
-    let spawner = RealDaemonSpawner;
-    let spawned = match spawner.spawn_detached(&argv, &acp_env, cwd, &log_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("qd start: acp adapter spawn failed: {e}");
-            return 1;
-        }
-    };
-
-    // 4. readiness: poll connect+status until the resident ACP session is established
-    //    (the codex connect-with-retry analog). On failure: group-kill the adapter (no
-    //    orphan), surface the error.
-    let conn = match connect_ready(&endpoint, std::time::Duration::from_secs(30)) {
-        Ok(c) => c,
-        Err(e) => {
-            spawner.kill(spawned.pid);
-            eprintln!("qd start: {e} (see {})", log_path.display());
-            return 1;
-        }
-    };
-    let session_id = conn.status_session_id().ok().flatten().unwrap_or_default();
-
-    // Bind the pre-minted stable id to the ACP session UUID now that we have it.
-    // Best-effort: a bind failure is logged but does not abort the create (the session
-    // is live; the id just remains unbound, which resolve_to_uuid will miss).
-    if !session_id.is_empty() {
-        if let Err(e) =
-            dispatch::idstore::bind(&ids_path, &acp_qd_id, &session_id, &RealClock)
-        {
-            eprintln!("qd start: could not bind stable id to acp session {session_id}: {e}");
-        }
-    }
-
-    // 5. optional create-time prompt: drive it over the SAME connection (the resident
-    //    keeps streaming after we disconnect). Non-blocking — `wait` observes the turn.
-    //
-    // F1 (red-team round 1, Child B era): the registry row doesn't exist yet at
-    // this point (written at step 6, below) — but a dispatched create-time prompt
-    // is EXACTLY the "a structured send was issued" case `structured_send_issued`
-    // exists to record. Getting this wrong leaves a false "never sent"
-    // wire-history on the row (in the retired auto-degrade era that meant
-    // double-delivery risk; under Child D the record is history truth the
-    // resume seam consumes).
-    let dispatched = drive_create_prompt(&conn, &session_id, prompt.as_deref(), name);
-    drop(conn); // resident stays up; this was a short-lived create connection.
-
-    // 6. write the registry row (the endpoint is the residence reconnect handle, S5).
-    let clock = RealClock;
-    let now = clock.now_ms();
-    let cwd_str = cwd.to_string_lossy().into_owned();
-    let entry = dispatch::registry::RegistryEntry {
-        pid: Some(spawned.pid),
-        session_id: Some(session_id),
-        cwd: Some(cwd_str),
-        started_at: Some(now),
-        updated_at: Some(now),
-        status: Some("idle".to_string()),
-        name: Some(name.to_string()),
-        version: None,
-        kind: None,
-        entrypoint: None,
-        backend: None,
-        spawned_by: None,
-        // A-OC.1: persist THIS provider's id (acp/claude-code OR acp/opencode) so the other
-        // verbs (kill/wait/resume/send:relay) route + re-derive the bridge from the row.
-        provider: Some(provider_impl.id().to_string()),
-        endpoint: Some(endpoint),
-        // A freshly-created healthy row carries NO `transport` field (the tier
-        // is DERIVED per verb; the field is write-retired — historical
-        // Child-B-era latch, see registry.rs's field doc).
-        transport: None,
-        // Child B (opencode D1), F1 fix: `Some(true)` iff the create-time prompt
-        // was DISPATCHED above — i.e. a structured send genuinely went out for
-        // this session before its row ever existed. `None` only for a truly
-        // prompt-less create.
-        structured_send_issued: dispatched.then_some(true),
-        hosting: None,
-    };
-    if let Err(e) = dispatch::registry::write_entry(&paths.sessions_dir, &entry) {
-        spawner.kill(spawned.pid);
-        eprintln!("qd start: acp registry write failed: {e}");
-        return 1;
-    }
-
-    println!("Started detached acp session \"{name}\"");
-    0
-}
-
-/// §2.3.2 `chunks-delivered.ack_source` for the `new -p` create path. The create
-/// lane drives whichever backend QD_MUX names; the embedded daemon blocks on its
-/// per-write InputSent ack ("input-sent"), zmx observes only `zmx send` exit 0
-/// ("cli-exit"). Reuse the send-verb label so both verbs name the channel the same.
-fn new_p_ack_source() -> &'static str {
-    match common::send_backend_label() {
-        common::SendBackend::Embedded => "input-sent",
-        common::SendBackend::Zmx => "cli-exit",
-    }
-}
-
-/// §5.1 / D6: emit `priming-readiness-timeout` to the BYNAME file on a -p boot
-/// timeout (no sessionId exists on a failed boot). `phase` is the TYPED boot
-/// phase carried from the source on `NewError::BootTimeout` (m-4, ack3-spec §8):
-/// `Idle` → "idle", `PidFile` → "pid-file" — no longer string-matched out of the
-/// detail wording. `waited_ms` is best-effort (the configured phase deadline).
-/// The existing stderr/exit are UNCHANGED — this is purely additive.
-fn emit_priming_timeout(
-    home: &std::path::Path,
-    env: &RealEnv,
-    clock: &RealClock,
-    name: &str,
-    phase: dispatch::boot::BootPhase,
-) {
-    let ev_state = dispatch::paths::QdPaths::from_home_env(home, env).state_dir;
-    let writer = EventWriter::for_key(
-        &ev_state,
-        &events::byname_key(name),
-        None,
-        Some(name.to_string()),
-    );
-    let defaults = dispatch::boot::BootTimeouts::default();
-    // m-4 (ack3-spec §8): phase is read TYPED from the BootFailure carried up the
-    // create seam — the old `detail.contains("did not reach idle")` string-match
-    // (the named COUPLING) is gone; a reworded boot error can no longer misfile it.
-    let (phase, waited_ms) = match phase {
-        dispatch::boot::BootPhase::Idle => ("idle", defaults.overall_ms.max(0) as u64),
-        dispatch::boot::BootPhase::PidFile => ("pid-file", defaults.pid_phase_ms.max(0) as u64),
-        // Fix-A (RESPEC-DELTA §4): the relay-sidecar phase shares the overall
-        // deadline (it runs after idle, bounded by the same boot deadline).
-        dispatch::boot::BootPhase::Relay => ("relay", defaults.overall_ms.max(0) as u64),
-    };
-    events::warn_emit(
-        &writer,
-        clock,
-        &Payload::PrimingReadinessTimeout {
-            waited_ms,
-            phase: phase.to_string(),
-        },
-    );
-}
-
-/// §9 anchored emission for the `new -p` Verified path (mirrors send:pty's W8
-/// anchored): recovered false, attribution absent, line_index 0 (verify returns
-/// texts, not indices). `transcript` may be unresolved (None → empty string —
-/// the anchor still carries the offset).
-fn emit_new_p_anchored(
-    writer: &EventWriter,
-    clock: &dyn Clock,
-    send_id: &str,
-    message: &str,
-    transcript: Option<&std::path::Path>,
-    offset: u64,
-) {
-    events::warn_emit(
-        writer,
-        clock,
-        &Payload::TurnAnchored {
-            send_id: send_id.to_string(),
-            content_sha256: events::sha256_hex(message.as_bytes()),
-            anchor: Anchor {
-                transcript: transcript
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-                start_offset: offset,
-                line_index: 0,
-            },
-            recovered: false,
-            attribution: None,
-        },
-    );
-}
-
-/// §2.3.4 anchored-mismatch for the `new -p` Truncated path. The
-/// PayloadVerifyOutcome carries lengths only; `actual_sha` is re-derived HERE by
-/// re-reading the user texts past the offset + sha-ing the longest truncation-
-/// signature record (honest value; "" if the re-read fails / transcript absent).
-#[allow(clippy::too_many_arguments)]
-fn emit_new_p_mismatch(
-    writer: &EventWriter,
-    clock: &dyn Clock,
-    send_id: &str,
-    message: &str,
-    transcript: Option<&std::path::Path>,
-    offset: u64,
-    expected: usize,
-    recorded: usize,
-) {
-    let actual_sha = transcript
-        .and_then(|t| dispatch::submit::read_user_texts_past_offset(t, offset).ok())
-        .and_then(|texts| {
-            dispatch::submit::longest_truncation_signature(&texts, message)
-                .map(|r| events::sha256_hex(r.as_bytes()))
-        })
-        .unwrap_or_default();
-    events::warn_emit(
-        writer,
-        clock,
-        &Payload::TurnAnchoredMismatch {
-            send_id: send_id.to_string(),
-            expected_sha: events::sha256_hex(message.as_bytes()),
-            actual_sha,
-            expected_len: expected as u64,
-            actual_len: recorded as u64,
-            recovered: false,
-            attribution: None,
-        },
-    );
-}
-
-/// A bin-local [`DeliverDeps`] that wraps [`RealDeliverDeps`] and RECORDS each
-/// `send_message` text-chunk ack (ACK-2 §9 recorder; red-team R9). `send_message`
-/// re-implements the Real impl's CHUNKED two-write delivery but captures each
-/// chunk's `mux.send(...).is_ok()`; the CR write is NOT counted (only text chunks
-/// are chunks-delivered evidence). All OTHER trait methods delegate to `inner`, so
-/// the bounded-retry core + the DeliverDeps trait are UNTOUCHED.
-struct RecordingDeliverDeps<'a> {
-    inner: dispatch::submit::RealDeliverDeps<'a>,
-    mux: &'a dyn Mux,
-    dir: PathBuf,
-    zmx_name: String,
-    sleeper: &'a RealSleeper,
-    total: Cell<u32>,
-    acked: Cell<u32>,
-}
-
-impl dispatch::submit::DeliverDeps for RecordingDeliverDeps<'_> {
-    fn send_message(&self, message: &str) {
-        // CHUNKED two-write delivery (mirrors RealDeliverDeps::send_message,
-        // submit.rs), recording each text chunk's ack. The settle + separate "\r"
-        // are byte-identical to the Real impl; only the per-chunk result, which the
-        // Real impl discards via `let _ =`, is captured here.
-        dispatch::submit::send_text_chunked(
-            &mut |chunk| {
-                self.total.set(self.total.get() + 1);
-                if self.mux.send(&self.dir, &self.zmx_name, chunk).is_ok() {
-                    self.acked.set(self.acked.get() + 1);
-                }
-            },
-            &mut |ms| self.sleeper.sleep_ms(ms),
-            message,
-            dispatch::submit::ChunkSendOptions::default(),
-        );
-        self.sleeper.sleep_ms(dispatch::submit::TWO_WRITE_SETTLE_MS);
-        let _ = self.mux.send(&self.dir, &self.zmx_name, "\r");
-    }
-    fn read_screen(&self) -> String {
-        self.inner.read_screen()
-    }
-    fn find_pid_file(&self) -> Option<PathBuf> {
-        self.inner.find_pid_file()
-    }
-    fn submit_deps(
-        &self,
-        pid_file: PathBuf,
-        message: &str,
-    ) -> Box<dyn dispatch::submit::SubmitDeps + '_> {
-        self.inner.submit_deps(pid_file, message)
-    }
-}
-
-/// W8: resolve the just-created session's transcript path (best-effort, single
-/// pass): registry row by NAME → sessionId → `find_jsonl_path`. `None` at any
-/// step (claude hasn't written its row / id / transcript yet — normal for a
-/// fresh session).
-fn resolve_new_p_transcript(
-    paths: &dispatch::paths::QdPaths,
-    name: &str,
-) -> Option<std::path::PathBuf> {
-    let entry = dispatch::registry::read_entries(&paths.sessions_dir, false)
-        .into_iter()
-        .find(|s| s.entry.name.as_deref() == Some(name))?;
-    let sid = entry.entry.session_id?;
-    dispatch::jsonl::find_jsonl_path(&paths.projects_dir, &sid, entry.entry.cwd.as_deref())
-}
-
-/// W8 [`dispatch::submit::VerifyDeps`] for the `qd new -p` path: RE-resolves the
-/// transcript each poll (registry → sessionId → path; the fresh session's
-/// row/transcript may land mid-budget) and reads user texts past the
-/// pre-delivery offset. Every resolution failure is a re-polled `Err` —
-/// [`dispatch::submit::verify_chunked_payload`] degrades to `SourceUnavailable` only
-/// when NO read ever succeeds.
-struct NewPVerifyDeps<'a> {
-    paths: &'a dispatch::paths::QdPaths,
-    name: &'a str,
-    offset: u64,
-    clock: &'a RealClock,
-    sleeper: &'a RealSleeper,
-}
-
-impl dispatch::submit::VerifyDeps for NewPVerifyDeps<'_> {
-    fn read_user_texts(&self) -> Result<Vec<String>, String> {
-        let path = resolve_new_p_transcript(self.paths, self.name)
-            .ok_or_else(|| "session transcript not yet resolvable".to_string())?;
-        dispatch::submit::read_user_texts_past_offset(&path, self.offset)
-    }
-    fn sleep(&self, ms: u64) {
-        use dispatch::boot::Sleeper;
-        self.sleeper.sleep_ms(ms);
-    }
-    fn now_ms(&self) -> i64 {
-        use dispatch::effects::Clock;
-        self.clock.now_ms()
-    }
-}
+// The FIVE per-lane create wrappers lived here — `run_new_codex_tui`,
+// `run_new_pi_tui`, `run_new_codex_daemon`, `run_new_pi_daemon`,
+// `run_new_acp_daemon` — plus the two adapters and the `OwnedPaneDeps` bundle
+// that fed them. All DELETED, on the same reasoning that retired
+// `revive_codex_tui` and `revive_pi_tui` one stage earlier: their bodies were
+// effect assembly a library can own, and `quorum_qw::lanes`' seven create arms
+// own it now. `qd start` calls `LaneOps::start` once and renders the answer.
+//
+// What did NOT move is in `run_new` where it always was: the per-lane `-p`
+// notices (a lane has no user to talk to), the six success lines, and every
+// refusal that has to fire before a create is attempted.
 
 /// §3.5 WENT-BUSY EXIT CONTRACT (HARDENING #3, ADR 0008): map the three-way
 /// [`DeliverOutcome`] of an `qd new -p` delivery to the sanctioned exit codes.
@@ -3275,125 +2008,6 @@ mod tests {
     use dispatch::submit::DeliverOutcome;
 
     // -------------------------------------------------------------------------
-    // Child B (opencode D1), F1 fix: `drive_create_prompt`'s dispatch-to-marker
-    // wiring. Red-team round 1 found that a create-time `--prompt` dispatched a
-    // real structured send but the row was ALWAYS written with
-    // `structured_send_issued: None` — making the session look pre-send forever,
-    // so its first transport loss would incorrectly auto-degrade to the floor
-    // instead of refusing (conditions 3/4). These pin the fix directly: a fake
-    // `AcpClient` stands in for a real acp connection, so the exact
-    // dispatch-confirmed-on-the-wire → `true` mapping is testable without a
-    // socket.
-    // -------------------------------------------------------------------------
-    use super::drive_create_prompt;
-
-    /// A fake `AcpClient` whose `prompt` invokes `on_dispatched` before returning
-    /// `Ok` (mirrors `AcpConnection::prompt`'s real dispatch-timing contract —
-    /// the SAME fixture shape as `tests/acp_fallback.rs`'s `FakeDispatchingClient`).
-    struct FakeDispatchingClient;
-    impl dispatch::provider::acp::AcpClient for FakeDispatchingClient {
-        fn initialize(
-            &self,
-        ) -> Result<dispatch::provider::acp::InitializeResult, dispatch::provider::acp::AcpError>
-        {
-            unimplemented!()
-        }
-        fn new_session(&self, _cwd: &str) -> Result<String, dispatch::provider::acp::AcpError> {
-            unimplemented!()
-        }
-        fn prompt(
-            &self,
-            _session: &str,
-            _text: &str,
-            _from: &str,
-            on_dispatched: &dyn Fn(),
-        ) -> Result<String, dispatch::provider::acp::AcpError> {
-            on_dispatched();
-            Ok("turn-1".to_string())
-        }
-        fn cancel(&self, _session: &str) -> Result<(), dispatch::provider::acp::AcpError> {
-            unimplemented!()
-        }
-        fn next_update(
-            &self,
-            _timeout: std::time::Duration,
-        ) -> Result<
-            Option<dispatch::provider::acp::AcpEvent>,
-            dispatch::provider::acp::AcpError,
-        > {
-            unimplemented!()
-        }
-    }
-
-    /// A fake `AcpClient` whose `prompt` ALWAYS fails WITHOUT ever invoking
-    /// `on_dispatched` — models a genuine pre-send failure (never reached the
-    /// wire), the negative control for the dispatched case below.
-    struct FakeNonDispatchingClient;
-    impl dispatch::provider::acp::AcpClient for FakeNonDispatchingClient {
-        fn initialize(
-            &self,
-        ) -> Result<dispatch::provider::acp::InitializeResult, dispatch::provider::acp::AcpError>
-        {
-            unimplemented!()
-        }
-        fn new_session(&self, _cwd: &str) -> Result<String, dispatch::provider::acp::AcpError> {
-            unimplemented!()
-        }
-        fn prompt(
-            &self,
-            _session: &str,
-            _text: &str,
-            _from: &str,
-            _on_dispatched: &dyn Fn(),
-        ) -> Result<String, dispatch::provider::acp::AcpError> {
-            Err(dispatch::provider::acp::AcpError::Closed)
-        }
-        fn cancel(&self, _session: &str) -> Result<(), dispatch::provider::acp::AcpError> {
-            unimplemented!()
-        }
-        fn next_update(
-            &self,
-            _timeout: std::time::Duration,
-        ) -> Result<
-            Option<dispatch::provider::acp::AcpEvent>,
-            dispatch::provider::acp::AcpError,
-        > {
-            unimplemented!()
-        }
-    }
-
-    #[test]
-    fn create_time_prompt_that_dispatches_reports_true() {
-        let client = FakeDispatchingClient;
-        let dispatched = drive_create_prompt(&client, "sess-1", Some("hello"), "my-session");
-        assert!(
-            dispatched,
-            "a create-time prompt whose bytes reach the wire MUST report dispatched=true, \
-             so the row's structured_send_issued becomes Some(true) — the F1 regression"
-        );
-    }
-
-    #[test]
-    fn create_time_prompt_that_never_dispatches_reports_false() {
-        let client = FakeNonDispatchingClient;
-        let dispatched = drive_create_prompt(&client, "sess-1", Some("hello"), "my-session");
-        assert!(
-            !dispatched,
-            "a prompt that failed before reaching the wire must report dispatched=false \
-             (structured_send_issued stays None — a genuinely pre-send session)"
-        );
-    }
-
-    #[test]
-    fn no_create_time_prompt_reports_false() {
-        let client = FakeDispatchingClient;
-        // None and empty-string both mean "no create-time prompt" (the same
-        // `.filter(|s| !s.is_empty())` gate the production call site uses).
-        assert!(!drive_create_prompt(&client, "sess-1", None, "my-session"));
-        assert!(!drive_create_prompt(&client, "sess-1", Some(""), "my-session"));
-    }
-
-    // -------------------------------------------------------------------------
     // punch item 11: fork-target transcript preflight.
     // -------------------------------------------------------------------------
     use super::fork_transcript_missing_error;
@@ -3522,82 +2136,15 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // §5.1 / G3 — priming-readiness-timeout emission (M3). The emission is the
-    // reachable unit seam (the full create-boot path is jail-only, M5/G7c). The
-    // mutation control: deleting the warn_emit in emit_priming_timeout REDs these.
+    // §5.1 / G3 — priming-readiness-timeout emission (M3). The three rows that
+    // drove `emit_priming_timeout` FOLLOWED it into
+    // `quorum_qw::delivery::priming` — the emitter is qw's now, and a test that
+    // asserts what landed in the delivery log belongs on the side that writes it.
+    // The row below stays: it asserts `NewError`'s HUMAN surface, which is the
+    // create seam's and is read by this verb.
     // -------------------------------------------------------------------------
-    use super::emit_priming_timeout;
     use dispatch::boot::BootPhase;
     use dispatch::create::NewError;
-    use dispatch::effects::{RealClock, RealEnv};
-    use dispatch::events::{byname_key, parse_events};
-
-    /// The byname events file emit_priming_timeout writes to, resolved the SAME
-    /// way the function does (QD_HOME-honoring) so the test is hermetic.
-    fn byname_events_file(home: &std::path::Path, name: &str) -> std::path::PathBuf {
-        let state = dispatch::paths::QdPaths::from_home_env(home, &RealEnv).state_dir;
-        dispatch::events::events_path(&state, &byname_key(name))
-    }
-
-    #[test]
-    fn priming_timeout_pid_file_phase_emits_to_byname() {
-        let home = tempfile::tempdir().unwrap();
-        // m-4 (ack3-spec §8): keyed on the TYPED phase, not a detail string.
-        emit_priming_timeout(home.path(), &RealEnv, &RealClock, "wk", BootPhase::PidFile);
-        let file = byname_events_file(home.path(), "wk");
-        let text = std::fs::read_to_string(&file).expect("byname events file written");
-        let recs = parse_events(&text).records;
-        assert_eq!(recs.len(), 1, "exactly one record");
-        assert_eq!(recs[0].event, "priming-readiness-timeout");
-        assert_eq!(recs[0].str_field("phase").as_deref(), Some("pid-file"));
-        // waited_ms = the pid-phase default (40s); best-effort.
-        assert_eq!(recs[0].u64_field("waited_ms"), Some(40_000));
-        // No sessionId on a failed boot → keyed by name only.
-        assert_eq!(recs[0].name.as_deref(), Some("wk"));
-        assert!(recs[0].session.is_none());
-    }
-
-    #[test]
-    fn priming_timeout_idle_phase_typed() {
-        let home = tempfile::tempdir().unwrap();
-        // m-4 (ack3-spec §8): the Idle phase is read TYPED, not parsed from wording.
-        emit_priming_timeout(home.path(), &RealEnv, &RealClock, "wk", BootPhase::Idle);
-        let file = byname_events_file(home.path(), "wk");
-        let text = std::fs::read_to_string(&file).unwrap();
-        let recs = parse_events(&text).records;
-        assert_eq!(recs[0].str_field("phase").as_deref(), Some("idle"));
-        assert_eq!(recs[0].u64_field("waited_ms"), Some(60_000));
-    }
-
-    /// m-4 REGRESSION TOOTH (ack3-spec §8): a BootTimeout whose detail string is
-    /// REWORDED — it does NOT contain "did not reach idle" — but whose TYPED phase
-    /// is `Idle` still files the event as "idle". The deleted string-match would
-    /// have misfiled this as "pid-file" (the exact brittleness m-4 removes). We
-    /// drive through the create-path destructure the real consumer uses, so the
-    /// phase flows the same way production threads it.
-    #[test]
-    fn priming_timeout_reworded_idle_detail_still_files_idle() {
-        let err = NewError::BootTimeout {
-            name: "wk".to_string(),
-            phase: BootPhase::Idle,
-            // Deliberately REWORDED: no "did not reach idle" substring.
-            detail: "session never settled to idle".to_string(),
-        };
-        let NewError::BootTimeout { phase, detail, .. } = &err else {
-            panic!("constructed a BootTimeout");
-        };
-        // Guard the premise: the old string-match key is genuinely absent.
-        assert!(!detail.contains("did not reach idle"));
-
-        let home = tempfile::tempdir().unwrap();
-        emit_priming_timeout(home.path(), &RealEnv, &RealClock, "wk", *phase);
-        let file = byname_events_file(home.path(), "wk");
-        let text = std::fs::read_to_string(&file).unwrap();
-        let recs = parse_events(&text).records;
-        // Typed phase wins: filed as "idle" despite the reworded detail.
-        assert_eq!(recs[0].str_field("phase").as_deref(), Some("idle"));
-        assert_eq!(recs[0].u64_field("waited_ms"), Some(60_000));
-    }
 
     /// m-4 ZERO-SURFACE ASSERT (orc rider, ack3-spec §8): adding the typed `phase`
     /// to `NewError::BootTimeout` must NOT change the human surface. The Display
@@ -3617,5 +2164,44 @@ mod tests {
             assert_eq!(format!("{err}"), expected, "Display must not vary by phase");
             assert_eq!(err.exit_code(), 1, "BootTimeout stays on the exit-1 lane");
         }
+    }
+
+    use super::supported_provider_names;
+
+    /// The unknown-provider line's BYTES are unchanged by the derivation. This is
+    /// the whole safety of moving the list off a literal: the set now comes from
+    /// `Harness::ALL`, and the sentence a user reads did not move.
+    #[test]
+    fn supported_provider_names_is_byte_identical_to_the_literal_it_replaced() {
+        assert_eq!(
+            supported_provider_names(),
+            "claude-code, codex, acp/claude-code, pi, opencode (= acp/opencode)"
+        );
+        assert_eq!(
+            format!(
+                "qd start: unknown provider \"{}\" — this engine supports: {}.",
+                "weird", supported_provider_names()
+            ),
+            "qd start: unknown provider \"weird\" — this engine supports: claude-code, codex, \
+             acp/claude-code, pi, opencode (= acp/opencode)."
+        );
+    }
+
+    /// ...and it names EVERY harness qw will accept. An id the engine takes but
+    /// does not advertise is as much a drift bug as one it advertises and refuses.
+    #[test]
+    fn supported_provider_names_covers_every_harness() {
+        let rendered = supported_provider_names();
+        for h in quorum_qw::lane::Harness::ALL {
+            assert!(
+                rendered.contains(h.provider_id()),
+                "{:?} ({}) is accepted by Harness::from_provider_id but not advertised in {rendered:?}",
+                h,
+                h.provider_id()
+            );
+        }
+        // The CLI alias too — it is what the refusal tells a user to type.
+        assert!(rendered.contains("opencode (= acp/opencode)"));
+        assert!(quorum_qw::lane::Harness::from_provider_id("opencode").is_some());
     }
 }

@@ -12,6 +12,7 @@
     "version": "1.0.0",
     "startedAt": "2024-06-04T10:01:39.000Z",
     "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
     "code": "as7"
   },
   {
@@ -28,6 +29,7 @@
     "startedAt": "2024-06-04T09:59:59.000Z",
     "jsonlPath": "<CODEX_HOME>/sessions/2026/06/04/rollout-2026-06-04T10-01-39-019ea0b3-04d3-7400-8d95-f55d41e961e4.jsonl",
     "provider": "codex",
+    "lane": "codex/daemon",
     "code": "1yd"
   },
   {
@@ -40,6 +42,7 @@
     "lastActive": "2024-06-04T08:33:20.000Z",
     "jsonlPath": "<CODEX_HOME>/sessions/2026/06/04/rollout-2026-06-04T08-33-20-019e9f3b-deea-7392-9861-b5d8ad376e2b.jsonl",
     "provider": "codex",
+    "lane": "codex/daemon",
     "code": "1gz"
   }
 ]

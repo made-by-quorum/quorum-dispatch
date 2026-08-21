@@ -210,7 +210,8 @@ mod tests {
 
     #[test]
     fn user_relay_registered_true_when_present() {
-        let json = r#"{"mcpServers":{"playwright":{},"relay":{"command":"qd","args":["relay:serve"]}}}"#;
+        let json =
+            r#"{"mcpServers":{"playwright":{},"relay":{"command":"qd","args":["relay:serve"]}}}"#;
         assert_eq!(user_relay_registered(json), Some(true));
     }
 

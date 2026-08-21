@@ -1,0 +1,202 @@
+[
+  {
+    "name": "live-vs-cold",
+    "userNamed": true,
+    "sessionId": "live-vs-cold-0001",
+    "pid": 3101,
+    "status": "idle",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/l1-live",
+    "lastActive": "2024-06-04T11:03:20.000Z",
+    "version": "1.0.0",
+    "startedAt": "2024-06-04T11:03:19.000Z",
+    "gitBranch": "transcript-branch",
+    "jsonlPath": "<HOME>/.claude/projects/-work-l1-transcript-cwd/live-vs-cold-0001.jsonl",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "hello"
+      },
+      {
+        "role": "assistant",
+        "text": "hi"
+      }
+    ],
+    "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
+    "code": "1x7"
+  },
+  {
+    "name": "live-vs-tomb",
+    "userNamed": true,
+    "sessionId": "live-vs-tomb-0002",
+    "pid": 3102,
+    "status": "busy",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/l2-live",
+    "lastActive": "2024-06-04T10:46:40.000Z",
+    "version": "1.0.0",
+    "startedAt": "2024-06-04T10:46:39.000Z",
+    "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
+    "code": "1tn"
+  },
+  {
+    "name": "acp-friendly-name",
+    "userNamed": true,
+    "sessionId": "acp-vs-cold-0003",
+    "pid": 3903,
+    "status": "killed",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/a3-tombstone",
+    "lastActive": "2024-06-04T10:30:00.000Z",
+    "version": "1.0.0",
+    "startedAt": "2024-06-04T10:29:59.000Z",
+    "gitBranch": "transcript-branch",
+    "jsonlPath": "<HOME>/.claude/projects/-work-a3-shadow-cwd/acp-vs-cold-0003.jsonl",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "hello"
+      },
+      {
+        "role": "assistant",
+        "text": "hi"
+      }
+    ],
+    "provider": "acp/claude-code",
+    "lane": "acp/claude-code/daemon",
+    "code": "kf6"
+  },
+  {
+    "name": "cold-opencode-name",
+    "userNamed": true,
+    "sessionId": "ses_merge00080000000000000000",
+    "status": "cold",
+    "turns": 2,
+    "tokens": 125,
+    "cwd": "/work/cold-opencode",
+    "lastActive": "2024-06-04T09:56:40.000Z",
+    "provider": "opencode",
+    "lane": "acp/opencode/daemon",
+    "code": "735"
+  },
+  {
+    "name": "c4-shadow-name",
+    "userNamed": true,
+    "sessionId": "claude-vs-cold-0004",
+    "status": "cold",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/c4-shadow-cwd",
+    "lastActive": "2024-06-04T09:06:40.000Z",
+    "jsonlPath": "<HOME>/.claude/projects/-work-c4-shadow-cwd/claude-vs-cold-0004.jsonl",
+    "gitBranch": "transcript-branch",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "hello"
+      },
+      {
+        "role": "assistant",
+        "text": "hi"
+      }
+    ],
+    "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
+    "code": "1o6"
+  },
+  {
+    "name": "cold-claude-name",
+    "userNamed": true,
+    "sessionId": "cold-claude-0005",
+    "status": "cold",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/cold-claude",
+    "lastActive": "2024-06-04T08:50:00.000Z",
+    "jsonlPath": "<HOME>/.claude/projects/-work-cold-claude/cold-claude-0005.jsonl",
+    "gitBranch": "transcript-branch",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "hello"
+      },
+      {
+        "role": "assistant",
+        "text": "hi"
+      }
+    ],
+    "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
+    "code": "1bj"
+  },
+  {
+    "name": "cold-pi-name",
+    "userNamed": true,
+    "sessionId": "pi-cold-0007",
+    "status": "cold",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/cold-pi",
+    "lastActive": "2024-06-04T08:33:20.000Z",
+    "jsonlPath": "<PI_ROOT>/2026-06-04T08-20-00-000Z_pi-cold-0007.jsonl",
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "hello"
+      }
+    ],
+    "provider": "pi",
+    "lane": "pi/daemon",
+    "code": "18a"
+  },
+  {
+    "userNamed": false,
+    "sessionId": "019ea0b3-04d3-7400-8d95-f55d41e961e4",
+    "status": "cold",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/cold-codex",
+    "lastActive": "2024-06-04T08:16:40.000Z",
+    "jsonlPath": "<CODEX_HOME>/sessions/2026/06/04/rollout-2026-06-04T08-33-20-019ea0b3-04d3-7400-8d95-f55d41e961e4.jsonl",
+    "provider": "codex",
+    "lane": "codex/daemon",
+    "code": "1yd"
+  },
+  {
+    "name": "orphan-pane-alpha",
+    "sessionId": "",
+    "pid": 7701,
+    "status": "cold",
+    "zmxName": "orphan-pane-alpha",
+    "zmxClients": 1,
+    "socketDir": "<ZMX_DIR>",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/orphan-alpha",
+    "lastActive": "2024-06-04T08:00:00.000Z",
+    "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
+    "code": "---"
+  },
+  {
+    "name": "orphan-pane-beta",
+    "sessionId": "",
+    "pid": 7702,
+    "status": "cold",
+    "zmxName": "orphan-pane-beta",
+    "zmxClients": 0,
+    "socketDir": "<ZMX_DIR>",
+    "turns": 0,
+    "tokens": 0,
+    "cwd": "/work/orphan-beta",
+    "lastActive": "2024-06-04T07:43:20.000Z",
+    "provider": "claude-code",
+    "lane": "claude-code/mux-pane",
+    "code": "---"
+  }
+]

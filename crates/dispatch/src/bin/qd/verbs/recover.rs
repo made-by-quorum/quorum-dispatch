@@ -1,23 +1,43 @@
 //! `qd delivery:recover` — the one-shot, dispatch-only delivery recovery verb (D1,
 //! spec §C2). Closes DEAD-DANGLING pty/new-p sends: a `send-initiated` with no
 //! terminal whose WRITER incarnation is gone (a sender killed mid-send / a SIGKILL
-//! that bypassed the WatchGuard Drop). It runs the tested lib recovery-read
-//! ([`events::recovery_read`]) and appends the verdict via
-//! [`events::emit_recovery_verdict`].
+//! that bypassed the WatchGuard Drop).
+//!
+//! ## WHERE THE WORK HAPPENS (stage-3 phase 3A, `09-ledger-split.md`)
+//! The transcript SEARCH is [`LaneOps::recover`]'s, not this verb's. Recovery-read
+//! opens the recipient's transcript and parses it PER-HARNESS — session-artifact
+//! access qd must not have — so it lives behind the lane, which resolves that
+//! transcript through the row's OWN provider. This verb keeps the three things that
+//! are qd's: the sweep enumeration, the liveness fence below, and the report.
 //!
 //! ## THE LIVENESS FENCE (hard obligation — cycle-3 finding)
 //! This verb runs as a SEPARATE process from the original sender, so it MUST NOT
-//! write a terminal for a send whose writer is still LIVE. `emit_recovery_verdict`
-//! has NO dead-writer gate of its own — its only re-check is idempotence against a
-//! raced-in *terminal*, NOT a live *writer* — so calling it directly on a live-writer
-//! `send-initiated` would append a PREMATURE terminal on a still-LIVE send, violating
-//! QS-1 ("the ledger lies") through the very path built to keep it honest. This verb
-//! therefore REPLICATES the gate `await_received` holds: it calls
-//! [`events::is_dead_dangling`] itself and emits ONLY when it returns true.
+//! ask for a terminal on a send whose writer is still LIVE. Neither
+//! `emit_recovery_verdict` (which the lane calls) nor [`LaneOps::recover`] has a
+//! dead-writer gate of its own — the only re-check down there is idempotence
+//! against a raced-in *terminal*, NOT a live *writer* — so calling `recover` on a
+//! live-writer `send-initiated` would append a PREMATURE terminal on a still-LIVE
+//! send, violating QS-1 ("the ledger lies") through the very path built to keep it
+//! honest. This verb therefore REPLICATES the gate `await_received` holds: it calls
+//! [`events::writer_gone_and_stale`] itself and calls the lane ONLY when it returns
+//! true.
 //! "Dangling" here means DEAD-dangling, never merely unresolved. A live-writer send
 //! is left untouched (stays dangling-but-live). Because the verb is a foreign
-//! process, `is_dead_dangling`'s own-pid short-circuit does NOT fire — a foreign live
-//! pid is correctly evaluated via the RF-6 `start_ms` arm.
+//! process, `writer_gone_and_stale`'s own-pid short-circuit does NOT fire — a foreign
+//! live pid is correctly evaluated via the RF-6 `start_ms` arm.
+//!
+//! Clauses (b) "the writer incarnation is gone" and (c) "age > `T_ANCHOR_IDLE_MS`"
+//! read qd's OWN record and qd's OWN process, so they stay here in full and are
+//! evaluated BEFORE any lane call, on qd's own intent log. Only clause (a) "is there
+//! a terminal for this send_id" crosses, as [`LaneOps::resolved`] — a pure poll of
+//! qw's log that writes nothing.
+//!
+//! ## THE TWO LOGS (stage-3 phase 3C, `09-ledger-split.md`)
+//! The sweep enumerates `<state>/intent/` — qd's OWN records, written before each
+//! send crossed the boundary. It used to enumerate `<state>/sessions/`, which is
+//! qw's, and that read is the one the ledger split removes (ruling D4). The
+//! terminals this verb produces still land in qw's log, because `recover` writes
+//! them and `recover` is qw's.
 //!
 //! ## SCOPE (minimal, per the plan)
 //! No flags beyond target selection; no scheduling; no residency. The resident /
@@ -28,37 +48,55 @@
 //! recovery-read on a relay `send-initiated` (no transcript, one-shot writer already
 //! dead) would manufacture a FALSE `pending-abandoned` — the opposite of honesty.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use clap::ArgMatches;
 
 use dispatch::effects::{Clock, Env, RealClock, RealEnv};
-use dispatch::events::{self, EventRecord, EventWriter, ReaderCtx, RecoveryDeps, RecoveryVerdict};
+use dispatch::events::{self, EventRecord};
 use dispatch::paths::QdPaths;
+use quorum_qw::contract::{LaneOps, LedgerAddress, MessageId, SessionId, Terminal};
+use quorum_qw::lane::{Harness, Lane, Mode};
 
-/// Real fs/clock backing for [`events::RecoveryDeps`] (the verb's production seam).
-/// `now_ms` is captured ONCE at verb start so every send in a sweep is judged
-/// against the same clock (and matches the `now_ms` the fence used).
-struct RealRecoveryDeps {
-    projects_dir: PathBuf,
-    now_ms: i64,
-}
+/// The lane a swept row falls back to when the registry cannot name one.
+///
+/// A `send-initiated` record carries no provider — only `(session?, name?)` — so
+/// the harness comes from the row's registry entry, and a recovery sweep runs
+/// precisely when that row may be gone (the janitor reaps a dead session's row long
+/// before its dangling send stops being recoverable). Refusing an unplaceable row
+/// would fail the case the verb exists for, so it degrades, exactly as
+/// [`quorum_qw::lanes::row_for_id`] degrades an unknown provider string.
+///
+/// **claude/pane is not a guess about the harness — it is the status quo, spelled
+/// out.** Before this rewiring the verb resolved EVERY harness's transcript through
+/// `jsonl::find_jsonl_path` over `<home>/.claude/projects`, and claude's
+/// `transcript_root`/`transcript_path` are literally that pair. So a row the
+/// registry cannot place is answered exactly as it was, while every row it CAN
+/// place now routes to its own harness's layout — which is the defect the move
+/// closes (a codex rollout or a pi session was silently `source-unavailable`).
+///
+/// For a BYNAME-only address the fallback is inert, and that is what keeps it from
+/// forcing a row through a wrong lane: `recover`'s transcript resolve short-circuits
+/// on the absent session id (there is no registry row, so no cwd and no id to key
+/// on), so no lane can change the answer. Such a row is left dangling as
+/// `Undetermined` — no terminal — exactly as before. The one byname case that DOES
+/// resolve is a record carrying its own `transcript` + `transcript_offset`, and that
+/// path never consults a provider at all.
+const FALLBACK_LANE: Lane = Lane {
+    harness: Harness::ClaudeCode,
+    mode: Mode::Pane,
+};
 
-impl RecoveryDeps for RealRecoveryDeps {
-    fn read_transcript(&self, path: &str) -> Option<String> {
-        std::fs::read_to_string(path).ok()
-    }
-    fn resolve_transcript(&self, session_id: Option<&str>, _name: Option<&str>) -> Option<String> {
-        // Offset-absent fallback (§6.1): re-resolve the transcript NOW via the same
-        // registry scan the live path uses. cwd is unknown here → the scan tier.
-        let sid = session_id?;
-        dispatch::jsonl::find_jsonl_path(&self.projects_dir, sid, None)
-            .map(|p| p.display().to_string())
-    }
-    fn now_ms(&self) -> i64 {
-        self.now_ms
-    }
-}
+/// The ledger's OWN reason token for the (b) empty-window verdict, as
+/// `quorum_qw::lanes::terminal_from_verdict` restates it. The R6 lattice has six
+/// termini and [`Terminal`] has four variants, so the two UNDETERMINED states are
+/// told apart by this token — the same string the ledger writes, not a second
+/// vocabulary invented at the boundary.
+const WINDOW_EMPTY: &str = "window-empty";
+/// The (c) disclosed closer's reason — `pending-abandoned{recovery-no-candidate}`.
+const RECOVERY_NO_CANDIDATE: &str = "recovery-no-candidate";
+/// The (d) disclosed closer's reason — `pending-abandoned{recovery-unattributable}`.
+const RECOVERY_UNATTRIBUTABLE: &str = "recovery-unattributable";
 
 /// Per-run recovery outcome (drives the summary + is the testable return value).
 #[derive(Debug, Default, PartialEq)]
@@ -115,13 +153,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     let clock = RealClock;
     let now_ms = clock.now_ms();
 
-    let report = recover_sweep(
-        &paths.state_dir,
-        &paths.projects_dir,
-        target_send_id,
-        &clock,
-        now_ms,
-    );
+    let report = recover_sweep(&paths, &env, target_send_id, now_ms);
 
     // Content-free summary (a recovery tool, not a chatty one). Best-effort — the
     // real product is the appended terminals in the delivery log.
@@ -147,107 +179,159 @@ pub fn run(m: &ArgMatches) -> i32 {
     0
 }
 
-/// The core sweep (testable, pure over its inputs). Enumerate every session's
-/// events file, collect the transcript-anchored (pty/new-p) `send-initiated`
-/// records, and for each — GATED BY [`events::is_dead_dangling`] — append a recovery
-/// verdict. `target` optionally narrows to one send_id.
+/// The core sweep. Enumerate every key's INTENT file, collect the recovery-eligible
+/// `send-initiated` records, and for each — GATED BY
+/// [`events::writer_gone_and_stale`], then by [`LaneOps::resolved`] — ask that row's
+/// LANE to resolve it. `target` optionally narrows to one send_id.
 fn recover_sweep(
-    state_dir: &Path,
-    projects_dir: &Path,
+    paths: &QdPaths,
+    env: &dyn Env,
     target: Option<&str>,
-    clock: &dyn Clock,
     now_ms: i64,
 ) -> RecoverReport {
+    let state_dir = paths.state_dir.as_path();
     let mut report = RecoverReport::default();
     let initiations = collect_pty_initiations(state_dir, target);
 
     for si in &initiations {
         report.scanned += 1;
-        let ctx = ReaderCtx {
-            state_dir,
-            session_id: si.session.as_deref(),
-            name: si.name.as_deref(),
-        };
-        let merged = ctx.read();
 
-        // THE FENCE: emit ONLY when the writer incarnation is gone (dead-dangling).
-        // is_dead_dangling returns false BOTH when a terminal already exists AND when
-        // the writer is still live — the two skip reasons the summary distinguishes.
-        if !events::is_dead_dangling(&merged.records, si, now_ms) {
-            let sid = si.send_id().unwrap_or_default();
-            if events::first_terminal_for(&merged.records, &sid).is_some() {
-                report.skipped_resolved += 1;
-            } else {
-                report.skipped_live += 1;
-            }
+        // THE FENCE, on qd's OWN record: clauses (b) "the writer incarnation is
+        // gone" and (c) "age > T_ANCHOR_IDLE_MS" read this record's `pid`,
+        // `start_ms` and `ts` — all three written by qd, into qd's intent log, and
+        // none of them needing a single byte of qw's. `events::is_dead_dangling`
+        // is now literally clause (a) plus this call, so the fence is the SAME
+        // code it always was rather than a copy of it, and the RF-6 start_ms arm
+        // (a recycled pid held by a stranger) is unchanged.
+        //
+        // A live writer is refused HERE, before any lane call is made — which is
+        // stronger than before, not weaker: `recover` is never reached.
+        if !events::writer_gone_and_stale(si, now_ms) {
+            report.skipped_live += 1;
             continue;
         }
 
-        // Dead-dangling → recover. Key the verdict to the send-initiated's own file
-        // (session uuid when known, else byname); the merged read covers both.
-        let key = si
-            .session
-            .clone()
-            .unwrap_or_else(|| events::byname_key(si.name.as_deref().unwrap_or("")));
-        let writer = EventWriter::for_key(state_dir, &key, si.session.clone(), si.name.clone());
-        let deps = RealRecoveryDeps {
-            projects_dir: projects_dir.to_path_buf(),
-            now_ms,
+        // Dead-dangling → the address is the record's OWN `(session?, name?)`
+        // pair, which is exactly what keyed the file this record came out of:
+        // `LedgerAddress::writer_key` reproduces the session-uuid-else-
+        // `byname-<name>` key the verdict is written under, and `parts()` feeds
+        // the same merged read.
+        let at = LedgerAddress {
+            session: si.session.clone().map(SessionId),
+            name: si.name.clone(),
         };
-        // The recovery-terminus lattice (R6): a terminal is written for anchored/
-        // mismatch (landed) and the two DISCLOSED abandoned closers (c/d); NO terminal
-        // for the two undetermined states (a/b) — those stay dead-dangling for a later
-        // run, counted as "left recoverable" so the summary stays honest.
-        match events::emit_recovery_verdict(&deps, &writer, clock, ctx, si) {
-            Ok(RecoveryVerdict::Anchored { .. }) => report.recovered_anchored += 1,
-            Ok(RecoveryVerdict::Truncated { .. }) => report.recovered_mismatch += 1,
-            Ok(RecoveryVerdict::Abandoned { .. }) => report.abandoned_no_candidate += 1,
-            Ok(RecoveryVerdict::Unattributable) => report.abandoned_unattributable += 1,
-            Ok(RecoveryVerdict::SourceUnavailable) => report.left_source_unavailable += 1,
-            Ok(RecoveryVerdict::EmptyWindow) => report.left_window_empty += 1,
-            Err(_) => report.emit_errors += 1,
+        let ops = dispatch::lane::open(lane_for_row(paths, env, &at), env, paths.clone());
+        let message = MessageId(si.send_id().unwrap_or_default());
+
+        // CLAUSE (a), and the ONLY clause that crosses: "is there already a
+        // terminal for this send_id" is answerable only from qw's delivery log,
+        // which qd does not read. `LaneOps::resolved` is that read and nothing
+        // else — no transcript, no lock, no emission.
+        //
+        // It must come BEFORE `recover`. `recover`'s under-flock idempotence
+        // ADOPTS an existing terminal rather than writing a second one, so the
+        // LEDGER would be safe either way — but its adopt path reports through
+        // `RecoveryVerdict`, which has no "already resolved" state, so a send
+        // delivered and seen months ago would come back as
+        // `NotDelivered{recovery-no-candidate}` and this summary would report it
+        // as abandoned. Every resolved send in a state dir's history, on every
+        // run, each paying a transcript read to get there.
+        //
+        // An `Err` is an un-read, not an absence: counted as an error and the send
+        // is LEFT ALONE, never handed to `recover` on the assumption that nothing
+        // closed it.
+        match ops.resolved(&at, &message) {
+            Ok(Some(_)) => {
+                report.skipped_resolved += 1;
+                continue;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                report.emit_errors += 1;
+                continue;
+            }
+        }
+
+        // The recovery-terminus lattice (R6) as the contract restates it: a terminal
+        // is written for anchored/mismatch (landed) and the two DISCLOSED abandoned
+        // closers (c/d); NO terminal for the two undetermined states (a/b) — those
+        // stay dead-dangling for a later run, counted as "left recoverable" so the
+        // summary stays honest.
+        //
+        // `Terminal` has four variants against the lattice's six termini, so the pair
+        // inside each collapsed variant is split back apart on the ledger's own reason
+        // token. `Undetermined` is NEVER a foreclosing outcome — the catch-all arm
+        // routes any reason we do not recognise (an address naming neither session nor
+        // target; a send_id with no `send-initiated` to search from) to
+        // source-unavailable, "there was nothing to look at", which is the honest
+        // reading and the one that leaves the send recoverable.
+        match ops.recover(&at, &message) {
+            Ok(Terminal::Seen) => report.recovered_anchored += 1,
+            Ok(Terminal::Mismatch) => report.recovered_mismatch += 1,
+            Ok(Terminal::NotDelivered { ref reason }) if reason == RECOVERY_NO_CANDIDATE => {
+                report.abandoned_no_candidate += 1
+            }
+            Ok(Terminal::NotDelivered { ref reason }) if reason == RECOVERY_UNATTRIBUTABLE => {
+                report.abandoned_unattributable += 1
+            }
+            Ok(Terminal::Undetermined { ref reason }) if reason == WINDOW_EMPTY => {
+                report.left_window_empty += 1
+            }
+            Ok(Terminal::Undetermined { .. }) => report.left_source_unavailable += 1,
+            // Unreachable by contract: `recover` mints only the six verdicts above.
+            // A foreclosing terminal we cannot name is counted as an ERROR rather than
+            // silently as a recovery — miscounting an unrecognised terminal as a
+            // success is the one thing this summary must not do.
+            Ok(_) | Err(_) => report.emit_errors += 1,
         }
     }
 
     report
 }
 
-/// Read every `*.events.jsonl` under the state dir's `sessions/` dir and return the
-/// transcript-anchored `send-initiated` records (verb ∈ {send:pty, new-p}) — the
-/// recovery-read-eligible set — optionally narrowed to `target` send_id.
+/// Which lane owns a swept row.
+///
+/// The sweep walks LEDGER rows, and a ledger row's identity is `(session?, name?)`
+/// — no provider, no hosting. The harness lives in the registry, so a
+/// session-addressed row is placed by the same exact, id-keyed lookup every other
+/// rewired verb uses ([`quorum_qw::lanes::row_for_id`]) and then by `lane_for` over
+/// that row's `provider`/`hosting`, byte-identically to `verbs/attach.rs`. A
+/// byname-only row has no registry row to look up by construction, and a
+/// session-addressed row may have had its row reaped; both land on
+/// [`FALLBACK_LANE`], whose docs explain why that changes no answer.
+fn lane_for_row(paths: &QdPaths, env: &dyn Env, at: &LedgerAddress) -> Lane {
+    at.session
+        .as_ref()
+        .and_then(|id| quorum_qw::lanes::row_for_id(paths, env, None, id))
+        .and_then(|s| quorum_qw::lane_for(&s.provider, s.hosting.as_deref()))
+        .unwrap_or(FALLBACK_LANE)
+}
+
+/// The verbs whose sends this sweep may close.
+///
+/// `send:pty` and `new-p` are the transcript-anchored sends recovery-read was
+/// designed for. [`super::intent::VERB_SEND`] is qd's own token for the unified
+/// `qd send`, and it is here because `LaneOps::deliver` picks the carrier
+/// privately: a unified send that lands on the pane carrier is exactly as
+/// recoverable as a `send:pty` one — qw's record carries the same id — and there
+/// is no way to tell at intent time which carrier it will be. One that lands on a
+/// resident carrier answers `Undetermined`, because qw's ledger has no
+/// `send-initiated` under qd's id (a resident keys its own on the turn id it
+/// minted), and `Undetermined` mints no terminal. So the scoping defence holds
+/// either way: nothing is closed on evidence that was never read.
+///
+/// `send:relay` is still absent, which is the defence
+/// `delivery_recover_verb::relay_send_is_not_swept` pins.
+const SWEPT_VERBS: &[&str] = &["send:pty", "new-p", super::intent::VERB_SEND];
+
+/// The recovery-eligible `send-initiated` records in qd's own intent log,
+/// optionally narrowed to `target` send_id.
+///
+/// The enumeration itself is [`super::intent::scan`]'s: every read of the intent
+/// tree lives in the one module that owns it, so `ledger_gate` can pin the ledger
+/// reads by file. This used to `read_dir` qw's `sessions/` directly; after the
+/// ledger split those records are qd's own (`09-ledger-split.md`, ruling D4), so
+/// the enumeration stops being a boundary crossing at all.
 fn collect_pty_initiations(state_dir: &Path, target: Option<&str>) -> Vec<EventRecord> {
-    let dir = events::events_dir(state_dir);
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return out; // no sessions dir yet → nothing to recover
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let is_events_file = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.ends_with(".events.jsonl"))
-            .unwrap_or(false);
-        if !is_events_file {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        for rec in events::parse_events(&text).records {
-            if rec.event != "send-initiated" {
-                continue;
-            }
-            // Transcript-anchored sends only (pty/new-p) — see the scope note above.
-            match rec.str_field("verb").as_deref() {
-                Some("send:pty") | Some("new-p") => {}
-                _ => continue,
-            }
-            if let Some(t) = target {
-                if rec.send_id().as_deref() != Some(t) {
-                    continue;
-                }
-            }
-            out.push(rec);
-        }
-    }
-    out
+    super::intent::scan(state_dir, SWEPT_VERBS, target)
 }
