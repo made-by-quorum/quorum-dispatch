@@ -502,31 +502,40 @@ fn no_trailer_at_cap_or_on_flagged_views() {
     assert_eq!(err, "", "explicit -n is the user's own cap: no trailer");
 }
 
-/// Bare `qd` (the default action IS `ls`) participates in the WP-B7 PIECE 1
-/// surface auto-flip exactly as `qd ls` does. An agent/pipe caller (this harness
-/// pipes stdout) auto-detects to the JSON machine surface, which carries NO
-/// trailer (the `… N more` affordance is the human-table surface only). The
-/// table-surface trailer for the over-cap default view is pinned by
-/// `default_over_cap_prints_trailer_on_stderr` (via `--table`, the surface a human
-/// reaches at a TTY). There is no `--table` to inject on the BARE `qd` form (the
-/// flag lives on the `ls` subcommand), so the faithful bare-`qd` coverage is: the
-/// default action flips to JSON and stays trailer-free.
+/// Bare `qd` is the HELP, not a session list.
+///
+/// This test used to assert the opposite: that the default action was `ls` and
+/// therefore participated in the WP-B7 PIECE 1 surface auto-flip (agent/pipe ⇒
+/// JSON). The default moved. `ls` answered a question nobody asked — a new
+/// machine's first sentence was `No sessions found.` — and an install pointing
+/// people at bare `qd` needs it to say what qd IS.
+///
+/// The auto-flip itself is untouched and still covered here, on the verb that
+/// still has it: `json_never_carries_trailer` and
+/// `ls_surface_auto_flips_agent_to_json_table_overrides` both drive `qd ls`
+/// through a pipe. What is pinned here is only that bare `qd` no longer emits a
+/// session surface at all — this harness pipes stdout, so under the old default
+/// it would have produced the 20-row JSON array, and that is exactly what must
+/// not happen now.
 #[test]
-fn bare_qd_default_action_flips_to_json_no_trailer() {
+fn bare_qd_prints_the_help_not_a_session_list() {
     let t = tempfile::tempdir().unwrap();
     let j = mixed_jail(t.path(), 25, 3);
     let (code, out, err) = j.run(&[]);
-    assert_eq!(code, 0, "stderr: {err}");
-    assert_eq!(
-        err, "",
-        "bare `qd` (agent/pipe) is the JSON surface: no trailer"
+
+    assert_eq!(code, 0, "bare `qd` exits 0: {err}");
+    assert!(
+        out.starts_with("Usage: qd [options] [command]"),
+        "bare `qd` is the help: {out}"
     );
-    // The default action reached the JSON surface — the over-cap view is the
-    // 20-row capped machine array (clean, parseable, trailer-free).
-    assert_eq!(
-        rows(&out).len(),
-        20,
-        "bare `qd` default action → capped JSON: {out}"
+    assert!(
+        out.contains("qd setup --fix"),
+        "…and the help says what `setup` does, which is the whole point of \
+         landing here on a fresh machine: {out}"
+    );
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&out).is_err(),
+        "bare `qd` must NOT emit the machine session surface, even piped: {out}"
     );
 }
 

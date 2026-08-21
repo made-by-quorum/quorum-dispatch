@@ -15,7 +15,9 @@
 //!   tail to ported `config::run_config_logic` / `survey::parse_survey_args` so
 //!   clap never reshapes their errors / exit conventions (survey parse error → 2,
 //!   config bare/--help → 0, unknown subcommand → 2).
-//! - **Default action:** bare `qd` (no verb) runs `ls` (index.ts:202-204).
+//! - **Default action:** bare `qd` (no verb) prints the top-level help. It ran
+//!   `ls` from the TS days through R24 (index.ts:202-204); see `verbs::dispatch`
+//!   for why that moved and what it cost.
 //!
 //! Real-deps wiring (kept from A2's pattern): `RealExec` / `ZmxMux` / `RealEnv` /
 //! `RealClock` / `QdPaths::from_home(HOME)` / `EventBootWaiter`.

@@ -70,20 +70,6 @@ fn emit_or_pipe_exit(payload: &str) {
     }
 }
 
-/// Default action: bare `qd` runs `ls` with no flags (index.ts:202-204). The
-/// render surface is the WP-B7 PIECE 1 auto-detect (agent/pipe ⇒ JSON, human/TTY
-/// ⇒ table) — a bare `qd | cat` from an agent now yields the machine surface.
-pub fn run_default() -> i32 {
-    run_inner(
-        false,
-        false,
-        resolve_emit_json(false, false),
-        false,
-        None,
-        None,
-    )
-}
-
 pub fn run(m: &ArgMatches) -> i32 {
     let all = m.get_flag("all");
     let live = m.get_flag("live");

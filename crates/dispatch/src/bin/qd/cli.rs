@@ -313,7 +313,7 @@ fn cmd_kill() -> Command {
 // of the old cmd_new, including the claudeArgs trailing-var-arg semantics.
 fn cmd_start() -> Command {
     Command::new("start")
-        .about("Create a new session (claude-code by default; also codex, pi, opencode)")
+        .about("Create a new session (claude-code, codex, pi, opencode)")
         .override_help(help::START)
         .arg(positional("name"))
         // claudeArgs...: variadic trailing positional. `trailing_var_arg(true)`
@@ -351,9 +351,27 @@ fn cmd_start() -> Command {
             "ordinal",
             "With --fork: rewind the fork to a past conversational-turn boundary (default: latest safe)",
         ))
+        // FTUE punch R19: `--attach` is REPLACED by `--no-attach`, because the
+        // default flipped. A human who runs `qd start wk` is looking at the
+        // session they just made and then had to type `qd attach wk` at it; start
+        // now hands the terminal over itself, so the flag worth having is the
+        // opt-OUT, not the opt-in.
+        //
+        // THE SPELLING IS NOT NEW. `attach` and `resume` both already register
+        // `--no-attach` for exactly this meaning — "do the work, do not take over
+        // my terminal" — so start joins a convention rather than inventing a third
+        // word for it. (`--attach` itself was the A5-deferred flag that only ever
+        // answered "not yet supported in the Rust engine", which is the other half
+        // of what R19 removes: an advertised inert flag, like `--port` above.)
+        //
+        // It is an OPT-OUT ONLY, never an opt-in: passing nothing does not force
+        // an attach either. The auto-detect decides (TTY + no agent markers +
+        // an attachable lane + no `-p`) and this flag can only veto it — see
+        // `crate::driver::attaches_after_start` for why an agent caller must
+        // never be handed a terminal it has no way to leave.
         .arg(long_flag(
-            "attach",
-            "Attach interactively instead of starting detached",
+            "no-attach",
+            "Start detached — do not attach after the session is created",
         ))
         .arg(long_val(
             "agent",
@@ -378,11 +396,38 @@ fn cmd_start() -> Command {
             "provider",
             "Provider: claude-code (default) or opencode",
         ))
-        .arg(long_val(
-            "port",
-            "port",
-            "Port for OpenCode server (default: auto-scan 4096-4106)",
-        ))
+        // FTUE punch R6: `--port` is GONE FROM THE HELP and STAYS IN THE PARSER,
+        // and the split is the whole point. Help advertised it with a real-sounding
+        // description ("Port for OpenCode server (default: auto-scan 4096-4106)")
+        // for a flag `verbs/lifecycle.rs` refuses unconditionally — an advertised
+        // inert flag, the same class of lie R1 removed with `resume --no-zmx`.
+        //
+        // R1 DELETED its flags; this one is kept, because the two are not the same
+        // shape. `--no-zmx` was read by NOTHING: it parsed, was silently ignored,
+        // and the session came up as if it had never been typed — so deleting it
+        // turned a silent lie into `error: unknown option`, which is strictly more
+        // information. `--port` is not ignored: it produces a loud, accurate,
+        // exit-1 refusal that NAMES the park ("not yet supported in the Rust
+        // engine (parked)"). Deleting the registration would replace that sentence
+        // with clap's `error: unknown option '--port'`, which tells a TS-era
+        // scripted caller strictly LESS. It is also a live park, not dead weight:
+        // `--provider opencode` was un-parked and this was deliberately left
+        // behind (the legacy opencode-ws port; the acp/opencode residence
+        // allocates its own loopback port), so the refusal names a real deferral.
+        //
+        // `hide(true)` is the honesty fix and the ONLY change: it suppresses the
+        // help row and nothing else — the C1 hidden-but-working property — so the
+        // parse-then-refuse path is byte-identical and only the advertisement is
+        // gone. The description says "parked" for the same reason: no rendering of
+        // this arg, anywhere, may describe it as a working feature again.
+        .arg(
+            long_val(
+                "port",
+                "port",
+                "(parked — refused by the verb; not supported by this engine)",
+            )
+            .hide(true),
+        )
         // `--via <name>` (spec §3.2): route the new session through the named
         // backends.json profile. A6 unhides it (was a hidden no-op) and gives it
         // help text — the flag is now LIVE (resolved in verbs/lifecycle.rs run_new).
@@ -1317,8 +1362,12 @@ mod tests {
 
     #[test]
     fn start_accepts_deferred_options_at_parse() {
-        // -p/--model/--attach/--provider/--port are PARSE-accepted (the honest
-        // deferral error is emitted by the backend AFTER parse, spec §3 row 5).
+        // -p/--model/--provider/--port are PARSE-accepted (the honest deferral
+        // error is emitted by the backend AFTER parse, spec §3 row 5).
+        //
+        // R19 removed `--attach` from this row: it was the OTHER parse-then-refuse
+        // flag here, and it no longer exists in either half (the default attaches,
+        // `--no-attach` opts out — see `start_no_attach_replaces_attach`).
         let m = parse(&[
             "start",
             "wk",
@@ -1326,7 +1375,6 @@ mod tests {
             "hello",
             "--model",
             "opus",
-            "--attach",
             "--provider",
             "opencode",
             "--port",
@@ -1343,7 +1391,69 @@ mod tests {
             sm.get_one::<String>("model").map(String::as_str),
             Some("opus")
         );
-        assert!(sm.get_flag("attach"));
+        assert_eq!(
+            sm.get_one::<String>("port").map(String::as_str),
+            Some("4096")
+        );
+    }
+
+    /// FTUE punch **R6**: `--port` is gone from the ADVERTISED surface and still
+    /// in the PARSER, and the two halves are asserted together because either one
+    /// alone is the bug. Help that lists it is the doc-drift R6 removes; a parser
+    /// that drops it replaces a refusal naming the park with `error: unknown
+    /// option`, which tells a TS-era scripted caller strictly less.
+    #[test]
+    fn start_port_is_hidden_but_still_parses() {
+        // Not advertised — not in the verbatim help the verb prints, and not in
+        // clap's own rendering either (the arg is `hide(true)`).
+        assert!(
+            !help::START.contains("--port"),
+            "R6: --port must not be advertised in `qd start --help`:\n{}",
+            help::START
+        );
+        let mut start_cmd = build_cli()
+            .find_subcommand("start")
+            .cloned()
+            .expect("start exists");
+        let rendered = start_cmd.render_long_help().to_string();
+        assert!(!rendered.contains("--port"), "hidden in clap help too:\n{rendered}");
+        // Still parses, so `verbs/lifecycle.rs` can print the parked refusal.
+        let m = parse(&["start", "wk", "--port", "4096"]).expect("--port still parses");
+        let (_, sm) = m.subcommand().unwrap();
+        assert_eq!(sm.get_one::<String>("port").map(String::as_str), Some("4096"));
+        // And nothing anywhere still describes it as a working feature.
+        assert!(
+            !rendered.contains("auto-scan"),
+            "the OpenCode-server description is gone:\n{rendered}"
+        );
+    }
+
+    /// FTUE punch **R19**: `--attach` is REPLACED, not merely defaulted. The old
+    /// flag was advertised and inert ("not yet supported in the Rust engine");
+    /// the opt-out that replaces it is spelled exactly as `attach` and `resume`
+    /// already spell theirs.
+    #[test]
+    fn start_no_attach_replaces_attach() {
+        assert!(parse(&["start", "wk", "--no-attach"]).is_ok());
+        // The opt-in is an honest unknown option now.
+        let e = parse(&["start", "wk", "--attach"]).unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::UnknownArgument);
+        // The help surface agrees with the parser.
+        assert!(help::START.contains("--no-attach"), "{}", help::START);
+        assert!(
+            !help::START.contains("  --attach"),
+            "the deferred opt-in is gone from help:\n{}",
+            help::START
+        );
+        // THE SPELLING IS SHARED — that is the point of choosing it. All three
+        // verbs that can decline to take over your terminal decline the same way.
+        for argv in [
+            vec!["attach", "wk", "--no-attach"],
+            vec!["resume", "wk", "--no-attach"],
+            vec!["start", "wk", "--no-attach"],
+        ] {
+            assert!(parse(&argv).is_ok(), "{argv:?}");
+        }
     }
 
     #[test]

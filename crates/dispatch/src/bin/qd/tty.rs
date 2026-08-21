@@ -1,4 +1,5 @@
-//! Tiny TTY helpers shared by the bin verbs (bootstrap's zmx + relay prompts).
+//! Tiny TTY helpers shared by the bin verbs (bootstrap's relay prompt, setup's
+//! apply prompt, and `qd start`'s harness question).
 //!
 //! These are bin-layer effects (interactivity detection + a visible `[y/N]`
 //! prompt). The pure deciders in [`dispatch::bootstrap`] never call these — they take
@@ -31,4 +32,27 @@ pub fn prompt_yes_no_default_no(question: &str) -> bool {
     }
     let ans = line.trim().to_ascii_lowercase();
     ans == "y" || ans == "yes"
+}
+
+/// Ask a question and read ONE line back, trimmed. `None` on EOF or a read
+/// error — which is the whole reason this returns an `Option` rather than a
+/// `String`: a caller must be able to tell "the human pressed Enter" (an empty
+/// `Some`, meaning *take the default*) apart from "there is nobody there" (a
+/// closed stdin), and both have to resolve without hanging.
+///
+/// Like [`prompt_yes_no_default_no`], callers guard on interactivity BEFORE
+/// calling — a non-TTY never reaches here. Added for FTUE punch R20 (`qd
+/// start`'s "which harness?" question), which needs a free-text answer rather
+/// than a `[y/N]`.
+pub fn prompt_line(question: &str) -> Option<String> {
+    print!("{question}");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let stdin = std::io::stdin();
+    match stdin.lock().read_line(&mut line) {
+        // read_line answers Ok(0) at EOF with nothing appended — a closed stdin,
+        // not an empty answer. Distinguishing them is the point of the Option.
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line.trim().to_string()),
+    }
 }

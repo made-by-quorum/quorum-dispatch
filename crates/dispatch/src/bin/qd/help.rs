@@ -187,9 +187,20 @@ Options:
 // P0 start-surface rework (STATE 21 ruling): `--resume` removed (redundant with
 // the resume verb); `--fork <session>` is now valued — a new participant forked
 // from an existing transcript. The model line below is the ruled wording.
+//
+// FTUE punch R6 / R19 / R20 — three edits to this string, one theme: it may no
+// longer describe anything it does not do.
+//   R6:  `--port` is GONE from this list. It was advertised here with a real
+//        description while the verb refused it unconditionally; the flag itself
+//        stays parse-accepted so the refusal survives (see `cli::cmd_start`).
+//   R19: `--attach` is replaced by `--no-attach`. The old flag was A5-deferred
+//        and only ever answered "not yet supported"; the default now attaches,
+//        so what a human needs is the opt-out.
+//   R20: the `--provider` entry says what an OMITTED provider does, which is no
+//        longer one thing — a terminal is asked, everything else defaults.
 pub const START: &str = r####"Usage: qd start [options] <name> [claudeArgs...]
 
-Create a new session (claude-code by default; also codex, pi, opencode)
+Create a new session (claude-code, codex, pi, opencode)
 
 start = new participant (fresh or forked) · resume = same participant wakes ·
 attach = enter live or cold session.
@@ -200,7 +211,12 @@ Options:
                          participant (session = name, id, or unique prefix)
   --turn <ordinal>       With --fork: rewind the fork to a past conversational-turn
                          boundary (default: latest safe)
-  --attach               Attach interactively instead of starting detached
+  --no-attach            Start detached — do not attach after the session is
+                         created. A start at a terminal hands you the session
+                         it just made (the same handoff `qd attach <name>`
+                         does); this opts out and returns instead. Agent and
+                         piped callers never attach in the first place, so the
+                         flag is for the human who wants the old behaviour
   --interactive          Force the interactive native-TUI launch (agent-marked
                          callers must pass it: QD_SESSION_ID in the caller's env
                          routes the auto-detect headless otherwise).
@@ -244,8 +260,14 @@ Options:
                          means idle, not relay-reachable)
   -p, --prompt <prompt>  Send an initial prompt after the session starts
   --model <model>        Set the model before sending the prompt
-  --provider <provider>  Provider: claude-code (default), codex, pi,
+  --provider <provider>  Provider: claude-code, codex, pi,
                          opencode (= acp/opencode), or acp/claude-code.
+                         OMITTED AT A TERMINAL, qd ASKS — the choice is offered
+                         from the harnesses `qd setup` found installed on this
+                         machine, and Enter takes the default. Omitted
+                         ANYWHERE ELSE (a pipe, a script, an agent session) it
+                         resolves to claude-code without asking: a prompt no
+                         one can answer is a hang, not a question.
                          Default lanes: claude-code runs its TUI in an
                          attachable pane; codex runs an app server you can also
                          open a terminal on (`qd attach`); pi runs its TUI in an
@@ -254,7 +276,6 @@ Options:
                          not `qd attach`). Use --interactive for a plain TUI
                          pane (codex, pi) or --daemon for the headless resident
                          (codex, pi)
-  --port <port>          Port for OpenCode server (default: auto-scan 4096-4106)
   --via <name>           Route through a backends.json profile (per-session backend)
   --alt-screen           Fullscreen (alt-screen) rendering for this session
                          (default: inline, so phone/SSH attach can scroll)
@@ -613,6 +634,24 @@ pub const SESSION_VERBS: [&str; 4] = ["ls", "start", "stop", "attach"];
 /// session verb, and grouping it with the four would say otherwise.
 pub const FIRST_RUN_VERBS: [&str; 1] = ["setup"];
 
+/// What `qd setup` does, printed under the First-run row in `qd --help`.
+///
+/// A verb table can say a verb exists; it cannot say whether running it is safe,
+/// and that is the only question a person has about a setup command on a machine
+/// they care about. So this says the two things that decide it: it writes
+/// NOTHING without `--fix`, and it is re-runnable. The rest is what it inspects,
+/// named concretely enough that a reader can tell whether their problem is in
+/// scope.
+///
+/// This carries weight it did not used to: bare `qd` prints this help now, so
+/// for anyone following the brew formula's "run `qd`" line, these three lines
+/// ARE the first-run instructions.
+const SETUP_NOTE: &str =
+    "  Report-only by default: `qd setup` names what is missing — the ~/.quorum layout,
+  the relay pin in ~/.claude.json, and which of claude/codex/pi/opencode it can
+  find — and changes nothing. Re-run it as `qd setup --fix` to apply what it
+  listed. Safe to re-run either way.";
+
 /// Section header for the hidden surface, printed only by `qd --help-all`.
 const HIDDEN_HEADING: &str = "Hidden from `qd --help` (agent-facing, machinery, compat — all still working):";
 
@@ -715,6 +754,14 @@ pub fn render_top(cmd: &clap::Command, include_hidden: bool) -> String {
     push_section(&mut out, "Options:", &options, width);
     for (heading, rows) in &sections {
         push_section(&mut out, heading, rows, width);
+        // The one section whose rows are not self-explanatory: `setup` is the
+        // verb a new reader is most likely to hesitate over, and bare `qd` lands
+        // them here (see `verbs::dispatch`).
+        if *heading == "First run:" {
+            out.push('\n');
+            out.push_str(SETUP_NOTE);
+            out.push('\n');
+        }
     }
     if !include_hidden {
         out.push('\n');

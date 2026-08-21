@@ -44,10 +44,45 @@ use super::super::tty;
 const PROBE_TIMEOUT_MS: u64 = 10_000;
 
 pub fn run(m: &ArgMatches) -> i32 {
-    let fix = m.get_flag("fix");
-    let json = m.get_flag("json");
-    let yes = m.get_flag("yes");
+    run_with(m.get_flag("fix"), m.get_flag("json"), m.get_flag("yes"))
+}
 
+fn run_with(fix: bool, json: bool, yes: bool) -> i32 {
+    let code = run_report(fix, json, yes);
+
+    // --- FTUE punch R23: a completed setup ENDS IN THE HELP -----------------
+    //
+    // Setup used to end by dropping the human back at a shell prompt having said
+    // nothing about what to type there. The natural next keystroke is a bare
+    // `qd`, which ran `ls` — so the first sentence a freshly set-up machine
+    // spoke was "No sessions found.", which is true, useless, and reads like a
+    // failure. Printing the four-verb table instead answers the question the
+    // human actually has. (Bare `qd` prints this same table now, which makes the
+    // two surfaces agree rather than making this one redundant: setup is also
+    // reached directly, and a run that ends in silence is the defect.)
+    //
+    // ONLY ON SUCCESS: a failing setup's last words must be its own — the check
+    // that is still red and the remedy under it — not a verb table pushing them
+    // up the scrollback. And never under `--json`, where stdout is a document.
+    if help_tail_follows(code, json) {
+        println!("\n[setup] Setup is complete. Here is the whole session surface:");
+        print!("{}", crate::help::render_top(&crate::cli::build_cli(), false));
+    }
+    code
+}
+
+/// R23's whole decision, as a value: does the verb table follow this run?
+///
+/// Two lines of `&&`, split out because both conditions are load-bearing and
+/// neither is obvious from the call site. It is also the shape a mutation
+/// notices — flipping either clause reds `help_tail_only_follows_a_clean_human_run`.
+fn help_tail_follows(exit_code: i32, json: bool) -> bool {
+    exit_code == 0 && !json
+}
+
+/// The report/fix pass itself — everything `qd setup` did before R23 bolted the
+/// help onto the end of a successful one.
+fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
     let env = RealEnv;
     let exec = RealExec;
 
@@ -110,6 +145,11 @@ pub fn run(m: &ArgMatches) -> i32 {
     print!("{}", report.render());
     report.exit_code()
 }
+
+
+// ---------------------------------------------------------------------------
+// Gather — every real-world probe, in one place.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Gather — every real-world probe, in one place.
@@ -248,11 +288,13 @@ fn version_of(exec: &impl Exec, program: &str) -> Option<String> {
     Some(out.stdout.trim().to_string()).filter(|s| !s.is_empty())
 }
 
-/// Probe one harness: presence, version where the probe is cheap, and whether
-/// qd's wiring for it is in place (C2's three questions).
-fn probe_harness(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec) -> HarnessFacts {
+/// Where ONE harness lives on this machine, or that it does not. The
+/// presence half of [`probe_harness`], split out because it is the only half
+/// [`present_harnesses`] needs — a version sniff costs a subprocess per harness
+/// and answers a question `qd start`'s provider prompt never asks.
+fn harness_presence(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec) -> Presence {
     let on_path = which(exec, id.program());
-    let presence = match (&on_path, id) {
+    match (&on_path, id) {
         (Some(p), _) => Presence::OnPath {
             path: Some(p.clone()),
         },
@@ -272,7 +314,40 @@ fn probe_harness(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec) -
             }
         }
         (None, _) => Presence::Missing,
-    };
+    }
+}
+
+/// FTUE punch **R20** — which harnesses this machine actually has, in report
+/// order, for `qd start`'s "which harness?" prompt.
+///
+/// # Why start asks setup and not the other way round
+///
+/// C4's complaint is that harness detection "reaches only as far as `qd setup`":
+/// the substrate exists, and nothing else consults it, so spawn time is where a
+/// drifted or absent harness bites. R20 is the first other consultation, and the
+/// point of routing it through this file is that there is exactly ONE probe. If
+/// `qd start` grew its own `command -v` sweep it would immediately be a second
+/// answer to "do you have pi", and the C5 off-PATH case — pi installed
+/// npm-global into a prefix that is not on PATH — is precisely the kind of thing
+/// a second answer gets wrong.
+///
+/// PRESENCE ONLY, deliberately. [`gather`] additionally runs `--version` on
+/// everything it finds, which is four subprocesses with a ten-second ceiling
+/// each; that is the right cost for a verb whose whole job is the report, and
+/// the wrong cost for a prompt standing between a human and their session.
+/// Nothing here can hang beyond [`PROBE_TIMEOUT_MS`] per `command -v`.
+pub fn present_harnesses(home: &Path, env: &impl Env, exec: &impl Exec) -> Vec<HarnessId> {
+    HarnessId::ALL
+        .iter()
+        .copied()
+        .filter(|id| harness_presence(*id, home, env, exec).found())
+        .collect()
+}
+
+/// Probe one harness: presence, version where the probe is cheap, and whether
+/// qd's wiring for it is in place (C2's three questions).
+fn probe_harness(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec) -> HarnessFacts {
+    let presence = harness_presence(id, home, env, exec);
 
     let mut f = HarnessFacts::new(id, presence);
     if !f.presence.found() {
@@ -454,4 +529,22 @@ fn write_rc_block(rc: &Path, bin_dir: &Path) -> Result<String, String> {
         "managed PATH block in {} — open a new shell (or `source` it) to pick it up",
         rc.display()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- R23: the help tail ------------------------------------------------
+
+    /// The verb table follows a CLEAN, HUMAN run and nothing else. A failing
+    /// setup keeps the last word (its red check and the remedy under it), and a
+    /// `--json` run's stdout stays a single parseable document.
+    #[test]
+    fn help_tail_only_follows_a_clean_human_run() {
+        assert!(help_tail_follows(0, false));
+        assert!(!help_tail_follows(1, false), "a failure keeps the last word");
+        assert!(!help_tail_follows(0, true), "--json stdout is a document");
+        assert!(!help_tail_follows(1, true));
+    }
 }

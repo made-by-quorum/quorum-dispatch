@@ -165,6 +165,30 @@ pub fn run(m: &ArgMatches) -> i32 {
         };
     }
 
+    attach_resolved(session, render)
+}
+
+/// The attach itself, from an ALREADY-RESOLVED row: the collision preflight, the
+/// codex viewer, the lane, and every message. Split out of [`run`] for exactly
+/// one second caller — `qd start`'s post-create handoff (FTUE punch R19).
+///
+/// # Why start calls this and not `run`
+///
+/// R19 makes `qd start <name>` end where `qd attach <name>` would have: the human
+/// is looking at the session they just made, so making them type the second
+/// command was the whole complaint. "Ends where attach would" has to mean the
+/// SAME code, or the two drift — start would get a hand-rolled `ops.attach(&id)`
+/// that quietly lacks the codex viewer, the cold-wake, the daemon redirect and
+/// the `NotFound` revive, and the first bug report would be that attaching by
+/// hand works and attaching from start does not.
+///
+/// What start does NOT reuse is everything ABOVE this line in [`run`]: `--no-attach`
+/// is start's own flag with its own meaning (do not attach at all, rather than
+/// revive-without-attaching), and the tombstone rejection is nonsense for a row
+/// that was created microseconds ago. The resolution start does for itself, so
+/// that a failure to find the session it just started is not fatal — see
+/// [`attach_after_create`].
+pub fn attach_resolved(session: &Session, render: RenderMode) -> i32 {
     // ADD-8 residual fix — live-id-collision PREFLIGHT over the RAW registry,
     // SHARED with resume (Pete feedback #6). The deduped join collapses two same-id
     // LIVE rows to one, so a bare `qd attach` would silently attach to the deduped
@@ -174,7 +198,8 @@ pub fn run(m: &ArgMatches) -> i32 {
     // attach proceeds; we do NOT use alive_pid_for_id, which would block the
     // legitimate single-live attach).
     //
-    // It runs FIRST, exactly where `attach_resolved` ran it: a collision is a
+    // It runs FIRST, exactly where the retired `attach_resolved` MECHANIC (the
+    // deleted lifecycle.rs helper, not this function) ran it: a collision is a
     // refusal to address the session at all, so it precedes every routing question.
     let env = dispatch::effects::RealEnv;
     let paths = match common::paths_from_home(&env) {
@@ -289,6 +314,38 @@ pub fn run(m: &ArgMatches) -> i32 {
             1
         }
     }
+}
+
+/// FTUE punch **R19** — the handoff `qd start` makes after a successful create.
+///
+/// Resolves the row by the name the create just used and runs the ordinary
+/// [`attach_resolved`] path, so a started session lands exactly where `qd attach
+/// <name>` would have landed it.
+///
+/// # Why a resolution failure is not a failure
+///
+/// The session EXISTS by the time this is called — the create returned a handle,
+/// the bind phase (on the claude lane) already proved the id is bound, and the
+/// verdict line is already on stdout. If the fuzzy resolver cannot find it
+/// anyway — a name that now collides, a registry read that lost a race — then
+/// the thing that failed is the CONVENIENCE, not the start. Reporting exit 1
+/// there would tell a caller the create failed when it did not, and would
+/// silently change the exit contract of a verb whose codes are ruled (§3.5). So
+/// the fallback is the pointer the user would otherwise have typed, and exit 0.
+///
+/// A resolution that SUCCEEDS hands its exit code straight through: from that
+/// point on this is an attach, and an attach that fails should say so.
+pub fn attach_after_create(name: &str, render: RenderMode) -> i32 {
+    // `resolve_session_uncapped` prints its own loud not-found/ambiguous line, so
+    // the caller is already told WHAT went wrong; this adds only what to do next.
+    let Ok(session) = common::resolve_session_uncapped(name) else {
+        eprintln!(
+            "qd start: \"{name}\" was created but could not be resolved to attach to. \
+             The session IS RUNNING — attach with \"qd attach {name}\"."
+        );
+        return 0;
+    };
+    attach_resolved(&session, render)
 }
 
 /// The cold path: revive, then hand over the terminal.

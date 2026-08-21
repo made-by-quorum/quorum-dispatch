@@ -5,14 +5,42 @@
 use crate::effects::Env;
 use std::path::Path;
 
-/// Built-in default claude flags (TS `CLAUDE_FLAGS`, utils.ts:186) — TS parity.
+/// Built-in default claude flags (TS `CLAUDE_FLAGS`, utils.ts:186).
 /// `--dangerously-load-development-channels` takes `server:relay` as its ARGUMENT
 /// (the value that loads `~/.claude/channels/`; verified 2026-06-04, spec §7).
-const DEFAULT_FLAGS: &[&str] = &[
-    "--dangerously-skip-permissions",
-    "--dangerously-load-development-channels",
-    "server:relay",
-];
+///
+/// ⚠ SAFE BY DEFAULT — R22 ruling (FTUE punch list, 2026-08-20). This vector used
+/// to lead with `--dangerously-skip-permissions`, in TS parity with
+/// `src/utils.ts:186`. That was the FLEET's posture — a rack of operator-owned
+/// worker sessions — baked in as the FIRST-RUN default, so a brand-new user who
+/// typed `qd start` got a claude with every approval prompt suppressed on their
+/// own machine, having agreed to nothing. Nothing about being launched by qd makes
+/// a session more trusted than one the user starts by hand, and `claude` itself
+/// makes that flag an explicit, typed-out choice. So does qd now.
+///
+/// DO NOT "restore parity" by putting the flag back — this is a deliberate,
+/// one-way divergence from the TS pin. The `test/golden/` corpus still records the
+/// TS vector; it is now evidence of what the OPT-IN path produces, not of what the
+/// default does (pinned both ways by the unit test
+/// `default_is_the_ts_vector_minus_the_bypass_flag` below).
+///
+/// The dev-channels PAIR stays: it is what loads `~/.claude/channels/` and makes
+/// `server:relay` — the whole point of a qd-launched session — reachable. It is
+/// "dangerously-" named for channel loading, not for permissions.
+///
+/// OPT IN through the surfaces that already exist ([`resolve_claude_flags`]) —
+/// they REPLACE this default rather than append to it, so spell the WHOLE vector:
+///
+/// ```text
+/// QD_CLAUDE_FLAGS="--dangerously-skip-permissions --dangerously-load-development-channels server:relay" qd start wk
+/// ```
+///
+/// or, once per machine, in the qd config toml:
+///
+/// ```text
+/// claude_flags = "--dangerously-skip-permissions --dangerously-load-development-channels server:relay"
+/// ```
+const DEFAULT_FLAGS: &[&str] = &["--dangerously-load-development-channels", "server:relay"];
 
 // --- Effort A / Reading B: the forbidden-claude-flag matcher --------------------
 //
@@ -148,6 +176,17 @@ pub fn claude_flags(env: &(impl Env + ?Sized), config_toml_path: &Path) -> Vec<S
 /// Resolve the base claude flags by precedence — BEFORE the CF forbidden-flag strip
 /// applied in [`claude_flags`]. Split out so the strip runs ONCE over every return
 /// path (env / config / default), not duplicated per branch.
+///
+/// REPLACE, never append — and that is load-bearing twice over. It is what lets an
+/// operator NARROW the vector (ADR 0006's stated purpose: a machine that must not
+/// load dev channels sets `QD_CLAUDE_FLAGS` to just the flags it wants), and since
+/// R22 it is also the carrier for the bypass OPT-IN: a caller who wants
+/// `--dangerously-skip-permissions` back names it here, alongside whatever else it
+/// wants, and gets exactly the vector it typed. R22 deliberately added NO new flag
+/// or env var for the bypass — a second surface would mean two ways to spell one
+/// posture and a merge rule between them, and the honest cost of turning approval
+/// prompts off should be typing out the flag that turns them off. See
+/// [`DEFAULT_FLAGS`] for the exact spellings.
 fn resolve_claude_flags(env: &(impl Env + ?Sized), config_toml_path: &Path) -> Vec<String> {
     // 1. env override.
     if let Some(raw) = env.var("QD_CLAUDE_FLAGS") {
@@ -631,6 +670,16 @@ mod tests {
         DEFAULT_FLAGS.iter().map(|s| s.to_string()).collect()
     }
 
+    /// The bypass OPT-IN spelling, exactly as a user types it into
+    /// `QD_CLAUDE_FLAGS` / `claude_flags` (R22). This is also the pre-R22 TS
+    /// vector, which is why the frozen `test/golden/` captures still match it.
+    const BYPASS_OPT_IN: &str =
+        "--dangerously-skip-permissions --dangerously-load-development-channels server:relay";
+
+    fn bypass_opt_in_flags() -> Vec<String> {
+        split_ws(BYPASS_OPT_IN)
+    }
+
     #[test]
     fn claude_bin_defaults_to_claude() {
         assert_eq!(claude_bin(&MapEnv::default()), "claude");
@@ -889,6 +938,68 @@ mod tests {
         );
     }
 
+    // --- R22: safe by default, bypass is opt-in ---------------------------------
+
+    /// THE ruling, asserted on the CONSTANT rather than on a resolved vector, so it
+    /// holds no matter which resolution path a caller took. A fresh machine with no
+    /// env and no config gets a claude that still ASKS. The dev-channels pair is
+    /// asserted present in the same breath — it is the half of the old vector that
+    /// must NOT be collateral damage (it is what makes `server:relay` load).
+    #[test]
+    fn default_flags_do_not_bypass_permissions_but_keep_dev_channels() {
+        assert!(
+            !DEFAULT_FLAGS.contains(&"--dangerously-skip-permissions"),
+            "R22: the built-in default must not suppress approval prompts on a \
+             user's machine — the bypass is opt-in. Read the DEFAULT_FLAGS doc \
+             comment before changing this: {DEFAULT_FLAGS:?}"
+        );
+        assert_eq!(
+            DEFAULT_FLAGS,
+            &["--dangerously-load-development-channels", "server:relay"],
+            "the dev-channels flag and its ARGUMENT are a pair and both stay"
+        );
+
+        // And end-to-end through the real resolver, on a machine with nothing set.
+        let flags = claude_flags(&MapEnv::default(), Path::new("/tmp/no-such-config.toml"));
+        assert!(!flags.iter().any(|f| f == "--dangerously-skip-permissions"));
+        assert!(flags.iter().any(|f| f == "server:relay"));
+    }
+
+    /// The OPT-IN still works, through BOTH pre-existing surfaces and with no new
+    /// flag or env var — the escape hatch R22 routed the bypass through. Note the
+    /// user spells the WHOLE vector: these surfaces REPLACE the default, so the
+    /// dev-channels pair has to be named too or it is genuinely gone (that is the
+    /// narrowing power ADR 0006 wanted, not a bug).
+    #[test]
+    fn bypass_is_opt_in_via_env_and_via_config_key() {
+        let nonexistent = Path::new("/tmp/does-not-exist-qd-config.toml");
+
+        // 1. QD_CLAUDE_FLAGS.
+        let e = env(&[("QD_CLAUDE_FLAGS", BYPASS_OPT_IN)]);
+        assert_eq!(claude_flags(&e, nonexistent), bypass_opt_in_flags());
+
+        // 2. `claude_flags` in the config toml (the per-machine spelling).
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, format!("claude_flags = \"{BYPASS_OPT_IN}\"\n")).unwrap();
+        assert_eq!(
+            claude_flags(&MapEnv::default(), &cfg),
+            bypass_opt_in_flags()
+        );
+
+        // The bypass flag is NOT in the forbidden set F — the CF strip must never
+        // eat it, or the opt-in would silently no-op (the failure mode a user
+        // would report as "I set the flag and it did nothing").
+        assert!(!is_forbidden_claude_flag("--dangerously-skip-permissions"));
+
+        // Opting in alongside a forbidden flag: the bypass survives, F still dies.
+        let e = env(&[("QD_CLAUDE_FLAGS", "--dangerously-skip-permissions --print")]);
+        assert_eq!(
+            claude_flags(&e, nonexistent),
+            vec!["--dangerously-skip-permissions"]
+        );
+    }
+
     #[test]
     fn build_new_extra_args_name_first_then_opts_then_passthrough() {
         let flags = default_flags();
@@ -922,8 +1033,11 @@ mod tests {
 
     #[test]
     fn build_new_extra_args_dedupes_against_flags() {
-        let flags = default_flags();
-        // A pass-through that's already in flags is skipped (no double-pass).
+        // R22: the dedupe is against the RESOLVED flag vector, so exercise it with
+        // an OPT-IN vector — `--dangerously-skip-permissions` is no longer in the
+        // default, and a pass-through only double-passes if the resolved flags
+        // actually carry it.
+        let flags = bypass_opt_in_flags();
         let extra = build_new_extra_args(
             "n",
             &NewOpts::default(),
@@ -934,6 +1048,21 @@ mod tests {
             &flags,
         );
         assert_eq!(extra, vec!["--name", "n", "--extra"]);
+        // Mirror: with the SAFE default vector the same pass-through is NOT a
+        // duplicate, so it rides through to argv (the user asked for it by hand).
+        let extra = build_new_extra_args(
+            "n",
+            &NewOpts::default(),
+            &[
+                "--dangerously-skip-permissions".to_string(),
+                "--extra".to_string(),
+            ],
+            &default_flags(),
+        );
+        assert_eq!(
+            extra,
+            vec!["--name", "n", "--dangerously-skip-permissions", "--extra"]
+        );
     }
 
     // Pete feedback #6 (duplicate session ids) regression pin. qd does NOT mint its
@@ -1033,23 +1162,44 @@ mod tests {
         );
         assert_eq!(
             cmd,
-            "command 'claude' '--dangerously-skip-permissions' \
-             '--dangerously-load-development-channels' 'server:relay' '--name' 'x'"
+            "command 'claude' '--dangerously-load-development-channels' \
+             'server:relay' '--name' 'x'"
         );
     }
 
-    /// PARITY: byte-compare the assembled command against the frozen 0b golden
-    /// capture (test/golden/dryrun/captures/build_claude_cmd/capture.normalized).
-    /// The golden uses `<NAME>` as the session-name placeholder; replicate the
-    /// same inputs (default bin/flags, extra = `["--name", "<NAME>"]`).
+    /// PARITY, re-aimed by R22. `GOLDEN` is the frozen 0b capture byte-for-byte
+    /// (test/golden/dryrun/captures/build_claude_cmd/capture.normalized) — the TS
+    /// pin's argv, `<NAME>` and all. It no longer describes the DEFAULT, because
+    /// the default no longer carries the bypass flag; it describes the OPT-IN.
+    ///
+    /// So this test now proves BOTH halves of the R22 ruling against the one
+    /// frozen artifact: the quoting/order machinery is byte-unchanged (feed it the
+    /// opt-in vector and the old golden reappears exactly), and the default is that
+    /// same vector minus exactly one token. A regression that puts the flag back in
+    /// `DEFAULT_FLAGS` reds the second half; a regression in the quoting rule or
+    /// flag ORDER reds the first. Deleting the golden to "fix" either one throws
+    /// away the only byte-level record of the assembly contract.
     #[test]
-    fn build_claude_cmd_byte_matches_golden_capture() {
+    fn default_is_the_ts_vector_minus_the_bypass_flag() {
         const GOLDEN: &str = "command 'claude' '--dangerously-skip-permissions' '--dangerously-load-development-channels' 'server:relay' '--name' '<NAME>'";
-        let env = MapEnv::default();
-        let bin = claude_bin(&env);
-        let flags = claude_flags(&env, Path::new("/tmp/no-such-config.toml"));
-        let extra = build_new_extra_args("<NAME>", &NewOpts::default(), &[], &flags);
-        assert_eq!(build_claude_cmd(&bin, &flags, &extra), GOLDEN);
+        let cmd = |env: &MapEnv| {
+            let bin = claude_bin(env);
+            let flags = claude_flags(env, Path::new("/tmp/no-such-config.toml"));
+            let extra = build_new_extra_args("<NAME>", &NewOpts::default(), &[], &flags);
+            build_claude_cmd(&bin, &flags, &extra)
+        };
+
+        // OPT-IN: the user types the whole vector → the frozen golden, byte-exact.
+        assert_eq!(cmd(&env(&[("QD_CLAUDE_FLAGS", BYPASS_OPT_IN)])), GOLDEN);
+
+        // DEFAULT: the same string with the bypass token (and its quotes and the
+        // one separating space) removed — nothing else moved.
+        let expected_default = GOLDEN.replace("'--dangerously-skip-permissions' ", "");
+        assert_eq!(cmd(&MapEnv::default()), expected_default);
+        assert!(
+            !expected_default.contains("dangerously-skip-permissions"),
+            "sanity: the removal actually removed it"
+        );
     }
 
     // --- F1 session-env mechanism (utils.ts:514-707) ---

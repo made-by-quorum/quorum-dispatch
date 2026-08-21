@@ -80,6 +80,30 @@ impl Jail {
             .expect("spawn qd setup")
     }
 
+    /// [`run`](Self::run) with NO arguments — the default action.
+    ///
+    /// Separate from `run` only so the bare-`qd` tests below read as what they
+    /// are, and so `QD_TEST_NO_BARE_PROCS` can keep a real claude or codex on
+    /// the developer's own machine from ever reaching a session gather. Nothing
+    /// on this path performs one today — bare `qd` is pure text — but the guard
+    /// costs nothing and these assertions must not become host-dependent if that
+    /// changes.
+    fn run_bare(&self) -> Output {
+        Command::new(qd_bin())
+            .env("HOME", self.home())
+            .env("QD_HOME", self.home().join(".quorum/dispatch"))
+            .env("PATH", self.fakebin())
+            .env("SHELL", "/bin/zsh")
+            .env("QRM_RELAY_DISABLE_SCAN", "1")
+            .env("QD_TEST_NO_BARE_PROCS", "1")
+            .env_remove("QD_PI_BIN")
+            .env_remove("NPM_CONFIG_PREFIX")
+            .env_remove("ZDOTDIR")
+            .stdin(Stdio::null())
+            .output()
+            .expect("spawn bare qd")
+    }
+
     fn read(&self, rel: &str) -> Option<String> {
         std::fs::read_to_string(self.home().join(rel)).ok()
     }
@@ -468,4 +492,90 @@ fn the_qc_plugin_is_only_ever_reported() {
     .unwrap();
     let v: serde_json::Value = serde_json::from_str(&stdout(&j.run(&["setup", "--json"]))).unwrap();
     assert_eq!(v["qc_plugin_registered"], serde_json::json!(true));
+}
+
+// ---------------------------------------------------------------------------
+// Bare `qd` — the default action.
+//
+// It prints the help, on every machine, set up or not. It ran `ls` historically,
+// and briefly (R24) redirected into `qd setup` when the machine looked fresh —
+// which meant bare `qd` did two different things depending on state the person
+// could not see, and helped only someone whose machine was pristine. The brew
+// formula points a new installer at bare `qd`, so what it prints has to be the
+// same thing every time, and has to name `setup`.
+// ---------------------------------------------------------------------------
+
+/// A fresh HOME gets the help — not `ls`, and not an auto-run of setup.
+#[test]
+fn bare_qd_on_a_fresh_machine_prints_the_help() {
+    let j = Jail::new();
+    let out = j.run_bare();
+    let so = stdout(&out);
+
+    assert!(
+        so.starts_with("Usage: qd [options] [command]"),
+        "bare `qd` is the help: {so}"
+    );
+    assert!(
+        !so.contains("[setup]"),
+        "it must not RUN setup — arriving here is still install time, and C19 \
+         ruled that writes need consent: {so}"
+    );
+    assert!(
+        !so.contains("No sessions found"),
+        "…and it is not the old `ls` default either: {so}"
+    );
+}
+
+/// The help names `setup` and says what running it will do — the two facts that
+/// decide whether a person is willing to run it on a machine they care about:
+/// it writes nothing without `--fix`, and it is safe to re-run.
+#[test]
+fn the_help_says_what_setup_will_do() {
+    let j = Jail::new();
+    let so = stdout(&j.run_bare());
+
+    assert!(so.contains("setup"), "the verb is listed: {so}");
+    assert!(
+        so.contains("Report-only by default"),
+        "the help states the posture: {so}"
+    );
+    assert!(
+        so.contains("qd setup --fix"),
+        "…and names the form that actually applies the fixes: {so}"
+    );
+    assert!(
+        so.contains("Safe to re-run"),
+        "…and that re-running is safe: {so}"
+    );
+}
+
+/// A machine WITH sessions gets the same help. The default no longer varies with
+/// anything — no `~/.quorum` probe, no session count, nothing a person cannot
+/// see from the command they typed.
+#[test]
+fn bare_qd_is_the_help_on_a_machine_with_sessions_too() {
+    let j = Jail::new();
+    let uuid = "c01d0001-aaaa-4aaa-8aaa-000000000001";
+    let proj = j.home().join(".claude").join("projects").join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(
+        proj.join(format!("{uuid}.jsonl")),
+        format!(
+            "{{\"type\":\"agent-name\",\"agentName\":\"keepme\"}}\n\
+             {{\"type\":\"user\",\"message\":{{\"content\":\"hello\"}},\
+             \"cwd\":\"/w\",\"sessionId\":\"{uuid}\"}}\n"
+        ),
+    )
+    .unwrap();
+
+    let so = stdout(&j.run_bare());
+    assert!(
+        so.starts_with("Usage: qd [options] [command]"),
+        "same help, sessions or not: {so}"
+    );
+    assert!(
+        !so.contains("keepme"),
+        "bare `qd` does not list sessions any more — `qd ls` does: {so}"
+    );
 }

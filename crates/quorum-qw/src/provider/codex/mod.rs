@@ -104,12 +104,18 @@ const CODEX_BIN_ENV: &str = "QD_CODEX_BIN";
 /// The `sessions/` subdir of `$CODEX_HOME` — the rollout tree root.
 const SESSIONS_SUBDIR: &str = "sessions";
 
-// NOTE (W4): the qd-launched full-bypass thread/start posture (approval policy
-// `never` + sandbox `danger-full-access`, the claude `--dangerously-…` parity
-// defaults, codex-p2-spec section 3.3) is a CREATE-PATH concern — it is passed to
+// NOTE (W4): the qd-launched thread/start approval posture (codex-p2-spec
+// section 3.3) is a CREATE-PATH concern — it is passed to
 // `AppServerRpc::thread_start(cwd, approval_policy, sandbox)` by the W4 create
 // sequence, NOT by this W3 launch_plan (which only builds the daemon argv). The
 // constants live with that caller, not here.
+//
+// R22 (2026-08-20): that posture is now SAFE BY DEFAULT (`on-request` +
+// `workspace-write`), following claude's `DEFAULT_FLAGS` off
+// `--dangerously-skip-permissions`. The old full-bypass pair (`never` +
+// `danger-full-access`) is opt-in behind `QD_CODEX_DANGER_FULL_ACCESS=1`. The
+// rationale — and the warning not to "restore parity" by reverting it — lives at
+// the constants in `app_server/create.rs`.
 
 /// The codex binary to launch: the `QD_CODEX_BIN` override, else `"codex"` off
 /// PATH. Shared so the launch plan and the human viewer

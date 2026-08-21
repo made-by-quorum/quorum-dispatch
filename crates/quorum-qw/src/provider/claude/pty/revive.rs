@@ -34,6 +34,24 @@
 //! [`plan_claude_revive`] is NOT idempotent — it writes the per-session env file —
 //! so [`run_claude_revive`] takes the plan as an input rather than re-deriving it.
 //!
+//! ── AND WHY THE PLAN HAS A SECOND SHAPE (punch R21) ─────────────────────────
+//! Not every `qd attach` on a claude row wants a relaunch. A session that was
+//! started and never messaged has a RUNNING pane and no provider session id at
+//! all — claude mints one when it writes its first transcript record, and there
+//! is no first record. The join can only surface that as a `ZmxOnly` row
+//! (`session_id: ""`), and this module used to answer it with
+//! [`ReviveClaudeError::NoSessionId`] — a dead end on a session that is sitting
+//! right there, idle, waiting to be typed at.
+//!
+//! So [`plan_claude_revive`] can now settle on
+//! [`ClaudeRevivePlan::SeedLivePane`] instead: send the pane an opening message
+//! (which is what mints the id) and hand back ITS coordinates. Same two phases,
+//! same [`ReviveHandle`], same `mux.attach` on the other side — the caller does
+//! not learn which shape it got, because its next move does not change.
+//! [`crate::onboarding::HOW_TO_REACH_PEERS`] is the message, shared with the
+//! relay MCP instructions so a session hears one story about talking to peers no
+//! matter which door it came in by.
+//!
 //! ── THE VERB-PREFIX BUG THIS MOVE FIXES ─────────────────────────────────────
 //! The pre-split `revive_claude` hard-coded `qd attach:` on every one of its own
 //! error lines and `qd resume:` on every line its shared helpers emitted — from
@@ -83,6 +101,14 @@ use crate::resume::{
 pub enum ReviveClaudeError {
     /// The row carries no provider session id — there is nothing to resume
     /// against. NOT verb-attributed (it never was).
+    ///
+    /// NARROWED BY PUNCH R21. This used to answer every id-less row; it now
+    /// answers only the ones with no live pane either. A row whose pane is still
+    /// running is missing its id because nothing has been said to that session
+    /// yet, and refusing it was refusing the one case a first message would fix —
+    /// see [`ClaudeRevivePlan::SeedLivePane`] and [`live_pane_to_seed`]. The
+    /// WORDING is unchanged: for a row with no pane, "Cannot resume: no session
+    /// ID found." is still exactly what happened.
     NoSessionId,
     /// F3 cwd reality-check: the recorded project dir (or an explicit override)
     /// does not exist. Carries the actionable message
@@ -238,17 +264,58 @@ pub struct ClaudeReviveParams<'a> {
     pub fresh: bool,
 }
 
-/// What [`plan_claude_revive`] settled — the launch, fully assembled. Hand it
-/// straight to [`run_claude_revive`]; see the module docs on why it must not be
-/// re-derived.
+/// What [`plan_claude_revive`] settled. Hand it straight to
+/// [`run_claude_revive`]; see the module docs on why it must not be re-derived.
+///
+/// TWO SHAPES because there are two ways a `qd attach` on a claude row can end
+/// with the user in a live pane, and they are not variants of one launch. See
+/// [`ClaudeRevivePlan::SeedLivePane`] for the second one (punch R21).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ClaudeRevivePlan {
-    /// The derived, S2-validated zmx session name.
-    pub zmx_name: String,
-    /// The complete `<env prefix>command 'claude' …` shell command.
-    pub claude_cmd: String,
-    /// The reality-checked working dir the pane is launched in.
-    pub cwd: PathBuf,
+pub enum ClaudeRevivePlan {
+    /// The ordinary revive: the row is genuinely cold, so relaunch `claude` into
+    /// a fresh detached pane and wait for boot.
+    Relaunch {
+        /// The derived, S2-validated zmx session name.
+        zmx_name: String,
+        /// The complete `<env prefix>command 'claude' …` shell command.
+        claude_cmd: String,
+        /// The reality-checked working dir the pane is launched in.
+        cwd: PathBuf,
+    },
+    /// PUNCH R21 — the row has NO provider session id but DOES have a live pane,
+    /// so there is nothing to relaunch and nothing to resume: seed the pane that
+    /// is already running and hand its coordinates back.
+    ///
+    /// This is the never-messaged claude session. Its pane is up, but claude has
+    /// written no transcript and no registry row, so the join can only build it
+    /// as a `ZmxOnly` row — `session_id: ""`, `status: Cold` (the port's honest
+    /// literal, not a claim the process is gone). Revive used to refuse it with
+    /// [`ReviveClaudeError::NoSessionId`], which was a true statement about the
+    /// row and a dead end for the user: the id it wanted does not exist YET, and
+    /// the only thing that mints it is a first turn.
+    ///
+    /// So: type the first turn. [`crate::onboarding::HOW_TO_REACH_PEERS`] is what
+    /// gets typed — the same wording punch R9 put in the relay MCP instructions —
+    /// which makes one send do both jobs, minting the id AND telling the agent
+    /// how to reach its peers. Then attach to the pane that was there all along.
+    ///
+    /// RELAUNCHING WOULD NOT WORK, and that is worth recording rather than
+    /// rediscovering: [`crate::resume::clear_stale_panes`] refuses to kill a pane
+    /// whose process is ALIVE, so the relaunch arm cannot even reach its launch
+    /// on this row — it would trade `Cannot resume: no session ID found.` for
+    /// `a RUNNING pane named "…" holds this name`. The pane is not in the way of
+    /// the fix; the pane IS the fix.
+    SeedLivePane {
+        /// The live pane's name, taken from the row rather than derived — a
+        /// ZmxOnly row's name IS its pane's name, and deriving one from an empty
+        /// session id would address a pane that does not exist.
+        zmx_name: String,
+        /// The socket dir the pane was actually FOUND in (Bug D /
+        /// cs-owns-session-identity: per-session ops MUST target this dir, never
+        /// a re-resolved `ZMX_DIR`). `None` when the row carries none, which the
+        /// launch phase reads as "use the caller's canonical dir".
+        socket_dir: Option<PathBuf>,
+    },
 }
 
 /// WP-B5-ii-b (PROOF 1) — the resume argv fragment a cold-row revive passes to
@@ -329,6 +396,49 @@ pub fn prepare_claude_resume_env(
     Ok(format!("{env_prefix}{base_claude_cmd}"))
 }
 
+/// PUNCH R21 — the pure half of the never-messaged decision: does this row carry
+/// a pane that is ALREADY RUNNING, so that the missing provider session id is a
+/// "not yet" rather than a "never"?
+///
+/// `Some` ⇒ [`ClaudeRevivePlan::SeedLivePane`]; `None` ⇒ there is genuinely
+/// nothing to talk to and [`ReviveClaudeError::NoSessionId`] is still the honest
+/// answer. Two facts, both from the row, both required:
+///
+/// - a **pane name**. A ZmxOnly row's `name` and `zmx_name` are its pane's name;
+///   a row with neither is a transcript or registry artifact with no pane behind
+///   it.
+/// - a **live pid**. `is_pid_alive` is the same proof
+///   [`crate::resume::clear_stale_panes`] demands before it will touch a pane,
+///   and for the same reason: the row's `Cold` status is a port literal, not
+///   evidence, so the process is asked directly. A dead or absent pid means the
+///   pane is gone — seeding it would type into nothing and report success.
+///
+/// FACTORED PURE (no mux, no fs, no clock) so the decision is unit-testable on
+/// the default floor, the same shape [`revive_resume_args`] takes for its own
+/// wiring proof.
+///
+/// FIX-SHAPED MUTATION: drop the `is_pid_alive` conjunct → a cold ZmxOnly ghost
+/// (a row whose pane died) plans a seed instead of refusing → the
+/// `dead_pane_is_still_no_session_id` unit reds.
+pub fn live_pane_to_seed(session: &Session) -> Option<ClaudeRevivePlan> {
+    let zmx_name = session
+        .zmx_name
+        .as_deref()
+        .or(session.name.as_deref())
+        .filter(|n| !n.is_empty())?;
+    // `> 0`, not `!= 0`: `is_pid_alive` bottoms out in `kill(pid, 0)`, where 0
+    // means "this process group" and a negative pid means "that process group" —
+    // both would answer ALIVE for a row that records no usable pid at all.
+    let pid = session.pid.filter(|p| *p > 0)?;
+    if !crate::effects::is_pid_alive(pid as i32) {
+        return None;
+    }
+    Some(ClaudeRevivePlan::SeedLivePane {
+        zmx_name: zmx_name.to_string(),
+        socket_dir: session.socket_dir.as_deref().map(PathBuf::from),
+    })
+}
+
 /// Phase 1 — resolve the cwd, assemble the claude argv through the provider seam,
 /// derive + validate the zmx name, run the D4 guard, mint the identity and write
 /// the env file. Touches no mux; creates nothing but the env file. See the module
@@ -339,8 +449,15 @@ pub fn plan_claude_revive(
 ) -> Result<ClaudeRevivePlan, ReviveClaudeError> {
     let session = params.session;
 
+    // PUNCH R21: no provider session id is TWO different situations, and the old
+    // single refusal answered both with the harsher one. A row whose pane is
+    // still running has no id because nothing has been said to it yet — so say
+    // something (see [`ClaudeRevivePlan::SeedLivePane`]). A row with no live pane
+    // has no id and nothing to mint one: that one is still a dead end, and this
+    // is the FIRST thing checked so it stays the same dead end it always was —
+    // before the cwd probe, before the argv build, before the env file.
     if session.session_id.is_empty() {
-        return Err(ReviveClaudeError::NoSessionId);
+        return live_pane_to_seed(session).ok_or(ReviveClaudeError::NoSessionId);
     }
 
     // F3: cwd reality-check BEFORE any spawn (lifecycle.ts:451-462).
@@ -404,7 +521,7 @@ pub fn plan_claude_revive(
         &base_claude_cmd,
     )?;
 
-    Ok(ClaudeRevivePlan {
+    Ok(ClaudeRevivePlan::Relaunch {
         zmx_name,
         claude_cmd,
         cwd: PathBuf::from(&cwd),
@@ -469,30 +586,117 @@ pub fn run_detached_revive(
 /// Phase 2 — clear any stale same-name pane, then run the detached launch + the
 /// ready-wait. On success returns the [`ReviveHandle`] so the caller can attach
 /// the live pane with a plain `mux.attach`.
+///
+/// On a [`ClaudeRevivePlan::SeedLivePane`] plan (punch R21) NONE of that runs:
+/// there is a live pane already, so the work is the opening send and the handle
+/// points at the pane that was there. Both arms answer the same
+/// [`ReviveHandle`] because the caller's next move is the same either way —
+/// `mux.attach` on the coordinates it gets back.
 pub fn run_claude_revive(
     deps: &ClaudeLaunchDeps<'_>,
     clock: &dyn Clock,
     plan: &ClaudeRevivePlan,
 ) -> Result<ReviveHandle, ReviveClaudeError> {
+    let (zmx_name, claude_cmd, cwd) = match plan {
+        ClaudeRevivePlan::Relaunch {
+            zmx_name,
+            claude_cmd,
+            cwd,
+        } => (zmx_name, claude_cmd, cwd),
+        // PUNCH R21. The pane is up; give it its first turn and hand it over.
+        ClaudeRevivePlan::SeedLivePane {
+            zmx_name,
+            socket_dir,
+        } => {
+            // Bug D: the dir the pane was FOUND in wins over the caller's
+            // canonical one, which may be a different socket root entirely.
+            let dir = socket_dir
+                .clone()
+                .unwrap_or_else(|| deps.canonical_dir.clone());
+            seed_live_pane(deps.mux, clock, &dir, zmx_name, deps.paths);
+            return Ok(ReviveHandle {
+                socket_dir: dir,
+                zmx_name: zmx_name.clone(),
+            });
+        }
+    };
+
     // r6 F1: the SAFE stale-pane clear.
-    clear_stale_panes(deps.mux, &deps.scan_dirs, &plan.zmx_name)
-        .map_err(ReviveClaudeError::StalePane)?;
+    clear_stale_panes(deps.mux, &deps.scan_dirs, zmx_name).map_err(ReviveClaudeError::StalePane)?;
 
     // Detached revive + ready-wait via the SHARED seam.
     run_detached_revive(
         deps.mux,
         &deps.canonical_dir,
-        &plan.zmx_name,
-        &plan.claude_cmd,
-        &plan.cwd,
+        zmx_name,
+        claude_cmd,
+        cwd,
         deps.paths,
         clock,
     )?;
 
     Ok(ReviveHandle {
         socket_dir: deps.canonical_dir.clone(),
-        zmx_name: plan.zmx_name.clone(),
+        zmx_name: zmx_name.clone(),
     })
+}
+
+/// PUNCH R21 — type [`crate::onboarding::HOW_TO_REACH_PEERS`] into a live but
+/// never-messaged claude pane, so the turn that onboards the agent is also the
+/// turn that mints the provider session id the row was missing.
+///
+/// ── THE SEND IS BORROWED, NOT INVENTED ──────────────────────────────────────
+/// [`crate::submit::deliver_prompt`] over [`crate::submit::RealDeliverDeps`] is
+/// the SAME seam `qd start -p` primes a freshly-booted pane through
+/// (`delivery::priming`), and it is the right one for exactly the reason that
+/// path exists: it is addressed by NAME, not by id — "at `-p` time the provider
+/// uuid may not have been written yet", which is this row's whole condition. It
+/// owns the ADR-0009 two-write shape (chunked text, settle, a SEPARATE `\r`),
+/// the content-verified remediation CR, and the bounded went-busy retry, none of
+/// which should be re-derived here.
+///
+/// The five carriers in [`crate::delivery`] were the other candidates and every
+/// one of them refuses this row before it writes a byte: `send_mux_pty` refuses
+/// `status == Cold`, and a ZmxOnly row is Cold by the port's literal even while
+/// its process runs.
+///
+/// ── WHY NO OUTCOME HERE IS AN ERROR ─────────────────────────────────────────
+/// `deliver_prompt` sends FIRST and only then looks for the pid file, so the
+/// message — and therefore the id mint — has already happened by the time any of
+/// its three outcomes exists. What the outcomes describe is SUBMIT ACCEPTANCE:
+/// `PidFileMissing` means no registry row appeared within the poll (the normal
+/// reading for a session whose row is being written for the first time by the
+/// turn we just started), `Stalled` means acceptance was never observed. Neither
+/// is a reason to withhold the terminal the user asked for — they are about to
+/// LOOK at this pane, which is a better report than anything this function could
+/// return, and this module prints nothing by contract. So the send is made and
+/// the handle is returned; the failure this arm can actually have — the mux
+/// refusing the write — surfaces where every mux failure does, as an attach that
+/// lands on a pane that did not move.
+fn seed_live_pane(
+    mux: &dyn Mux,
+    clock: &dyn Clock,
+    socket_dir: &Path,
+    zmx_name: &str,
+    paths: &QdPaths,
+) {
+    let sleeper = RealSleeper;
+    let deliver = crate::submit::RealDeliverDeps {
+        mux,
+        clock,
+        sleeper: &sleeper,
+        zmx_name: zmx_name.to_string(),
+        // A ZmxOnly row's registry key, if one ever appears, is keyed on the same
+        // name the pane carries — there is no other name to look it up by.
+        session_name: zmx_name.to_string(),
+        sessions_dir: paths.sessions_dir.clone(),
+        dir: socket_dir.to_path_buf(),
+    };
+    let _ = crate::submit::deliver_prompt(
+        &deliver,
+        crate::onboarding::HOW_TO_REACH_PEERS,
+        crate::submit::DELIVER_TIMEOUT_S,
+    );
 }
 
 #[cfg(test)]
@@ -811,5 +1015,124 @@ mod tests {
             "qd attach: name \"wk\" is held by running session ab3kx9mq; \
              rename or stop it first"
         );
+    }
+
+    // ── punch R21: a never-messaged pane is seeded, not refused ──────────────
+    //
+    // The decision under test is [`live_pane_to_seed`], which is where the
+    // "no session id" fork now happens. It is pure over the row, so these run on
+    // the default floor with no mux, no fs and no clock — the same shape the
+    // recorded-id proof above takes.
+
+    /// The row shape the join builds for a claude session that was STARTED and
+    /// never messaged: a live mux pane, and nothing else. No transcript (claude
+    /// writes one on its first turn), so no session id and no registry match —
+    /// `join.rs`'s ZmxOnly branch, verbatim: `session_id: ""`, `user_named: None`,
+    /// `status: Cold` even though the pid is alive.
+    fn zmx_only_row(pid: i64) -> Session {
+        Session {
+            name: Some("wk".to_string()),
+            user_named: None,
+            session_id: String::new(),
+            code: None,
+            qd_id: None,
+            pid: Some(pid),
+            status: SessionStatus::Cold,
+            zmx_name: Some("wk".to_string()),
+            zmx_clients: Some(0),
+            socket_dir: Some("/tmp/zmx-501".to_string()),
+            relay_port: None,
+            turns: 0,
+            tokens: 0,
+            cwd: Some("/tmp".to_string()),
+            last_active_ms: None,
+            version: None,
+            started_at_ms: None,
+            git_branch: None,
+            jsonl_path: None,
+            last_turns: None,
+            provider: "claude-code".to_string(),
+            entrypoint: None,
+            lineage: None,
+            hosting: None,
+            which_branch: SessionBranch::ZmxOnly,
+        }
+    }
+
+    /// R21, the fix: a row with no provider session id but a LIVE pane plans a
+    /// seed — addressed at the pane's own name, in the socket dir the pane was
+    /// FOUND in (Bug D), not at a name derived from the empty id.
+    #[test]
+    fn never_messaged_live_pane_plans_a_seed() {
+        // The test process is the one pid this suite can prove alive.
+        let me = std::process::id() as i64;
+        match live_pane_to_seed(&zmx_only_row(me)) {
+            Some(ClaudeRevivePlan::SeedLivePane {
+                zmx_name,
+                socket_dir,
+            }) => {
+                assert_eq!(zmx_name, "wk", "the pane is addressed by ITS name");
+                assert_eq!(
+                    socket_dir,
+                    Some(PathBuf::from("/tmp/zmx-501")),
+                    "per-session ops target the dir the pane was found in (Bug D)"
+                );
+            }
+            other => panic!("a live never-messaged pane must plan a seed, got {other:?}"),
+        }
+    }
+
+    /// R21's other half, and the one that keeps the refusal honest: the pane is
+    /// GONE. `Cannot resume: no session ID found.` is still the right answer —
+    /// there is no id, and no process to type at that would mint one.
+    ///
+    /// FIX-SHAPED MUTATION (red-before): drop the `is_pid_alive` conjunct from
+    /// `live_pane_to_seed` → this row plans a seed into a dead pane → red.
+    #[test]
+    fn dead_pane_is_still_no_session_id() {
+        // Far above any pid this host will allocate; kill(pid, 0) answers ESRCH.
+        assert!(
+            live_pane_to_seed(&zmx_only_row(2_147_483_646)).is_none(),
+            "a dead pane cannot be seeded — the refusal stands"
+        );
+    }
+
+    /// A cold registry row with no id and no pane at all (the pre-R21 shape this
+    /// refusal was written for) is untouched by the narrowing.
+    #[test]
+    fn row_with_no_pane_is_still_no_session_id() {
+        let mut row = zmx_only_row(1);
+        row.pid = None;
+        row.zmx_name = None;
+        row.name = None;
+        assert!(
+            live_pane_to_seed(&row).is_none(),
+            "no pane, no pid, no name — nothing to seed"
+        );
+    }
+
+    /// The refusal's WORDING did not move with the narrowing. It is
+    /// self-attributed (no `qd <verb>:` prefix) and byte-identical to the line
+    /// `qd attach` printed before R21 — a user who still hits it reads exactly
+    /// what they read yesterday.
+    #[test]
+    fn no_session_id_line_is_unchanged_and_self_attributed() {
+        assert!(ReviveClaudeError::NoSessionId.is_self_attributed());
+        assert_eq!(
+            ReviveClaudeError::NoSessionId.line("attach"),
+            "Cannot resume: no session ID found."
+        );
+    }
+
+    /// The opening message is the SHARED wording, not a second copy of it. If
+    /// this ever stops being `onboarding::HOW_TO_REACH_PEERS`, the seed and the
+    /// relay MCP instructions are teaching two different stories — which is the
+    /// exact drift the shared macro exists to prevent (R9/R21 "shares its
+    /// wording").
+    #[test]
+    fn the_seed_message_is_the_shared_onboarding_wording() {
+        let msg = crate::onboarding::HOW_TO_REACH_PEERS;
+        assert!(msg.contains("qd ls"), "{msg}");
+        assert!(msg.contains("qd send:relay <session>"), "{msg}");
     }
 }

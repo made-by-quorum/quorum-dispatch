@@ -32,8 +32,9 @@
 //!      `["--listen", "ws://127.0.0.1:<port>"]`, `process_group(0)`, stdout/stderr
 //!      → `<qd_home>/.quorum/dispatch/log/codex-<name>.log`, cwd = session cwd.
 //!   4. ws connect (bounded retry — the daemon needs a moment to listen) →
-//!      initialize handshake (+ initialized) → thread/start(cwd, FULL-BYPASS
-//!      policy) → the thread id.
+//!      initialize handshake (+ initialized) → thread/start(cwd, approval
+//!      posture — safe by default since R22, see [`thread_start_posture`]) →
+//!      the thread id.
 //!   5. write the registry row via [`crate::registry::write_entry`] (its FIRST
 //!      production caller).
 //!   6. optional first prompt: turn/start it (NON-fatal — the session exists).
@@ -56,19 +57,71 @@ use crate::provider::{LaunchRequest, Provider, ProviderFx};
 use crate::registry::{self, RegistryEntry};
 
 // ===========================================================================
-// The R-a FULL-BYPASS posture (codex-p2-spec §3.3).
+// The thread/start approval posture (codex-p2-spec §3.3, RE-RULED by R22).
 // ===========================================================================
+//
+// HISTORY, because the shape of this block is the whole point. §3.3 set ONE
+// pair of constants — approval policy `never` + sandbox `danger-full-access` —
+// and justified them purely as PARITY: claude's `DEFAULT_FLAGS` led with
+// `--dangerously-skip-permissions`, so a qd-launched codex thread matched it, on
+// the reasoning that two harnesses under one `qd start` should not differ in how
+// much they ask. The old comment even flagged flipping them as a one-line
+// Pete-readback item.
+//
+// R22 (FTUE punch list, 2026-08-20) flipped the thing they were parity WITH.
+// claude's default no longer suppresses approval prompts on a user's machine
+// (see `launch.rs DEFAULT_FLAGS`), and the parity argument runs in this
+// direction too: codex follows. What §3.3 actually pinned was "codex matches
+// claude", not "codex runs wide open", and the two only ever looked like the
+// same statement because of what claude's default happened to be.
+//
+// So the constants are now a PAIR OF PAIRS with a resolver between them, and the
+// bypass is reachable — deliberately — only by naming it. A reader who arrives
+// here to "restore parity" with claude by putting `never` back would be breaking
+// the parity, not restoring it.
 
-/// qd-launched codex threads run codex's full-bypass posture — the claude
-/// `--dangerously-skip-permissions` parity defaults (codex-p2-spec §3.3).
+/// The DEFAULT posture for a qd-launched codex thread (R22): codex still asks.
+/// `on-request` lets the model escalate when it genuinely needs to and puts the
+/// decision in front of the human; `workspace-write` confines writes to the
+/// session cwd. This is codex's own ordinary interactive posture — qd launching
+/// the thread is not a reason for it to be more trusted than one the user starts
+/// by hand.
+const APPROVAL_POLICY: &str = "on-request";
+const SANDBOX: &str = "workspace-write";
+
+/// The FULL-BYPASS posture — no prompts, whole machine. OPT-IN ONLY, via
+/// [`DANGER_FULL_ACCESS_ENV`]. This is the pre-R22 default; it is still exactly
+/// right for an operator-owned worker rack, which is the fleet these values were
+/// written for, and exactly wrong as what a first-time `qd start` hands someone.
+const APPROVAL_POLICY_BYPASS: &str = "never";
+const SANDBOX_BYPASS: &str = "danger-full-access";
+
+/// `QD_CODEX_DANGER_FULL_ACCESS=1` — the codex-side bypass opt-in (R22).
 ///
-/// ⚠ FLIPPING THESE IS A ONE-LINE PETE-READBACK ITEM. They give an qd-launched
-/// codex thread approval-policy `never` + sandbox `danger-full-access` (the same
-/// "no prompts, full machine access" posture claude sessions run under today).
-/// They are passed to `AppServerRpc::thread_start(cwd, approval_policy, sandbox)`
-/// — codex-p2-spec §3.3 keeps them at THIS caller, not in the W3 launch_plan.
-const APPROVAL_POLICY: &str = "never";
-const SANDBOX: &str = "danger-full-access";
+/// WHY AN ENV VAR AND NOT A FLAG-VECTOR KEY, the way claude opted in: claude's
+/// bypass is a claude ARGV FLAG, so it rides the `QD_CLAUDE_FLAGS`/`claude_flags`
+/// surface that already existed for exactly that. codex's is NOT argv — it is two
+/// fields of the `thread/start` rpc params (codex-p2-spec §3.3 deliberately keeps
+/// them at this caller, out of the W3 launch_plan), so there is no codex flag
+/// vector for it to live in and inventing one would mean building a whole
+/// config surface to carry a single boolean. `QD_CODEX_UNPINNED=1` is the
+/// established codex-side spelling for "I know what this guard is for, stand
+/// down" ([`unpinned_override`]) — this follows it exactly, down to the strict
+/// `== "1"` read, so the two codex escape hatches behave the same way.
+const DANGER_FULL_ACCESS_ENV: &str = "QD_CODEX_DANGER_FULL_ACCESS";
+
+/// Resolve `(approval_policy, sandbox)` for `thread/start` — the SINGLE place the
+/// posture is decided, so no future call site can pick its own. Read off the env
+/// SEAM (L9a — never raw `std::env`). Any non-`"1"` value, including unset, is
+/// NOT the opt-in: the bypass is never something a stray truthy-looking value
+/// ("true", "yes", "0 ") turns on by accident.
+fn thread_start_posture(env: &dyn Env) -> (&'static str, &'static str) {
+    if env.var(DANGER_FULL_ACCESS_ENV).as_deref() == Some("1") {
+        (APPROVAL_POLICY_BYPASS, SANDBOX_BYPASS)
+    } else {
+        (APPROVAL_POLICY, SANDBOX)
+    }
+}
 
 /// The ws client identity sent on `initialize` (matches the W3 boot waiter +
 /// the spike probe's `clientInfo`).
@@ -637,9 +690,12 @@ fn finish_create(
     // Best-effort `initialized` (a failure here does not un-ready us — W3 parity).
     let _ = rpc.initialized();
 
-    // Step 4c: thread/start with the FULL-BYPASS posture (the R-a constants).
+    // Step 4c: thread/start with the resolved approval posture — safe by default,
+    // full bypass only when QD_CODEX_DANGER_FULL_ACCESS=1 (R22; see
+    // [`thread_start_posture`]).
     let cwd_str = params.cwd.to_string_lossy().into_owned();
-    let thread_id = match rpc.thread_start(&cwd_str, APPROVAL_POLICY, SANDBOX) {
+    let (approval_policy, sandbox) = thread_start_posture(deps.env);
+    let thread_id = match rpc.thread_start(&cwd_str, approval_policy, sandbox) {
         Ok(id) => id,
         Err(e) => {
             deps.spawner.kill(spawned.pid);
@@ -1161,6 +1217,77 @@ mod tests {
         assert_eq!(map.by_session.get("T-IDS"), Some(&id));
     }
 
+    // === R22: safe by default, full bypass opt-in ==========================
+
+    /// The resolver in isolation. The DEFAULT arm is the ruling; the strict `"1"`
+    /// arm is the guard that keeps "full machine access" from being switched on by
+    /// a value that merely LOOKS truthy — a user who exports
+    /// `QD_CODEX_DANGER_FULL_ACCESS=true` gets the safe posture and a codex that
+    /// asks, which is the right way to be wrong.
+    #[test]
+    fn thread_start_posture_is_safe_by_default_and_strict_about_the_opt_in() {
+        let with = |v: Option<&str>| {
+            let mut vars = HashMap::new();
+            if let Some(v) = v {
+                vars.insert("QD_CODEX_DANGER_FULL_ACCESS".to_string(), v.to_string());
+            }
+            let env = MapEnv { vars, uid: 501 };
+            thread_start_posture(&env)
+        };
+        // Unset ⇒ safe.
+        assert_eq!(with(None), ("on-request", "workspace-write"));
+        // Exactly "1" ⇒ the opt-in.
+        assert_eq!(with(Some("1")), ("never", "danger-full-access"));
+        // Everything else ⇒ safe. Same strictness as QD_CODEX_UNPINNED.
+        for v in ["", "0", "true", "yes", "1 ", " 1", "TRUE", "danger"] {
+            assert_eq!(
+                with(Some(v)),
+                ("on-request", "workspace-write"),
+                "only the literal \"1\" opts in; {v:?} must not"
+            );
+        }
+    }
+
+    /// End-to-end through the real create sequence: with the opt-in exported, the
+    /// `thread/start` rpc carries the full-bypass pair verbatim. This is the half
+    /// that proves the escape hatch is actually WIRED — a resolver that returns the
+    /// right tuple into a call site that ignores it would pass the unit test above
+    /// and strand every operator who needs the old posture back.
+    #[test]
+    fn danger_full_access_env_opts_the_thread_back_into_full_bypass() {
+        let mut h = harness();
+        h.env
+            .vars
+            .insert("QD_CODEX_DANGER_FULL_ACCESS".to_string(), "1".to_string());
+        let exec = exact_exec();
+        let rpc = FixtureRpc::happy("019e9f4b-thread-uuid");
+        let connect =
+            |_url: &str| -> Result<Box<dyn AppServerRpc>, RpcError> { Ok(Box::new(RpcRef(&rpc))) };
+        let alloc = || Ok(18962u16);
+        let spawner = FakeSpawner::ok(55501);
+        let deps = DaemonDeps {
+            provider: &crate::provider::codex::CODEX_PROVIDER,
+            env: &h.env,
+            exec: &exec,
+            clock: &h.clock,
+            sessions_dir: h.sessions_dir.clone(),
+            claims_dir: h.claims_dir.clone(),
+            log_dir: h.log_dir.clone(),
+            spawner: &spawner,
+            connect: &connect,
+            alloc_port: &alloc,
+            ids_path: h.ids_path.clone(),
+        };
+        run_new_daemon(&deps, &params("cdx", None)).expect("happy create");
+        assert!(
+            rpc.calls()
+                .iter()
+                .any(|c| c == "thread_start(never,danger-full-access)"),
+            "the opt-in must reach thread/start: {:?}",
+            rpc.calls()
+        );
+    }
+
     // === The full happy sequence writes a correct row (assert EVERY field). ===
 
     #[test]
@@ -1203,12 +1330,13 @@ mod tests {
             ]
         );
 
-        // thread/start carried the FULL-BYPASS posture.
+        // thread/start carried the SAFE-BY-DEFAULT posture (R22) — this harness
+        // sets no env, i.e. it is the fresh-machine case.
         assert!(
             rpc.calls()
                 .iter()
-                .any(|c| c == "thread_start(never,danger-full-access)"),
-            "thread_start full-bypass: {:?}",
+                .any(|c| c == "thread_start(on-request,workspace-write)"),
+            "thread_start safe posture: {:?}",
             rpc.calls()
         );
 

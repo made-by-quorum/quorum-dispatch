@@ -1,6 +1,7 @@
 //! Verb dispatch + the REAL backends (spec §3). One module per verb group; this
 //! file routes a parsed clap `ArgMatches` to the right backend, and the default
-//! action (bare `qd` → ls, index.ts:202-204) when no subcommand matched.
+//! action (bare `qd` → ls, index.ts:202-204 — or `qd setup` on a machine that
+//! has never been set up, FTUE punch R24) when no subcommand matched.
 
 mod adopt;
 mod bootstrap;
@@ -31,7 +32,7 @@ mod whoami;
 use clap::ArgMatches;
 
 /// Route the parsed top-level matches to the verb backend. When no subcommand
-/// was given, run the default action (`ls`), index.ts:202-204.
+/// was given, run the default action — the help (see the `None` arm).
 pub fn dispatch(matches: &ArgMatches) -> i32 {
     match matches.subcommand() {
         Some(("ls", m)) => ls::run(m),
@@ -80,7 +81,25 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
             eprintln!("error: unknown command '{other}'");
             1
         }
-        // No subcommand: default action → ls (index.ts:202-204).
-        None => ls::run_default(),
+        // No subcommand: bare `qd` prints the help.
+        //
+        // It ran `ls` for as long as qd has existed (index.ts:202-204), which
+        // answered a question nobody asked: the first thing a new machine ever
+        // said was `No sessions found.` R24 tried to repair that for the fresh
+        // case specifically, redirecting into `qd setup` when the machine had no
+        // `~/.quorum` and nothing to list — but that only helped someone whose
+        // machine was pristine, and it made bare `qd` mean two different things
+        // depending on state a person cannot see. An upgrader who read the brew
+        // formula's "run `qd`" line still landed in `ls`.
+        //
+        // So the default is the help, unconditionally. It is the answer to the
+        // question bare `qd` actually asks — "what is this, what can I type" —
+        // it is the same text a completed `qd setup` now ends with (R23), and it
+        // names `setup` and says what it does, which is what the redirect was
+        // reaching for. `qd ls` is one word away for anyone who wanted the list.
+        None => {
+            println!("{}", crate::help::render_top(&crate::cli::build_cli(), false));
+            0
+        }
     }
 }

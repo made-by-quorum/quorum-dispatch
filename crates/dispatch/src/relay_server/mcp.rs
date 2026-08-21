@@ -14,8 +14,9 @@
 //! fixture (`exec/ccrelay-mcp-handshake-fixture.json`):
 //! - the `initialize` result shape (P-B2): `protocolVersion` echoed,
 //!   `capabilities {tools:{}, experimental:{"claude/channel":{}}}`,
-//!   `serverInfo {name:"relay", version:"0.1.0"}`, and the verbatim
-//!   [`INSTRUCTIONS`] string as a TOP-LEVEL result field;
+//!   `serverInfo {name:"relay", version:"0.1.0"}`, and the [`INSTRUCTIONS`]
+//!   string as a TOP-LEVEL result field (SHAPE faithful; its CONTENT deliberately
+//!   grew past the fixture in punch R9 — see the constant's docs);
 //! - `tools/list` (P-B3) advertising the unchanged `reply` tool plus the
 //!   dispatch self-adoption `shutdown_for_adoption` tool;
 //! - the outbound `notifications/claude/channel` notification shape (P-B4).
@@ -45,15 +46,53 @@ use serde_json::{json, Value};
 
 use crate::relay_server::RelayServer;
 
-/// The verbatim MCP `instructions` string (server.ts:88). Surfaced as a TOP-LEVEL
-/// field of the `initialize` result (NOT inside capabilities). This guides Claude
-/// Code on how to use the relay channel + the loop-prevention rule; CC depends on
-/// it, so it is copied EXACTLY (any drift is an interop break). VERIFIED to decode
-/// to the fixture's `instructions` value byte-for-byte (666 chars). NOTE: the
-/// fixture metadata `critical_fields.instructions.length: 753` is INACCURATE — it
-/// matches neither the decoded string (666) nor the raw JSON-escaped form (684);
-/// the verbatim content is the contract and it matches exactly.
-pub const INSTRUCTIONS: &str = "Messages from other sessions arrive as <channel source=\"relay\" from_session=\"...\" message_id=\"...\">. To respond, call the reply tool with your full response and the message_id. The tool delivers to a sender blocked in 'qd send:relay --wait', or otherwise posts your reply to the origin session as a new channel message marked [REPLY to <message_id>]. If the tool returns an error, your reply did NOT reach anyone — send a fresh message instead (qd send:relay <session>) and restate your substance. NEVER call the reply tool on a message whose text begins with \"[REPLY to\" — that is a delivered reply, not a request; replying to it can ping-pong two sessions forever.";
+/// The MCP `instructions` string. Surfaced as a TOP-LEVEL field of the
+/// `initialize` result (NOT inside capabilities). This is the ONLY thing a cold
+/// claude session is told about the relay before it has to use it.
+///
+/// ── THE FIRST HALF IS FROZEN, THE SECOND HALF IS OURS (punch R9) ────────────
+/// Everything up to "…ping-pong two sessions forever." is server.ts:88 verbatim
+/// — the bun reference server's wording, decoded byte-for-byte from the frozen
+/// handshake fixture (666 chars). It explains how to ANSWER: the `<channel>`
+/// envelope, the `reply` tool, what happens when `reply` errors, and the
+/// loop-prevention rule. It is not edited; CC depends on that behavior contract
+/// and any drift in it is an interop break. (NOTE: the fixture metadata
+/// `critical_fields.instructions.length: 753` is INACCURATE — it matches neither
+/// the decoded string (666) nor the raw JSON-escaped form (684); the content is
+/// the contract and it matches exactly.)
+///
+/// R9 appends the missing half. The frozen text never says peers EXIST, so a
+/// session that had not been messaged first had no way to discover one or to
+/// originate to it — it could only ever answer. The two added sentences are
+/// [`quorum_qw::how_to_reach_peers`], NOT a literal typed here, because the same
+/// wording is what punch R21 types into a never-messaged claude pane as its
+/// opening turn (`quorum_qw::provider::claude::revive`). One definition, two
+/// consumers — see that module's docs for why it lives in qw and why it is a
+/// macro rather than a `const`.
+///
+/// ── WHAT THAT COST, AND HOW IT WAS SETTLED ──────────────────────────────────
+/// The string is 871 chars and no longer equal to the frozen fixture's
+/// `instructions` value, nor to what `~/work/cc-relay/server.ts` emitted. Both
+/// live OUTSIDE this repo and could not be updated in lockstep, so R9 shipped by
+/// narrowing the checks that compared against them to prefix-equality — a real
+/// assertion traded for one that could not fail, in exchange for parity with a
+/// server nobody runs.
+///
+/// That was reopened and RULED: retire the bun half. Nothing runs
+/// `server.ts` — every session's `relay` MCP server is this binary — the
+/// checkout only ever existed on one developer's machine, and `instructions` is
+/// advisory rather than protocol-shaped (nothing parses it; Claude Code reads
+/// it). C17 names this string as the surface agent onboarding may have to ride
+/// on alone, and a cold session that cannot find its peers was the live defect.
+/// `relay_server_differential.rs` now drives this server alone and asserts
+/// byte-equality against THIS constant over a real handshake, which is the
+/// property that was always worth pinning. The bun-era handshake capture is
+/// still read for protocol SHAPE where it exists; it no longer gets a vote on
+/// this string.
+pub const INSTRUCTIONS: &str = concat!(
+    "Messages from other sessions arrive as <channel source=\"relay\" from_session=\"...\" message_id=\"...\">. To respond, call the reply tool with your full response and the message_id. The tool delivers to a sender blocked in 'qd send:relay --wait', or otherwise posts your reply to the origin session as a new channel message marked [REPLY to <message_id>]. If the tool returns an error, your reply did NOT reach anyone — send a fresh message instead (qd send:relay <session>) and restate your substance. NEVER call the reply tool on a message whose text begins with \"[REPLY to\" — that is a delivered reply, not a request; replying to it can ping-pong two sessions forever. ",
+    quorum_qw::how_to_reach_peers!()
+);
 
 /// The verbatim `reply` tool description (server.ts:96 / fixture line 96).
 const REPLY_TOOL_DESCRIPTION: &str = "Reply to a message from another Claude session. Delivers to a sender waiting in qd send:relay --wait, or posts the reply back to the origin session as a new channel message. Returns an error (with guidance) when neither delivery path works — the reply has NOT reached anyone in that case.";
@@ -729,12 +768,13 @@ mod tests {
             instr.starts_with("Messages from other sessions"),
             "instructions prefix: {instr}"
         );
-        // The DECODED instructions string is 666 chars (verified to match the
-        // fixture's decoded `instructions` value EXACTLY). NOTE: the fixture's
-        // `critical_fields.instructions.length: 753` metadata field is INACCURATE —
-        // it does not match the decoded string (666) NOR the raw JSON-escaped form
-        // (684); the verbatim CONTENT is the contract, and it matches exactly.
-        assert_eq!(instr.chars().count(), 666, "instructions char length");
+        // The DECODED instructions string is 871 chars: the fixture's 666-char
+        // answer half, verbatim, plus the space and the 204-char origination half
+        // punch R9 appended (see the constant's docs for why it grew past the
+        // fixture). NOTE: the fixture's `critical_fields.instructions.length: 753`
+        // metadata field was already INACCURATE before R9 — it matched neither the
+        // decoded string (666) nor the raw JSON-escaped form (684).
+        assert_eq!(instr.chars().count(), 871, "instructions char length");
         // instructions must NOT be nested in capabilities.
         assert!(result["capabilities"]["instructions"].is_null());
     }
@@ -1386,13 +1426,25 @@ mod tests {
     // --- instructions constant integrity ---
 
     #[test]
-    fn instructions_const_matches_the_fixture_verbatim() {
-        // The decoded fixture `instructions` value is 666 chars (the fixture's
-        // metadata `length: 753` is inaccurate — see the note in the initialize
-        // test). The CONTENT is the contract: verbatim match to server.ts:88.
-        assert_eq!(INSTRUCTIONS.chars().count(), 666);
+    fn instructions_const_is_the_frozen_answer_half_plus_the_r9_origination_half() {
+        // 871 = the 666-char server.ts:88 answer half (the frozen fixture's
+        // decoded value; its metadata `length: 753` is inaccurate — see the note
+        // on the constant), one joining space, and the 204-char shared
+        // origination wording R9 added. The count is pinned so a reword has to be
+        // a DECISION rather than a diff nobody measured.
+        assert_eq!(INSTRUCTIONS.chars().count(), 871);
+        // The answer half, unedited: same opening, same closing rule, same
+        // `[REPLY to` marker CC keys its loop-prevention on.
         assert!(INSTRUCTIONS.starts_with("Messages from other sessions arrive as <channel"));
-        assert!(INSTRUCTIONS.ends_with("ping-pong two sessions forever."));
+        assert!(INSTRUCTIONS.contains("ping-pong two sessions forever."));
         assert!(INSTRUCTIONS.contains("[REPLY to"));
+        // The origination half, and — the point of the shared macro — the SAME
+        // bytes punch R21 types into a never-messaged claude pane. If these two
+        // ever drift, one of the two doors is teaching a session something the
+        // other door contradicts.
+        assert!(
+            INSTRUCTIONS.ends_with(quorum_qw::onboarding::HOW_TO_REACH_PEERS),
+            "R9's two sentences ARE R21's opening message — one definition, not two"
+        );
     }
 }

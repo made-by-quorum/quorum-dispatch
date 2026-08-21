@@ -93,6 +93,11 @@ pub mod mux_selector;
 // not reach back into `dispatch`, and this module's only dependency is
 // `qrmux::protocol`, so it travels rather than being duplicated.
 pub mod observe;
+// The one wording that tells a session how to reach its peers (punch R9 + R21).
+// It lives here rather than beside either of its two consumers because those two
+// are in different crates and the dependency runs one way: `qd`'s relay MCP
+// server and `qw`'s claude revive both reach qw, and only qw.
+pub mod onboarding;
 pub mod preflight;
 pub mod provider;
 pub mod provider_gather;

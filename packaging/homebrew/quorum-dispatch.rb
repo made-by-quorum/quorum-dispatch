@@ -54,10 +54,39 @@ class QuorumDispatch < Formula
     bin.install "target/release/qw"
   end
 
-  # NO caveats block. The one that lived here told a fresh installer to go build
-  # a third-party multiplexer from a staged tarball — instructions for a retired
-  # dependency, printed at the end of every install (FTUE R1). `qd bootstrap` is
-  # the first-run surface; post-install text is not.
+  # ONE caveat line, and one only (FTUE punch R24).
+  #
+  # The block that used to live here told a fresh installer to go build a
+  # third-party multiplexer from a staged tarball — instructions for a dependency
+  # that has since been retired — and R1 deleted it. What R1 did not notice is
+  # that it deleted the ONLY thing a `brew install` said: the install ended in
+  # silence, having put two binaries on a machine without naming either of them.
+  #
+  # This is the smallest repair that is also true, and it names the VERB rather
+  # than just the binary. R24 first wrote "Run `qd`" and leaned on bare `qd`
+  # redirecting into setup on a machine that looked fresh; that redirect is gone
+  # (bare `qd` prints the help now, on every machine — see `verbs::dispatch`),
+  # and even while it existed it did nothing for the far more common reader:
+  # someone who already had qd from source and was moving to brew. They ran `qd`,
+  # got a session list, and finished nothing. `qd setup` is the thing that
+  # actually finishes an install, so the line says `qd setup`.
+  #
+  # Naming it here does not make the install DO it: C19 ruled install-time stays
+  # inert — Homebrew's `post_install` is sandboxed away from `~/.zshrc`,
+  # `~/.claude.json` and `~/.quorum`, is never a TTY, and re-fires on every
+  # upgrade and every `brew bundle` — so a printed line a human chooses to run is
+  # the whole handoff. `qd setup` is itself report-only until `--fix`, which is
+  # what makes it safe to put in front of someone this way.
+  #
+  # NOTE FOR WHOEVER LANDS R17: the formula Homebrew actually installs from is
+  # the TAP's copy (private-org/homebrew-tap, Formula/quorum-dispatch.rb), not
+  # this file — which is why R1's mux-caveats deletion landed here and kept
+  # printing `QD_MUX=zmx` on real machines for months. Both copies carry this
+  # caveats block now. Keep the two in step, or R17 should collapse them into
+  # one file.
+  def caveats
+    "Run `qd setup` to finish setup."
+  end
 
   test do
     # `qd --version` prints the TS-parity version string (corpus rows 03/04).

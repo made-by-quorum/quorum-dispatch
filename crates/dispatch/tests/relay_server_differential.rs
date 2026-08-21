@@ -1,40 +1,50 @@
-//! §4b M5b DIFFERENTIAL + CROSS-COMPAT harness — drives BOTH the legacy bun
-//! relay server (`~/work/cc-relay/server.ts`) AND the native Rust `qd relay:serve`
-//! through the SAME scenario script via the SAME frozen `CcRelay` client (HTTP) +
-//! subprocess JSON-RPC (MCP stdio), asserting EQUIVALENT OBSERVABLE behavior.
+//! §4b relay-server acceptance harness — drives the native Rust `qd relay:serve`
+//! through a full scenario via the SAME frozen `CcRelay` client (HTTP) +
+//! subprocess JSON-RPC (MCP stdio), asserting the HARD interop contract CC and
+//! the frozen client depend on.
 //!
-//! ## Goal
-//! This is a DIAGNOSTIC + INTEROP check, NOT a byte-identical gate. The bar is:
-//! the Rust server is a drop-in for the frozen client + CC's MCP channel.
-//! Behavioral divergences from bun are JUDGMENT CALLS for the lead — this file
-//! asserts the HARD interop contract and does NOT assert the known-intentional
-//! deltas listed in the EXPECTED-DIVERGENCE ALLOWLIST below.
+//! ## This was a DIFFERENTIAL; the bun half is retired
+//! It once drove a second server — the legacy bun implementation at
+//! `~/work/cc-relay/server.ts` — through the same scenarios and asserted
+//! equivalence, which is where the file's name comes from. That server is gone
+//! as a reference: nothing runs it, the relay every session actually speaks to
+//! is `qd relay:serve` (`~/.claude.json` pins the `relay` MCP server to the `qd`
+//! binary), and the checkout only ever existed on one developer's machine —
+//! outside this repo, unbuildable from it, and absent here, so every bun test
+//! skipped rather than ran.
 //!
-//! ## Bun-present precondition
-//! If bun (`$HOME/.bun/bin/bun`) or `~/work/cc-relay/server.ts` is absent on this
-//! host, each test prints a LOUD skip marker and returns. On brano (the target host),
-//! both are present and the differential MUST actually run — never a silent pass.
+//! FTUE punch R9 forced the ruling. It grew the MCP `instructions` string by two
+//! sentences, bun could not follow, and the cross-server assertions were briefly
+//! narrowed from byte-equality to prefix-equality so the change could land. That
+//! traded a real assertion for one that could never fail here in exchange for
+//! parity with a server no one runs. Ruled: retire the bun half, and let the
+//! Rust constant be the authority it already was in practice. Byte-equality is
+//! RESTORED — against `mcp::INSTRUCTIONS`, which is what CC actually receives.
+//!
+//! The `RelayKind` enum survives with one variant on purpose: it keeps every
+//! scenario helper's shape and their `[Rust]` log prefixes, so what remains is a
+//! deletion rather than a rewrite of tests that were passing.
 //!
 //! ## EXPECTED-DIVERGENCE ALLOWLIST (do NOT assert these as equal)
-//! - mint seq VALUES: Rust seeds the per-process seq from the start epoch; bun
-//!   starts at 0. We assert the message_id FORMAT only (`^relay-<digits>-<digits>$`).
-//! - idleTimeout: bun uses idleTimeout=240 to keep long-polls alive; Rust does not
-//!   need this hack. Not observable at the assertion level.
-//! - TTL sweeper cadence: Rust uses a 30s poll; bun uses per-entry setTimeout.
-//!   Not observable in a short test.
-//! - M5a stale-sidecar sweep (Rust only) and conn-cap 128 (Rust only): these are
-//!   hardening features absent from bun. Not tested here (covered in M5a suite).
-//! - M1 fix: Rust dropped bun's spurious-evict-on-FIFO-reinsert. Not observable
-//!   in these rows.
+//! Kept because the FIXTURE is still a bun-era capture (`load_handshake_fixture`,
+//! also outside this repo and also absent here), so the protocol-shape fields it
+//! pins are compared against a bun recording when it is present:
+//! - mint seq VALUES: Rust seeds the per-process seq from the start epoch; the
+//!   capture starts at 0. We assert the message_id FORMAT only
+//!   (`^relay-<digits>-<digits>$`).
+//! - M5a stale-sidecar sweep and conn-cap 128: Rust-only hardening, absent from
+//!   the capture. Not tested here (covered in the M5a suite).
+//! - `instructions`: no longer compared against the capture at all. The capture
+//!   froze the 666-char answer half; R9's string is the authority now.
 //!
 //! ## Jail discipline
 //! Every server uses a TEMP HOME (tempfile::tempdir). RELAY_PORT_BASE is set to a
 //! high value outside 8900-9000 (the client probe range). NEVER writes to the real
-//! ~/.claude or ~/work/cc-relay.
+//! ~/.claude.
 //!
 //! ## RAII reap guard (non-negotiable)
-//! Every spawned process (bun or qd) is killed on Drop — including on panic-unwind
-//! and early-return — so no relay process leaks into the fleet after the suite.
+//! Every spawned `qd` is killed on Drop — including on panic-unwind and
+//! early-return — so no relay process leaks into the fleet after the suite.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -91,71 +101,35 @@ fn unique_port_bases() -> (u16, u16) {
 // RelayKind — which server binary to spawn
 // ---------------------------------------------------------------------------
 
+/// Which server to spawn. ONE variant since the bun half was retired — kept as
+/// an enum so the scenario helpers below keep their signatures and their
+/// `[Rust]` log prefixes (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelayKind {
     Rust,
-    Bun,
 }
 
 impl RelayKind {
     fn name(self) -> &'static str {
         match self {
             RelayKind::Rust => "Rust",
-            RelayKind::Bun => "Bun",
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Precondition check — LOUD skip when bun/server.ts absent
+// Real HOME — for the bun-era handshake capture, the last external artifact
+// this file still reads (and still skips loudly when absent).
 // ---------------------------------------------------------------------------
 
-/// Resolve `$HOME` (the REAL user home, NOT the test's temp home) for the bun
-/// binary and server.ts paths. Never hardcodes `/home/u`.
+/// Resolve `$HOME` (the REAL user home, NOT the test's temp home). Never
+/// hardcodes a developer's path.
 fn real_home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
 }
 
-fn bun_binary() -> PathBuf {
-    real_home().join(".bun").join("bin").join("bun")
-}
-
-fn server_ts() -> PathBuf {
-    real_home().join("work").join("cc-relay").join("server.ts")
-}
-
-/// Check that bun + server.ts are present. If not, print a LOUD skip message
-/// and return false. Never silently pass.
-///
-/// F3 fix: if `REQUIRE_BUN=1` is set (e.g. on brano/CI), panic instead of
-/// returning false — enforces that the differential actually runs on hosts
-/// that promise bun is present. Prevents silent-green rot if server.ts moves.
-fn bun_precondition_check(test_name: &str) -> bool {
-    let bun = bun_binary();
-    let ts = server_ts();
-    let bun_ok = bun.exists();
-    let ts_ok = ts.exists();
-    if !bun_ok || !ts_ok {
-        let require_bun = std::env::var("REQUIRE_BUN")
-            .map(|v| v == "1")
-            .unwrap_or(false);
-        if require_bun {
-            panic!(
-                "REQUIRE_BUN=1 but bun/cc-relay absent ({test_name}): \
-                 bun={bun_ok} bun_path={bun:?}, server_ts={ts_ok} ts_path={ts:?}"
-            );
-        }
-        eprintln!(
-            "SKIP 4b differential ({test_name}): bun/cc-relay absent on this host \
-             (bun={bun_ok} bun_path={bun:?}) (server_ts={ts_ok} ts_path={ts:?})"
-        );
-        return false;
-    }
-    true
-}
-
 // ---------------------------------------------------------------------------
-// RelayChild — spawns either Rust or Bun relay server, full RAII reap
+// RelayChild — spawns the Rust relay server, full RAII reap
 // ---------------------------------------------------------------------------
 
 struct RelayChild {
@@ -200,11 +174,6 @@ impl RelayChild {
                 let exe = env!("CARGO_BIN_EXE_qd");
                 let mut c = Command::new(exe);
                 c.arg("relay:serve");
-                c
-            }
-            RelayKind::Bun => {
-                let mut c = Command::new(bun_binary());
-                c.arg(server_ts());
                 c
             }
         };
@@ -297,7 +266,6 @@ impl RelayChild {
     }
 
     /// Path to this child's sidecar `<home>/.claude/relay/<pid>.json`.
-    /// For bun, the sidecar pid == the bun child pid (we spawn bun directly).
     fn sidecar_path(&self) -> PathBuf {
         self.home
             .join(".claude")
@@ -514,13 +482,19 @@ fn load_handshake_fixture() -> Option<Value> {
 }
 
 // ---------------------------------------------------------------------------
-// The INSTRUCTIONS constant — 666-char verbatim string (byte-equality required)
+// The INSTRUCTIONS constant — byte-equality required
 // ---------------------------------------------------------------------------
-// We use dispatch::relay_server::mcp::INSTRUCTIONS directly rather than duplicating
-// the string here, so the assertion is "bun emits what Rust uses" rather than
-// "both emit a third copy". Any diff between bun and Rust is a HARD failure.
-// The 666-char length is verified by the existing unit test in mcp.rs.
-// We alias it as EXPECTED_INSTRUCTIONS for readability in this file.
+// We use dispatch::relay_server::mcp::INSTRUCTIONS directly rather than
+// duplicating the string here, so the assertion is "the server emits what the
+// binary was built with" rather than "both emit a third copy that drifts".
+// Its exact length is pinned by the unit test in mcp.rs; this file asserts the
+// value that actually crossed an MCP handshake.
+//
+// R9 grew it to 871 chars: 666 (the answer half, frozen since server.ts:88) + 1
+// + 204 (the shared origination wording, `quorum_qw::how_to_reach_peers!`). The
+// cross-server assertions this constant used to serve were briefly weakened to
+// prefix-equality so R9 could land beside a bun twin that could not follow;
+// retiring the bun half restored them to equality. See the module docs.
 use dispatch::relay_server::mcp::INSTRUCTIONS as EXPECTED_INSTRUCTIONS;
 
 // ---------------------------------------------------------------------------
@@ -564,18 +538,18 @@ fn run_core_scenario(kind: RelayKind) {
         init_resp["result"]["serverInfo"]["version"], "0.1.0",
         "[{kind:?}] serverInfo.version must be '0.1.0'"
     );
-    // instructions — VERBATIM 666-char string (byte-equality)
+    // instructions — VERBATIM 871-char string (byte-equality)
     let instructions = init_resp["result"]["instructions"]
         .as_str()
         .unwrap_or_else(|| panic!("[{kind:?}] instructions field must be a string"));
     assert_eq!(
         instructions, EXPECTED_INSTRUCTIONS,
-        "[{kind:?}] instructions must be the verbatim 666-char string"
+        "[{kind:?}] instructions must be the verbatim 871-char string"
     );
     assert_eq!(
         instructions.chars().count(),
-        666,
-        "[{kind:?}] instructions must be exactly 666 Unicode chars, got {}",
+        871,
+        "[{kind:?}] instructions must be exactly 871 Unicode chars, got {}",
         instructions.chars().count()
     );
 
@@ -583,7 +557,7 @@ fn run_core_scenario(kind: RelayKind) {
     // DIVERGENCE NOTE: the Rust relay server added `shutdown_for_adoption` in
     // the adopt integration branch (mcp.rs:372). The Bun reference server has
     // no such tool (adoption is Rust-only). This is a ratified divergence —
-    // assert 2 tools for Rust and 1 tool for Bun.
+    // assert 2 tools.
     child.send(&json!({
         "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
     }));
@@ -593,7 +567,6 @@ fn run_core_scenario(kind: RelayKind) {
         .expect("tools array");
     let expected_tool_count = match kind {
         RelayKind::Rust => 2,
-        RelayKind::Bun => 1,
     };
     assert_eq!(
         tools.len(),
@@ -984,23 +957,19 @@ fn run_handshake_fixture_check(kind: RelayKind) {
     let actual_resp = handshake(&mut child, 1);
     let _port = child.wait_for_port();
 
-    // Assert the instructions are byte-equal to the fixture.
-    let fixture_instructions = expected_resp["result"]["instructions"]
-        .as_str()
-        .expect("fixture must have instructions string");
+    // INSTRUCTIONS: asserted against the BINARY's constant, not the capture.
+    //
+    // The capture is a bun-era recording that froze the 666-char answer half. R9
+    // appended the origination half and the capture cannot be re-recorded from
+    // this repo, so comparing against it could only ever assert "R9 did not
+    // happen". The honest assertion is that what crossed this handshake is
+    // exactly what the binary carries — the same thing CC receives.
     let actual_instructions = actual_resp["result"]["instructions"]
         .as_str()
         .unwrap_or_else(|| panic!("[{kind:?}] server must emit instructions string"));
-
     assert_eq!(
-        actual_instructions, fixture_instructions,
-        "[{kind:?}] instructions must be byte-equal to the frozen fixture"
-    );
-    assert_eq!(
-        actual_instructions.chars().count(),
-        666,
-        "[{kind:?}] instructions must be exactly 666 Unicode chars, got {}",
-        actual_instructions.chars().count()
+        actual_instructions, EXPECTED_INSTRUCTIONS,
+        "[{kind:?}] instructions must be byte-identical to mcp::INSTRUCTIONS"
     );
 
     // protocolVersion echoed.
@@ -1040,32 +1009,8 @@ fn run_handshake_fixture_check(kind: RelayKind) {
 // the bun 408 is covered separately by existing parity tests if needed.
 
 fn run_replies_timeout_check(kind: RelayKind) {
-    // Only assert the full 408 path on Rust (where we control park duration).
-    // On bun the park is 120s — driving a real 408 would stall the suite.
-    // JUDGMENT CALL: bun's 408 path is not tested here; it is covered by the
-    // parity suite against the in-process server.
+    // The full 408 path, with the park duration under our control.
     let (port_base_a, _) = unique_port_bases();
-    if kind == RelayKind::Bun {
-        eprintln!(
-            "[Bun] SKIP /replies 408 variant: bun park=120s, would stall suite. \
-             Covered by parity suite. Asserting client-timeout shape instead."
-        );
-        // Assert that the client DOES get SOME response (timeout or 408) within
-        // a bounded window, proving the endpoint is live.
-        let mut child = RelayChild::spawn(kind, "sess-bun-replies-408", port_base_a);
-        let _init = handshake(&mut child, 1);
-        let port = child.wait_for_port();
-        // Use a very short timeout_ms — client side will time out (not a server 408).
-        // This is a bounded assertion that the /replies endpoint is reachable.
-        let result = CcRelay::new().fetch_reply(port, "relay-no-such-0", 200);
-        // Under bun, the server parks for 120s but client times out after 200ms.
-        // The CcRelay will return a read-timeout Err or a server error — either way
-        // the endpoint is live and non-hanging.
-        eprintln!("[Bun] /replies short-timeout result (expected timeout/error): {result:?}");
-        // We do NOT assert the exact error type; just that it returns within READ_BUDGET.
-        return;
-    }
-
     // Rust: the park deadline is the server-configured park_ms (default in relay:serve).
     // We can use fetch_reply with a small timeout_ms; the Rust server will 408 after
     // its own park_ms. With a 500ms client timeout we catch either outcome.
@@ -1135,251 +1080,43 @@ fn differential_rust_replies_timeout() {
     run_replies_timeout_check(RelayKind::Rust);
 }
 
-// ── Bun core scenario ───────────────────────────────────────────────────────
+// ── The instructions string, byte-exact across a real handshake ─────────────
 
+/// The `instructions` a live `qd relay:serve` hands a client on initialize are
+/// byte-identical to the constant the binary was built with.
+///
+/// This is the assertion that survived the bun retirement, restored to equality.
+/// It replaces `differential_instructions_byte_equal_across_servers`, which
+/// compared two servers where only one still exists — and which R9 had reduced
+/// to a prefix check against a twin that could not be updated. What matters was
+/// never "bun and Rust agree"; it is that the string CC reads over a real MCP
+/// handshake is the string in `mcp::INSTRUCTIONS`, unedited in transit.
 #[test]
-fn differential_bun_core_scenario() {
-    if !bun_precondition_check("differential_bun_core_scenario") {
-        return;
-    }
-    run_core_scenario(RelayKind::Bun);
-}
-
-#[test]
-fn differential_bun_pushback() {
-    if !bun_precondition_check("differential_bun_pushback") {
-        return;
-    }
-    run_pushback_scenario(RelayKind::Bun);
-}
-
-#[test]
-fn differential_bun_handshake_fixture() {
-    if !bun_precondition_check("differential_bun_handshake_fixture") {
-        return;
-    }
-    run_handshake_fixture_check(RelayKind::Bun);
-}
-
-#[test]
-fn differential_bun_replies_timeout() {
-    if !bun_precondition_check("differential_bun_replies_timeout") {
-        return;
-    }
-    run_replies_timeout_check(RelayKind::Bun);
-}
-
-// ── Instructions byte-equality between Bun and Rust ────────────────────────
-
-/// Assert that BOTH servers emit the IDENTICAL instructions string —
-/// the cross-server byte-equality constraint of the interop contract.
-#[test]
-fn differential_instructions_byte_equal_across_servers() {
-    let (port_base_a, port_base_b) = unique_port_bases();
-    if !bun_precondition_check("differential_instructions_byte_equal_across_servers") {
-        // Still assert Rust alone so the test isn't silent.
-        let mut rust_child =
-            RelayChild::spawn(RelayKind::Rust, "sess-inst-check-rust", port_base_a);
-        let rust_resp = handshake(&mut rust_child, 1);
-        let rust_inst = rust_resp["result"]["instructions"]
-            .as_str()
-            .expect("rust instructions");
-        assert_eq!(
-            rust_inst, EXPECTED_INSTRUCTIONS,
-            "Rust instructions must match the expected verbatim string"
-        );
-        return;
-    }
-
-    let mut rust_child = RelayChild::spawn(RelayKind::Rust, "sess-inst-rust", port_base_a);
-    let mut bun_child = RelayChild::spawn(RelayKind::Bun, "sess-inst-bun", port_base_b);
-
-    let rust_resp = handshake(&mut rust_child, 1);
-    let bun_resp = handshake(&mut bun_child, 1);
-
-    let rust_inst = rust_resp["result"]["instructions"]
+fn relay_instructions_cross_the_handshake_byte_exact() {
+    let (port_base_a, _) = unique_port_bases();
+    let mut child = RelayChild::spawn(RelayKind::Rust, "sess-inst-rust", port_base_a);
+    let resp = handshake(&mut child, 1);
+    let inst = resp["result"]["instructions"]
         .as_str()
-        .expect("rust instructions string");
-    let bun_inst = bun_resp["result"]["instructions"]
-        .as_str()
-        .expect("bun instructions string");
+        .expect("instructions string");
 
     assert_eq!(
-        rust_inst, bun_inst,
-        "Rust and Bun servers must emit byte-identical instructions strings"
+        inst, EXPECTED_INSTRUCTIONS,
+        "the handshake's instructions must be byte-identical to mcp::INSTRUCTIONS"
     );
-    assert_eq!(
-        rust_inst, EXPECTED_INSTRUCTIONS,
-        "Rust instructions must match the verbatim expected string"
-    );
-    assert_eq!(
-        rust_inst.chars().count(),
-        666,
-        "instructions must be exactly 666 Unicode chars, got {}",
-        rust_inst.chars().count()
-    );
-
-    eprintln!(
-        "instructions byte-equality: CONFIRMED (both servers, {} chars)",
-        rust_inst.len()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// §5 CROSS-COMPAT — mixed-fleet interop (one Bun + one Rust sharing one HOME)
-// ---------------------------------------------------------------------------
-//
-// Proves a rolling cutover (some bun, some Rust) interoperates over the shared
-// sidecar/inbox/HTTP contract.
-//
-// Scenario:
-//   (a) Rust sender → reply via Rust → push-back lands on BUN origin's sidecar.
-//   (b) Bun sender → reply via Bun → push-back lands on RUST origin's sidecar.
-
-#[test]
-fn cross_compat_rust_sender_reply_pushback_to_bun_origin() {
-    if !bun_precondition_check("cross_compat_rust_sender_reply_pushback_to_bun_origin") {
-        return;
-    }
-
-    // Shared HOME: both servers discover each other's sidecars.
-    let home_dir = tempfile::tempdir().expect("shared home tempdir");
-    let home = home_dir.path().to_path_buf();
-    let (port_base_a, port_base_b) = unique_port_bases();
-
-    // Rust is the "current" server (the one that will REPLY).
-    // Bun is the "origin" server (it POSTed the original message).
-    let bun_session = "sess-xc-bun-origin";
-    let rust_session = "sess-xc-rust-replier";
-
-    let mut bun_child =
-        RelayChild::spawn_sharing_home(RelayKind::Bun, bun_session, &home, port_base_a);
-    let mut rust_child =
-        RelayChild::spawn_sharing_home(RelayKind::Rust, rust_session, &home, port_base_b);
-
-    handshake(&mut bun_child, 1);
-    handshake(&mut rust_child, 1);
-
-    let bun_port = bun_child.wait_for_port();
-    let rust_port = rust_child.wait_for_port();
-
-    // Wait for BOTH sidecars to appear (cross-discovery requires this).
-    let bun_sidecar = bun_child.sidecar_path();
-    let rust_sidecar = rust_child.sidecar_path();
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        if bun_sidecar.exists() && rust_sidecar.exists() {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "cross-compat: sidecars never appeared (bun={} rust={})",
-            bun_sidecar.exists(),
-            rust_sidecar.exists()
-        );
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    eprintln!("cross-compat: both sidecars present. bun_port={bun_port} rust_port={rust_port}");
-
-    // (a) Bun (origin) posts to Rust (replier). No waiter → push-back to bun.
-    // We POST from bun_session to rust_port, then reply via rust's MCP stdin.
-    // The push-back should arrive on bun's stdout.
-    let msg_id = CcRelay::new()
-        .send_message(rust_port, "reply via rust, push to bun", bun_session)
-        .expect("cross-compat POST to rust");
-
-    // Drain notification on rust's stdout.
-    rust_child.next_json_matching("cross-compat rust notification", |v| {
-        v["method"] == "notifications/claude/channel"
-            && v["params"]["meta"]["message_id"] == json!(msg_id)
-    });
-
-    // Rust replies (no waiter → push-back to bun).
-    let pb_resp = call_reply(&mut rust_child, 50, &msg_id, "rust-to-bun push-back");
-    eprintln!("cross-compat: rust push-back reply result: {pb_resp}");
-
+    // Both halves R9 left the string in: the frozen answer contract, and the
+    // origination sentences. Named separately so a future edit that drops one
+    // says WHICH.
     assert!(
-        !is_error(&pb_resp),
-        "cross-compat: Rust push-back to Bun origin must be DELIVERED: {pb_resp}"
-    );
-    let pb_text = result_text(&pb_resp);
-    assert!(
-        pb_text.starts_with("DELIVERED"),
-        "cross-compat: Rust reply result must start with DELIVERED, got: {pb_text}"
+        inst.starts_with("Messages from other sessions arrive as <channel"),
+        "the frozen answer half must still lead: {inst:?}"
     );
     assert!(
-        pb_text.contains(&format!("posted to session {bun_session}")),
-        "cross-compat: Rust push-back must name bun origin, got: {pb_text}"
+        inst.ends_with(quorum_qw::onboarding::HOW_TO_REACH_PEERS),
+        "R9's origination half must still close it: {inst:?}"
     );
 
-    // Bun must receive the pushed-back reply as a channel notification.
-    let bun_notif = bun_child.next_json_matching("cross-compat bun push-back notification", |v| {
-        v["method"] == "notifications/claude/channel"
-    });
-    let content = bun_notif["params"]["content"]
-        .as_str()
-        .expect("bun notification content");
-    assert!(
-        content.starts_with(&format!("[REPLY to {msg_id}] ")),
-        "cross-compat: bun push-back content must start with '[REPLY to {msg_id}] ', got: {content}"
-    );
-    assert_eq!(
-        bun_notif["params"]["meta"]["from_session"].as_str(),
-        Some(rust_session),
-        "cross-compat: pushed-back from_session must be the rust replier"
-    );
-
-    eprintln!("cross-compat (a): Rust→push-back→Bun PASSED");
-
-    // (b) Rust posts to Bun, Bun replies, push-back lands on Rust's stdout.
-    let msg_id_b = CcRelay::new()
-        .send_message(bun_port, "reply via bun, push to rust", rust_session)
-        .expect("cross-compat POST to bun");
-
-    // Drain notification on bun's stdout.
-    bun_child.next_json_matching("cross-compat bun notification b", |v| {
-        v["method"] == "notifications/claude/channel"
-            && v["params"]["meta"]["message_id"] == json!(msg_id_b)
-    });
-
-    // Bun replies (no waiter → push-back to rust).
-    let pb_resp_b = call_reply(&mut bun_child, 60, &msg_id_b, "bun-to-rust push-back");
-    eprintln!("cross-compat: bun push-back reply result: {pb_resp_b}");
-
-    assert!(
-        !is_error(&pb_resp_b),
-        "cross-compat: Bun push-back to Rust origin must be DELIVERED: {pb_resp_b}"
-    );
-    let pb_text_b = result_text(&pb_resp_b);
-    assert!(
-        pb_text_b.starts_with("DELIVERED"),
-        "cross-compat: Bun reply result must start with DELIVERED, got: {pb_text_b}"
-    );
-    assert!(
-        pb_text_b.contains(&format!("posted to session {rust_session}")),
-        "cross-compat: Bun push-back must name rust origin, got: {pb_text_b}"
-    );
-
-    // Rust must receive the pushed-back reply as a channel notification.
-    let rust_notif = rust_child
-        .next_json_matching("cross-compat rust push-back notification", |v| {
-            v["method"] == "notifications/claude/channel"
-        });
-    let content_b = rust_notif["params"]["content"]
-        .as_str()
-        .expect("rust notification content");
-    assert!(
-        content_b.starts_with(&format!("[REPLY to {msg_id_b}] ")),
-        "cross-compat: rust push-back content must start with '[REPLY to {msg_id_b}] ', got: {content_b}"
-    );
-    assert_eq!(
-        rust_notif["params"]["meta"]["from_session"].as_str(),
-        Some(bun_session),
-        "cross-compat: pushed-back from_session must be the bun replier"
-    );
-
-    eprintln!("cross-compat (b): Bun→push-back→Rust PASSED");
-    eprintln!("cross-compat FULL SCENARIO PASSED: rolling cutover interop verified");
+    eprintln!("instructions: {} bytes confirmed over a live handshake", inst.len());
 }
 
 // ---------------------------------------------------------------------------

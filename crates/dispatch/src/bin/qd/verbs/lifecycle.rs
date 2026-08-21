@@ -77,10 +77,18 @@ fn resolve_create_dirs(
 /// spec-cli §11; the retired `new` verb errors in verbs/stubs.rs and never
 /// reaches this backend) — A2's detached create (run_new), now WITH
 /// A4 `-p/--prompt` + `--model` DELIVERY (spec §3.4) and the went-busy EXIT
-/// CONTRACT (§3.5: 0=accepted, 10=stalled, 1=infra/other). `--attach`
-/// DEFERRED→A5; `--provider opencode`/`--port` DEFERRED (parked); A6 makes
-/// `--via <name>` LIVE — F1 caller-capture + backends.json profile composition
-/// thread the backend env into create (spec §2.2 + §3.2).
+/// CONTRACT (§3.5: 0=accepted, 10=stalled, 1=infra/other). `--port` DEFERRED
+/// (parked, and no longer advertised — FTUE punch R6); A6 makes `--via <name>`
+/// LIVE — F1 caller-capture + backends.json profile composition thread the
+/// backend env into create (spec §2.2 + §3.2).
+///
+/// FTUE punch R19 + R20 add the two ends a human notices. R20: an OMITTED
+/// `--provider` is a question at a terminal (asked from the harnesses actually
+/// installed) and claude-code everywhere else. R19: a successful create at a
+/// terminal ENDS INSIDE the session, rather than printing a `qd attach <name>`
+/// the user then has to type at a session they are already looking at. Neither
+/// touches the agent surface: both are gated on `crate::driver`, which answers
+/// Agent for every marker-carrying or piped caller.
 /// punch item 11: the fork-target transcript preflight. Returns `Some(error)`
 /// when the target has NO transcript on disk (claude: `transcript_path` over
 /// the projects-dir for that sid), `None` when the fork is legal. Status-blind
@@ -265,6 +273,182 @@ fn supported_provider_names() -> String {
         .join(", ")
 }
 
+/// What `qd start` boots when nothing and nobody says otherwise — and the answer
+/// R20 stops treating as a decision. It is still the right FALLBACK (it is the
+/// harness the relay is native to), it was just never a CHOICE the user was
+/// offered.
+const DEFAULT_PROVIDER: &str = "claude-code";
+
+/// The LANE a detected harness belongs to.
+///
+/// The detector and the router keep separate vocabularies, for separate and
+/// legitimate reasons: `HarnessId` is what `qd setup` probes for on PATH, and
+/// `Harness` is what `Lane::for_create` routes on. R20's prompt is the first
+/// place the two meet, so the crossing gets exactly one exhaustive, wildcard-free
+/// match — a fifth harness added to the detector then fails to compile HERE
+/// until someone says which lane it starts.
+fn harness_for_detected(id: dispatch::setup::harness::HarnessId) -> quorum_qw::lane::Harness {
+    use dispatch::setup::harness::HarnessId;
+    use quorum_qw::lane::Harness;
+    match id {
+        HarnessId::ClaudeCode => Harness::ClaudeCode,
+        HarnessId::Codex => Harness::Codex,
+        HarnessId::Pi => Harness::Pi,
+        HarnessId::Opencode => Harness::Opencode,
+    }
+}
+
+/// `--provider` spelling for a detected harness — asked of the router, never
+/// spelled here.
+///
+/// The naive version of this function is a second table of provider-id string
+/// literals, and it would be wrong within one release: `HarnessId::as_str`
+/// answers `"claude"` (the BINARY setup probes for) where the provider id is
+/// `"claude-code"` (the LANE), and `Harness::Opencode` is `"acp/opencode"` where
+/// the detector says `"opencode"`. Two of four arms are traps. Deriving the
+/// string from [`quorum_qw::lane::Harness::provider_id`] — the same method the
+/// unknown-provider refusal above derives its advertised list from — means the
+/// prompt cannot offer a spelling the parser rejects, because it is reading the
+/// parser's own answer.
+fn provider_id_for_harness(id: dispatch::setup::harness::HarnessId) -> &'static str {
+    harness_for_detected(id).provider_id()
+}
+
+/// FTUE punch **R20** — resolve an OMITTED `--provider` by asking, where there is
+/// someone to ask.
+///
+/// # The complaint
+///
+/// A flagless `qd start wk` silently booted claude-code. A user who installed
+/// codex, or pi, got the wrong harness AND no indication that there had been a
+/// choice — the worst shape a default can take, because nothing about the
+/// outcome tells you a different one existed.
+///
+/// # What replaces it
+///
+/// The harnesses `qd setup` found (`verbs::setup::present_harnesses` — the same
+/// probe, never a second one; see C4) are offered as a numbered list with the
+/// default on Enter. Three shapes, and only one of them is a question:
+///
+/// - **nobody to ask** — no TTY, a pipe, a script, an agent session, or `--json`
+///   — answers `None` and the caller keeps [`DEFAULT_PROVIDER`]. This is the half
+///   of R20 that is not negotiable: a prompt in a context that cannot answer one
+///   is a HANG, which is worse than the wrong default by a wide margin. The
+///   driver resolves it, with [`DriverOverride::None`] so that `--interactive`
+///   (which every commissioned agent seat passes) cannot talk its way into a
+///   question.
+/// - **exactly one harness installed** — there is no choice to offer, so it is
+///   taken and SAID rather than asked. Silent when that one is claude-code: the
+///   sentence would be announcing the default to a user who has nothing else.
+/// - **two or more** — the actual prompt.
+///
+/// A caller who typed `--provider` never reaches here at all.
+///
+/// # Never hangs, never loops
+///
+/// `prompt_line` answers `None` on EOF, which takes the default immediately.
+/// Unrecognised input is re-asked at most [`PROVIDER_PROMPT_TRIES`] times and
+/// then takes the default: a start must always terminate in a session or an
+/// error, never in an argument with the user about menu syntax.
+fn resolve_provider_by_asking(
+    home: &std::path::Path,
+    env: &RealEnv,
+    name: &str,
+    json_out: bool,
+) -> Option<String> {
+    // --json means stdout is a document; a menu printed into it is corruption.
+    // (A --json caller is almost certainly non-interactive anyway, so this is a
+    // belt to the driver's braces — but "almost certainly" is not a contract.)
+    if json_out {
+        return None;
+    }
+    if crate::driver::resolve_driver_real(crate::driver::DriverOverride::None, env)
+        != crate::driver::Driver::Human
+    {
+        return None;
+    }
+
+    let found = super::setup::present_harnesses(home, env, &RealExec);
+    let (first, rest) = found.split_first()?;
+    if rest.is_empty() {
+        let id = provider_id_for_harness(*first);
+        if id == DEFAULT_PROVIDER {
+            return None;
+        }
+        println!(
+            "qd start: {} is the only agent harness on this machine — starting \"{name}\" \
+             with --provider {id}. (`qd setup` lists what qd looked for.)",
+            first.label()
+        );
+        return Some(id.to_string());
+    }
+
+    // The default is claude-code when it is installed — the fallback this
+    // function exists to stop being SILENT, not to stop being the default — and
+    // otherwise the first harness found, in setup's report order.
+    let default_idx = found
+        .iter()
+        .position(|h| provider_id_for_harness(*h) == DEFAULT_PROVIDER)
+        .unwrap_or(0);
+
+    println!("qd start: which harness should \"{name}\" run?");
+    let width = found
+        .iter()
+        .map(|h| h.label().chars().count())
+        .max()
+        .unwrap_or(0);
+    for (i, h) in found.iter().enumerate() {
+        let mark = if i == default_idx { "  (default)" } else { "" };
+        println!(
+            "  {}) {:<width$}  --provider {}{mark}",
+            i + 1,
+            h.label(),
+            provider_id_for_harness(*h),
+            width = width
+        );
+    }
+
+    let default_id = provider_id_for_harness(found[default_idx]);
+    for _ in 0..PROVIDER_PROMPT_TRIES {
+        let Some(answer) = super::super::tty::prompt_line(&format!(
+            "  Number or name [{}]: ",
+            default_idx + 1
+        )) else {
+            break; // EOF — take the default rather than spin on a closed stdin.
+        };
+        if answer.is_empty() {
+            break;
+        }
+        // A number picks a row; anything else is matched against the two names
+        // the line above showed — the harness label and the provider id — because
+        // a user who reads "--provider codex" and types `codex` has answered the
+        // question correctly and should not be told otherwise.
+        let picked = answer
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=found.len()).contains(n))
+            .map(|n| found[n - 1])
+            .or_else(|| {
+                found.iter().copied().find(|h| {
+                    answer.eq_ignore_ascii_case(provider_id_for_harness(*h))
+                        || answer.eq_ignore_ascii_case(h.as_str())
+                        || answer.eq_ignore_ascii_case(h.label())
+                })
+            });
+        match picked {
+            Some(h) => return Some(provider_id_for_harness(h).to_string()),
+            None => println!("  \"{answer}\" is not one of the choices."),
+        }
+    }
+    println!("  Using {default_id}.");
+    Some(default_id.to_string())
+}
+
+/// How many times the R20 harness prompt re-asks before taking its default. A
+/// mistyped answer deserves another go; an unattended terminal echoing garbage
+/// does not deserve an infinite loop between a user and their session.
+const PROVIDER_PROMPT_TRIES: usize = 3;
+
 pub fn run_new(m: &ArgMatches) -> i32 {
     let env = RealEnv;
     let home = match env.var("HOME").filter(|s| !s.is_empty()) {
@@ -309,7 +493,11 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         );
         return 1;
     }
-    let attach = m.get_flag("attach");
+    // FTUE punch R19: the opt-OUT, replacing the A5-deferred `--attach` opt-in.
+    // A start at a terminal now ends inside the session it created; this returns
+    // instead. It is only ever a veto — see `crate::driver::attaches_after_start`,
+    // which owns the rest of the decision.
+    let no_attach = m.get_flag("no-attach");
     // Lifecycle-collapse A-1 (spec D4): machine-readable identity output. Under
     // --json the human "Started detached session" line moves to stderr and
     // stdout carries exactly one JSON object (success identity, or the A-2
@@ -408,13 +596,25 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             return 1;
         }
     }
+    // --- FTUE punch R20: an omitted --provider is a QUESTION, not an assumption ---
+    // Placed AFTER the accept-set check (so a typed-and-wrong `--provider` still
+    // fails on its own terms, unasked) and BEFORE every resolution below, because
+    // the answer decides which provider `--fork`, `--interactive` and the lane are
+    // validated against. `None` back means "nobody to ask" and the
+    // `unwrap_or(DEFAULT_PROVIDER)` below is unchanged from what a flagless start
+    // has always done. See `resolve_provider_by_asking`.
+    let provider = match provider {
+        Some(p) => Some(p),
+        None => resolve_provider_by_asking(&home, &env, &name, json_out),
+    };
+
     // codex P1 W3 (codex-p1-spec section 7.1 step 2): resolve the provider ONCE
     // from the validated value (None ⇒ "claude-code"). The W1 fail-closed check
     // above already guarantees the value is "claude-code" here, so `provider_for`
     // resolves; the defensive None arm re-prints the SAME loud unknown-provider
     // error rather than panicking (it is structurally unreachable given the check,
     // but a fail-closed exit is the only honest posture if the two ever drift).
-    let provider_id = provider.as_deref().unwrap_or("claude-code");
+    let provider_id = provider.as_deref().unwrap_or(DEFAULT_PROVIDER);
     let Some(provider_impl) = dispatch::provider::provider_for(provider_id) else {
         eprintln!(
             "qd start: unknown provider \"{provider_id}\" — this engine supports: {}.",
@@ -422,10 +622,6 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         );
         return 1;
     };
-    if attach {
-        eprintln!("qd start: --attach is not yet supported in the Rust engine (A5).");
-        return 1;
-    }
     // P0 qafix R2 (orc ruling 2026-06-10), kept across the start-surface rework:
     // codex start has NO transcript seed — `run_new_codex_daemon` never receives
     // --fork, so it used to be DROPPED silently pre-validation. Errors-that-teach:
@@ -562,8 +758,9 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     //
     // WHAT STAYS ON THIS SIDE is everything above and below this block, and it is
     // exactly the inventory `quorum_qw::lanes`' own header lists: the clap parse
-    // and the `claudeArgs` forbidden-flag chokepoint, the parked `--port`/`--attach`
-    // refusals, `--fork` target resolution and its transcript seed (they need qd's
+    // and the `claudeArgs` forbidden-flag chokepoint, the parked `--port` refusal
+    // (R6 unadvertised it; the refusal is why the flag still parses),
+    // `--fork` target resolution and its transcript seed (they need qd's
     // fuzzy resolver), the driver auto-detect and its `Headless` refusal, `--via`
     // credential materialisation, every `--json` emission, the bind phase, the
     // relay-presence warning, telemetry, and the claude lane's post-boot `-p`
@@ -660,6 +857,34 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // warning, the telemetry stamp and the `-p` priming send all belong to it and to
     // nothing else; the other five render one line and return.
     let claude_lane = lane.harness == quorum_qw::lane::Harness::ClaudeCode;
+
+    // --- FTUE punch R19: does this start END INSIDE the session it makes? -----
+    //
+    // Resolved HERE, once, because the lane is the last of the four inputs to
+    // arrive and every exit below has to agree on the answer. The decision itself
+    // is `crate::driver::attaches_after_start`, where the reasoning lives; the
+    // two non-obvious arguments are assembled here:
+    //
+    // - `no_attach || headless_flag`. `--no-attach` is the R19 opt-out. `--headless`
+    //   is folded into it because it already MEANS "I am not a terminal" on every
+    //   other surface, and honouring it as an attach veto costs nothing on the
+    //   lanes where it is otherwise inert (codex/pi) while keeping the flag's one
+    //   meaning intact.
+    // - `is_pane() || is_app_server()`. The five lanes with a terminal to hand
+    //   over: claude's pane, codex's pane, codex's app server (attachable through
+    //   a second client — `Lane::is_app_server` is spelled as a predicate for
+    //   exactly this reason), pi's pane and pi's extension pane. The other three —
+    //   codex/daemon, pi/daemon, acp/* — have no terminal at all, and an attach
+    //   attempt would reach nothing but the daemon-redirect error.
+    //
+    // The driver is resolved with `DriverOverride::None`: see the function's docs
+    // for why `--interactive` must not be allowed to force this.
+    let attach_after_start = crate::driver::attaches_after_start(
+        crate::driver::resolve_driver_real(crate::driver::DriverOverride::None, &env),
+        no_attach || headless_flag,
+        prompt.is_some(),
+        lane.is_pane() || lane.is_app_server(),
+    );
 
     // --- WP-B-CS-1 (D2): driver auto-detect routing (claude lane only) ---------
     // I/O mode follows who DRIVES (S-B-COMMAND-SURFACE-RULINGS). A HUMAN caller →
@@ -988,6 +1213,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                 | quorum_qw::lane::Mode::AppServer,
             ) => {}
         }
+        // R19: the pane lanes end where `qd attach <name>` would have. The
+        // verdict line above still names that command, and stays: it is the
+        // truth for the NEXT time, and it is what a `--no-attach` or scripted
+        // caller — which is every caller that reaches it without attaching —
+        // needs to read.
+        if attach_after_start {
+            return super::attach::attach_after_create(&name, render);
+        }
         return 0;
     }
 
@@ -1300,6 +1533,20 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                 refused.error.exit_code()
             }
         };
+    }
+
+    // R19: the claude lane's handoff. It is the LAST thing the verb does — after
+    // the bind phase, the relay warranty check and the telemetry stamp — because
+    // every one of those either guarantees or records something about a session
+    // that must be true before a human is put inside it, and none of them can run
+    // once this call has taken the terminal.
+    //
+    // Unreachable with a prompt: the `-p` block above returns unconditionally,
+    // and `attaches_after_start` would answer `false` here anyway. Both, on
+    // purpose — the exit contract of a `-p` start (§3.5) is the caller's answer
+    // and an attach must not be able to overwrite it from either direction.
+    if attach_after_start {
+        return super::attach::attach_after_create(&name, render);
     }
 
     0
@@ -2006,6 +2253,55 @@ fn poll_stdin(timeout_ms: i32) -> bool {
 mod tests {
     use super::map_deliver_outcome;
     use dispatch::submit::DeliverOutcome;
+
+    // -------------------------------------------------------------------------
+    // FTUE punch R20: the detector's vocabulary and the parser's must agree.
+    // -------------------------------------------------------------------------
+
+    /// Every harness `qd setup` can DETECT maps to a `--provider` spelling this
+    /// engine can START — and to the RIGHT one. Deriving the string from
+    /// `Harness::provider_id` makes the first half structural; the second half
+    /// is what this test is actually for, because a crossed arm
+    /// (`HarnessId::Pi => Harness::Codex`) yields a perfectly valid provider id
+    /// for the wrong harness, and the user would get codex from a menu row
+    /// labelled pi.
+    ///
+    /// The link between the two vocabularies is the program name: the detector
+    /// finds `pi` on PATH and the router calls that lane `pi`; `claude` becomes
+    /// `claude-code`; `opencode` becomes `acp/opencode`. Containment is the
+    /// strongest relation that holds across all four, and it is enough to catch
+    /// every crossing — no harness's program name is a substring of another's
+    /// provider id.
+    ///
+    /// FIX-SHAPED MUTATION: swap any two arms of `harness_for_detected` and this
+    /// REDs on the containment assert.
+    #[test]
+    fn provider_ids_for_detected_harnesses_are_all_startable() {
+        use dispatch::setup::harness::HarnessId;
+        for id in HarnessId::ALL {
+            let provider_id = super::provider_id_for_harness(*id);
+            assert!(
+                quorum_qw::lane::Harness::from_provider_id(provider_id).is_some(),
+                "R20 would offer `--provider {provider_id}` for {id:?}, which start refuses",
+            );
+            assert!(
+                provider_id.contains(id.as_str()),
+                "R20 would label `--provider {provider_id}` as {id:?} — a crossed arm in \
+                 harness_for_detected",
+            );
+        }
+    }
+
+    /// The fallback is still claude-code, and it is still a provider the engine
+    /// accepts — R20 changed when the default is REACHED (never, at a terminal,
+    /// without being offered the alternatives), not what it is.
+    #[test]
+    fn the_default_provider_is_a_real_provider() {
+        assert_eq!(super::DEFAULT_PROVIDER, "claude-code");
+        assert!(
+            quorum_qw::lane::Harness::from_provider_id(super::DEFAULT_PROVIDER).is_some()
+        );
+    }
 
     // -------------------------------------------------------------------------
     // punch item 11: fork-target transcript preflight.

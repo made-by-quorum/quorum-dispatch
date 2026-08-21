@@ -130,6 +130,46 @@ pub fn start_route(driver: Driver, has_prompt: bool) -> StartRoute {
     }
 }
 
+/// FTUE punch **R19** — does `qd start` hand the terminal over once the session
+/// is up?
+///
+/// # Why this is a decision and not `if is_tty`
+///
+/// `qd start wk` used to create a session and return, leaving the human staring
+/// at a prompt and typing `qd attach wk` at a session they were already looking
+/// at. Attaching is now the default — but "default" here has to mean *for a
+/// human at a terminal*, and nothing else, because every other caller of `start`
+/// is something an attach would break:
+///
+/// - an **agent** (`QD_SESSION_ID` / `CLAUDECODE` in its env) has no terminal to
+///   give and no keystroke to leave one with; handing it a mux pane wedges the
+///   turn that spawned the session;
+/// - a **pipe** (`qd start … | tee`) is the same case without the marker;
+/// - a **`-p` start** is by construction a programmatic first turn — the prompt
+///   IS the interaction, and the exit code (0 / 10 / 1, spec §3.5) is the answer
+///   the caller is waiting for. Attaching would replace that answer with a TUI.
+///
+/// So the driver, which already answers "who is driving this invocation", is the
+/// input — and it is resolved with [`DriverOverride::None`] at the call site,
+/// NOT from `--interactive`. That is load-bearing: every commissioned agent seat
+/// starts with `qd start <name> --interactive` (the PTY-LANE PREMISE pinned by
+/// `interactive_override_routes_to_interactive_even_with_agent_marker` below),
+/// so letting that flag force an attach would attach *the whole fleet*.
+///
+/// `lane_attachable` is the fourth input because three of the nine lanes have no
+/// terminal at all (`codex/daemon`, `pi/daemon`, `acp/*`): for them the create is
+/// the whole story, and an attach attempt would only reach the daemon-redirect
+/// error. `opted_out` is `--no-attach` (and `--headless`, which says the same
+/// thing in the driver's vocabulary).
+pub fn attaches_after_start(
+    driver: Driver,
+    opted_out: bool,
+    has_prompt: bool,
+    lane_attachable: bool,
+) -> bool {
+    !opted_out && !has_prompt && lane_attachable && driver == Driver::Human
+}
+
 /// The render surface `qd ls` selects (WP-B-CS-2, S-B rulings §"qd ls"): a TTY
 /// human gets the **table**, a pipe/agent gets **JSON**, and an explicit `--json`
 /// always overrides to JSON (the same context-default + explicit-escape pattern as
@@ -346,6 +386,41 @@ mod tests {
         let bare = resolve_driver(DriverOverride::None, false, &agent_env("CLAUDECODE"));
         assert_eq!(start_route(bare, true), StartRoute::Headless);
         assert_eq!(start_route(bare, false), StartRoute::RefuseNoPrompt);
+    }
+
+    // --- R19: attach-after-start (the post-create handoff decision) ---------
+
+    /// The ONE row that attaches: a human, no opt-out, no `-p`, an attachable
+    /// lane. Everything else in this matrix returns.
+    #[test]
+    fn attaches_after_start_only_for_a_bare_human_start_on_an_attachable_lane() {
+        assert!(attaches_after_start(Driver::Human, false, false, true));
+        // --no-attach / --headless veto.
+        assert!(!attaches_after_start(Driver::Human, true, false, true));
+        // -p is a programmatic first turn; its exit code is the answer.
+        assert!(!attaches_after_start(Driver::Human, false, true, true));
+        // A daemon lane has no terminal to hand over.
+        assert!(!attaches_after_start(Driver::Human, false, false, false));
+        // An agent caller NEVER attaches, however bare the invocation.
+        assert!(!attaches_after_start(Driver::Agent, false, false, true));
+    }
+
+    /// FIX-SHAPED MUTATION, and the one that matters most: the fleet starts its
+    /// seats with `qd start <name> --interactive` from inside an agent-marked
+    /// session. If the attach decision were ever resolved through the
+    /// `--interactive` override instead of [`DriverOverride::None`], every
+    /// commissioned agent would be handed a mux pane it cannot leave. Compose the
+    /// two halves here so the wiring, not just the predicate, is pinned.
+    #[test]
+    fn agent_marked_interactive_start_does_not_attach() {
+        let env = agent_env("QD_SESSION_ID");
+        // What the call site actually asks: no override, so the marker decides.
+        let driver = resolve_driver(DriverOverride::None, true, &env);
+        assert_eq!(driver, Driver::Agent);
+        assert!(!attaches_after_start(driver, false, false, true));
+        // And the converse: a human at the same TTY with no marker DOES attach.
+        let human = resolve_driver(DriverOverride::None, true, &bare_env());
+        assert!(attaches_after_start(human, false, false, true));
     }
 
     // --- WP-B-CS-2: ls render-mode auto-detect (override wins) --------------
