@@ -48,4 +48,8 @@ pub const CLAUDE_AGENT_ACP_BIN: &str = "claude-agent-acp";
 /// compiled [`BRIDGE_BIN`] (`claude-code-acp`), byte-identical to pre-A-OC.1. `'static` singleton
 /// (`provider_for` hands out `&'static dyn Provider` without allocation, the `CLAUDE_PROVIDER`
 /// precedent).
-pub static ACP_CC_PROVIDER: AcpProvider = AcpProvider::new("acp/claude-code", None, &[]);
+/// `harness_server = None` because `claude-code-acp` genuinely has no server: it
+/// speaks ACP on stdin/stdout and listens on nothing. That is not a gap to fill
+/// later — it is why this bridge has no viewer, and why its spawned argv and its
+/// registry row are untouched by the `acp/opencode` viewer work.
+pub static ACP_CC_PROVIDER: AcpProvider = AcpProvider::new("acp/claude-code", None, &[], None);

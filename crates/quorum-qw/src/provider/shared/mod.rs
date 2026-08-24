@@ -49,6 +49,13 @@
 //!   reply-path line, one inverse parser the content-keyed matchers un-wrap
 //!   with. Two harnesses run it; a second copy is exactly the drift this
 //!   directory exists to prevent.
+//! - [`viewer`] — the human VIEWER pane on a daemon-hosted session
+//!   ([`viewer::pane_name`] + [`viewer::reap_pane`]). `codex/app-server` and
+//!   `acp/opencode` both have a residence that is a SERVER, so both answer "a
+//!   daemon has no terminal" by opening a second CLIENT of it in a pane; the
+//!   pane's name and its reap are identical for both, and neither function
+//!   contains a line about a harness. What DOES know a harness — which argv the
+//!   viewer runs, which refusals its row must clear — stays in the lane.
 //! - [`fixture`] — [`fixture::FixtureDaemonProvider`], the compiled-in
 //!   daemon-SHAPED conformance fixture. Harness-neutral by construction: it is
 //!   the standing proof that the [`crate::provider::Provider`] trait is not
@@ -67,3 +74,4 @@ pub mod attribution;
 pub mod daemon;
 pub mod fixture;
 pub mod pane;
+pub mod viewer;

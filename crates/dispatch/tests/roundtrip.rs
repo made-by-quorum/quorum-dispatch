@@ -46,6 +46,9 @@ fn registry_write_roundtrip_through_pipeline() {
         // Child B (opencode D1): no structured-send history on this row.
         structured_send_issued: None,
         hosting: None,
+        // The bridge-side server address `acp/opencode` records; a claude row has
+        // no such server, so it stays absent on disk like `endpoint` above.
+        harness_endpoint: None,
     };
     registry::write_entry(&paths.sessions_dir, &entry).unwrap();
 

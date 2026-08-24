@@ -18,12 +18,21 @@
 //!
 //! # What deliberately stays here
 //!
-//! - **The codex-daemon viewer.** [`LaneOps::attach`] answers `NotSupported` for
-//!   every daemon lane, and `07-lane-gaps.md` ruling J says that is intentional:
-//!   the viewer does not give the daemon a terminal, it opens a SECOND CLIENT on
-//!   its app server, which is a different operation and must not be promoted into
-//!   the contract. So the viewer is tried before the lane, and a row that cannot
-//!   host one falls through to the honest redirect.
+//! - **The `codex/daemon` viewer.** [`LaneOps::attach`] answers `NotSupported`
+//!   for every daemon lane WITHOUT a joinable residence, and `07-lane-gaps.md`
+//!   ruling J says that is intentional: the viewer does not give the daemon a
+//!   terminal, it opens a SECOND CLIENT on its app server, which is a different
+//!   operation and must not be promoted into the contract. So the viewer is
+//!   tried before the lane, and a row that cannot host one falls through to the
+//!   honest redirect.
+//!
+//!   NARROWED TWICE, and the second time by `acp/opencode`. `codex/app-server`
+//!   stopped coming through here in 2026-08 (its own lane opens the same viewer);
+//!   `acp/opencode` never did, because its lane grew a viewer of its own from the
+//!   start — `opencode attach <url> --session <id>` on the HTTP server inside the
+//!   ACP bridge, reached through [`LaneOps::attach`] like any other lane. What is
+//!   left here is `codex/daemon` alone, which has no attach of its own and would
+//!   otherwise lose an affordance it has today.
 //! - **`--no-attach`** — revive to a persistent daemon and DO NOT attach. `wake`
 //!   covers the revive; the "already live, not attaching" report and the
 //!   claude-only guard are composed here.
@@ -234,10 +243,20 @@ pub fn attach_resolved(session: &Session, render: RenderMode) -> i32 {
     // survives ONLY for `codex/daemon`, which has no attach of its own and would
     // otherwise lose an affordance it has today. When the two are unified, this is
     // the half to delete.
-    let app_server_lane = quorum_qw::lane_for(&session.provider, session.hosting.as_deref())
-        .is_some_and(|l| l.is_app_server());
+    //
+    // `acp/opencode` is the worked example of doing it the right way round: it
+    // has a viewer too (`opencode attach <url> --session <id>` on the bridge's own
+    // HTTP server) and NO special case here at all — the lane owns it, the
+    // provider guard below excludes it, and this block never sees it.
+    //
+    // The guard asks `has_viewer()` rather than `is_app_server()` so it keeps
+    // meaning "the lane already does this" as more lanes acquire one. For a
+    // `codex` row the two answers coincide today; if they ever stop, the wrong
+    // one would shadow a lane's own viewer with this copy.
+    let lane_opens_its_own_viewer = quorum_qw::lane_for(&session.provider, session.hosting.as_deref())
+        .is_some_and(|l| l.has_viewer());
     if session.provider == "codex"
-        && !app_server_lane
+        && !lane_opens_its_own_viewer
         && matches!(session.status, SessionStatus::Idle | SessionStatus::Busy)
     {
         if let Some(code) = lifecycle::attach_codex_viewer(session) {

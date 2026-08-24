@@ -194,6 +194,36 @@ pub struct RegistryEntry {
     /// pinned by `hosting_disk_key_is_lowercase_hosting`, not assumed).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hosting: Option<String>,
+    /// The HARNESS's own server address, as distinct from [`Self::endpoint`],
+    /// which is QD's.
+    ///
+    /// WHY TWO ENDPOINT FIELDS, AND WHY THAT IS NOT A DUPLICATE. On an `acp/*`
+    /// row the two name different servers in different processes. `endpoint` is
+    /// the `qd acp-daemon` adapter's ws front — qd's own residence layer, the
+    /// thing every verb reconnects to. This is the server the BRIDGE PROGRAM
+    /// runs for itself, on its own protocol, which qd does not drive and only
+    /// hands out. Collapsing them would mean one field whose meaning depends on
+    /// who is reading it.
+    ///
+    /// WHAT IT IS FOR. `opencode acp` is not a stdio-only bridge: it starts a
+    /// full opencode HTTP server and adapts ACP onto it, and `opencode attach
+    /// <url> --session <id>` opens a human TUI as a SECOND CLIENT of exactly
+    /// that server. So this is the viewer's reconnect handle, the `acp/opencode`
+    /// answer to what `endpoint` is for `codex/app-server`. Left `None` by the
+    /// bridges that have no such server (`acp/claude-code`), which is why it is
+    /// an `Option` rather than a second mandatory address.
+    ///
+    /// RE-ALLOCATED PER RESIDENCE, never reused: the port is pinned at spawn, so
+    /// a revive writes a NEW one and a row whose adapter is dead carries an
+    /// address nobody is serving. Read it through a liveness check, never as
+    /// proof the server is up — the same rule `endpoint` carries.
+    ///
+    /// skip-None + appended LAST keeps every existing row / tombstone / golden
+    /// byte-stable (the `provider`/`endpoint`/`transport`/`hosting` precedent),
+    /// pinned by the absent-stays-absent round-trip test. On-disk key is
+    /// `harnessEndpoint` (`rename_all = "camelCase"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness_endpoint: Option<String>,
 }
 
 impl RegistryEntry {
@@ -287,6 +317,18 @@ impl RegistryEntry {
         // structural hosting rather than dropping the row or inventing a topology.
         // The `wrong_typed_hosting_number_degrades` test is the mutation evidence.
         field!(entry.hosting, Option<String>, "hosting", "hosting");
+        // Per-field-permissive harnessEndpoint read, same R1 discipline. A
+        // wrong-typed `"harnessEndpoint": 7` DEGRADES to None (row survives,
+        // "harnessEndpoint" named) — and None is the SAFE degrade: the viewer
+        // refuses for want of an address, which is what it would do for a row
+        // that never had one. Dropping the row instead would take a live
+        // session's whole record out over a field only `qd attach` reads.
+        field!(
+            entry.harness_endpoint,
+            Option<String>,
+            "harnessEndpoint",
+            "harnessEndpoint"
+        );
         // Any remaining keys are unknown fields — ignored (permissive).
 
         Some((entry, degraded))
@@ -1268,6 +1310,7 @@ mod tests {
             transport: None,
             structured_send_issued: None,
             hosting: None,
+            harness_endpoint: None,
         }
     }
 
@@ -1294,6 +1337,7 @@ mod tests {
             transport: None,
             structured_send_issued: None,
             hosting: None,
+            harness_endpoint: None,
         }
     }
 
@@ -1711,6 +1755,62 @@ mod tests {
         // Absent stays absent across the round-trip.
         let back = read_entry(dir.path(), 4242).unwrap();
         assert_eq!(back.endpoint, None);
+        assert_eq!(back, entry);
+    }
+
+    // === RegistryEntry.harnessEndpoint — the bridge's OWN server address (the
+    // same R1 / provider / endpoint discipline) ===
+
+    // A wrong-typed `"harnessEndpoint": 7` DEGRADES (row survives,
+    // "harnessEndpoint" named) instead of dropping the whole row. Mutation
+    // evidence: removing the `field!(entry.harness_endpoint, ...)` line in
+    // from_value reds this.
+    #[test]
+    fn wrong_typed_harness_endpoint_number_degrades() {
+        let (e, degraded) = read_blob(r#"{"pid":100,"harnessEndpoint":7}"#);
+        assert_eq!(e.harness_endpoint, None, "wrong-typed degrades to None");
+        assert_eq!(e.pid, Some(100), "the rest of the row survives");
+        assert_eq!(degraded, vec!["harnessEndpoint"]);
+    }
+
+    // The on-disk key is camelCase `harnessEndpoint`, and a populated value
+    // round-trips through write+read. Pinned rather than assumed — `endpoint`
+    // next to it is a single lowercase word that `rename_all` does NOT touch, so
+    // "the key is whatever the field is called" is not a rule this struct
+    // follows.
+    #[test]
+    fn harness_endpoint_on_disk_key_is_camel_case_and_round_trips() {
+        let dir = tempdir().unwrap();
+        let mut entry = codex_entry();
+        entry.harness_endpoint = Some("http://127.0.0.1:41234".into());
+        write_entry(dir.path(), &entry).unwrap();
+        let text = fs::read_to_string(dir.path().join("90909.json")).unwrap();
+        assert!(text.contains("\"harnessEndpoint\""), "json: {text}");
+        let back = read_entry(dir.path(), 90909).unwrap();
+        assert_eq!(
+            back.harness_endpoint.as_deref(),
+            Some("http://127.0.0.1:41234")
+        );
+        assert_eq!(back, entry);
+    }
+
+    // A row with no harness server writes NO `harnessEndpoint` key. This is the
+    // byte-stability pin: `acp/claude-code`, codex, pi and claude rows must be
+    // unchanged on disk by the field's existence, and so must every pre-existing
+    // row, tombstone and golden.
+    #[test]
+    fn absent_harness_endpoint_stays_absent_and_byte_stable() {
+        let dir = tempdir().unwrap();
+        let entry = full_entry();
+        assert_eq!(entry.harness_endpoint, None);
+        write_entry(dir.path(), &entry).unwrap();
+        let text = fs::read_to_string(dir.path().join("4242.json")).unwrap();
+        assert!(
+            !text.contains("harnessEndpoint"),
+            "a None harnessEndpoint must NOT appear on disk (byte-stability): {text}"
+        );
+        let back = read_entry(dir.path(), 4242).unwrap();
+        assert_eq!(back.harness_endpoint, None);
         assert_eq!(back, entry);
     }
 

@@ -191,22 +191,16 @@ impl std::fmt::Display for CodexTuiError {
 
 impl std::error::Error for CodexTuiError {}
 
-/// codex-interactive, use case 2: the mux-pane name of a HUMAN VIEWER opened on
-/// a session (`qd attach` on a live daemon row spawns `codex --remote <endpoint>
-/// …` into a pane of this name).
-///
-/// Distinct from the session's own name because a viewer is NOT the session — it
-/// is a second process looking at it, with its own lifetime.
-///
-/// `.view` rather than something unmintable: qrmux restricts pane names to
-/// `a-zA-Z0-9_-.`, so there is no separator available that a session name could
-/// not also contain. A user COULD therefore have a real session literally named
-/// `foo.view`, and reusing a pane on name alone would attach them to that instead
-/// of a viewer on `foo`. So reuse is gated on the pane's COMMAND matching our
-/// viewer argv, never on the name — see `verbs::lifecycle::attach_codex_viewer`.
-pub fn viewer_pane_name(session_name: &str) -> String {
-    format!("{session_name}.view")
-}
+// codex-interactive, use case 2: `viewer_pane_name` MOVED to
+// [`crate::provider::shared::viewer::pane_name`] and is re-exported here so
+// every `codex::pane::viewer_pane_name` call site keeps resolving.
+//
+// It moved because the sentence that justified keeping it under codex — "no
+// other lane has a viewer" — stopped being true: `acp/opencode` has one now
+// (`opencode attach <url> --session <id>` on the HTTP server inside the ACP
+// bridge). The function never held a line about codex; it formats a pane name.
+// Its war story travelled with it.
+pub use crate::provider::shared::viewer::pane_name as viewer_pane_name;
 
 /// The revive preconditions — PURE, and deliberately separate from
 /// [`revive_codex_tui`] so a caller can refuse before it resolves HOME, the mux
@@ -347,6 +341,10 @@ pub fn create_codex_tui(
         transport: None,
         structured_send_issued: None,
         hosting: Some(Hosting::MuxPane.as_str().to_string()),
+        // No second server to hand out: this harness's residence IS qd's
+        // (`endpoint`), so there is no separate harness-side address a viewer
+        // could join. See `RegistryEntry::harness_endpoint`.
+        harness_endpoint: None,
     };
     if let Err(detail) = registry::write_entry(&deps.paths.sessions_dir, &entry) {
         return Err(CodexTuiError::RowWriteFailed {

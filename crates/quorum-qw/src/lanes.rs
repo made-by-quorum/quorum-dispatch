@@ -746,12 +746,12 @@ impl LaneImpl<'_> {
     /// there is no ledger entry to get wrong. `deliver` may NOT be split this way —
     /// see [`LaneOps::deliver`] on why its wake/steer decision has to stay atomic.
     pub fn attach_target(&self, id: &SessionId) -> Result<(String, PathBuf), LaneError> {
-        // `codex/app-server` is the one daemon lane with an answer here, and it
-        // is a DIFFERENT answer: not "this session's terminal" (it has none) but
-        // "the pane a viewer on it would live in". Side-effect-free, like every
-        // other precheck — the pane is created by `attach` itself, not here, so a
-        // wire `attach_precheck` never spawns a TUI.
-        if self.lane.is_app_server() {
+        // The viewer lanes have an answer here, and it is a DIFFERENT answer: not
+        // "this session's terminal" (they have none) but "the pane a viewer on it
+        // would live in". Side-effect-free, like every other precheck — the pane
+        // is created by `attach` itself, not here, so a wire `attach_precheck`
+        // never spawns a TUI.
+        if self.lane.has_viewer() {
             return self.viewer_target(id);
         }
         if self.lane.is_daemon() {
@@ -776,14 +776,30 @@ impl LaneImpl<'_> {
         Ok((zmx_name, dir))
     }
 
-    /// Where a viewer on this `codex/app-server` session lives — `(pane name,
-    /// socket dir)`. PURE: it reads the row and resolves the mux dirs, and
-    /// creates nothing.
+    /// Where a viewer on this session lives — `(pane name, socket dir)`. PURE:
+    /// it reads the row and resolves the mux dirs, and creates nothing.
     ///
-    /// The three refusals are the three facts a viewer needs, and each is a
-    /// [`LaneError::Cold`] rather than a `NotSupported`, because none of them is
-    /// structural — they are all "not yet" on a row that could acquire them.
+    /// The pane NAME is harness-neutral (`<session>.view`), so what this routes
+    /// on is the REFUSALS: the facts a viewer needs before one is worth opening
+    /// differ per harness, and each lane's are checked by its own arm. Reached
+    /// only for a lane [`Lane::has_viewer`] admits; the fallthrough is the
+    /// hand-built-`Lane` answer every other total match in this file gives.
     fn viewer_target(&self, id: &SessionId) -> Result<(String, PathBuf), LaneError> {
+        match self.lane.harness {
+            Harness::Codex => self.codex_viewer_target(id),
+            Harness::Opencode => self.opencode_viewer_target(id),
+            _ => Err(LaneError::NotSupported {
+                op: "attach".to_string(),
+                reason: NO_VIEWER_ON_THIS_LANE.to_string(),
+            }),
+        }
+    }
+
+    /// The `codex/app-server` viewer's preconditions.
+    ///
+    /// The refusals are the facts a viewer needs, and WHICH error each one is
+    /// matters as much as that it refuses — see the comment on `refused` below.
+    fn codex_viewer_target(&self, id: &SessionId) -> Result<(String, PathBuf), LaneError> {
         let s = self.row(id)?;
 
         // ── WHICH REFUSAL, AND WHY IT IS NOT A COSMETIC CHOICE ──────────────
@@ -872,13 +888,150 @@ impl LaneImpl<'_> {
         if !self.app_server_is_live(&s) {
             return Err(LaneError::Cold { id: id.clone() });
         }
+        self.viewer_pane(name)
+    }
+
+    /// The `acp/opencode` viewer's preconditions — the same three questions the
+    /// codex arm asks, answered against a different residence.
+    ///
+    /// # What is NOT here, and why its absence is the interesting part
+    ///
+    /// There is no turn-zero refusal. codex needs one because its viewer argv
+    /// ends `resume <thread-id>` and `thread/resume` needs a ROLLOUT to resume
+    /// FROM — a thread created but never driven has none, so the TUI boots,
+    /// fails, and leaves a dead pane. opencode has no equivalent edge: the ACP
+    /// bridge's `session/new` goes straight through `sdk.session.create`, so the
+    /// session exists ON THE SERVER from the moment the row does, and `opencode
+    /// attach` validates it by asking that same server for it. A zero-turn
+    /// opencode session opens an empty, working viewer.
+    ///
+    /// That is a claim about a live program, so it is worth saying where it can
+    /// be checked: opencode v1.18.21, `acp/service.ts` (`newSession` returns
+    /// `sessionId: state.id` where `state.id` is the id `sdk.session.create`
+    /// minted) and `cli/tui/validate-session.ts` (what `attach --session` calls).
+    /// It also means the ACP session id ON THE ROW is the opencode session id —
+    /// no mapping, no second lookup.
+    fn opencode_viewer_target(&self, id: &SessionId) -> Result<(String, PathBuf), LaneError> {
+        let s = self.row(id)?;
+        let refused = |detail: String| LaneError::Refused { detail };
+
+        // A viewer's pane is named after the SESSION, so a nameless row has
+        // nowhere to put one. A wake does not mint a name.
+        let name = s.name.as_deref().filter(|n| !n.is_empty()).ok_or_else(|| {
+            refused(format!(
+                "session {} has no name, and a viewer pane is named after its session",
+                id.0
+            ))
+        })?;
+        // No ACP session id ⇒ nothing for `--session` to select. A wake cannot
+        // invent one: the resume path REQUIRES the id it would load.
+        if s.session_id.is_empty() {
+            return Err(refused(format!(
+                "session {name:?} has no opencode session id yet, so there is nothing \
+                 for a viewer to open"
+            )));
+        }
+        // No LIVE bridge to point `attach` at. **`Cold`**, and deliberately: the
+        // viewer is a second client on a RUNNING server, a dead one is exactly
+        // what a wake repairs, and qd's revive-and-retry then lands the attach on
+        // the freshly-pinned port.
+        //
+        // A LIVENESS check, not an "is the field populated" check — the same
+        // distinction the codex arm learned the hard way. `harnessEndpoint` is
+        // written at spawn and nothing rewrites the row when the adapter dies, so
+        // a killed session still answers `Some(http://…)`; a viewer spawned
+        // against it would fail to connect and leave a dead pane on screen.
+        if !self.acp_adapter_is_live(&s) {
+            return Err(LaneError::Cold { id: id.clone() });
+        }
+        // The adapter IS live and its row still does not name a bridge server.
+        // That is one specific thing: a session started before qd pinned the
+        // port, whose bridge is listening on an ephemeral port nobody recorded.
+        //
+        // **`Refused`, not `Cold`, and the difference is the whole lesson from
+        // the codex arm.** A wake cannot repair this: `wake` on an ALREADY-ALIVE
+        // acp adapter is a deliberate no-op (the Case-1 gate — it does not
+        // re-spawn and does not rewrite the row), so mapping this to `Cold` would
+        // send the user through "Revived …; attaching..." followed by a
+        // not-live error about a session that is plainly live, with the remedy
+        // that actually works mentioned nowhere. So the sentence names it.
+        if self.recorded_harness_endpoint(&s).is_none() {
+            return Err(refused(format!(
+                "session {name:?} was started before qd pinned opencode's server \
+                 port, so its bridge is listening on a port nothing recorded and \
+                 a viewer has no address to join. Restart it (qd stop {name} && \
+                 qd start {name} --provider opencode) to open one."
+            )));
+        }
+        self.viewer_pane(name)
+    }
+
+    /// `(pane name, socket dir)` for a viewer on `name` — the half of a viewer
+    /// target that is the same for every harness.
+    fn viewer_pane(&self, name: &str) -> Result<(String, PathBuf), LaneError> {
         let (_, canonical, _) = self
             .socket_dirs()
             .map_err(|detail| LaneError::Transport { detail })?;
-        Ok((
-            crate::provider::codex::pane::viewer_pane_name(name),
-            canonical,
-        ))
+        Ok((crate::provider::shared::viewer::pane_name(name), canonical))
+    }
+
+    /// Is THIS acp row's adapter actually running right now?
+    ///
+    /// The `app_server_is_live` analog, and identity-checked for the same reason:
+    /// the recorded pid is alive AND its live command line is our acp-daemon
+    /// carrying the recorded `--listen <endpoint>`. Under exact-pid-reuse a live
+    /// pid can belong to an unrelated process, and treating that as a healthy
+    /// residence would point a viewer at a port nobody is serving.
+    ///
+    /// Keyed on the ADAPTER, not on the bridge, and that is the right key: the
+    /// adapter owns the bridge as a process-group child, so an adapter that is
+    /// ours and alive is what makes its bridge's port meaningful.
+    fn acp_adapter_is_live(&self, s: &Session) -> bool {
+        let Some(pid) = s.pid.filter(|&p| p > 0) else {
+            return false;
+        };
+        let Some(listen) = self.current_endpoint(s.pid) else {
+            return false;
+        };
+        quorum_core::effects::is_pid_alive(pid as i32)
+            && crate::provider::acp::residence::cmdline_is_our_acp_daemon(
+                crate::create_daemon::real_cmdline_probe(pid).as_deref(),
+                Some(listen.as_str()),
+            )
+    }
+
+    /// What the row SAYS this session's bridge server address is. A pure read —
+    /// it asks whether the field is there, and nothing about whether anything is
+    /// listening.
+    ///
+    /// Separate from [`LaneImpl::harness_endpoint`] because the two answer
+    /// questions with different remedies: an absent field means the session
+    /// predates the port pin (restart it), while a present field on a dead
+    /// adapter means the session is cold (wake it). Collapsing them is what would
+    /// send a live session round the revive loop.
+    fn recorded_harness_endpoint(&self, s: &Session) -> Option<String> {
+        s.pid
+            .filter(|&p| p > 0)
+            .and_then(|pid| crate::registry::read_entry(&self.paths.sessions_dir, pid))
+            .and_then(|e| e.harness_endpoint)
+            .filter(|e| !e.is_empty())
+    }
+
+    /// This `acp/opencode` row's LIVE bridge HTTP address, or `None`.
+    ///
+    /// Both halves are load-bearing. The recorded `harnessEndpoint` says where
+    /// the bridge was TOLD to listen; the identity-checked liveness says whether
+    /// that bridge is still there. Either alone points a viewer at a socket
+    /// nobody is serving — the row's address outlives the process that bound it.
+    ///
+    /// This is what the viewer argv reads. The target's refusals decompose it
+    /// into its two halves so each can name its own remedy; by the time an argv
+    /// is being built, both have already been established and the combined
+    /// answer is the useful one.
+    fn harness_endpoint(&self, s: &Session) -> Option<String> {
+        self.acp_adapter_is_live(s)
+            .then(|| self.recorded_harness_endpoint(s))
+            .flatten()
     }
 
     /// Is THIS row's codex app server actually running right now?
@@ -929,16 +1082,23 @@ impl LaneImpl<'_> {
         )
     }
 
-    /// Attach a human TUI to a LIVE `codex/app-server` session, without stopping
-    /// or converting it.
+    /// Attach a human TUI to a LIVE daemon-hosted session, without stopping or
+    /// converting it.
     ///
-    /// THE MECHANISM (verified live against codex-cli 0.147.0). The codex TUI is
-    /// itself an app-server client — `codex --remote <ws-url>` points it at an
-    /// EXISTING app server instead of bootstrapping its own. This lane already
-    /// spawns exactly such a server per session and records its address in the
-    /// row's `endpoint` (`ws://127.0.0.1:<port>`, the form `--remote` accepts). So
-    /// the human's TUI and the agent's RPC client become two clients of ONE app
-    /// server, driving ONE thread.
+    /// THE MECHANISM, and it is the same shape for both lanes that have it: the
+    /// harness's own TUI is a CLIENT of a server, this lane already spawns
+    /// exactly such a server per session, and the row records its address. So the
+    /// human's TUI and the agent's driver become two clients of ONE server,
+    /// driving ONE session.
+    ///
+    /// - `codex/app-server` (verified live against codex-cli 0.147.0) — `codex
+    ///   --remote <ws-url> resume <thread-id>` on the row's `endpoint`, the
+    ///   `ws://127.0.0.1:<port>` the app server binds.
+    /// - `acp/opencode` — `opencode attach <http-url> --session <id>` on the row's
+    ///   `harnessEndpoint`, the `http://127.0.0.1:<port>` the opencode server
+    ///   inside the ACP bridge binds. qd pins that port at spawn precisely so
+    ///   there is an address to record here; left at opencode's default it is
+    ///   ephemeral and the server, though real, is unreachable.
     ///
     /// WHY THIS BEATS STOP-AND-CONVERT. The obvious way to give a human a terminal
     /// on an agent's session is to stop the daemon and relaunch the thread as a
@@ -961,14 +1121,9 @@ impl LaneImpl<'_> {
     /// sibling half, [`crate::provider::codex::resume::reap_viewer_pane`], made
     /// this trip one stage earlier — a viewer is a codex affordance and both
     /// halves belong on the same side of the boundary.
-    fn attach_codex_viewer(&self, id: &SessionId) -> Result<i32, LaneError> {
+    fn attach_viewer(&self, id: &SessionId) -> Result<i32, LaneError> {
         let s = self.row(id)?;
         let (pane, dir) = self.viewer_target(id)?;
-        // Unwraps are discharged by `viewer_target`, which refused all three of
-        // these above.
-        let endpoint = self
-            .current_endpoint(s.pid)
-            .ok_or_else(|| LaneError::Cold { id: id.clone() })?;
         let mux = self.mux.as_deref().ok_or_else(|| LaneError::Transport {
             detail: "could not resolve the mux backend".to_string(),
         })?;
@@ -1016,18 +1171,7 @@ impl LaneImpl<'_> {
         }
 
         if !pane_present {
-            // argv = `codex --remote <ws endpoint> resume <thread-id>`.
-            // `--remote` binds the TUI to OUR app server; `resume <id>` selects
-            // the agent's thread on it (an explicit UUID bypasses codex's session
-            // picker, which by default HIDES non-interactive sessions — exactly
-            // the kind an agent creates).
-            let argv = vec![
-                crate::provider::codex::codex_bin(self.env),
-                "--remote".to_string(),
-                endpoint,
-                "resume".to_string(),
-                s.session_id.clone(),
-            ];
+            let argv = self.viewer_argv(id, &s)?;
             let cmd = crate::launch::build_claude_cmd_from_argv(&argv);
             let cwd = s
                 .cwd
@@ -1061,6 +1205,74 @@ impl LaneImpl<'_> {
         mux.attach(&dir, &pane).map_err(|e| LaneError::Transport {
             detail: format!("attach to viewer pane {pane:?} failed: {e}"),
         })
+    }
+
+    /// The argv that opens a viewer on this session — the ONE part of
+    /// [`LaneImpl::attach_viewer`] that knows a harness.
+    ///
+    /// Every arm re-reads its address rather than taking one from the caller,
+    /// because the address a viewer needs is not the same field for both lanes
+    /// (codex joins qd's `endpoint`, opencode joins the bridge's own
+    /// `harnessEndpoint`) and a single "the endpoint" parameter would have to
+    /// mean whichever one the arm happened to want.
+    ///
+    /// The `Cold` unwraps here are already discharged by `viewer_target`, which
+    /// refused for exactly these reasons before anything reached this point; they
+    /// are spelled rather than `expect`ed so a future caller that skips the
+    /// precheck gets a refusal instead of a panic.
+    fn viewer_argv(&self, id: &SessionId, s: &Session) -> Result<Vec<String>, LaneError> {
+        match self.lane.harness {
+            // `codex --remote <ws endpoint> resume <thread-id>`. `--remote` binds
+            // the TUI to OUR app server; `resume <id>` selects the agent's thread
+            // on it (an explicit UUID bypasses codex's session picker, which by
+            // default HIDES non-interactive sessions — exactly the kind an agent
+            // creates).
+            Harness::Codex => {
+                let endpoint = self
+                    .current_endpoint(s.pid)
+                    .ok_or_else(|| LaneError::Cold { id: id.clone() })?;
+                Ok(vec![
+                    crate::provider::codex::codex_bin(self.env),
+                    "--remote".to_string(),
+                    endpoint,
+                    "resume".to_string(),
+                    s.session_id.clone(),
+                ])
+            }
+            // `opencode attach <http endpoint> --session <id>`. The positional url
+            // binds the TUI to the server inside OUR ACP bridge; `--session`
+            // opens the agent's session on it rather than whatever the TUI would
+            // have picked.
+            //
+            // **No `--fork`, and that is the whole point.** `opencode attach`
+            // treats forking as opt-in (`--fork requires --continue or --session`
+            // — it is a modifier ON this flag, not a consequence of it), so the
+            // plain form JOINS the live session. Adding it would branch the
+            // conversation and hand the human a copy while the agent kept driving
+            // the original: two sessions, silently, from a verb whose contract is
+            // that nothing converts.
+            //
+            // No `--dir` either: `attach --dir` exists to chdir a viewer that is
+            // NOT already in the session's directory, and the pane is spawned with
+            // the row's cwd (see `attach_viewer`), so passing it would restate
+            // where the process already is.
+            Harness::Opencode => {
+                let endpoint = self
+                    .harness_endpoint(s)
+                    .ok_or_else(|| LaneError::Cold { id: id.clone() })?;
+                Ok(vec![
+                    crate::provider::opencode::opencode_bin(self.env),
+                    "attach".to_string(),
+                    endpoint,
+                    "--session".to_string(),
+                    s.session_id.clone(),
+                ])
+            }
+            _ => Err(LaneError::NotSupported {
+                op: "attach".to_string(),
+                reason: NO_VIEWER_ON_THIS_LANE.to_string(),
+            }),
+        }
     }
 
     /// This lane's recovery/await effects. See [`LaneRecoveryDeps`] for why
@@ -2075,6 +2287,15 @@ fn daemon_reaped(pid: i64, was_alive: bool) -> KillReport {
 /// combination — so these arms exist for exactly the reason the `claude/daemon`
 /// and `acp/*-pane` ones do: a hand-built `Lane` gets an ANSWER rather than a
 /// panic or, worse, another lane's behaviour.
+/// Why a lane with no joinable residence refuses to open a viewer.
+///
+/// Unreachable in production — [`LaneImpl::attach`] asks [`Lane::has_viewer`]
+/// first, and every lane that answers `true` has an arm. It exists for the same
+/// reason this file's other unreachable arms do: a hand-built `Lane` gets an
+/// ANSWER rather than a panic or another lane's behaviour.
+const NO_VIEWER_ON_THIS_LANE: &str = "this lane's residence is not a server a second client can \
+     join, so there is no viewer to open on it";
+
 const APP_SERVER_IS_CODEX_ONLY: &str =
     "only codex has an app-server residence a human terminal can join";
 
@@ -3131,6 +3352,26 @@ impl LaneOps for LaneImpl<'_> {
                     &spawner,
                     &probe,
                 );
+                // `acp/opencode` can have a viewer pane (`qd attach` opens
+                // `opencode attach` on the bridge's own HTTP server), and the
+                // group reap above just killed the adapter that owned that
+                // server. Left behind, the pane sits rendering a dead connection
+                // and its name blocks the next viewer. The SAME reap the codex
+                // arm runs, for the same reason and from the same place.
+                //
+                // Guarded on the lane rather than run unconditionally: an
+                // `acp/claude-code` session never has a viewer (its bridge runs no
+                // server to join), so reaping for one would be a mux scan on every
+                // stop in service of a pane that cannot exist.
+                if self.lane.has_viewer() {
+                    if let Some(vname) = s.name.as_deref() {
+                        crate::provider::shared::viewer::reap_pane(
+                            self.env,
+                            &self.paths.home,
+                            vname,
+                        );
+                    }
+                }
                 Ok(daemon_reaped(pid, killed.was_alive))
             }
 
@@ -4128,11 +4369,12 @@ impl LaneOps for LaneImpl<'_> {
     /// See [`LaneOps::attach`] for why this returns an exit code rather than a
     /// plan. A daemon-hosted session has no terminal of its own.
     fn attach(&self, id: &SessionId) -> Result<i32, LaneError> {
-        // The one daemon lane that attaches. It does not hand over the session's
-        // terminal — it opens a SECOND CLIENT on the session's app server and
-        // hands over that. See [`LaneImpl::attach_codex_viewer`].
-        if self.lane.is_app_server() {
-            return self.attach_codex_viewer(id);
+        // The daemon lanes that attach. They do not hand over the session's
+        // terminal — they open a SECOND CLIENT on the server the session's
+        // residence already is, and hand over that. See
+        // [`LaneImpl::attach_viewer`].
+        if self.lane.has_viewer() {
+            return self.attach_viewer(id);
         }
         let (zmx_name, dir) = self.attach_target(id)?;
         let zmx_name = zmx_name.as_str();
@@ -4182,14 +4424,21 @@ mod tests {
     /// Attach refusal must track attachability EXACTLY in both directions: a pane
     /// lane refusing attach would be a bug, since attach is the point of a pane.
     ///
-    /// **`codex/app-server` is the deliberate exception, and this is where it is
-    /// pinned.** It is `is_daemon()` — every other path must treat it as one —
-    /// but it does NOT refuse attach, because its residence is a server a second
-    /// client can join. The predicate is therefore `is_daemon() &&
-    /// !is_app_server()`, and spelling it that way here is the point: if someone
-    /// later makes `is_daemon()` false for it to "fix" attach, this test still
-    /// passes while the lane silently starts taking every PANE branch in the
-    /// file. The two halves are asserted separately below so that cannot happen.
+    /// **The VIEWER lanes are the deliberate exception, and this is where it is
+    /// pinned.** They are `is_daemon()` — every other path must treat them as
+    /// daemons — but they do NOT refuse attach, because their residence is a
+    /// server a second client can join. The predicate is therefore `is_daemon()
+    /// && !has_viewer()`, and spelling it that way here is the point: if someone
+    /// later makes `is_daemon()` false for one of them to "fix" attach, this test
+    /// still passes while the lane silently starts taking every PANE branch in
+    /// the file. The two halves are asserted separately below so that cannot
+    /// happen.
+    ///
+    /// It said `!is_app_server()` while codex was the only such lane. That is now
+    /// `acp/opencode` too — `opencode acp` runs an HTTP server qd pins the port
+    /// of, and `opencode attach <url> --session <id>` is a second client of it —
+    /// which is exactly why the question moved off a MODE test and onto a named
+    /// lane property.
     #[test]
     fn only_unattachable_daemon_lanes_refuse_attach() {
         let ghost = SessionId("no-such-session".into());
@@ -4197,12 +4446,35 @@ mod tests {
             let (p, _) = lane_for_test(lane);
             let ops = lane_ops(lane, &E, p);
             let refused = matches!(ops.attach(&ghost), Err(LaneError::NotSupported { .. }));
-            assert_eq!(
-                refused,
-                lane.is_daemon() && !lane.is_app_server(),
-                "{lane}"
-            );
+            assert_eq!(refused, lane.is_daemon() && !lane.has_viewer(), "{lane}");
         }
+    }
+
+    /// The viewer lanes are EXACTLY two, and both are daemons everywhere but
+    /// attach.
+    ///
+    /// The companion to `the_app_server_lane_is_a_daemon_everywhere_but_attach`,
+    /// generalized: the same silent-fix hazard applies to `acp/opencode`, and the
+    /// count is pinned so a third lane cannot acquire a viewer without someone
+    /// writing down which server a human is being pointed at.
+    #[test]
+    fn the_viewer_lanes_are_daemons_everywhere_but_attach() {
+        let viewers: Vec<Lane> = Lane::ALL.into_iter().filter(|l| l.has_viewer()).collect();
+        assert_eq!(
+            viewers.iter().map(|l| l.id()).collect::<Vec<_>>(),
+            vec!["codex/app-server", "acp/opencode/daemon"],
+            "exactly two lanes have a residence a second client can join"
+        );
+        for lane in viewers {
+            assert!(lane.is_daemon(), "{lane} must stay daemon-hosted");
+            assert!(!lane.is_pane(), "{lane} is not a pane lane");
+        }
+        // `acp/opencode` has a viewer WITHOUT being an app-server lane, which is
+        // the whole reason the two predicates had to come apart: app-server names
+        // a codex-specific residence AND a `codex --remote` TUI, and opencode has
+        // neither.
+        let oc = Lane::new(Harness::Opencode, Mode::Daemon).unwrap();
+        assert!(oc.has_viewer() && !oc.is_app_server());
     }
 
     /// The half the test above cannot see: `codex/app-server` must remain a
@@ -4230,11 +4502,40 @@ mod tests {
         }
     }
 
+    /// The body of a `&self` method of `LaneImpl`, by brace matching.
+    ///
+    /// The scans below used to slice to a hand-written end anchor ("the doc line
+    /// of the next function"). That anchor broke the moment a function was
+    /// inserted between the two, and it broke SILENTLY INTO A PASS-SHAPED
+    /// FAILURE: the slice swallowed a second function and the `Cold` count went
+    /// to 2. Brace matching cannot drift that way.
+    fn method_body(name: &str) -> &'static str {
+        let src = include_str!("lanes.rs");
+        let start = src
+            .find(&format!("fn {name}(&self"))
+            .unwrap_or_else(|| panic!("{name} exists"));
+        let open = start + src[start..].find('{').expect("a body");
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &src[start..open + i + 1];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("{name} has an unbalanced body");
+    }
+
     /// **`Cold` means "a wake would fix this" — and nothing else.**
     ///
     /// A source scan, because the property is about which VARIANT each refusal in
-    /// [`LaneImpl::viewer_target`] reaches, and the alternative is standing up a
-    /// registry row plus a live app server per case to observe it.
+    /// a viewer-target arm reaches, and the alternative is standing up a registry
+    /// row plus a live server per case to observe it.
     ///
     /// This exists because the distinction was got WRONG and shipped. Every
     /// refusal was `Cold`, `verbs/attach.rs` maps `Cold` to `wake_then_attach`,
@@ -4249,30 +4550,23 @@ mod tests {
     /// one, because the retry hit the identical refusal. The user's actual remedy
     /// (send it a turn) appeared nowhere.
     ///
-    /// So: exactly ONE `Cold` in that function, guarding the dead-endpoint case,
-    /// which is the only one a revive repairs.
+    /// So: exactly ONE `Cold` per arm, guarding the dead-server case, which is
+    /// the only one a revive repairs. Asserted per ARM rather than over the
+    /// router, because the lesson is about a single refusal ladder and a second
+    /// lane's ladder must not be able to satisfy it.
     #[test]
-    fn viewer_target_says_cold_only_where_a_wake_would_help() {
-        let src = include_str!("lanes.rs");
-        let start = src
-            .find("fn viewer_target(&self")
-            .expect("viewer_target exists");
-        // The body ends at the next `fn ` at method indentation.
-        let end = start
-            + src[start..]
-                .find("\n    /// This codex row's rollout file")
-                .expect("viewer_target is followed by codex_rollout_path");
-        let body = &src[start..end];
+    fn codex_viewer_target_says_cold_only_where_a_wake_would_help() {
+        let body = method_body("codex_viewer_target");
 
         // The CONSTRUCTION, not the mention — the doc block above the guards
         // explains `Cold` by name and must not be counted as a use of it.
         assert_eq!(
             body.matches("LaneError::Cold { id:").count(),
             1,
-            "viewer_target must reach `Cold` exactly once — qd turns it into a \
-             revive-and-retry, so a `Cold` on a condition no wake repairs spins \
-             the user through a pointless revive and then reports \"is not live\" \
-             about a session that is live"
+            "codex_viewer_target must reach `Cold` exactly once — qd turns it \
+             into a revive-and-retry, so a `Cold` on a condition no wake repairs \
+             spins the user through a pointless revive and then reports \"is not \
+             live\" about a session that is live"
         );
         // And it must be the DEAD-SERVER guard that owns it.
         let cold_at = body.find("LaneError::Cold { id:").unwrap();
@@ -4302,6 +4596,108 @@ mod tests {
             body.contains("qd send"),
             "the turn-zero refusal must name the remedy that actually works"
         );
+    }
+
+    /// The same ruling, for `acp/opencode`: one `Cold`, on the dead-bridge guard.
+    ///
+    /// And one extra property this arm needs that codex's does not. Its guard is
+    /// a CALL — `self.harness_endpoint(&s)` — so the "liveness, not field
+    /// presence" lesson can only be honoured inside that accessor. A version of
+    /// it that read `row.harness_endpoint` and returned it would pass a naive
+    /// scan of this arm while pointing every viewer at a dead port, because
+    /// nothing rewrites the row when the adapter dies. So the accessor is scanned
+    /// too, and the arm is required to go through it.
+    #[test]
+    fn opencode_viewer_target_says_cold_only_where_a_wake_would_help() {
+        let body = method_body("opencode_viewer_target");
+
+        assert_eq!(
+            body.matches("LaneError::Cold { id:").count(),
+            1,
+            "opencode_viewer_target must reach `Cold` exactly once — the same \
+             revive-and-retry mapping applies to this lane"
+        );
+        let cold_at = body.find("LaneError::Cold { id:").unwrap();
+        let liveness_at = body
+            .find("!self.acp_adapter_is_live(&s)")
+            .expect("the dead-adapter guard exists");
+        assert!(
+            cold_at > liveness_at && cold_at - liveness_at < 400,
+            "the one `Cold` must belong to the dead-adapter guard — that is the \
+             only refusal here a wake can repair"
+        );
+        // THREE refusals no wake repairs, each carrying its own sentence: no
+        // name, no session id, and — the one that is easy to get wrong — a LIVE
+        // adapter whose row predates the port pin. `wake` on an already-alive acp
+        // adapter is a deliberate no-op, so mapping that last case to `Cold`
+        // would revive nothing and then report "not live" about a live session.
+        assert_eq!(
+            body.matches("refused(format!(").count(),
+            3,
+            "every refusal no wake repairs must carry its own sentence"
+        );
+        assert!(
+            body.contains("qd stop") && body.contains("qd start"),
+            "the predates-the-pin refusal must name the remedy that actually works"
+        );
+
+        // The dead-adapter guard must ask LIVENESS, not "is the field populated".
+        // Nothing rewrites the row when the adapter dies, so a field check passes
+        // for a corpse and the viewer spawns against a dead socket.
+        let liveness = method_body("acp_adapter_is_live");
+        assert!(
+            liveness.contains("is_pid_alive"),
+            "the guard must ask whether the adapter is still alive, not merely \
+             whether the row has a string on it"
+        );
+        assert!(
+            liveness.contains("cmdline_is_our_acp_daemon"),
+            "liveness must be IDENTITY-checked: under exact-pid-reuse a live pid \
+             can belong to an unrelated process, and treating that as a healthy \
+             bridge points a viewer at a port nobody is serving"
+        );
+
+        // And the address the argv reads must be BOTH halves — a recorded string
+        // AND a live adapter. This is the accessor that could quietly become a
+        // bare field read.
+        let combined = method_body("harness_endpoint");
+        assert!(
+            combined.contains("acp_adapter_is_live") && combined.contains("recorded_harness_endpoint"),
+            "the viewer's address must be gated on liveness, not read raw off the row"
+        );
+    }
+
+    /// The viewer argv is the harness-specific half, and each arm must build the
+    /// command that program actually accepts.
+    ///
+    /// A source scan for the same reason the refusal scans are: observing the
+    /// argv means standing up a live row plus a mux that records what it was
+    /// asked to run.
+    #[test]
+    fn viewer_argv_builds_each_harness_its_own_join_command() {
+        let body = method_body("viewer_argv");
+
+        // codex: `codex --remote <ws> resume <thread-id>`.
+        assert!(body.contains("\"--remote\"") && body.contains("\"resume\""));
+        // opencode: `opencode attach <http> --session <id>`.
+        assert!(body.contains("\"attach\"") && body.contains("\"--session\""));
+
+        // **No `--fork`.** `opencode attach --fork` branches the conversation
+        // instead of joining it, which would hand the human a copy while the
+        // agent kept driving the original — two sessions, silently, from a verb
+        // whose contract is that nothing converts.
+        // (The argv TOKEN, not the word — the comment above the arm explains
+        // `--fork` by name and must not be counted as a use of it.)
+        assert!(
+            !body.contains("\"--fork\".to_string()"),
+            "a viewer JOINS the session; forking it would make a second one"
+        );
+
+        // Each arm must read the address its own harness serves on. codex joins
+        // qd's adapter endpoint; opencode joins the bridge's own server. Crossing
+        // them would point a TUI at a port speaking the wrong protocol.
+        assert!(body.contains(".current_endpoint(s.pid)"));
+        assert!(body.contains(".harness_endpoint(s)"));
     }
 
     // --- Defect A: the mux join must scan the SELECTED backend's dirs ------

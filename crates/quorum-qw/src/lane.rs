@@ -511,12 +511,51 @@ impl Lane {
         matches!(self.mode, Mode::Daemon | Mode::AppServer)
     }
 
-    /// The one lane whose residence a human can also open a terminal onto.
+    /// Is this lane's residence the `codex app-server` specifically?
     ///
-    /// Spelled as a predicate rather than compared inline so the `attach`
-    /// exception reads as a named property instead of a bare enum test.
+    /// Spelled as a predicate rather than compared inline so a call site reads as
+    /// a named property instead of a bare enum test. Ask [`Lane::has_viewer`]
+    /// instead for the "can a human get a terminal on this" question — that is
+    /// no longer the same question, and conflating them is what this pair exists
+    /// to prevent.
     pub fn is_app_server(self) -> bool {
         self.mode == Mode::AppServer
+    }
+
+    /// Can a human be given a terminal on this DAEMON lane's session — not by
+    /// giving the session a terminal it does not have, but by opening a second
+    /// CLIENT on the server its residence already is?
+    ///
+    /// # Why this is a lane property and not a mode test
+    ///
+    /// It used to be [`Lane::is_app_server`], and reading it that way was right
+    /// while codex was the only harness whose residence a second client could
+    /// join. It is now wrong in a specific and checkable way: `opencode acp` is
+    /// not a stdio bridge — it runs a full opencode HTTP server in-process, qd
+    /// pins its port at spawn, and `opencode attach <url> --session <id>` is a
+    /// documented second client of exactly that server. So `acp/opencode` has the
+    /// property while being nothing like an app-server lane in any other respect.
+    ///
+    /// Keeping the mode test would have forced the choice between two worse
+    /// things: giving opencode `Mode::AppServer` (a lie about its topology that
+    /// `Harness::supports` correctly refuses — app-server names a codex-specific
+    /// residence *and* a `codex --remote` TUI), or a second attach path bolted on
+    /// beside the first. Naming the actual property costs one predicate.
+    ///
+    /// Answering `true` here does NOT make a lane attachable in the ordinary
+    /// sense: [`Lane::is_daemon`] still answers `true`, there is still no
+    /// terminal to hand over, and everything else — kill, deliver, receive path,
+    /// health — still takes the daemon branch. The exception is spelled at
+    /// `attach` and nowhere else.
+    pub fn has_viewer(self) -> bool {
+        matches!(
+            (self.harness, self.mode),
+            // codex's app server, joined by `codex --remote <ws> resume <id>`.
+            (Harness::Codex, Mode::AppServer)
+            // opencode's HTTP server inside the ACP bridge, joined by
+            // `opencode attach <http> --session <id>`.
+            | (Harness::Opencode, Mode::Daemon)
+        )
     }
 
     /// Does this lane deliver over the `quorum-lane` extension's control socket

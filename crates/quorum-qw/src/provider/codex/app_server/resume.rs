@@ -153,51 +153,17 @@ pub fn kill_codex(
     DaemonKillOutcome { was_alive }
 }
 
-/// codex-interactive, use case 2: best-effort reap of a session's human-viewer
-/// pane (see `verbs::lifecycle::attach_codex_viewer`).
-///
-/// The viewer is not the session and holds no row, but it is a live TUI pointed
-/// at an app server [`kill_codex`] just killed — left behind it would sit there
-/// rendering a dead connection, and its name would block the next viewer. So the
-/// codex DAEMON kill arm calls this immediately after the group reap.
-///
-/// Lives here, not in the verb, because it is a CODEX AFFORDANCE: no other lane
-/// has a viewer, and qd should not have to know that this one does.
-///
-/// Silent by design at every step: a session with no viewer is the overwhelmingly
-/// common case, and a viewer that cannot be reaped must never turn a successful
-/// `qd stop` into a failure — the session itself is already down. (The pre-move
-/// version routed its backend parse through the verb's `common::select_backend`,
-/// which PRINTS on a bogus `QD_MUX`; parsing directly restores the silence the
-/// doc claimed.)
-pub fn reap_viewer_pane(env: &dyn Env, home: &std::path::Path, session_name: &str) {
-    let pane = crate::provider::codex::pane::viewer_pane_name(session_name);
-    let Ok(backend) = crate::mux_selector::parse_backend(env) else {
-        return;
-    };
-    let Ok(mux) = crate::mux_selector::select_mux(backend, home, env) else {
-        return;
-    };
-    let dirs: Vec<PathBuf> = match backend {
-        crate::mux_selector::Backend::Embedded => {
-            match crate::qrmux_dir::resolve_qrmux_dir(home, env) {
-                Ok(d) => vec![d],
-                Err(_) => return,
-            }
-        }
-        crate::mux_selector::Backend::Zmx => vec![quorum_core::zmx_dir::resolve_zmx_dir(env)],
-    };
-    for d in dirs {
-        if mux
-            .list(&d)
-            .unwrap_or_default()
-            .into_iter()
-            .any(|z| z.name == pane)
-        {
-            let _ = mux.kill(&d, &pane);
-        }
-    }
-}
+// codex-interactive, use case 2: `reap_viewer_pane` MOVED to
+// [`crate::provider::shared::viewer::reap_pane`] and is re-exported here so
+// every `codex::resume::reap_viewer_pane` call site keeps resolving.
+//
+// Same reason `viewer_pane_name` moved (see `codex::pane`): the doc here used to
+// say "Lives here, not in the verb, because it is a CODEX AFFORDANCE: no other
+// lane has a viewer" — and `acp/opencode` now has one. The body never mentioned
+// codex; it kills a pane by name. The acp kill arm calls the same function for
+// the same reason this one does: a viewer left pointed at a server we just
+// killed sits there rendering a dead connection.
+pub use crate::provider::shared::viewer::reap_pane as reap_viewer_pane;
 
 // ===========================================================================
 // RESUME (deliverable B).
@@ -746,6 +712,10 @@ fn finish_revive(
         // the session would come back as whatever the row default answers that
         // day. See [`ResumeParams::hosting`] for the demotion that caused.
         hosting: params.hosting.clone(),
+        // No second server to hand out: this harness's residence IS qd's
+        // (`endpoint`), so there is no separate harness-side address a viewer
+        // could join. See `RegistryEntry::harness_endpoint`.
+        harness_endpoint: None,
     };
     if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);

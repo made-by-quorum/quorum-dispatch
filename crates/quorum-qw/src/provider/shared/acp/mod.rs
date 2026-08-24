@@ -86,6 +86,53 @@ pub const BRIDGE_ENV_STRIP: &[&str] = &[
 /// already sees the ACP-driven session; the host additionally tees the `session/update` feed to a
 /// live transcript (SC-2c). What is DISTINCT from claude is the live drive path (ACP, not PTY) —
 /// `parse_status`/`inject`/`boot_waiter` below, and the SC-1 queue — NOT the at-rest transcript.
+/// A bridge program that runs a server of ITS OWN, on its own protocol, which qd
+/// pins the port of and hands out but never drives.
+///
+/// # Why an ACP bridge would have one at all
+///
+/// Because not every "ACP bridge" is a stdio shim. `claude-code-acp` is: it
+/// speaks ACP on stdin/stdout and nothing else, which is why its spec leaves this
+/// `None`. `opencode acp` is not — it calls `Server.listen()` and adapts ACP onto
+/// a full opencode HTTP server in the same process. That server is not an
+/// implementation detail we are reaching into: `opencode attach <url> --session
+/// <id>` is a documented entry, and it is the ONLY way to put a human terminal on
+/// a session the bridge is driving.
+///
+/// # What qd does and does not do with it
+///
+/// DOES: pin its port at spawn (it defaults to `0`, an ephemeral port nothing can
+/// find again) and record the resulting address on the row, so a later verb can
+/// hand it to a viewer. DOES NOT: speak the protocol. Every drive path stays ACP
+/// over the adapter's ws front — one wire, unchanged. This is an ADDRESS qd
+/// publishes, not a second transport it maintains.
+pub struct HarnessServer {
+    /// The bridge flag that pins the listen port (opencode: `--port`). Passed
+    /// through as `--bridge-arg`s, so the adapter needs no knowledge of it.
+    pub port_flag: &'static str,
+    /// The URL scheme that server answers on (opencode: `http`).
+    pub scheme: &'static str,
+}
+
+impl HarnessServer {
+    /// This server's loopback address at `port` — the string the row records and
+    /// a viewer is handed.
+    ///
+    /// Loopback is not a default that could be widened later: the bridge is a
+    /// child of a per-session adapter on this machine, and its `--hostname`
+    /// default (`127.0.0.1`) is what we are agreeing with rather than overriding.
+    /// A harness server reachable off-box would be a session anyone on the
+    /// network could type into.
+    pub fn endpoint(&self, port: u16) -> String {
+        format!("{}://127.0.0.1:{port}", self.scheme)
+    }
+
+    /// The `--bridge-arg` pair that pins this server to `port`.
+    pub fn port_args(&self, port: u16) -> [String; 2] {
+        [self.port_flag.to_string(), port.to_string()]
+    }
+}
+
 pub struct AcpProvider {
     /// The stable provider id (registry/dispatch key + `--json` value): `acp/<bridge>`.
     id: &'static str,
@@ -96,6 +143,12 @@ pub struct AcpProvider {
     bridge_cmd: Option<&'static str>,
     /// Extra `--bridge-arg`s for the bridge program (opencode: `["acp"]`; claude-code: none).
     bridge_args: &'static [&'static str],
+    /// This bridge's own server, if it runs one ([`HarnessServer`]). `None` for a
+    /// stdio-only bridge (claude-code), and that `None` is load-bearing: it is
+    /// what makes the create path allocate ONE port rather than two, and what
+    /// leaves `acp/claude-code`'s row and spawned argv byte-identical to what
+    /// they were before this field existed.
+    harness_server: Option<&'static HarnessServer>,
 }
 
 
@@ -113,11 +166,13 @@ impl AcpProvider {
         id: &'static str,
         bridge_cmd: Option<&'static str>,
         bridge_args: &'static [&'static str],
+        harness_server: Option<&'static HarnessServer>,
     ) -> AcpProvider {
         AcpProvider {
             id,
             bridge_cmd,
             bridge_args,
+            harness_server,
         }
     }
 
@@ -131,6 +186,13 @@ impl AcpProvider {
     /// The extra `--bridge-arg`s for this provider's bridge program (opencode: `["acp"]`).
     pub fn bridge_args(&self) -> &'static [&'static str] {
         self.bridge_args
+    }
+
+    /// This bridge's own server, if it runs one. `None` ⇒ a stdio-only bridge:
+    /// the residence allocates no second port and the row records no
+    /// `harnessEndpoint`.
+    pub fn harness_server(&self) -> Option<&'static HarnessServer> {
+        self.harness_server
     }
 }
 
@@ -170,6 +232,15 @@ impl Provider for AcpProvider {
     /// host's spawn REMOVES [`BRIDGE_ENV_STRIP`] from the inherited env (the nesting guard —
     /// `LaunchPlan.env` can only ADD, so the removal is a spawn-time concern, documented here and
     /// applied in `client.rs`). Consumes NO claude config surface (no `fx.env`/config-toml read).
+    ///
+    /// **NOT the spawn path, and one thing it deliberately omits.** The live ACP
+    /// create/resume assemble their argv at the residence layer
+    /// (`daemon::bridge_for` + `residence::build_adapter_argv`), not here; this
+    /// stays as the `Provider` contract's description of the command. What it
+    /// cannot include is the [`HarnessServer`] port pin (`opencode acp --port
+    /// <p>`), because the port is allocated per residence and a `&LaunchRequest`
+    /// carries none. Read this for "which program", never for "the exact argv a
+    /// running bridge was spawned with".
     fn launch_plan(&self, _fx: &ProviderFx, req: &LaunchRequest) -> LaunchPlan {
         // The bridge program: this provider's override (opencode → `opencode acp`) or the
         // compiled BRIDGE_BIN default (claude-code → `claude-code-acp`). For acp/claude-code

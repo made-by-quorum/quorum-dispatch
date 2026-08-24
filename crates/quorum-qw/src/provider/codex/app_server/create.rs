@@ -748,6 +748,10 @@ fn finish_create(
         // The lane's own stamp. See [`DaemonParams::hosting`] — this is what
         // makes a `codex/app-server` row come back as its own lane.
         hosting: params.hosting.clone(),
+        // No second server to hand out: this harness's residence IS qd's
+        // (`endpoint`), so there is no separate harness-side address a viewer
+        // could join. See `RegistryEntry::harness_endpoint`.
+        harness_endpoint: None,
     };
     if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);

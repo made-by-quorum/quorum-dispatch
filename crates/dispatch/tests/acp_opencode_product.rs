@@ -12,11 +12,21 @@
 //!    `--bridge-cmd`, the compiled default). MUTATION EVIDENCE: aliasing the opencode bridge back
 //!    to the claude default (or dropping the bridge_cmd wiring in the residence verbs) reds this.
 //!
+//! 1b. **`opencode_adapter_argv_pins_the_bridges_own_http_port`** (DEFAULT suite): proves the
+//!    residence argv also carries `--bridge-arg --port --bridge-arg <p>`, and that the row's
+//!    recorded `harnessEndpoint` is that same port. `opencode acp` runs a full opencode HTTP
+//!    server; its port defaults to `0`, so without the pin qd spawns a real server per session and
+//!    cannot name it afterwards — and `qd attach` on this lane becomes impossible. MUTATION
+//!    EVIDENCE: dropping the `harness_server` spec, or the port append in `bridge_for`, reds this
+//!    while everything else still passes.
+//!
 //! 2. **`acp_opencode_live_product_path`** (gated `QD_ACP_OPENCODE_LIVE=1`): drives the REAL `qd`
 //!    binary end-to-end — `qd start --provider opencode` → `qd send:relay` (a live OpenRouter turn,
 //!    gpt-4o-mini) → `qd wait` → `qd stop` — asserting the row is `acp/opencode`, the turn returned
 //!    a live turn-id, wait resolved done, and stop left no leak. Non-vacuity: it asserts the live
-//!    turn-id + provider row (a skip-mode no-op cannot pass). CRED: the OpenRouter key is FILE-PATH
+//!    turn-id + provider row (a skip-mode no-op cannot pass). It also asserts the bridge's own
+//!    HTTP server was PINNED and is BOUND (`opencode acp --port <p>` in the live cmdline, plus a
+//!    TCP connect) — the address `qd attach` hands a viewer. CRED: the OpenRouter key is FILE-PATH
 //!    ONLY (`~/.secrets/openrouter-pi.key`), read into the child env at drive-time; its VALUE never
 //!    appears in the test source, assertions, or output.
 
@@ -78,6 +88,56 @@ fn opencode_bridge_resolution_routes_to_opencode() {
     assert!(
         !cc_argv.join(" ").contains("--bridge-cmd"),
         "acp/claude-code adapter argv must carry NO --bridge-cmd (byte-identical): {cc_argv:?}"
+    );
+}
+
+/// The bridge's OWN server is pinned on the adapter argv, and the row records it.
+///
+/// This is the half `opencode_bridge_resolution_routes_to_opencode` cannot see:
+/// that test proves qd spawns `opencode acp`, this one proves qd spawns it on a
+/// port it can name later. The two failure modes are different — the first
+/// spawns the wrong program, the second spawns the right program unreachably —
+/// and only the second one still passes every other test in this file.
+#[test]
+fn opencode_adapter_argv_pins_the_bridges_own_http_port() {
+    let oc = acp_provider_for("acp/opencode").expect("acp/opencode is registered");
+    let server = oc
+        .harness_server()
+        .expect("`opencode acp` runs an HTTP server of its own");
+    assert_eq!(server.port_flag, "--port");
+    assert_eq!(server.endpoint(41234), "http://127.0.0.1:41234");
+
+    // The residence argv carries the pin as bridge-args, so the adapter spawns
+    // `opencode acp --port 41234`.
+    let mut bridge_args: Vec<String> = oc.bridge_args().iter().map(|a| a.to_string()).collect();
+    bridge_args.extend(server.port_args(41234));
+    let argv = build_adapter_argv(
+        Path::new("/usr/bin/qd"),
+        "ws://127.0.0.1:9000",
+        Path::new("/work"),
+        oc.bridge_cmd(),
+        &bridge_args,
+        None,
+    );
+    assert!(
+        argv.join(" ")
+            .contains("--bridge-cmd opencode --bridge-arg acp --bridge-arg --port --bridge-arg 41234"),
+        "the opencode adapter argv must pin the bridge's HTTP port: {argv:?}"
+    );
+
+    // The two ports on the row are DIFFERENT SERVERS: `endpoint` is qd's adapter
+    // ws front, `harnessEndpoint` is the bridge's own HTTP server. A viewer needs
+    // the second; every verb needs the first.
+    assert_ne!(server.endpoint(41234), "ws://127.0.0.1:9000");
+
+    // `acp/claude-code` stays a stdio-only bridge: NO server, so no second port
+    // is allocated and its row carries no `harnessEndpoint` key at all. This is
+    // the byte-stability half — a `Some(...)` here would change every existing
+    // claude-bridge row on disk.
+    let cc = acp_provider_for("acp/claude-code").expect("acp/claude-code is registered");
+    assert!(
+        cc.harness_server().is_none(),
+        "claude-code-acp speaks ACP on stdio and listens on nothing"
     );
 }
 
@@ -175,6 +235,46 @@ fn acp_opencode_live_product_path() {
         "the row must persist provider=acp/opencode: {info_json}"
     );
 
+    // The PIN, live. `opencode acp` runs an opencode HTTP server; its port
+    // defaults to 0, so this asserts qd told it otherwise and that something is
+    // actually listening there. Both halves are needed: the cmdline proves the
+    // flag was passed, the connect proves the server took it. Without this the
+    // viewer path (`qd attach` → `opencode attach <url> --session <id>`) has no
+    // address to use.
+    //
+    // DELIBERATELY STOPS AT THE SOCKET. Asserting on an HTTP response would be
+    // better evidence, and is the obvious next increment — it is left out
+    // because opencode's `GET /session` sits behind workspace-routing middleware
+    // whose query requirements were not verified against a running server, and a
+    // gated lane that reds on an unverified guess is worse than one that proves
+    // less. What IS proven here is what the pin exists for: a named, bound port.
+    let bridge_cmdline = {
+        let ps = Command::new("ps")
+            .args(["-Ao", "args="])
+            .output()
+            .expect("ps runs");
+        String::from_utf8_lossy(&ps.stdout)
+            .lines()
+            .find(|l| l.contains("opencode") && l.contains(" acp ") && l.contains("--port"))
+            .map(str::to_string)
+            .expect("the spawned bridge must appear as `opencode acp --port <p>`")
+    };
+    let pinned_port: u16 = bridge_cmdline
+        .split_whitespace()
+        .skip_while(|t| *t != "--port")
+        .nth(1)
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| panic!("--port must carry a port: {bridge_cmdline}"));
+    assert_ne!(pinned_port, 0, "an ephemeral port is the state the pin removes");
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], pinned_port)),
+        std::time::Duration::from_secs(5),
+    )
+    .unwrap_or_else(|e| {
+        panic!("nothing is listening on the pinned port {pinned_port}: {e} — the row \
+                records an address a viewer cannot reach")
+    });
+
     // send:relay drives a LIVE opencode turn via OpenRouter; a non-empty turn id proves it landed.
     let mut send = Command::new(qd);
     base(&mut send);
@@ -215,6 +315,7 @@ fn acp_opencode_live_product_path() {
     let evidence = format!(
         "A-OC.1 live product-path lane GREEN\n\
          qd start --provider opencode → info provider=acp/opencode\n\
+         bridge http server pinned + bound: 127.0.0.1:{pinned_port}\n\
          send:relay turn id: {turn_id}\n\
          wait: done, stop: clean\n"
     );

@@ -249,13 +249,52 @@ fn acp_log_path(home: &std::path::Path, name: &str) -> PathBuf {
 /// existed); `acp/opencode` yields `--bridge-cmd opencode --bridge-arg acp`.
 /// Without this a resumed opencode session would respawn `claude-code-acp`
 /// loading an opencode session — the verb-routing-arms trap.
-fn bridge_for(provider_id: &str) -> (Option<&'static str>, Vec<String>) {
+fn bridge_for(provider_id: &str, harness_port: Option<u16>) -> (Option<&'static str>, Vec<String>) {
     let acp = super::acp_provider_for(provider_id);
     let bridge_cmd = acp.and_then(|p| p.bridge_cmd());
-    let bridge_args: Vec<String> = acp
+    let mut bridge_args: Vec<String> = acp
         .map(|p| p.bridge_args().iter().map(|a| a.to_string()).collect())
         .unwrap_or_default();
+    // Pin the bridge's OWN server, for a bridge that runs one. This is the whole
+    // mechanism: the adapter already forwards every `--bridge-arg` verbatim, so
+    // pinning opencode's HTTP port needs no adapter change at all — it is two
+    // more args on a list the residence layer has always passed through.
+    //
+    // The two Options are read TOGETHER on purpose. A port allocated for a bridge
+    // with no server would be a port bound to nothing, and a server spec with no
+    // port would silently leave the default `0` in place — an ephemeral port, a
+    // live server, and no way to name it, which is exactly the state this
+    // function exists to end. Either half missing ⇒ the pre-existing argv.
+    if let (Some(server), Some(port)) = (acp.and_then(|p| p.harness_server()), harness_port) {
+        bridge_args.extend(server.port_args(port));
+    }
     (bridge_cmd, bridge_args)
+}
+
+/// Allocate the bridge's own server port — for a bridge that HAS one.
+///
+/// `Ok(None)` is the ordinary answer for `acp/claude-code` and means "asked and
+/// there is nothing to allocate", not "failed". Only a real allocator failure is
+/// `Err`, and it is fatal for the same reason the ws port's is: a create that
+/// pressed on would leave the bridge listening on an ephemeral port, which is
+/// the un-nameable server this whole path exists to replace.
+fn alloc_harness_port(
+    provider_id: &str,
+    alloc: &PortAllocator<'_>,
+) -> Result<Option<u16>, std::io::Error> {
+    match super::acp_provider_for(provider_id).and_then(|p| p.harness_server()) {
+        Some(_) => alloc().map(Some),
+        None => Ok(None),
+    }
+}
+
+/// The `harnessEndpoint` string for a row, given the port [`alloc_harness_port`]
+/// handed out. `None` whenever there is no server or no port — the row then
+/// carries no such key at all, which is what keeps every `acp/claude-code` row
+/// byte-stable.
+fn harness_endpoint_for(provider_id: &str, harness_port: Option<u16>) -> Option<String> {
+    let server = super::acp_provider_for(provider_id).and_then(|p| p.harness_server())?;
+    Some(server.endpoint(harness_port?))
 }
 
 
@@ -304,6 +343,15 @@ pub fn create_acp_daemon(
         detail: e.to_string(),
     })?;
     let endpoint = format!("ws://127.0.0.1:{port}");
+    // 1b. and, for a bridge that runs a server of its own, a SECOND loopback port
+    //     — the one the bridge listens on rather than the one the adapter does.
+    //     Allocated here, beside the ws port, so both addresses this session will
+    //     ever answer at are decided before anything is spawned.
+    let harness_port = alloc_harness_port(&params.provider_id, deps.alloc_port).map_err(|e| {
+        AcpCreateError::PortAllocFailed {
+            detail: e.to_string(),
+        }
+    })?;
 
     // 2. self-exec: the adapter IS this binary under the hidden `acp-daemon` verb.
     if deps.exe.as_os_str().is_empty() {
@@ -315,7 +363,7 @@ pub fn create_acp_daemon(
     // 3. spawn the adapter DETACHED (codex RealDaemonSpawner reuse: process_group(0),
     //    stdin null, stdout/stderr → log). The bridge child inherits the group.
     // create path: no `--load-session` (a brand-new session/new, not a resume).
-    let (bridge_cmd, bridge_args) = bridge_for(&params.provider_id);
+    let (bridge_cmd, bridge_args) = bridge_for(&params.provider_id, harness_port);
     let argv = build_adapter_argv(
         &deps.exe,
         &endpoint,
@@ -417,6 +465,11 @@ pub fn create_acp_daemon(
         // default", and that is a question with an answer somewhere else; a
         // present one means "this row is a daemon row" and needs no lookup.
         hosting: Some(crate::lane::Mode::Daemon.hosting_token().to_string()),
+        // The bridge's OWN server, for the one bridge that has one — the viewer's
+        // reconnect handle (`acp/opencode`), absent for `acp/claude-code`. Written
+        // from the port pinned at step 1b, so the row names the address the bridge
+        // was actually told to listen on rather than one discovered afterwards.
+        harness_endpoint: harness_endpoint_for(&params.provider_id, harness_port),
     };
     if let Err(e) = registry::write_entry(&deps.paths.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);
@@ -700,6 +753,20 @@ pub fn resume_acp(
         }
     };
     let endpoint = format!("ws://127.0.0.1:{port}");
+    // A revive re-allocates the bridge's own server port too, and it MUST: the
+    // old row's `harnessEndpoint` named a port belonging to a process that is
+    // gone. Carrying it forward would publish a dead address as a live one, and a
+    // viewer pointed at it would fail to connect — the same mistake reading
+    // `endpoint` without a liveness check makes, written into the record instead.
+    let harness_port = match alloc_harness_port(&params.provider_id, deps.alloc_port) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(AcpResumeError::PortAllocFailed {
+                name,
+                detail: e.to_string(),
+            })
+        }
+    };
     if deps.exe.as_os_str().is_empty() {
         return Err(AcpResumeError::ExeUnresolved {
             name,
@@ -716,7 +783,7 @@ pub fn resume_acp(
         .unwrap_or_else(|| ".".to_string());
     let cwd = PathBuf::from(&cwd_str);
 
-    let (bridge_cmd, bridge_args) = bridge_for(&params.provider_id);
+    let (bridge_cmd, bridge_args) = bridge_for(&params.provider_id, harness_port);
     // LOAD MODE: `--load-session <sessionId>` → the adapter boots via real `session/load`.
     let argv = build_adapter_argv(
         &deps.exe,
@@ -835,6 +902,9 @@ pub fn resume_acp(
         // a resumed session's row differ from a fresh one in the one field that
         // decides which lane drives it.
         hosting: Some(crate::lane::Mode::Daemon.hosting_token().to_string()),
+        // The NEW bridge's server address (see the re-allocation note above) —
+        // never the old row's, which named a dead port.
+        harness_endpoint: harness_endpoint_for(&params.provider_id, harness_port),
     };
     if let Err(e) = registry::write_entry(sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);
@@ -935,6 +1005,144 @@ mod tests {
             ..RegistryEntry::default()
         };
         crate::registry::write_entry(sessions_dir, &entry).unwrap();
+    }
+
+    // === The bridge's OWN server: pinned at spawn, recorded on the row. ===
+    //
+    // `opencode acp` starts a full opencode HTTP server and adapts ACP onto it.
+    // Its listen port defaults to `0`, so before the pin qd spawned a real server
+    // per session and had no way to name it afterwards — which is precisely the
+    // state that made `qd attach` impossible on this lane. These pin the three
+    // pure functions that end it. The spawn itself is covered live
+    // (`tests/acp_opencode_live.rs`); what is checkable without a process is that
+    // the argv carries the flag, that the row carries the address, and that
+    // neither happens for a bridge with no server.
+
+    /// A fake allocator handing out DISTINCT ports, so a test can tell the ws
+    /// port from the harness port. A fixture that returned one port twice would
+    /// pass while the two addresses silently collapsed onto each other.
+    fn counting_alloc(next: &std::cell::Cell<u16>) -> impl Fn() -> std::io::Result<u16> + '_ {
+        move || {
+            let p = next.get();
+            next.set(p + 1);
+            Ok(p)
+        }
+    }
+
+    #[test]
+    fn opencode_bridge_argv_carries_the_pinned_port() {
+        let (cmd, args) = bridge_for("acp/opencode", Some(41234));
+        assert_eq!(cmd, Some("opencode"));
+        assert_eq!(args, vec!["acp", "--port", "41234"]);
+    }
+
+    #[test]
+    fn a_stdio_only_bridge_is_untouched_by_the_pin() {
+        // BYTE-STABILITY, and it is the point of the `harness_server: None` arm:
+        // `acp/claude-code` must spawn exactly the argv it spawned before this
+        // existed, whether or not a port is offered. The `Some(41234)` case is
+        // the one that would regress if `bridge_for` appended unconditionally.
+        assert_eq!(bridge_for("acp/claude-code", None), (None, vec![]));
+        assert_eq!(bridge_for("acp/claude-code", Some(41234)), (None, vec![]));
+    }
+
+    /// The pin must survive the `--bridge-arg` ENCODING, which is the one place
+    /// it could silently be lost.
+    ///
+    /// `--port` is passed to the adapter as the VALUE of a `--bridge-arg`, and it
+    /// looks exactly like an adapter flag. If `parse_adapter_args` treated a
+    /// value beginning with `--` as the next flag rather than as the value it was
+    /// taking, the port would land on the adapter (which does not accept it) or
+    /// be dropped, and the bridge would go back to an ephemeral port — with
+    /// everything still spawning, still working, and `qd attach` failing later
+    /// against a recorded address nothing is bound to.
+    ///
+    /// So this walks the whole encode/decode: `bridge_for` → `build_adapter_argv`
+    /// → `parse_adapter_args` → the exact `program args…` the adapter hands
+    /// `AcpHost::spawn`.
+    #[test]
+    fn the_pinned_port_survives_the_bridge_arg_round_trip() {
+        use super::super::residence::{build_adapter_argv, parse_adapter_args};
+
+        let (cmd, args) = bridge_for("acp/opencode", Some(41234));
+        let argv = build_adapter_argv(
+            std::path::Path::new("/usr/bin/qd"),
+            "ws://127.0.0.1:9000",
+            std::path::Path::new("/work"),
+            cmd,
+            &args,
+            None,
+        );
+        // `--port` and its value ride as bridge-arg VALUES, never as adapter flags.
+        assert_eq!(
+            argv,
+            vec![
+                "/usr/bin/qd",
+                "acp-daemon",
+                "--listen",
+                "ws://127.0.0.1:9000",
+                "--cwd",
+                "/work",
+                "--bridge-cmd",
+                "opencode",
+                "--bridge-arg",
+                "acp",
+                "--bridge-arg",
+                "--port",
+                "--bridge-arg",
+                "41234",
+            ]
+        );
+        // And the adapter decodes them back to the command it will spawn:
+        // `opencode acp --port 41234`.
+        let parsed = parse_adapter_args(&argv[2..]).expect("the adapter parses its own argv");
+        assert_eq!(parsed.bridge_cmd, "opencode");
+        assert_eq!(parsed.bridge_args, vec!["acp", "--port", "41234"]);
+        assert_eq!(parsed.listen, "ws://127.0.0.1:9000");
+    }
+
+    #[test]
+    fn only_a_bridge_with_a_server_gets_a_port_allocated() {
+        let next = std::cell::Cell::new(41000);
+        let alloc = counting_alloc(&next);
+        // opencode: allocated, and it consumes a port.
+        assert_eq!(alloc_harness_port("acp/opencode", &alloc).unwrap(), Some(41000));
+        // claude-code: asked, nothing to allocate, and NO port consumed — an
+        // allocator call here would bind a socket for a server that will never
+        // exist.
+        assert_eq!(alloc_harness_port("acp/claude-code", &alloc).unwrap(), None);
+        assert_eq!(next.get(), 41001, "the no-server arm must not burn a port");
+    }
+
+    #[test]
+    fn the_recorded_address_is_the_one_the_bridge_was_told_to_listen_on() {
+        assert_eq!(
+            harness_endpoint_for("acp/opencode", Some(41234)).as_deref(),
+            Some("http://127.0.0.1:41234"),
+        );
+        // No server ⇒ no key on the row at all (skip-None), which is what keeps
+        // every `acp/claude-code` row byte-stable.
+        assert_eq!(harness_endpoint_for("acp/claude-code", Some(41234)), None);
+        // And a server spec with no port is `None` rather than a URL with a hole
+        // in it: the address must name a port something is actually bound to.
+        assert_eq!(harness_endpoint_for("acp/opencode", None), None);
+    }
+
+    #[test]
+    fn the_two_ports_are_different_servers_in_different_processes() {
+        // The ws endpoint is qd's adapter; the harness endpoint is the bridge's
+        // own server. They are allocated from the same allocator and must never
+        // be assumed equal — the row records BOTH because a viewer needs the
+        // second one and every verb needs the first.
+        let next = std::cell::Cell::new(41000);
+        let alloc = counting_alloc(&next);
+        let ws = alloc().unwrap();
+        let harness = alloc_harness_port("acp/opencode", &alloc).unwrap().unwrap();
+        assert_ne!(ws, harness);
+        assert_eq!(
+            harness_endpoint_for("acp/opencode", Some(harness)).as_deref(),
+            Some("http://127.0.0.1:41001")
+        );
     }
 
     #[test]

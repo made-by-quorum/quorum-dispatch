@@ -325,6 +325,10 @@ pub fn create_pi_session(
             // `pi/extension` already follows when it patches `hosting` onto the
             // row it just created.
             hosting: Some(crate::lane::Mode::Daemon.hosting_token().to_string()),
+            // No second server to hand out: this harness's residence IS qd's
+            // (`endpoint`), so there is no separate harness-side address a viewer
+            // could join. See `RegistryEntry::harness_endpoint`.
+            harness_endpoint: None,
         };
         if let Err(e) = registry::write_entry(&deps.sessions_dir, &entry) {
             deps.spawner.kill(spawned.pid);

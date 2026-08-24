@@ -508,6 +508,10 @@ pub fn create_pi_tui(
         transport: None,
         structured_send_issued: None,
         hosting: Some(Hosting::MuxPane.as_str().to_string()),
+        // No second server to hand out: this harness's residence IS qd's
+        // (`endpoint`), so there is no separate harness-side address a viewer
+        // could join. See `RegistryEntry::harness_endpoint`.
+        harness_endpoint: None,
     };
     if let Err(detail) = registry::write_entry(&deps.paths.sessions_dir, &entry) {
         return Err(PiTuiError::RowWriteFailed {

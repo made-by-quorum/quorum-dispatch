@@ -898,6 +898,7 @@ mod tests {
                 transport: None,
                 structured_send_issued: None,
                 hosting: None,
+                harness_endpoint: None,
             },
             tombstoned: false,
             degraded: Vec::new(),

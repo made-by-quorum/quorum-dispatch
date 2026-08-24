@@ -26,3 +26,28 @@ pub mod acp;
 pub mod store;
 
 pub use store::{sessions, store_dir, OpencodeSession, OPENCODE_DB_FILENAME, PROVIDER_ID};
+
+/// The env var overriding the opencode binary on a launch argv (else
+/// `"opencode"`). The `QD_CODEX_BIN` precedent, for the same reason: a box with
+/// a non-PATH or versioned install needs one place to say so.
+const OPENCODE_BIN_ENV: &str = "QD_OPENCODE_BIN";
+
+/// The opencode binary to launch: the `QD_OPENCODE_BIN` override, else
+/// `"opencode"` off PATH.
+///
+/// Shared so the ACP bridge spawn and the human viewer (`opencode attach …`) can
+/// never disagree about which binary is "opencode" on this box — a viewer built
+/// from a different install than the bridge would be a second opencode talking
+/// to the first one's server, which is exactly the confusion this resolves once.
+///
+/// NOTE the asymmetry with the bridge, which is spawned as the literal
+/// `AcpProvider::bridge_cmd` (`"opencode"`) rather than through here. That is a
+/// real gap, not a design: the bridge argv is a `&'static str` in a `const fn`
+/// spec, so it cannot consult the env. Both resolve to `"opencode"` unless the
+/// override is set, so today they agree; wiring the spec to the env is the fix
+/// if that ever stops being true.
+pub fn opencode_bin(env: &dyn crate::effects::Env) -> String {
+    env.var(OPENCODE_BIN_ENV)
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "opencode".to_string())
+}
