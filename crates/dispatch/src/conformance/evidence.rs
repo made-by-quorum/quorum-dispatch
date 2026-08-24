@@ -425,9 +425,11 @@ pub struct RunArtifact {
 }
 
 impl RunArtifact {
-    /// The grid-map key for a (lane, cell). Stable + human-readable.
+    /// The grid-map key for a (lane, cell): the LANE id, not its harness, so
+    /// the two lanes of one harness hold distinct rows in the same grid.
+    /// Stable + human-readable.
     pub fn cell_key(lane: Lane, cell: &CellId) -> String {
-        format!("{}::{}", lane.provider_id(), cell.0)
+        format!("{}::{}", lane.id(), cell.0)
     }
 
     /// Every observation in the grid (skips coverage records).

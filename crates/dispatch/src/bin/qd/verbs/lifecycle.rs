@@ -251,26 +251,56 @@ fn seed_fork_transcript(
 /// the order list is the full set.
 fn supported_provider_names() -> String {
     use quorum_qw::lane::Harness;
-    const DISPLAY_ORDER: [Harness; 5] = [
+    const DISPLAY_ORDER: [Harness; 4] = [
         Harness::ClaudeCode,
         Harness::Codex,
-        Harness::AcpClaudeCode,
         Harness::Pi,
         Harness::Opencode,
     ];
+    // No alias parenthetical any more. `opencode` used to read `opencode (=
+    // acp/opencode)` because the name a user typed and the id qd stored were
+    // different strings; ACP-as-a-mode collapsed them, and every harness now has
+    // exactly one spelling.
     DISPLAY_ORDER
         .iter()
-        .map(|h| match h {
-            // The CLI ergonomic is the name a user TYPES; the internal id follows
-            // in parens, exactly as this line has always read. Both spellings
-            // resolve — `from_provider_id` accepts the alias.
-            Harness::Opencode => format!("opencode (= {})", h.provider_id()),
-            Harness::ClaudeCode | Harness::Codex | Harness::AcpClaudeCode | Harness::Pi => {
-                h.provider_id().to_string()
-            }
-        })
+        .map(|h| h.provider_id().to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The refusal for a `--provider` value this engine cannot place.
+///
+/// TWO different mistakes reach here and they deserve different sentences. A
+/// value with no `/` is a program name that does not name a program, and the fix
+/// is to pick one that does. A value WITH a `/` is a lane id, and if its first
+/// segment names a real program then the program is fine and the topology is
+/// what is wrong — telling that caller "unknown provider: claude-code/daemon"
+/// invites them to doubt `claude-code`, which is not the problem, and hides the
+/// only useful fact: which lanes that harness actually has.
+///
+/// The lane list is DERIVED from `Lane::ALL`, so a harness that gains a lane
+/// starts being offered one here without anybody remembering to add it.
+fn unplaceable_provider_message(arg: &str) -> String {
+    use quorum_qw::lane::{Harness, Lane};
+    if let Some((program, _)) = arg.split_once('/') {
+        if let Some(h) = Harness::from_provider_id(program) {
+            let lanes = Lane::ALL
+                .iter()
+                .filter(|l| l.harness == h)
+                .map(|l| l.id())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!(
+                "qd start: \"{arg}\" is not a lane — {program} has no such topology. \
+                 {program}'s lanes are: {lanes}."
+            );
+        }
+    }
+    format!(
+        "qd start: unknown provider \"{arg}\" — this engine supports: {}. \
+         (A lane can be named directly too, e.g. --provider codex/daemon.)",
+        supported_provider_names()
+    )
 }
 
 /// What `qd start` boots when nothing and nobody says otherwise — and the answer
@@ -279,14 +309,21 @@ fn supported_provider_names() -> String {
 /// offered.
 const DEFAULT_PROVIDER: &str = "claude-code";
 
-/// The LANE a detected harness belongs to.
+/// The HARNESS a detected binary belongs to.
 ///
 /// The detector and the router keep separate vocabularies, for separate and
 /// legitimate reasons: `HarnessId` is what `qd setup` probes for on PATH, and
 /// `Harness` is what `Lane::for_create` routes on. R20's prompt is the first
 /// place the two meet, so the crossing gets exactly one exhaustive, wildcard-free
 /// match — a fifth harness added to the detector then fails to compile HERE
-/// until someone says which lane it starts.
+/// until someone says which harness it starts.
+///
+/// **The two sets are the same size now, and that is a result rather than a
+/// coincidence.** `HarnessId` has always had four entries and no ACP row,
+/// because `qd setup` probes for PROGRAMS and there is no `acp` program to find —
+/// the bridge runs claude, or opencode. `Harness` had five, and this function was
+/// the seam where a four-program world met a five-harness one. ACP being a lane
+/// makes the router agree with what the detector always said.
 fn harness_for_detected(id: dispatch::setup::harness::HarnessId) -> quorum_qw::lane::Harness {
     use dispatch::setup::harness::HarnessId;
     use quorum_qw::lane::Harness;
@@ -302,14 +339,20 @@ fn harness_for_detected(id: dispatch::setup::harness::HarnessId) -> quorum_qw::l
 /// spelled here.
 ///
 /// The naive version of this function is a second table of provider-id string
-/// literals, and it would be wrong within one release: `HarnessId::as_str`
-/// answers `"claude"` (the BINARY setup probes for) where the provider id is
-/// `"claude-code"` (the LANE), and `Harness::Opencode` is `"acp/opencode"` where
-/// the detector says `"opencode"`. Two of four arms are traps. Deriving the
-/// string from [`quorum_qw::lane::Harness::provider_id`] — the same method the
-/// unknown-provider refusal above derives its advertised list from — means the
-/// prompt cannot offer a spelling the parser rejects, because it is reading the
-/// parser's own answer.
+/// literals, and it would still be wrong: `HarnessId::as_str` answers `"claude"`
+/// — the BINARY setup probes for — where the provider id is `"claude-code"`, the
+/// program. That trap is one arm of four.
+///
+/// It used to be two. `Harness::Opencode` answered `"acp/opencode"` where the
+/// detector said `"opencode"`, and the gap was not an oversight: while ACP was a
+/// harness the provider id had to carry the transport, so it could not also be
+/// the program name the detector finds on PATH. Now it is, and the arm is no
+/// longer a trap.
+///
+/// Deriving the string from [`quorum_qw::lane::Harness::provider_id`] — the same
+/// method the unknown-provider refusal above derives its advertised list from —
+/// means the prompt cannot offer a spelling the parser rejects, because it is
+/// reading the parser's own answer.
 fn provider_id_for_harness(id: dispatch::setup::harness::HarnessId) -> &'static str {
     harness_for_detected(id).provider_id()
 }
@@ -435,10 +478,24 @@ fn resolve_provider_by_asking(
                         || answer.eq_ignore_ascii_case(h.label())
                 })
             });
-        match picked {
-            Some(h) => return Some(provider_id_for_harness(h).to_string()),
-            None => println!("  \"{answer}\" is not one of the choices."),
+        if let Some(h) = picked {
+            return Some(provider_id_for_harness(h).to_string());
         }
+        // A LANE id is a legitimate answer even though the menu does not offer
+        // one. The menu asks "which harness", and a caller who already knows they
+        // want `codex/daemon` has answered a more specific version of the same
+        // question — refusing it because the rows only listed programs would be
+        // pedantry, and `--provider` itself takes the form.
+        //
+        // Returned VERBATIM rather than reduced to its harness: the whole content
+        // of the answer is the topology, and `Lane::for_create` is what reads it.
+        // Not filtered against the DETECTED set either — a lane id names a
+        // harness explicitly, so there is no inference to protect, and refusing an
+        // installed-but-undetected harness here would be a second, worse accept-set.
+        if quorum_qw::lane::Lane::from_id(&answer).is_some() {
+            return Some(answer);
+        }
+        println!("  \"{answer}\" is not one of the choices.");
     }
     println!("  Using {default_id}.");
     Some(default_id.to_string())
@@ -522,6 +579,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // flagless start makes. See the topology block below.
     let daemon_flag = m.get_flag("daemon");
     let app_server_flag = m.get_flag("app-server");
+    let acp_flag = m.get_flag("acp");
     let agent = m.get_one::<String>("agent").cloned();
     // `qd start --agent <name>` is RETIRED. The old static-agent path resolved
     // `~/.quorum/dispatch/plugins/core/agents/<name>.md` and fail-closed booted that role;
@@ -581,18 +639,18 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // P2 W4: codex is now a supported value (GATE-R RULED (A) daemon-thread).
     //
     // The SET is qw's and the WORDING is qd's, and that split is the point.
-    // `Harness::from_provider_id` accepts exactly these six spellings (five
-    // harnesses plus the `opencode` CLI alias) and is what `Lane::for_create`
-    // routes on, so asking it here means the accept-set can no longer drift from
-    // the set that actually has lanes. The message text and the exit code stay on
-    // this side, where user-facing wording belongs — and it names the same set
-    // because `supported_provider_names` derives it from `Harness::ALL`.
+    // `parse_provider_arg` is exactly what `Lane::for_create` routes on, so asking
+    // it here means the accept-set can no longer drift from the set that actually
+    // has lanes. The message text and the exit code stay on this side, where
+    // user-facing wording belongs.
+    //
+    // It accepts a LANE id as well as a program name, which is why the refusal
+    // below teaches both forms: `--provider codex/daemon` is a legitimate way to
+    // ask for a lane, and a user who mistypes one should not be told the program
+    // is unknown.
     if let Some(p) = provider.as_deref() {
-        if quorum_qw::lane::Harness::from_provider_id(p).is_none() {
-            eprintln!(
-                "qd start: unknown provider \"{p}\" — this engine supports: {}.",
-                supported_provider_names()
-            );
+        if quorum_qw::lane::parse_provider_arg(p).is_none() {
+            eprintln!("{}", unplaceable_provider_message(p));
             return 1;
         }
     }
@@ -615,7 +673,22 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // error rather than panicking (it is structurally unreachable given the check,
     // but a fail-closed exit is the only honest posture if the two ever drift).
     let provider_id = provider.as_deref().unwrap_or(DEFAULT_PROVIDER);
-    let Some(provider_impl) = dispatch::provider::provider_for(provider_id) else {
+    // The `Provider` impl is looked up by the id the REGISTRY keys on, which is
+    // not always the string the user typed: `--provider codex/daemon` names a
+    // lane, and `provider_for` is a registry of programs. Try the typed string
+    // first — it is what the legacy `acp/*` spellings need, and they resolve the
+    // bridge impl rather than the bare program's — then fall back to the harness's
+    // canonical id for a lane-id argument.
+    //
+    // This impl is read for exactly one thing below (`--fork`'s transcript
+    // resolution), so the fallback is not load-bearing today; it is written this
+    // way so that a lane-id argument cannot arrive at a `None` and be reported as
+    // an unknown provider it plainly is not.
+    let provider_impl = dispatch::provider::provider_for(provider_id).or_else(|| {
+        quorum_qw::lane::parse_provider_arg(provider_id)
+            .and_then(|(h, _)| dispatch::provider::provider_for(h.provider_id()))
+    });
+    let Some(provider_impl) = provider_impl else {
         eprintln!(
             "qd start: unknown provider \"{provider_id}\" — this engine supports: {}.",
             supported_provider_names()
@@ -639,7 +712,19 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // `pi`, the mode `--mode rpc` opts OUT of), so `--interactive` now means for
     // pi exactly what it means for claude and codex. acp/* keeps the refusal: an
     // ACP bridge is a protocol adapter with no terminal of its own at all.
-    if interactive_flag && provider_id.starts_with("acp/") {
+    //
+    // ASKED OF THE HARNESS, not of the provider STRING, and that repairs a bug
+    // this refusal carried for as long as it existed. It used to read
+    // `provider_id.starts_with("acp/")`, which caught `--provider
+    // acp/claude-code --interactive` and MISSED `--provider opencode
+    // --interactive` — the alias for the same bridge — which slipped past and
+    // was silently downgraded to a daemon, exit 0. There is no string to test
+    // now: `Harness::supports(Mode::Pane)` is the question that was always being
+    // asked, and no spelling can walk past it.
+    if interactive_flag
+        && quorum_qw::lane::Harness::from_provider_id(provider_id)
+            .is_some_and(|h| !h.supports(quorum_qw::lane::Mode::Pane))
+    {
         eprintln!(
             "qd start: --interactive is not supported with --provider {provider_id} — it is \
              daemon-hosted and has no terminal to attach. Start it without --interactive \
@@ -766,15 +851,20 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // relay-presence warning, telemetry, and the claude lane's post-boot `-p`
     // delivery with its went-busy exit mapping.
     //
-    // WHY THE ROUTING IS NOT A BARE `Lane::for_create(provider_id, interactive)`.
-    // The chain it replaces sent every `acp/*` create to the daemon arm even under
-    // `--interactive`: the loud refusal above tests the string the USER typed, so
-    // `--provider acp/claude-code --interactive` is caught, while `--provider
-    // opencode --interactive` — the CLI alias for the same harness — slips past it
-    // and silently gets a daemon. That is today's behaviour, and this is not the
-    // change that repairs it, so the flag is masked for acp exactly where the chain
-    // masked it. (Repairing it means widening the refusal above, which moves bytes.)
-    let interactive_lane = interactive_flag && !provider_impl.id().starts_with("acp/");
+    // THE ACP MASK IS GONE, and its removal is the point rather than a tidy-up.
+    //
+    // A `let interactive_lane = interactive_flag && !id.starts_with("acp/")` stood
+    // here, and it existed to PRESERVE a bug: the refusal above used to test the
+    // string the user typed, so `--provider acp/claude-code --interactive` was
+    // caught while `--provider opencode --interactive` — the alias for the same
+    // bridge — slipped past and was silently downgraded to a daemon, exit 0. The
+    // mask reproduced that downgrade so the two spellings at least behaved alike.
+    //
+    // Both halves are repaired. The refusal asks `Harness::supports(Mode::Pane)`,
+    // which no spelling can walk past, and `Lane::for_create` refuses a pinned
+    // spelling that disagrees with an explicit flag — so `--provider
+    // acp/claude-code --interactive` yields no lane rather than a masked one.
+    // Nothing needs to mask a flag it can simply honour or refuse.
     // The topologies, as ONE value. `--daemon`, `--extension` and `--interactive`
     // are pairwise conflicting at parse, so at most one arm's condition is ever
     // true and this chain's ORDER is not load-bearing — it reads top-down as
@@ -788,16 +878,64 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // `codex/app-server` and `pi/extension` (DEC-2/DEC-4).
     let topology = if daemon_flag {
         quorum_qw::lane::CreateTopology::Daemon
+    } else if acp_flag {
+        quorum_qw::lane::CreateTopology::Acp
     } else if app_server_flag {
         quorum_qw::lane::CreateTopology::AppServer
     } else if extension_flag {
         quorum_qw::lane::CreateTopology::Extension
-    } else if interactive_lane {
+    } else if interactive_flag {
         quorum_qw::lane::CreateTopology::Interactive
     } else {
         quorum_qw::lane::CreateTopology::Default
     };
-    let Some(lane) = quorum_qw::lane::Lane::for_create(provider_impl.id(), topology) else {
+    // Routed on the string the USER TYPED, not on `provider_impl.id()`. The two
+    // differ for exactly one input and it matters twice: `provider_for("opencode")`
+    // resolves an impl whose internal id is still the legacy `acp/opencode`, so
+    // routing on the impl would (a) make every refusal below quote a spelling the
+    // user did not type, and (b) treat a plain `--provider opencode` as though it
+    // had pinned a lane. What a caller typed is what pins a lane — that is the
+    // whole content of `harness_and_pinned_mode`.
+    let Some(lane) = quorum_qw::lane::Lane::for_create(provider_id, topology) else {
+        // A LEGACY `acp/*` spelling plus a flag naming a different lane. Checked
+        // FIRST because every message below assumes the provider named only a
+        // program, and this one named a lane outright — so `--provider
+        // acp/claude-code --daemon` would otherwise be told "claude-code has no
+        // daemon lane", which is true and beside the point.
+        //
+        // This case became REACHABLE with the remodel and was not before: the
+        // old engine masked `--interactive` for `acp/*` rather than refusing it,
+        // so the pair produced a daemon and exit 0. Refusing it is the repair.
+        //
+        // TWO spellings pin a lane and they need different remedies. An explicit
+        // `codex/daemon` is a CURRENT way to say it, so the advice is to drop
+        // whichever half is wrong. A legacy `acp/claude-code` is not, so the
+        // advice also names what it has become — a caller reading it may not know
+        // the spelling moved.
+        if let Some((harness, Some(pinned))) =
+            quorum_qw::lane::parse_provider_arg(provider_id)
+        {
+            let named = quorum_qw::lane::Lane::new(harness, pinned)
+                .map(|l| l.id())
+                .unwrap_or_else(|| pinned.hosting_token().to_string());
+            let is_legacy = quorum_qw::lane::harness_and_pinned_mode(provider_id)
+                .is_some_and(|(_, p)| p.is_some());
+            if is_legacy {
+                eprintln!(
+                    "qd start: --provider {provider_id} already names the {named} lane, and \
+                     the topology flag you passed names a different one. That spelling is \
+                     the older way to say \"{named}\"; drop the flag, or name the lane you \
+                     want directly."
+                );
+            } else {
+                eprintln!(
+                    "qd start: --provider {provider_id} already names the {named} lane, and \
+                     the topology flag you passed names a different one. Drop the flag, or \
+                     name the lane you want — not both."
+                );
+            }
+            return 1;
+        }
         // `--extension` on a harness that has no extension lane lands here, and
         // it is one of the two reachable cases: every other path was validated
         // above. Named specifically, because "unknown provider" would be a lie
@@ -806,7 +944,22 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             eprintln!(
                 "qd start: --extension is pi's alone (provider \"{}\" has no extension lane). \
                  It rides pi's own extension loader, which no other harness here has.",
-                provider_impl.id()
+                provider_id
+            );
+            return 1;
+        }
+        // `--acp` on a harness with no ACP adapter, or on a legacy `acp/*`
+        // spelling that already pins a DIFFERENT lane. Two distinct refusals, and
+        // the difference is worth stating: codex and pi have no adapter wired up
+        // in qd YET (a missing adapter, not a missing affordance — ACP is a
+        // general protocol), while an outright contradiction is a caller asking
+        // for two lanes at once.
+        if acp_flag {
+            eprintln!(
+                "qd start: --acp is not available for --provider {} — no ACP adapter is \
+                 wired up for that harness in qd yet. It is available for claude-code \
+                 (claude-code/acp) and opencode (opencode/acp).",
+                provider_id
             );
             return 1;
         }
@@ -825,29 +978,44 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                  lane). It names a specific residence — `codex app-server --listen ws://…` \
                  with a `codex --remote` viewer able to join it — which no other harness \
                  here has.",
-                provider_impl.id()
+                provider_id
             );
             return 1;
         }
+        // `--daemon` on a harness with no headless lane. TWO harnesses reach here
+        // now and they are refused for different reasons, so the sentence is
+        // chosen rather than shared: claude has no headless form at all, while
+        // opencode HAS one — its ACP bridge — and simply does not spell it
+        // `daemon`. Telling an opencode user "there is no headless opencode"
+        // would be false and would send them looking for the wrong thing.
         if daemon_flag {
+            let why = match quorum_qw::lane::Harness::from_provider_id(provider_id) {
+                Some(quorum_qw::lane::Harness::Opencode) => {
+                    "opencode's only residence IS its ACP bridge, so \"opencode/daemon\" \
+                     names nothing. Start it without --daemon (or with --acp, which says \
+                     the same thing)."
+                }
+                _ => {
+                    "claude-code has no daemon lane at all. It is a TUI in a mux pane and \
+                     nothing else: there is no headless claude to host, so \
+                     \"claude-code/daemon\" is not a lane this engine can build. Start it \
+                     without --daemon."
+                }
+            };
             eprintln!(
-                "qd start: --daemon is not supported with --provider {} — claude-code has \
-                 no daemon lane at all. It is a TUI in a mux pane and nothing else: there \
-                 is no headless claude to host, so \"claude-code/daemon\" is not a lane \
-                 this engine can build. Start it without --daemon. (--daemon is for \
-                 --provider codex and pi, whose default lanes are codex/app-server and \
-                 pi/extension.)",
-                provider_impl.id()
+                "qd start: --daemon is not supported with --provider {provider_id} — {why} \
+                 (--daemon is for --provider codex and pi, whose default lanes are \
+                 codex/app-server and pi/extension.)"
             );
             return 1;
         }
         // Structurally unreachable: the accept-set was validated above against the
-        // SAME `Harness::from_provider_id` that `for_create` routes on. Fail closed
+        // SAME `parse_provider_arg` that `for_create` routes on. Fail closed
         // with the same loud line rather than panic — the defensive-arm posture the
         // `provider_for` lookup directly above already takes.
         eprintln!(
             "qd start: unknown provider \"{}\" — this engine supports: {}.",
-            provider_impl.id(),
+            provider_id,
             supported_provider_names()
         );
         return 1;
@@ -1171,10 +1339,9 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::Daemon) => {
                 println!("Started detached pi session \"{name}\"")
             }
-            (
-                quorum_qw::lane::Harness::AcpClaudeCode | quorum_qw::lane::Harness::Opencode,
-                quorum_qw::lane::Mode::Daemon,
-            ) => println!("Started detached acp session \"{name}\""),
+            (_, quorum_qw::lane::Mode::Acp) => {
+                println!("Started detached acp session \"{name}\"")
+            }
             // The extension lane names BOTH channels, because it is the one lane
             // that has both: a human attaches to the pane, and an agent drives
             // the same session over its control channel without attaching to
@@ -1200,15 +1367,22 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             }
             // claude is excluded by the enclosing `if` — it has four phases after
             // the create and prints its own line down there, not here.
-            (quorum_qw::lane::Harness::ClaudeCode, _) => {}
+            (quorum_qw::lane::Harness::ClaudeCode, quorum_qw::lane::Mode::Pane) => {}
             // Not lanes; `Lane::new` refuses each of these, so `for_create` cannot
             // have produced one. Named rather than wildcarded so that making any
             // of them real is an edit somebody has to make HERE, on purpose.
             (quorum_qw::lane::Harness::Codex, quorum_qw::lane::Mode::Extension)
             | (quorum_qw::lane::Harness::Pi, quorum_qw::lane::Mode::AppServer)
             | (
-                quorum_qw::lane::Harness::AcpClaudeCode | quorum_qw::lane::Harness::Opencode,
+                quorum_qw::lane::Harness::ClaudeCode,
+                quorum_qw::lane::Mode::Daemon
+                | quorum_qw::lane::Mode::Extension
+                | quorum_qw::lane::Mode::AppServer,
+            )
+            | (
+                quorum_qw::lane::Harness::Opencode,
                 quorum_qw::lane::Mode::Pane
+                | quorum_qw::lane::Mode::Daemon
                 | quorum_qw::lane::Mode::Extension
                 | quorum_qw::lane::Mode::AppServer,
             ) => {}
@@ -2464,22 +2638,29 @@ mod tests {
 
     use super::supported_provider_names;
 
-    /// The unknown-provider line's BYTES are unchanged by the derivation. This is
-    /// the whole safety of moving the list off a literal: the set now comes from
-    /// `Harness::ALL`, and the sentence a user reads did not move.
+    /// The unknown-provider line, pinned to the byte.
+    ///
+    /// It USED to read `claude-code, codex, acp/claude-code, pi, opencode (=
+    /// acp/opencode)` — five entries for four programs, one of which named a
+    /// transport and one of which had to carry a parenthetical explaining that
+    /// what you type and what qd stores are different strings. Both oddities were
+    /// the same modelling error, and ACP-as-a-lane removed it: four programs,
+    /// four names, no aliases to explain.
+    ///
+    /// The legacy `acp/*` spellings still PARSE (rows and scripts predate the
+    /// remodel). They are deliberately not advertised here — this line answers
+    /// "what may I type", and offering two spellings for one thing is how the
+    /// split began.
     #[test]
-    fn supported_provider_names_is_byte_identical_to_the_literal_it_replaced() {
-        assert_eq!(
-            supported_provider_names(),
-            "claude-code, codex, acp/claude-code, pi, opencode (= acp/opencode)"
-        );
+    fn supported_provider_names_is_one_name_per_program() {
+        assert_eq!(supported_provider_names(), "claude-code, codex, pi, opencode");
         assert_eq!(
             format!(
                 "qd start: unknown provider \"{}\" — this engine supports: {}.",
                 "weird", supported_provider_names()
             ),
             "qd start: unknown provider \"weird\" — this engine supports: claude-code, codex, \
-             acp/claude-code, pi, opencode (= acp/opencode)."
+             pi, opencode."
         );
     }
 
@@ -2496,8 +2677,24 @@ mod tests {
                 h.provider_id()
             );
         }
-        // The CLI alias too — it is what the refusal tells a user to type.
-        assert!(rendered.contains("opencode (= acp/opencode)"));
-        assert!(quorum_qw::lane::Harness::from_provider_id("opencode").is_some());
+        // Every advertised name is one a user may actually type…
+        for name in rendered.split(", ") {
+            assert!(
+                quorum_qw::lane::Harness::from_provider_id(name).is_some(),
+                "{name:?} is advertised but not accepted"
+            );
+        }
+        // …and the legacy spellings still parse WITHOUT being advertised, which
+        // is the whole compat contract in two lines.
+        for legacy in ["acp/claude-code", "acp/opencode"] {
+            assert!(
+                quorum_qw::lane::Harness::from_provider_id(legacy).is_some(),
+                "{legacy} must keep parsing — it is on disk in rows written before the remodel"
+            );
+            assert!(
+                !rendered.contains(legacy),
+                "{legacy} still parses but must NOT be advertised: one name per program"
+            );
+        }
     }
 }

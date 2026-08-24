@@ -669,6 +669,7 @@ mod registry_agreement_tests {
             // being handed a lane with no implementation behind it.
             Some("app-server"),
             Some("extension"),
+            Some("acp"),
             Some("garbage"),
             Some(""),
         ];
@@ -678,6 +679,7 @@ mod registry_agreement_tests {
             Mode::Daemon => Hosting::Daemon,
             Mode::Extension => Hosting::Extension,
             Mode::AppServer => Hosting::AppServer,
+            Mode::Acp => Hosting::Acp,
         };
 
         let mut diverged = 0usize;
@@ -687,10 +689,29 @@ mod registry_agreement_tests {
                 let old = row_hosting(p, t);
                 let new = quorum_qw::lane_for(p, t).map(|l| as_hosting(l.mode));
 
-                let harness = Harness::from_provider_id(p);
+                let (harness, pinned) = match quorum_qw::lane::harness_and_pinned_mode(p) {
+                    Some((h, pin)) => (Some(h), pin),
+                    None => (None, None),
+                };
                 let claimed = t.and_then(Mode::from_hosting_token);
 
                 match (harness, claimed) {
+                    // (0) a LEGACY `acp/*` spelling. Both readers pin the lane
+                    // off the provider id and ignore the row's token, so they
+                    // agree exactly and this is not a divergence at all. It is
+                    // listed first because the arm below would otherwise claim
+                    // it: `ClaudeCode` genuinely does not support `Mode::Daemon`,
+                    // and `acp/claude-code` rows all carry `hosting: "daemon"`.
+                    //
+                    // Nine of the old divergence count lived here, when `acp/*`
+                    // were providers of their own whose every non-daemon claim
+                    // had to degrade. Agreement replaced them.
+                    _ if pinned.is_some() => {
+                        assert_eq!(
+                            old, new,
+                            "both readers must pin the lane for legacy spelling {p:?}"
+                        );
+                    }
                     // (1) unknown provider: lane_for refuses outright.
                     (None, _) => {
                         assert_eq!(new, None, "lane_for must refuse unknown provider {p:?}");
@@ -726,26 +747,42 @@ mod registry_agreement_tests {
         // Pin the divergence count so a future change to either function that
         // widens or narrows the gap shows up here rather than silently.
         //
-        //   (1) unknown provider ("nonsense", "") x 4 parseable tokens      = 8
+        // DERIVE THIS, NEVER COPY IT. If a row below went red, work the table out
+        // again from `supports` and `row_default_mode` and rewrite the arithmetic.
+        // Pasting in whatever number the failure reported destroys the test: the
+        // count is only evidence because it was computed independently of the
+        // code it checks.
+        //
+        //   (1) unknown provider ("nonsense", "") x 5 parseable tokens      = 10
         //   (2) a known harness claiming a topology it cannot have:
         //         claude-code  x {daemon, app-server, extension}            = 3
-        //         codex        x {extension}                                = 1
-        //         pi           x {app-server}                               = 1
-        //         acp/claude-code, acp/opencode, opencode
-        //                      x {mux-pane, app-server, extension}  3 x 3   = 9
-        //                                                           TOTAL  = 22
+        //         codex        x {extension, acp}                           = 2
+        //         pi           x {app-server, acp}                          = 2
+        //         opencode     x {mux-pane, daemon, app-server, extension}  = 4
+        //                                                           TOTAL  = 21
         //
-        // The two single-harness modes are the bulk of (2), and that is the
-        // point: `app-server` and `extension` each exist for exactly one harness,
-        // so every OTHER harness claiming one must degrade rather than be handed
-        // a lane with nothing behind it.
-        assert_eq!(diverged, 22, "the deliberate-divergence set changed");
+        // The single-harness modes are the bulk of (2), and that is the point:
+        // `app-server`, `extension` and `acp` each exist for a subset of the
+        // harnesses, so every OTHER harness claiming one must degrade rather than
+        // be handed a lane with nothing behind it.
+        //
+        // WAS 22, AND THE MOVEMENT IS THE INTERESTING PART. Nine of the old
+        // divergences were `acp/claude-code`, `acp/opencode` and `opencode`
+        // claiming three impossible topologies apiece — an artefact of ACP being
+        // a harness, where the bridge ids were separate providers whose every
+        // non-daemon claim had to degrade. Those nine are GONE: `acp/*` is a
+        // legacy spelling that pins its lane in BOTH readers, so the two agree
+        // exactly and contribute nothing here. What replaced them is smaller and
+        // differently shaped — one new parseable token widens (1) by two, `acp`
+        // is an impossible claim for codex and pi, and `opencode` picks up a
+        // fourth as the only harness with a single lane.
+        assert_eq!(diverged, 21, "the deliberate-divergence set changed");
     }
 
     #[test]
     fn the_nine_lanes_cover_every_provider_and_topology_in_use() {
-        // codex appears three times and pi three times; claude only pane; acp
-        // only daemon.
+        // codex appears three times and pi three times; claude twice — its pane
+        // and its ACP bridge; opencode once, the bridge being its only lane.
         let ids: Vec<String> = Lane::ALL.iter().map(|l| l.id()).collect();
         for expected in [
             "claude-code/mux-pane",
@@ -761,8 +798,12 @@ mod registry_agreement_tests {
             // also drive. Pane-shaped, but its own lane because the carrier
             // differs.
             "pi/extension",
-            "acp/claude-code/daemon",
-            "acp/opencode/daemon",
+            // The two ACP bridge lanes, on the axis they belong on. Note
+            // `claude-code/acp` sits beside `claude-code/mux-pane` under ONE
+            // program id: the bridge runs the real claude engine into claude's
+            // own store, so what separates them is topology, not identity.
+            "claude-code/acp",
+            "opencode/acp",
         ] {
             assert!(ids.iter().any(|i| i == expected), "missing lane {expected}");
         }

@@ -24,23 +24,31 @@ use super::tier::{
     TierVerdict,
 };
 
-/// The lanes T4 publishes, in a stable published order.
+/// The lanes T4 publishes, in a stable published order. Every lane the battery
+/// measures, spelled the way qd spells a lane: `<harness>/<hosting>`.
+///
+/// The published rows are LANES and the published badges are PROVIDERS, and the
+/// two lists stopped being the same length when ACP became a hosting: five lanes
+/// over four harnesses, because claude-code carries two of them. That asymmetry
+/// is the whole content of interpretation (i) below — a badge is a claim about
+/// the lane a user lands in by default, a row is a claim about one measured
+/// lane, and while every provider had exactly one lane nothing forced a reader
+/// to tell them apart.
 const PUBLISHED_LANES: [Lane; 5] = [
     Lane::ClaudeCode,
     Lane::Codex,
-    Lane::AcpClaudeCode,
+    Lane::ClaudeCodeAcp,
     Lane::Opencode,
     Lane::Pi,
 ];
 
-/// The providers T4 badges, in a stable order.
-const PUBLISHED_PROVIDERS: [&str; 5] = [
-    "claude-code",
-    "codex",
-    "acp/claude-code",
-    "acp/opencode",
-    "pi",
-];
+/// The providers T4 badges, in a stable order — the four harnesses, by the id
+/// `qd start --provider` takes. The legacy `acp/*` spellings are deliberately
+/// NOT published: they still parse (and `provider_default_lanes` still answers
+/// for them, because scripts and on-disk rows carry them), but publishing them
+/// would print two badges for one program and read as though ACP were a fifth
+/// harness, which is exactly the model this document is no longer written in.
+const PUBLISHED_PROVIDERS: [&str; 4] = ["claude-code", "codex", "opencode", "pi"];
 
 // ===========================================================================
 // The publication layer (A10 v7, the two obligations that are NOT per-corpus):
@@ -271,10 +279,11 @@ fn header(
         ));
     }
     out.push_str(
-        "This document reports, for each **provider lane**, the conformance tier qd's evidence\n\
-         supports — computed deterministically from a recorded evidence corpus by the preregistered\n\
-         tier scheme (A1–A10). A fresh reader who re-runs the computation over the same corpus gets\n\
-         the identical table; nothing here is asserted by hand.\n\n",
+        "This document reports, for each **lane** (a harness plus how it is hosted), the\n\
+         conformance tier qd's evidence supports — computed deterministically from a recorded\n\
+         evidence corpus by the preregistered tier scheme (A1–A10). A fresh reader who re-runs\n\
+         the computation over the same corpus gets the identical table; nothing here is\n\
+         asserted by hand.\n\n",
     );
     out.push_str(&format!("- **Release commit:** `{release_commit}`\n"));
     let as_of_label = match mode {
@@ -324,10 +333,12 @@ fn interpretation_fidelity(out: &mut String) {
     // The three adopted interpretations, rendered VISIBLE per QS-4.
     out.push_str("## How to read this table (interpretation fidelity)\n\n");
     out.push_str(
-        "1. **Lanes, not providers.** A tier is a property of a *provider lane* (e.g. `codex`,\n\
-            `acp/claude-code`), measured on one designated evidence box — not a blanket claim about a\n\
-            provider across every configuration. A provider *badge* (below) is the weakest of the\n\
-            lanes qd selects by default for that provider.\n",
+        "1. **Lanes, not providers.** A tier is a property of a *lane* — a harness plus how it is\n\
+            hosted (e.g. `codex/daemon`, `claude-code/acp`) — measured on one designated evidence\n\
+            box, not a blanket claim about a program across every configuration. One program can\n\
+            hold several lanes with different lifecycle, delivery and attach mechanisms, and each\n\
+            earns its own row or appears in none. A provider *badge* (below) is the weakest of the\n\
+            measured lanes qd selects for that program.\n",
     );
     out.push_str(
         "2. **A window, not a single run.** A tier rests on the trailing window of eligible runs\n\
@@ -363,7 +374,7 @@ fn current_assignments(out: &mut String, computations: &[(Lane, TierComputation)
         }
         out.push_str(&format!(
             "| `{}` | {} | {} | {} | {} |\n",
-            lane.provider_id(),
+            lane.id(),
             tier,
             rate,
             evrun,
@@ -374,12 +385,17 @@ fn current_assignments(out: &mut String, computations: &[(Lane, TierComputation)
 }
 
 fn provider_badges(out: &mut String, corpus: &Corpus, release_commit: &str, params: &TierParams) {
-    out.push_str("## Provider badges (weakest default lane)\n\n");
+    out.push_str("## Provider badges (weakest measured lane)\n\n");
     out.push_str(
-        "A provider's badge is the tier of the **weakest lane qd selects by default** for it.\n\n",
+        "A provider's badge is the tier of the **weakest lane the battery measures** for that\n\
+         program. Where a program's default lane is not one the battery measures, the badge reads\n\
+         the measured lane and therefore UNDER-describes what a bare `qd start` gives you: today\n\
+         `codex` defaults to `codex/app-server` (the same process as `codex/daemon`, plus an\n\
+         attachable terminal) and `pi` defaults to `pi/extension` (a genuinely different carrier).\n\
+         Neither has seeds yet; when they do they appear as their own rows above.\n\n",
     );
-    out.push_str("| Provider | Badge | Default lane(s) |\n");
-    out.push_str("|----------|-------|-----------------|\n");
+    out.push_str("| Provider | Badge | Measured lane(s) |\n");
+    out.push_str("|----------|-------|------------------|\n");
     for provider in PUBLISHED_PROVIDERS {
         let lanes = provider_default_lanes(provider);
         let badge = super::tier::provider_badge(corpus, provider, release_commit, params)
@@ -387,7 +403,7 @@ fn provider_badges(out: &mut String, corpus: &Corpus, release_commit: &str, para
             .unwrap_or_else(|| "—".into());
         let lane_list = lanes
             .iter()
-            .map(|l| format!("`{}`", l.provider_id()))
+            .map(|l| format!("`{}`", l.id()))
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!("| `{provider}` | {badge} | {lane_list} |\n"));
@@ -407,7 +423,7 @@ fn designation_boxes(
          outcome-independent — never chosen for a favourable result.\n\n",
     );
     for (lane, c) in computations {
-        out.push_str(&format!("### `{}`\n\n", lane.provider_id()));
+        out.push_str(&format!("### `{}`\n\n", lane.id()));
         match &c.active_box {
             Some(b) => out.push_str(&format!("- **Active evidence box:** `{b}`\n")),
             None => out.push_str("- **Active evidence box:** none designated yet\n"),
@@ -461,7 +477,7 @@ fn citations_section(out: &mut String, computations: &[(Lane, TierComputation)])
          release commit renders **stale**.\n\n",
     );
     for (lane, c) in computations {
-        out.push_str(&format!("### `{}`\n\n", lane.provider_id()));
+        out.push_str(&format!("### `{}`\n\n", lane.id()));
         render_citation(out, &c.citation);
         out.push('\n');
     }

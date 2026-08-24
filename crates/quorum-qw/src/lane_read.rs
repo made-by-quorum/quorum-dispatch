@@ -134,7 +134,7 @@ pub fn list_for(lane: Lane, paths: &QdPaths, env: &dyn Env) -> Result<Listing, L
     let mut cache = StatsCache::load(&paths.state_dir);
 
     let rows = match (lane.harness, lane.mode) {
-        (Harness::ClaudeCode, _) => transcript_rows(
+        (Harness::ClaudeCode, Mode::Pane) => transcript_rows(
             gather::claude_cold_scan(paths),
             "claude-code",
             ClaudeRoot::ProjectDirFallback,
@@ -166,15 +166,17 @@ pub fn list_for(lane: Lane, paths: &QdPaths, env: &dyn Env) -> Result<Listing, L
                 git_branch: None,
             })
             .collect(),
-        (Harness::Opencode, _) => gather::opencode_cold_scan(env)
+        (Harness::Opencode, Mode::Acp) => gather::opencode_cold_scan(env)
             .into_iter()
             .map(|c| SessionSummary {
                 id: SessionId(c.id),
                 // The DISPLAY label, which is deliberately NOT the lane's provider
                 // id: a cold OpenCode row is read from the OpenCode store, not
                 // through the ACP bridge, and `qd ls` badges it `opencode`. The
-                // lane is `acp/opencode` because that is how the session is
-                // DRIVEN; the label says where the row was FOUND.
+                // lane is `opencode/acp` because that is how the session is
+                // DRIVEN; the label says where the row was FOUND. Since the
+                // remodel the two agree as STRINGS, which is a coincidence of
+                // opencode having one lane and not a reason to collapse them.
                 provider: "opencode".to_string(),
                 name: gather::nonempty(c.name),
                 cwd: gather::nonempty(c.cwd),
@@ -207,13 +209,29 @@ pub fn list_for(lane: Lane, paths: &QdPaths, env: &dyn Env) -> Result<Listing, L
         // (codex's is `codex/daemon`'s). `codex/app-server`'s sessions are LIVE
         // rows, and live rows have never been any lane's to enumerate.
         //
-        // claude/app-server and opencode/app-server are absent because the
-        // `(Harness::ClaudeCode, _)` and `(Harness::Opencode, _)` arms above
-        // already absorb them. Neither lane can be constructed, so which arm
-        // swallows the impossible combination decides nothing.
-        (Harness::Codex, Mode::Pane | Mode::Extension | Mode::AppServer)
-        | (Harness::Pi, Mode::Pane | Mode::Extension | Mode::AppServer)
-        | (Harness::AcpClaudeCode, _) => Vec::new(),
+        // `claude-code/acp` is HERE, and it is the arm this remodel had to get
+        // right. The ACP bridge writes claude-shaped JSONL into
+        // `~/.claude/projects` — claude's own root — so its cold rows are found
+        // by claude's scan wearing claude's label, exactly as they were when the
+        // lane was spelled `acp/claude-code/daemon`. It owns NOTHING of its own.
+        //
+        // Note the shape of the near-miss: the arm above used to read
+        // `(Harness::ClaudeCode, _)`, and a mode wildcard would have absorbed
+        // `Mode::Acp` silently, giving claude's store TWO claimants and
+        // double-counting every cold claude row in `qd ls`. It compiles either
+        // way; `exactly_one_lane_per_harness_owns_the_cold_store` is what says
+        // which one is right.
+        (Harness::ClaudeCode, Mode::Acp)
+        | (Harness::Codex, Mode::Pane | Mode::Extension | Mode::AppServer)
+        | (Harness::Pi, Mode::Pane | Mode::Extension | Mode::AppServer) => Vec::new(),
+        // Not lanes at all — `Lane::new` refuses each. Enumerated rather than
+        // wildcarded so a new harness or mode has to be decided here.
+        (Harness::ClaudeCode, Mode::Daemon | Mode::Extension | Mode::AppServer)
+        | (Harness::Codex | Harness::Pi, Mode::Acp)
+        | (
+            Harness::Opencode,
+            Mode::Pane | Mode::Daemon | Mode::Extension | Mode::AppServer,
+        ) => Vec::new(),
     };
     Ok(Listing {
         sessions: rows,
@@ -241,19 +259,26 @@ fn store_degradations(lane: Lane, paths: &QdPaths, env: &dyn Env) -> Vec<Degrada
     let probed = match (lane.harness, lane.mode) {
         // claude's store IS the projects dir — the same root `claude_cold_scan`
         // hands to `scan_transcripts`, not a re-derivation.
-        (Harness::ClaudeCode, _) => Some(paths.projects_dir.clone()),
+        (Harness::ClaudeCode, Mode::Pane) => Some(paths.projects_dir.clone()),
         (Harness::Pi, Mode::Daemon) => root("pi"),
         // `$CODEX_HOME/sessions` — the rollout tree. Its PARENT holds the sqlite
         // index, which `gather_codex` reads through a reader that reports nothing,
         // so an index refused inside a readable tree stays invisible here.
         (Harness::Codex, Mode::Daemon) => root("codex"),
-        (Harness::Opencode, _) => crate::provider::opencode::store_dir(env),
+        (Harness::Opencode, Mode::Acp) => crate::provider::opencode::store_dir(env),
         // No store of its own ⇒ no root ⇒ nothing that can be unreadable. The
         // same set as the `list_for` arm above, for the same per-harness-store
         // reason.
-        (Harness::Codex, Mode::Pane | Mode::Extension | Mode::AppServer)
-        | (Harness::Pi, Mode::Pane | Mode::Extension | Mode::AppServer)
-        | (Harness::AcpClaudeCode, _) => None,
+        (Harness::ClaudeCode, Mode::Acp)
+        | (Harness::Codex, Mode::Pane | Mode::Extension | Mode::AppServer)
+        | (Harness::Pi, Mode::Pane | Mode::Extension | Mode::AppServer) => None,
+        // Not lanes; same enumeration as `list_for`, for the same reason.
+        (Harness::ClaudeCode, Mode::Daemon | Mode::Extension | Mode::AppServer)
+        | (Harness::Codex | Harness::Pi, Mode::Acp)
+        | (
+            Harness::Opencode,
+            Mode::Pane | Mode::Daemon | Mode::Extension | Mode::AppServer,
+        ) => None,
     };
     probed
         .and_then(|path| root_degradation(&path))
@@ -412,7 +437,9 @@ pub fn health_for(
         //     synthesizes a shape nothing calls. Never reads the stored status
         //     string — that is the stale-data failure this classification exists
         //     to avoid.
-        (Harness::AcpClaudeCode | Harness::Opencode, _) => (acp_status(e), HealthSource::ProcessLiveness),
+        (Harness::ClaudeCode | Harness::Opencode, Mode::Acp) => {
+            (acp_status(e), HealthSource::ProcessLiveness)
+        }
 
         // --- codex: the rollout tail, both lanes. Connectionless by design, which
         //     is why `qd ls` exempts codex rows from the pid liveness gate — a
@@ -487,6 +514,15 @@ pub fn health_for(
             };
             (gated, source)
         }
+        // --- the combinations that are NOT lanes -------------------------
+        //     `Lane::new` refuses each, so `health_for` cannot be handed one.
+        //     Cold is the honest answer for a session that cannot exist: there is
+        //     no process to probe and no transcript to tail.
+        (Harness::Pi, Mode::Acp)
+        | (
+            Harness::Opencode,
+            Mode::Pane | Mode::Daemon | Mode::Extension | Mode::AppServer,
+        ) => (SessionStatus::Cold, HealthSource::ProcessLiveness),
     };
 
     Ok(Health {
@@ -789,9 +825,14 @@ mod tests {
     fn lane_owns_a_cold_store(l: Lane) -> bool {
         !matches!(
             (l.harness, l.mode),
-            (Harness::Codex, Mode::Pane | Mode::Extension | Mode::AppServer)
+            // `claude-code/acp` owns NOTHING: the bridge writes claude-shaped
+            // JSONL into claude's own `~/.claude/projects`, so those rows are
+            // found by claude's PANE-lane scan wearing claude's label. If this
+            // arm were missing, both claude lanes would claim one directory and
+            // every cold claude row would be counted twice in `qd ls`.
+            (Harness::ClaudeCode, Mode::Acp)
+                | (Harness::Codex, Mode::Pane | Mode::Extension | Mode::AppServer)
                 | (Harness::Pi, Mode::Pane | Mode::Extension | Mode::AppServer)
-                | (Harness::AcpClaudeCode, _)
         )
     }
 

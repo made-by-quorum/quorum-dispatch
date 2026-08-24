@@ -540,6 +540,15 @@ mod tests {
             .unwrap_or_else(|| panic!("{} has no daemon lane", harness.provider_id()))
     }
 
+    /// The same, for the ACP bridge lane. A separate helper rather than a second
+    /// argument to [`daemon`], because these are two different questions: the
+    /// lines below are pinned per LANE, and `claude-code` has both a lane with no
+    /// daemon at all and a lane that is one.
+    fn acp(harness: Harness) -> Lane {
+        Lane::new(harness, Mode::Acp)
+            .unwrap_or_else(|| panic!("{} has no acp lane", harness.provider_id()))
+    }
+
     /// The four daemon lanes' `qd stop` prose, pinned BYTE FOR BYTE against what the
     /// three retired verb bodies (`run_codex_kill` / `run_acp_kill` / `run_pi_kill`)
     /// printed. The bodies collapsed into one `LaneOps::kill` call; the lines did
@@ -562,14 +571,15 @@ mod tests {
             daemon_success_line(daemon(Harness::Codex), &named, 4242, true),
             "killed wk (daemon pid 4242) [daemon already dead — tombstoned]"
         );
-        // acp (both lanes): the SAME shape as codex, with the adapter's own noun.
-        for harness in [Harness::AcpClaudeCode, Harness::Opencode] {
+        // The ACP lanes of both harnesses: the SAME shape as codex, with the
+        // adapter's own noun.
+        for harness in [Harness::ClaudeCode, Harness::Opencode] {
             assert_eq!(
-                daemon_success_line(daemon(harness), &named, 4242, false),
+                daemon_success_line(acp(harness), &named, 4242, false),
                 "killed wk (daemon pid 4242)"
             );
             assert_eq!(
-                daemon_success_line(daemon(harness), &named, 4242, true),
+                daemon_success_line(acp(harness), &named, 4242, true),
                 "killed wk (daemon pid 4242) [adapter already dead — tombstoned]"
             );
         }
@@ -608,9 +618,9 @@ mod tests {
             daemon_no_pid_clause(daemon(Harness::Pi)),
             "pi session has no resident pid."
         );
-        for harness in [Harness::AcpClaudeCode, Harness::Opencode] {
+        for harness in [Harness::ClaudeCode, Harness::Opencode] {
             assert_eq!(
-                daemon_no_pid_clause(daemon(harness)),
+                daemon_no_pid_clause(acp(harness)),
                 "acp session has no daemon pid."
             );
         }

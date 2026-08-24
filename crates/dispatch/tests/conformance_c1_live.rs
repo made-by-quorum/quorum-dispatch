@@ -96,7 +96,7 @@ fn run_one_lane_cells(
 ) -> RunArtifact {
     let run_id = RunId(format!(
         "c1-pipeline-{}-{}-{run_index}",
-        lane.provider_id().replace('/', "-"),
+        lane.id().replace('/', "-"),
         std::process::id()
     ));
     let session_name = run_id.0.clone();
@@ -114,7 +114,7 @@ fn run_one_lane_cells(
             "c1-executor (b45d4thh)",
             &mut || {
                 tok_n += 1;
-                format!("c1-pipeline-tok-{}-{run_index}-{tok_n}", lane.provider_id())
+                format!("c1-pipeline-tok-{}-{run_index}-{tok_n}", lane.id())
             },
         )
         .expect("commission_run");
@@ -125,7 +125,7 @@ fn run_one_lane_cells(
             nonce_n += 1;
             format!(
                 "c1-pipeline-nonce-{}-{run_index}-{nonce_n}",
-                lane.provider_id()
+                lane.id()
             )
         })
         .expect("start_run");
@@ -138,7 +138,7 @@ fn run_one_lane_cells(
         // cycles never collide (a cell may itself start+stop a real daemon).
         let cell_session = format!("{session_name}-{}", cell.0.replace('.', "-"));
         let outcome = harness::run_cell(lane, cell, builder.runner(), &cell_session)
-            .unwrap_or_else(|| panic!("{}: no harness driver for {} yet", lane.provider_id(), cell.0));
+            .unwrap_or_else(|| panic!("{}: no harness driver for {} yet", lane.id(), cell.0));
         builder.observe(lane, cell.clone(), RunMode::Automated, outcome);
     }
 
@@ -219,7 +219,7 @@ fn c1_pipeline_five_lanes_sequential_grid() {
     let lanes = [
         Lane::Pi,
         Lane::Codex,
-        Lane::AcpClaudeCode,
+        Lane::ClaudeCodeAcp,
         Lane::Opencode,
         Lane::ClaudeCode,
     ];
@@ -227,14 +227,14 @@ fn c1_pipeline_five_lanes_sequential_grid() {
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 pipeline: {} ===", lane.provider_id());
+        eprintln!("=== C-1 pipeline: {} ===", lane.id());
         let mut cells = base_cells.to_vec();
         if matches!(lane, Lane::Codex) {
             cells.push(resume_cell.clone());
         }
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -258,7 +258,7 @@ fn c1_pipeline_five_lanes_sequential_grid() {
                 (Lane::Codex, "d1.resume-same-session-id") => assert!(
                     matches!(obs.outcome, dispatch::conformance::Outcome::NotApplicable { .. }),
                     "{}/{}: expected NotApplicable, got {:?}",
-                    obs.lane.provider_id(),
+                    obs.lane.id(),
                     obs.cell.0,
                     obs.outcome
                 ),
@@ -271,7 +271,7 @@ fn c1_pipeline_five_lanes_sequential_grid() {
                 _ => assert!(
                     obs.outcome.is_pass(),
                     "{}/{}: expected Pass, got {:?}",
-                    obs.lane.provider_id(),
+                    obs.lane.id(),
                     obs.cell.0,
                     obs.outcome
                 ),
@@ -407,7 +407,7 @@ fn c1_pipeline_multiplex_acp_claude_code_only() {
     let cells = [CellId("d1.multiplex-concurrent-distinct-residents".to_string())];
 
     let mut journal = AuthorityJournal::new();
-    let artifact = run_one_lane_cells(&mut journal, Lane::AcpClaudeCode, &cells, &manifest_digest, 0);
+    let artifact = run_one_lane_cells(&mut journal, Lane::ClaudeCodeAcp, &cells, &manifest_digest, 0);
     journal.integrity_check().expect("journal integrity");
 
     let obs = artifact.observations().next().expect("one observation");
@@ -502,15 +502,15 @@ fn c1_pipeline_cold_target_four_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d6.cold-target-send-fails-loud-with-terminal".to_string())];
-    let lanes = [Lane::Pi, Lane::Codex, Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::Pi, Lane::Codex, Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 cold-target: {} ===", lane.provider_id());
+        eprintln!("=== C-1 cold-target: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -521,7 +521,7 @@ fn c1_pipeline_cold_target_four_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -541,15 +541,15 @@ fn c1_pipeline_bridge_death_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d6.bridge-death-detection-no-false-positive".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 bridge-death: {} ===", lane.provider_id());
+        eprintln!("=== C-1 bridge-death: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -560,7 +560,7 @@ fn c1_pipeline_bridge_death_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -583,15 +583,15 @@ fn c1_pipeline_turn_phase_sequence_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d2.turn-phase-sequence-strict-order".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 turn-phase-sequence: {} ===", lane.provider_id());
+        eprintln!("=== C-1 turn-phase-sequence: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -602,7 +602,7 @@ fn c1_pipeline_turn_phase_sequence_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -622,15 +622,15 @@ fn c1_pipeline_delivery_log_home_override_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d2.delivery-log-consistency-under-home-override".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 delivery-log-home-override: {} ===", lane.provider_id());
+        eprintln!("=== C-1 delivery-log-home-override: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -641,7 +641,7 @@ fn c1_pipeline_delivery_log_home_override_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -663,15 +663,15 @@ fn c1_pipeline_turn_correlation_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d2.turn-correlation-and-completion".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 turn-correlation: {} ===", lane.provider_id());
+        eprintln!("=== C-1 turn-correlation: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -682,7 +682,7 @@ fn c1_pipeline_turn_correlation_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -700,15 +700,15 @@ fn c1_pipeline_transcript_tee_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d5.transcript-tee-captures-assistant-text".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 transcript-tee: {} ===", lane.provider_id());
+        eprintln!("=== C-1 transcript-tee: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -719,7 +719,7 @@ fn c1_pipeline_transcript_tee_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -747,10 +747,10 @@ fn c1_pipeline_turn_correlation_and_tee_pi_codex() {
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 turn-correlation+tee: {} ===", lane.provider_id());
+        eprintln!("=== C-1 turn-correlation+tee: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -763,7 +763,7 @@ fn c1_pipeline_turn_correlation_and_tee_pi_codex() {
                 assert!(
                     obs.outcome.is_blocked(),
                     "{}/{}: expected Blocked (version-pin gate), got {:?}",
-                    obs.lane.provider_id(),
+                    obs.lane.id(),
                     obs.cell.0,
                     obs.outcome
                 );
@@ -771,7 +771,7 @@ fn c1_pipeline_turn_correlation_and_tee_pi_codex() {
                 assert!(
                     obs.outcome.is_pass(),
                     "{}/{}: expected Pass, got {:?}",
-                    obs.lane.provider_id(),
+                    obs.lane.id(),
                     obs.cell.0,
                     obs.outcome
                 );
@@ -801,7 +801,7 @@ fn c1_pipeline_turn_correlation_and_tee_claude_code() {
     let mut journal = AuthorityJournal::new();
     let artifact = run_one_lane_cells(&mut journal, Lane::ClaudeCode, &cells, &manifest_digest, 0);
     for obs in artifact.observations() {
-        eprintln!("{}: {}: {:?}", Lane::ClaudeCode.provider_id(), obs.cell.0, obs.outcome);
+        eprintln!("{}: {}: {:?}", Lane::ClaudeCode.id(), obs.cell.0, obs.outcome);
     }
     journal.integrity_check().expect("journal integrity");
 
@@ -809,7 +809,7 @@ fn c1_pipeline_turn_correlation_and_tee_claude_code() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -832,15 +832,15 @@ fn c1_pipeline_resume_same_session_id_acp_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d1.resume-same-session-id".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 resume-same-session-id: {} ===", lane.provider_id());
+        eprintln!("=== C-1 resume-same-session-id: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -851,7 +851,7 @@ fn c1_pipeline_resume_same_session_id_acp_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -871,15 +871,15 @@ fn c1_pipeline_resume_recall_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d5.resume-jsonl-continuity-and-recall".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 resume-recall: {} ===", lane.provider_id());
+        eprintln!("=== C-1 resume-recall: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -890,7 +890,7 @@ fn c1_pipeline_resume_recall_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -921,7 +921,7 @@ fn c1_pipeline_resume_and_d1resume_pi() {
     let mut journal = AuthorityJournal::new();
     let artifact = run_one_lane_cells(&mut journal, Lane::Pi, &cells, &manifest_digest, 0);
     for obs in artifact.observations() {
-        eprintln!("{}: {}: {:?}", Lane::Pi.provider_id(), obs.cell.0, obs.outcome);
+        eprintln!("{}: {}: {:?}", Lane::Pi.id(), obs.cell.0, obs.outcome);
     }
     journal.integrity_check().expect("journal integrity");
 
@@ -929,7 +929,7 @@ fn c1_pipeline_resume_and_d1resume_pi() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -956,7 +956,7 @@ fn c1_pipeline_resume_recall_claude_code() {
     let mut journal = AuthorityJournal::new();
     let artifact = run_one_lane_cells(&mut journal, Lane::ClaudeCode, &cells, &manifest_digest, 0);
     for obs in artifact.observations() {
-        eprintln!("{}: {}: {:?}", Lane::ClaudeCode.provider_id(), obs.cell.0, obs.outcome);
+        eprintln!("{}: {}: {:?}", Lane::ClaudeCode.id(), obs.cell.0, obs.outcome);
     }
     journal.integrity_check().expect("journal integrity");
 
@@ -964,7 +964,7 @@ fn c1_pipeline_resume_recall_claude_code() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -985,15 +985,15 @@ fn c1_pipeline_queue_slot_released_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d3.queue-slot-released-no-leak".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 queue-slot-released: {} ===", lane.provider_id());
+        eprintln!("=== C-1 queue-slot-released: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -1004,7 +1004,7 @@ fn c1_pipeline_queue_slot_released_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -1023,15 +1023,15 @@ fn c1_pipeline_cancel_mapping_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d6.cancel-maps-to-truthful-terminal".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 cancel-mapping: {} ===", lane.provider_id());
+        eprintln!("=== C-1 cancel-mapping: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -1042,7 +1042,7 @@ fn c1_pipeline_cancel_mapping_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -1065,15 +1065,15 @@ fn c1_pipeline_wedged_child_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d6.self-terminate-on-wedged-child".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 wedged-child: {} ===", lane.provider_id());
+        eprintln!("=== C-1 wedged-child: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -1084,7 +1084,7 @@ fn c1_pipeline_wedged_child_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );
@@ -1143,15 +1143,15 @@ fn c1_pipeline_queue_overflow_two_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d3.queue-overflow-honors-configured-capacity".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode];
 
     let mut journal = AuthorityJournal::new();
     let mut artifacts = Vec::new();
     for (i, lane) in lanes.into_iter().enumerate() {
-        eprintln!("=== C-1 queue-overflow: {} ===", lane.provider_id());
+        eprintln!("=== C-1 queue-overflow: {} ===", lane.id());
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
         }
         artifacts.push(artifact);
     }
@@ -1162,7 +1162,7 @@ fn c1_pipeline_queue_overflow_two_lanes() {
         assert!(
             obs.outcome.is_pass(),
             "{}/{}: expected Pass, got {:?}",
-            obs.lane.provider_id(),
+            obs.lane.id(),
             obs.cell.0,
             obs.outcome
         );

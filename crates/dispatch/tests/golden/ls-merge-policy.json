@@ -68,7 +68,7 @@
       }
     ],
     "provider": "acp/claude-code",
-    "lane": "acp/claude-code/daemon",
+    "lane": "claude-code/acp",
     "code": "kf6"
   },
   {
@@ -81,7 +81,7 @@
     "cwd": "/work/cold-opencode",
     "lastActive": "2024-06-04T09:56:40.000Z",
     "provider": "opencode",
-    "lane": "acp/opencode/daemon",
+    "lane": "opencode/acp",
     "code": "735"
   },
   {

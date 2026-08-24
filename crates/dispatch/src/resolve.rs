@@ -305,7 +305,7 @@ fn acp_floor_original<'a>(matched: &[&'a Session]) -> Option<&'a Session> {
     let mut acp_rows = matched
         .iter()
         .copied()
-        .filter(|s| s.provider.starts_with("acp/"));
+        .filter(|s| quorum_qw::row_is_acp(&s.provider, s.hosting.as_deref()));
     let original = acp_rows.next()?;
     if acp_rows.next().is_some() || original.session_id.is_empty() {
         return None;

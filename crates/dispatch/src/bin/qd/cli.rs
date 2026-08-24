@@ -508,7 +508,8 @@ fn cmd_start() -> Command {
             )
             .conflicts_with("interactive")
             .conflicts_with("extension")
-            .conflicts_with("app-server"),
+            .conflicts_with("app-server")
+            .conflicts_with("acp"),
         )
         // `--app-server`: codex's default, nameable. It exists for the same
         // reason `--extension` survives now that it names pi's default (§5 of
@@ -523,6 +524,39 @@ fn cmd_start() -> Command {
         // `create_default_mode`, and the wire's `lane` field does not route
         // through `for_create` — so the variant would be a documented no-op,
         // which is exactly the dead-arm shape this enum exists to avoid.
+        // `--acp`: the Agent Client Protocol bridge lane, and the flag that keeps
+        // `claude-code/acp` REACHABLE at all.
+        //
+        // While ACP was modelled as a harness, naming the bridge and naming the
+        // program were one act: `--provider acp/claude-code`. Now that it is a
+        // topology, `--provider claude-code` names claude's default lane — the
+        // mux pane — and something has to spell the other one. Without this flag
+        // the remodel would have deleted a working lane from the CLI, which is
+        // precisely the failure `Lane::for_create`'s total routing table exists
+        // to make visible (`start_routing_is_total_over_every_real_input` asserts
+        // every one of the nine lanes is reachable from `qd start`).
+        //
+        // For `--provider opencode` it is a no-op that names the truth: its only
+        // lane is this one. For codex and pi it is a refusal TODAY, and the
+        // reason is a missing adapter rather than a missing affordance — see
+        // `Harness::supports`, which holds that distinction deliberately.
+        //
+        // Conflicts with the other three topology flags for the reason they
+        // conflict with each other: each names a different lane, and silently
+        // preferring one would be the create-routing bug `Lane::for_create` was
+        // built to make unrepresentable.
+        .arg(
+            long_flag(
+                "acp",
+                "Run the ACP bridge lane (claude-code/acp, opencode/acp) — a headless \
+                 resident driven over the Agent Client Protocol; drive it with `qd send`, \
+                 not `qd attach`",
+            )
+            .conflicts_with("interactive")
+            .conflicts_with("extension")
+            .conflicts_with("daemon")
+            .conflicts_with("app-server"),
+        )
         .arg(
             long_flag(
                 "app-server",
@@ -531,7 +565,8 @@ fn cmd_start() -> Command {
             )
             .conflicts_with("interactive")
             .conflicts_with("extension")
-            .conflicts_with("daemon"),
+            .conflicts_with("daemon")
+            .conflicts_with("acp"),
         )
         // Lifecycle-collapse A-1 (spec D4): machine-readable identity output.
         // Exit 0 with --json guarantees the printed id is BOUND (A-2); on a
@@ -1987,6 +2022,47 @@ mod tests {
             Some(help::start_about().as_str()),
             "`qd start --help` and the table row disagree about providers"
         );
+    }
+
+    /// **The help promises the lane form; the parser has to keep it.**
+    ///
+    /// `--provider`'s help says every lane id `qd ls --json` prints is accepted
+    /// back, which is a promise about a set the help does not enumerate. This
+    /// asserts it against `Lane::ALL`, so the promise cannot rot when a lane is
+    /// added — the new lane is printed by `ls` the day it exists, and this reds if
+    /// `--provider` will not take it.
+    ///
+    /// Pinned HERE, at the CLI surface, rather than only in `lane.rs`: the
+    /// round-trip is a claim about what a user can type, and it breaks if any
+    /// layer between the argument and `Lane::for_create` narrows the accept-set
+    /// — which is exactly what the pre-existing `Harness::from_provider_id` gate
+    /// did until it was widened to `parse_provider_arg`.
+    #[test]
+    fn the_help_promises_the_lane_form_and_every_printed_lane_is_accepted() {
+        let start = help::START;
+        assert!(
+            start.contains("<provider>/<lane>"),
+            "--provider's help must document the lane form: {start}"
+        );
+        assert!(
+            start.contains("qd ls --json"),
+            "…and say where a lane id comes from"
+        );
+        for lane in quorum_qw::lane::Lane::ALL {
+            let id = lane.id();
+            assert!(
+                quorum_qw::lane::parse_provider_arg(&id).is_some(),
+                "`ls --json` prints {id}, so `--provider {id}` must parse"
+            );
+            assert_eq!(
+                quorum_qw::lane::Lane::for_create(
+                    &id,
+                    quorum_qw::lane::CreateTopology::Default
+                ),
+                Some(lane),
+                "`--provider {id}` must create that exact lane"
+            );
+        }
     }
 
     /// The one state-dependent line in the help: an unfinished install says so,

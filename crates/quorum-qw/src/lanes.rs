@@ -1919,7 +1919,7 @@ impl LaneImpl<'_> {
         };
         let params = AcpCreateParams {
             name: req.name.clone(),
-            provider_id: self.lane.harness.provider_id().to_string(),
+            harness: self.lane.harness,
             cwd: req.cwd.clone(),
             prompt: req.prompt.clone(),
         };
@@ -2296,6 +2296,16 @@ fn daemon_reaped(pid: i64, was_alive: bool) -> KillReport {
 const NO_VIEWER_ON_THIS_LANE: &str = "this lane's residence is not a server a second client can \
      join, so there is no viewer to open on it";
 
+/// Why a `(harness, mode)` pair that is not a lane at all is refused, for every
+/// verb that can be handed one. The op name is the caller's; this is the reason.
+///
+/// Distinct from [`NO_VIEWER_ON_THIS_LANE`] above, which answers for a REAL lane
+/// that simply has no joinable residence. This one answers for a pair that
+/// `Lane::new` refuses outright.
+const NOT_A_LANE: &str =
+    "not a lane this engine can build: that harness has no such topology (see \
+     `Harness::supports`, which lists why each combination does not exist)";
+
 const APP_SERVER_IS_CODEX_ONLY: &str =
     "only codex has an app-server residence a human terminal can join";
 
@@ -2390,18 +2400,18 @@ pub fn create_prompt_refusal(lane: Lane) -> Option<&'static str> {
         // `codex/app-server` rides with `codex/daemon`: same core, same in-core
         // first turn, so the same answer.
         (Harness::Codex, Mode::Daemon | Mode::AppServer)
-        | (Harness::AcpClaudeCode, Mode::Daemon)
-        | (Harness::Opencode, Mode::Daemon)
+        | (Harness::ClaudeCode | Harness::Opencode, Mode::Acp)
         | (Harness::ClaudeCode, Mode::Daemon)
-        | (Harness::AcpClaudeCode | Harness::Opencode, Mode::Pane)
+        | (Harness::Opencode, Mode::Pane | Mode::Daemon)
         | (
-            Harness::ClaudeCode | Harness::Codex | Harness::AcpClaudeCode | Harness::Opencode,
+            Harness::ClaudeCode | Harness::Codex | Harness::Opencode,
             Mode::Extension,
         )
         | (
-            Harness::ClaudeCode | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode,
+            Harness::ClaudeCode | Harness::Pi | Harness::Opencode,
             Mode::AppServer,
-        ) => None,
+        )
+        | (Harness::Codex | Harness::Pi, Mode::Acp) => None,
     }
 }
 
@@ -2782,24 +2792,30 @@ impl LaneOps for LaneImpl<'_> {
             (Harness::Pi, Mode::Pane) => self.start_pi_pane(req),
             (Harness::Pi, Mode::Daemon) => self.start_pi_daemon(req),
             (Harness::Pi, Mode::Extension) => self.start_pi_extension(req),
-            // Seven lanes, seven arms. The two acp lanes share a core and are
-            // still written separately, because the seven-line table IS the thing
+            // Nine lanes, nine arms. The two ACP lanes share a core and are
+            // still written separately, because the nine-line table IS the thing
             // that replaced the comment — collapsing two of its rows to save a
             // line would start it back down the road it came from.
-            (Harness::AcpClaudeCode, Mode::Daemon) => self.start_acp_daemon(req),
-            (Harness::Opencode, Mode::Daemon) => self.start_acp_daemon(req),
+            //
+            // They are now `(harness, Mode::Acp)` rather than two harnesses, and
+            // that is the whole remodel visible in two lines: the SAME core, the
+            // same argv, the same resident, reached by naming the topology
+            // instead of inventing a program.
+            (Harness::ClaudeCode, Mode::Acp) => self.start_acp_daemon(req),
+            (Harness::Opencode, Mode::Acp) => self.start_acp_daemon(req),
 
-            // --- the three combinations that do not exist -------------------
+            // --- the combinations that do not exist -------------------------
             // Reachable only by constructing a `Lane` by hand around
-            // `Lane::new`, which refuses all three. They are answers, not gaps:
-            // claude has no daemon lane, and an ACP bridge is a protocol adapter
-            // with no terminal of its own at all.
+            // `Lane::new`, which refuses every one of them. They are answers, not
+            // gaps: claude has no headless lane, opencode has no lane but its
+            // bridge, and the extension/app-server affordances are pi's and
+            // codex's alone.
             (Harness::ClaudeCode, Mode::Daemon) => Err(LaneError::NotSupported {
                 op: "start".to_string(),
                 reason: "claude-code has no daemon lane".to_string(),
             }),
             (
-                Harness::ClaudeCode | Harness::Codex | Harness::AcpClaudeCode | Harness::Opencode,
+                Harness::ClaudeCode | Harness::Codex | Harness::Opencode,
                 Mode::Extension,
             ) => Err(LaneError::NotSupported {
                 op: "start".to_string(),
@@ -2807,15 +2823,22 @@ impl LaneOps for LaneImpl<'_> {
                          and its in-process extension API, which no other harness here has"
                     .to_string(),
             }),
-            (Harness::AcpClaudeCode | Harness::Opencode, Mode::Pane) => {
+            (Harness::Opencode, Mode::Pane | Mode::Daemon) => {
                 Err(LaneError::NotSupported {
                     op: "start".to_string(),
-                    reason: "an ACP bridge is a protocol adapter with no terminal of its own"
+                    reason: "opencode is driven over its ACP bridge and nothing else: it has \
+                             no TUI qd hosts in a pane and no residence of its own"
                         .to_string(),
                 })
             }
+            // codex and pi over ACP: not built here, rather than impossible. See
+            // `Harness::supports`, which holds the same distinction.
+            (Harness::Codex | Harness::Pi, Mode::Acp) => Err(LaneError::NotSupported {
+                op: "start".to_string(),
+                reason: "no ACP adapter is wired up for this harness in qd yet".to_string(),
+            }),
             (
-                Harness::ClaudeCode | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode,
+                Harness::ClaudeCode | Harness::Pi | Harness::Opencode,
                 Mode::AppServer,
             ) => Err(LaneError::NotSupported {
                 op: "start".to_string(),
@@ -2862,12 +2885,12 @@ impl LaneOps for LaneImpl<'_> {
         let clock = crate::effects::RealClock;
         match (self.lane.harness, self.lane.mode) {
             // --- the four harnesses with no app-server residence ---------------
-            // Placed FIRST so it also shadows the `(Harness::ClaudeCode, _)` arm
+            // Placed FIRST so it also shadows the `(Harness::ClaudeCode, ..)` arms
             // below: a hand-built `claude-code/app-server` must be REFUSED, not
             // quietly run through claude's own machinery. See
             // [`APP_SERVER_IS_CODEX_ONLY`].
             (
-                Harness::ClaudeCode | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode,
+                Harness::ClaudeCode | Harness::Pi | Harness::Opencode,
                 Mode::AppServer,
             ) => Err(LaneError::NotSupported {
                 op: "wake".to_string(),
@@ -2876,7 +2899,7 @@ impl LaneOps for LaneImpl<'_> {
             // --- claude pane: the two-phase revive (plan → backend/dirs → launch).
             // The phase split exists so the same-name guard and the env-file write
             // land before the mux backend is resolved; see the core's module docs.
-            (Harness::ClaudeCode, _) => {
+            (Harness::ClaudeCode, Mode::Pane) => {
                 use crate::provider::claude::revive::{
                     plan_claude_revive, run_claude_revive, ClaudeLaunchDeps, ClaudePlanDeps,
                     ClaudeReviveParams,
@@ -3144,7 +3167,7 @@ impl LaneOps for LaneImpl<'_> {
                 }
             }
 
-            (Harness::AcpClaudeCode | Harness::Opencode, _) => {
+            (Harness::ClaudeCode | Harness::Opencode, Mode::Acp) => {
                 use crate::provider::acp::daemon::{
                     resume_acp, AcpDaemonDeps, AcpResumeOutcome, AcpResumeParams, AcpWarning,
                 };
@@ -3179,7 +3202,12 @@ impl LaneOps for LaneImpl<'_> {
                 let params = AcpResumeParams {
                     name: s.name.clone().unwrap_or_else(|| s.session_id.clone()),
                     session_id: s.session_id.clone(),
-                    provider_id: s.provider.clone(),
+                    // THE LANE's harness, not a re-parse of `s.provider`. The
+                    // lane was already derived from this row through `lane_for`,
+                    // which is the one place that knows both the current
+                    // spelling and the legacy `acp/*` one. Reading the raw
+                    // string here would be a second, worse parser.
+                    harness: self.lane.harness,
                     cwd: s.cwd.clone(),
                     has_jsonl: s.jsonl_path.is_some(),
                     current_pid: s.pid,
@@ -3206,6 +3234,17 @@ impl LaneOps for LaneImpl<'_> {
             (Harness::Codex, Mode::Extension) => Err(LaneError::NotSupported {
                 op: "wake".to_string(),
                 reason: "the extension lane is pi's alone".to_string(),
+            }),
+            // --- the remaining combinations that are NOT lanes ---------------
+            // `Lane::new` refuses each, so none is reachable in production.
+            // Enumerated rather than wildcarded: this match is exhaustive over
+            // `(Harness, Mode)` on purpose, so adding either must break here and
+            // force a decision instead of being answered by a `_`.
+            (Harness::ClaudeCode, Mode::Daemon | Mode::Extension)
+            | (Harness::Codex | Harness::Pi, Mode::Acp)
+            | (Harness::Opencode, Mode::Pane | Mode::Daemon | Mode::Extension) => Err(LaneError::NotSupported {
+                op: "wake".to_string(),
+                reason: NOT_A_LANE.to_string(),
             }),
         }
     }
@@ -3238,12 +3277,12 @@ impl LaneOps for LaneImpl<'_> {
         let s = self.row(id)?;
         match (self.lane.harness, self.lane.mode) {
             // --- the four harnesses with no app-server residence ---------------
-            // Placed FIRST so it also shadows the `(Harness::ClaudeCode, _)` arm
+            // Placed FIRST so it also shadows the `(Harness::ClaudeCode, ..)` arms
             // below: a hand-built `claude-code/app-server` must be REFUSED, not
             // quietly run through claude's own machinery. See
             // [`APP_SERVER_IS_CODEX_ONLY`].
             (
-                Harness::ClaudeCode | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode,
+                Harness::ClaudeCode | Harness::Pi | Harness::Opencode,
                 Mode::AppServer,
             ) => Err(LaneError::NotSupported {
                 op: "kill".to_string(),
@@ -3336,8 +3375,8 @@ impl LaneOps for LaneImpl<'_> {
                 Ok(daemon_reaped(pid, killed.was_alive))
             }
 
-            // --- the two acp/* daemon lanes -------------------------------------
-            (Harness::AcpClaudeCode | Harness::Opencode, Mode::Daemon) => {
+            // --- the two ACP bridge lanes ---------------------------------------
+            (Harness::ClaudeCode | Harness::Opencode, Mode::Acp) => {
                 use crate::provider::acp::resume::kill_acp;
                 let Some(pid) = self.daemon_pid(&s) else {
                     return Ok(nothing_to_reap());
@@ -3359,8 +3398,8 @@ impl LaneOps for LaneImpl<'_> {
                 // and its name blocks the next viewer. The SAME reap the codex
                 // arm runs, for the same reason and from the same place.
                 //
-                // Guarded on the lane rather than run unconditionally: an
-                // `acp/claude-code` session never has a viewer (its bridge runs no
+                // Guarded on the lane rather than run unconditionally: a
+                // `claude-code/acp` session never has a viewer (its bridge runs no
                 // server to join), so reaping for one would be a mux scan on every
                 // stop in service of a pane that cannot exist.
                 if self.lane.has_viewer() {
@@ -3409,6 +3448,16 @@ impl LaneOps for LaneImpl<'_> {
             (Harness::ClaudeCode, Mode::Daemon) => Err(LaneError::NotSupported {
                 op: "kill".to_string(),
                 reason: "claude-code has no daemon lane".to_string(),
+            }),
+            // --- the remaining combinations that are NOT lanes ---------------
+            // `Lane::new` refuses each, so none is reachable in production.
+            // Enumerated rather than wildcarded: this match is exhaustive over
+            // `(Harness, Mode)` on purpose, so adding either must break here and
+            // force a decision instead of being answered by a `_`.
+            (Harness::Codex | Harness::Pi, Mode::Acp)
+            | (Harness::Opencode, Mode::Daemon) => Err(LaneError::NotSupported {
+                op: "kill".to_string(),
+                reason: NOT_A_LANE.to_string(),
             }),
         }
     }
@@ -3554,12 +3603,12 @@ impl LaneOps for LaneImpl<'_> {
 
         match (self.lane.harness, self.lane.mode) {
             // --- the four harnesses with no app-server residence ---------------
-            // Placed FIRST so it also shadows the `(Harness::ClaudeCode, _)` arm
+            // Placed FIRST so it also shadows the `(Harness::ClaudeCode, ..)` arms
             // below: a hand-built `claude-code/app-server` must be REFUSED, not
             // quietly run through claude's own machinery. See
             // [`APP_SERVER_IS_CODEX_ONLY`].
             (
-                Harness::ClaudeCode | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode,
+                Harness::ClaudeCode | Harness::Pi | Harness::Opencode,
                 Mode::AppServer,
             ) => Err(LaneError::NotSupported {
                 op: "receive_path".to_string(),
@@ -3571,7 +3620,7 @@ impl LaneOps for LaneImpl<'_> {
             // — that refusal is precisely the "absence of evidence" case, so it is
             // translated here into the variant that says so instead of being
             // propagated as a transport error that reads like a broken session.
-            (Harness::ClaudeCode, _) => {
+            (Harness::ClaudeCode, Mode::Pane) => {
                 let port = match self.relay_port_for(&s) {
                     Ok(port) => port,
                     Err(LaneError::Transport { detail }) => {
@@ -3653,26 +3702,36 @@ impl LaneOps for LaneImpl<'_> {
             // refusal is the carrier's, and it must stay there.
             (Harness::Codex, Mode::Daemon | Mode::AppServer)
             | (Harness::Pi, Mode::Daemon)
-            | (Harness::AcpClaudeCode, Mode::Daemon)
-            | (Harness::Opencode, Mode::Daemon) => Ok(ReceivePath::Available),
+            | (Harness::ClaudeCode | Harness::Opencode, Mode::Acp) => Ok(ReceivePath::Available),
 
             // The combinations that do not exist, refused in the same
             // vocabulary `start` and `deliver` refuse them.
-            (Harness::AcpClaudeCode | Harness::Opencode, Mode::Pane) => {
+            (Harness::Opencode, Mode::Pane | Mode::Daemon) => {
                 Err(LaneError::NotSupported {
                     op: "receive_path".to_string(),
-                    reason: "an ACP bridge is a protocol adapter with no terminal of its own"
+                    reason: "opencode is driven over its ACP bridge and nothing else"
                         .to_string(),
                 })
             }
-            // claude is already answered by its `(ClaudeCode, _)` arm above, so
-            // only these three reach here.
             (
-                Harness::Codex | Harness::AcpClaudeCode | Harness::Opencode,
+                Harness::ClaudeCode | Harness::Codex | Harness::Opencode,
                 Mode::Extension,
             ) => Err(LaneError::NotSupported {
                 op: "receive_path".to_string(),
                 reason: "the extension lane is pi's alone".to_string(),
+            }),
+            (Harness::Codex | Harness::Pi, Mode::Acp) => Err(LaneError::NotSupported {
+                op: "receive_path".to_string(),
+                reason: "no ACP adapter is wired up for this harness in qd yet".to_string(),
+            }),
+            // --- the remaining combinations that are NOT lanes ---------------
+            // `Lane::new` refuses each, so none is reachable in production.
+            // Enumerated rather than wildcarded: this match is exhaustive over
+            // `(Harness, Mode)` on purpose, so adding either must break here and
+            // force a decision instead of being answered by a `_`.
+            (Harness::ClaudeCode, Mode::Daemon) => Err(LaneError::NotSupported {
+                op: "receive_path".to_string(),
+                reason: NOT_A_LANE.to_string(),
             }),
         }
     }
@@ -3753,12 +3812,12 @@ impl LaneOps for LaneImpl<'_> {
         // daemon carrier that has no endpoint to reach.
         let outcome = match (self.lane.harness, self.lane.mode) {
             // --- the four harnesses with no app-server residence ---------------
-            // Placed FIRST so it also shadows the `(Harness::ClaudeCode, _)` arm
+            // Placed FIRST so it also shadows the `(Harness::ClaudeCode, ..)` arms
             // below: a hand-built `claude-code/app-server` must be REFUSED, not
             // quietly run through claude's own machinery. See
             // [`APP_SERVER_IS_CODEX_ONLY`].
             (
-                Harness::ClaudeCode | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode,
+                Harness::ClaudeCode | Harness::Pi | Harness::Opencode,
                 Mode::AppServer,
             ) => return Err(LaneError::NotSupported {
                 op: "deliver".to_string(),
@@ -3767,7 +3826,7 @@ impl LaneOps for LaneImpl<'_> {
             // claude/pane: the one lane with a CHOICE, and it is private. See
             // [`claude_carrier`] for the precedence and [`LaneImpl::relay_port_for`]
             // for why the port cannot simply be read off the row.
-            (Harness::ClaudeCode, _) => {
+            (Harness::ClaudeCode, Mode::Pane) => {
                 match claude_carrier(self.relay_port_for(&s)?, joined_pane(&s)) {
                     ClaudeCarrier::Relay { port } => {
                         let relay_paths = crate::delivery::relay::relay_paths(self.env);
@@ -3953,11 +4012,11 @@ impl LaneOps for LaneImpl<'_> {
             ),
             // ONE carrier, two lanes: `run_acp_send` takes the provider off the
             // row, and `acp_loss::preserve_identity` self-gates on it, so
-            // acp/opencode keeps its byte-identical plain refusal. Written as two
-            // arms anyway — the seven-line table is the thing that replaced the
+            // `opencode/acp` keeps its byte-identical plain refusal. Written as
+            // two arms anyway — the nine-line table is the thing that replaced the
             // provider-string chain, and collapsing a row to save a line starts it
             // back down that road.
-            (Harness::AcpClaudeCode, Mode::Daemon) => crate::delivery::render(
+            (Harness::ClaudeCode, Mode::Acp) => crate::delivery::render(
                 crate::delivery::acp::send_acp(
                     &crate::delivery::SendDeps {
                         env: self.env,
@@ -3972,7 +4031,7 @@ impl LaneOps for LaneImpl<'_> {
                 ),
                 "send:relay",
             ),
-            (Harness::Opencode, Mode::Daemon) => crate::delivery::render(
+            (Harness::Opencode, Mode::Acp) => crate::delivery::render(
                 crate::delivery::acp::send_acp(
                     &crate::delivery::SendDeps {
                         env: self.env,
@@ -3991,20 +4050,37 @@ impl LaneOps for LaneImpl<'_> {
             // --- the combinations that do not exist -------------------------
             // The same set [`LaneOps::start`] refuses, for the same reason: they
             // are unreachable except by constructing a `Lane` around `Lane::new`.
-            (Harness::AcpClaudeCode | Harness::Opencode, Mode::Pane) => {
+            (Harness::Opencode, Mode::Pane | Mode::Daemon) => {
                 return Err(LaneError::NotSupported {
                     op: "deliver".to_string(),
-                    reason: "an ACP bridge is a protocol adapter with no terminal of its own"
+                    reason: "opencode is driven over its ACP bridge and nothing else"
                         .to_string(),
                 })
             }
             (
-                Harness::Codex | Harness::AcpClaudeCode | Harness::Opencode,
+                Harness::ClaudeCode | Harness::Codex | Harness::Opencode,
                 Mode::Extension,
             ) => {
                 return Err(LaneError::NotSupported {
                     op: "deliver".to_string(),
                     reason: "the extension lane is pi's alone".to_string(),
+                })
+            }
+            (Harness::Codex | Harness::Pi, Mode::Acp) => {
+                return Err(LaneError::NotSupported {
+                    op: "deliver".to_string(),
+                    reason: "no ACP adapter is wired up for this harness in qd yet".to_string(),
+                })
+            }
+            // --- the remaining combinations that are NOT lanes ---------------
+            // `Lane::new` refuses each, so none is reachable in production.
+            // Enumerated rather than wildcarded: this match is exhaustive over
+            // `(Harness, Mode)` on purpose, so adding either must break here and
+            // force a decision instead of being answered by a `_`.
+            (Harness::ClaudeCode, Mode::Daemon) => {
+                return Err(LaneError::NotSupported {
+                    op: "deliver".to_string(),
+                    reason: NOT_A_LANE.to_string(),
                 })
             }
         };
@@ -4306,7 +4382,7 @@ impl LaneOps for LaneImpl<'_> {
             // `kill` and `lane_read::health_for` carry, kept in step with them
             // deliberately: if a second claude mode is ever built, all five
             // split together or none of them do.
-            (Harness::ClaudeCode, _) => {
+            (Harness::ClaudeCode, Mode::Pane) => {
                 crate::idle::await_idle_claude(self.env, &self.paths, &session, &label, budget_ms)
             }
 
@@ -4323,7 +4399,7 @@ impl LaneOps for LaneImpl<'_> {
             // ACP: one watcher over both bridges. `Mode::Daemon` is the only mode
             // either ACP harness supports — `--interactive` is refused for them
             // at create — so the wildcard covers exactly one lane apiece.
-            (Harness::AcpClaudeCode, _) | (Harness::Opencode, _) => {
+            (Harness::ClaudeCode, Mode::Acp) | (Harness::Opencode, Mode::Acp) => {
                 crate::idle::await_idle_acp(self.env, &self.paths, &session, &label, budget_ms)
             }
 
@@ -4361,6 +4437,17 @@ impl LaneOps for LaneImpl<'_> {
             (Harness::Pi, Mode::AppServer) => Err(LaneError::NotSupported {
                 op: "await_idle".to_string(),
                 reason: APP_SERVER_IS_CODEX_ONLY.to_string(),
+            }),
+            // --- the remaining combinations that are NOT lanes ---------------
+            // `Lane::new` refuses each, so none is reachable in production.
+            // Enumerated rather than wildcarded: this match is exhaustive over
+            // `(Harness, Mode)` on purpose, so adding either must break here and
+            // force a decision instead of being answered by a `_`.
+            (Harness::ClaudeCode, Mode::Daemon | Mode::Extension | Mode::AppServer)
+            | (Harness::Pi, Mode::Acp)
+            | (Harness::Opencode, Mode::Pane | Mode::Daemon | Mode::Extension | Mode::AppServer) => Err(LaneError::NotSupported {
+                op: "await_idle".to_string(),
+                reason: NOT_A_LANE.to_string(),
             }),
         }
     }
@@ -4462,18 +4549,20 @@ mod tests {
         let viewers: Vec<Lane> = Lane::ALL.into_iter().filter(|l| l.has_viewer()).collect();
         assert_eq!(
             viewers.iter().map(|l| l.id()).collect::<Vec<_>>(),
-            vec!["codex/app-server", "acp/opencode/daemon"],
+            vec!["codex/app-server", "opencode/acp"],
             "exactly two lanes have a residence a second client can join"
         );
         for lane in viewers {
             assert!(lane.is_daemon(), "{lane} must stay daemon-hosted");
             assert!(!lane.is_pane(), "{lane} is not a pane lane");
         }
-        // `acp/opencode` has a viewer WITHOUT being an app-server lane, which is
+        // `opencode/acp` has a viewer WITHOUT being an app-server lane, which is
         // the whole reason the two predicates had to come apart: app-server names
         // a codex-specific residence AND a `codex --remote` TUI, and opencode has
-        // neither.
-        let oc = Lane::new(Harness::Opencode, Mode::Daemon).unwrap();
+        // neither. It is not a `Mode::Daemon` lane either — opencode's only
+        // residence IS its ACP bridge, and the HTTP server a viewer joins lives
+        // inside it.
+        let oc = Lane::new(Harness::Opencode, Mode::Acp).unwrap();
         assert!(oc.has_viewer() && !oc.is_app_server());
     }
 
@@ -5103,7 +5192,12 @@ mod tests {
         let params = |has_jsonl: bool| AcpResumeParams {
             name: "wk".to_string(),
             session_id: row.session_id.clone(),
-            provider_id: row.provider.clone(),
+            // As the lane's ACP arm builds it: the harness the row PLACES in,
+            // which `lane_for` resolves for the current spelling and the legacy
+            // `acp/*` one alike — never a second parser written here.
+            harness: crate::lane::lane_for(&row.provider, row.hosting.as_deref())
+                .expect("the row places in a lane")
+                .harness,
             cwd: row.cwd.clone(),
             has_jsonl,
             current_pid: row.pid,
@@ -5208,8 +5302,8 @@ mod tests {
         // rather than by probing, because probing them spawns a resident.
         for lane in [
             Lane::new(Harness::Codex, Mode::Daemon).unwrap(),
-            Lane::new(Harness::AcpClaudeCode, Mode::Daemon).unwrap(),
-            Lane::new(Harness::Opencode, Mode::Daemon).unwrap(),
+            Lane::new(Harness::ClaudeCode, Mode::Acp).unwrap(),
+            Lane::new(Harness::Opencode, Mode::Acp).unwrap(),
         ] {
             assert_eq!(
                 create_prompt_refusal(lane),
@@ -5264,8 +5358,8 @@ mod tests {
             ("(Harness::Codex, Mode::AppServer)", "self.start_codex_app_server(req)"),
             ("(Harness::Pi, Mode::Pane)", "self.start_pi_pane(req)"),
             ("(Harness::Pi, Mode::Daemon)", "self.start_pi_daemon(req)"),
-            ("(Harness::AcpClaudeCode, Mode::Daemon)", "self.start_acp_daemon(req)"),
-            ("(Harness::Opencode, Mode::Daemon)", "self.start_acp_daemon(req)"),
+            ("(Harness::ClaudeCode, Mode::Acp)", "self.start_acp_daemon(req)"),
+            ("(Harness::Opencode, Mode::Acp)", "self.start_acp_daemon(req)"),
         ];
         for (pattern, arm) in table {
             let line = format!("{pattern} => {arm},");
@@ -5372,8 +5466,12 @@ mod tests {
     fn start_is_total_for_every_lane() {
         for (harness, mode) in [
             (Harness::ClaudeCode, Mode::Daemon),
-            (Harness::AcpClaudeCode, Mode::Pane),
             (Harness::Opencode, Mode::Pane),
+            (Harness::Opencode, Mode::Daemon),
+            // Not built here yet rather than impossible, and `start` must still
+            // ANSWER rather than panic — see `Harness::supports`.
+            (Harness::Codex, Mode::Acp),
+            (Harness::Pi, Mode::Acp),
         ] {
             assert_eq!(
                 Lane::new(harness, mode),

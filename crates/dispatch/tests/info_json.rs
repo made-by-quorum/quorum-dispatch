@@ -5,7 +5,18 @@
 //!
 //! The json object is the point-resolution surface an outside consumer joins against; the
 //! field list was promised to P1 exactly as the goldens freeze it:
-//! name, sessionId, qdId?, qdIdPrefix?, status, live, pid, provider.
+//! name, sessionId, qdId?, qdIdPrefix?, status, live, pid, provider, lane?, jsonlPath?.
+//!
+//! `lane` is the newest of those and the only one that is DERIVED rather than
+//! read off the row: `provider` is whatever string the row records, `lane` is
+//! `lane_for(provider, hosting)` — the `(harness, mode)` pair every verb actually
+//! dispatches on. The two are not redundant and a consumer wanting to know how a
+//! session is driven must join on `lane`, because `provider` alone stopped
+//! answering it. `claude-code` is two lanes now (a mux pane and an ACP bridge)
+//! and the pane rows below are only one of them; conversely the legacy
+//! `acp/claude-code` spelling is a provider string that names a lane outright.
+//! It is emitted OPTIONAL for one reason: an unknown provider id yields no lane
+//! at all, and inventing one would be worse than omitting the key.
 //!
 //! Rows pinned here: mapped + live, unmapped qdId, cold row,
 //! stale-idle-dead-pid (live:false), ambiguity error json-free on stderr.

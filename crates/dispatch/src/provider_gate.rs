@@ -12,8 +12,8 @@
 //!
 //! 1. **Enumeration by purpose.** Naming a provider IS the job here. The
 //!    conformance harness spends 67 literals building `qd start --provider codex`
-//!    ARGV for a live-execution harness; `conformance/ids.rs` spells the five
-//!    lane ids for serde; `render.rs` writes one into a synthesised JSON row.
+//!    ARGV for a live-execution harness; `render.rs` writes one into a
+//!    synthesised JSON row.
 //!    Every one of those is a provider named as *data* — an argv token, a wire
 //!    spelling, a manifest row, a default. None of them decides anything. These
 //!    STAY.
@@ -107,12 +107,13 @@ const PINS: &[Pin] = &[
     // ---- library ------------------------------------------------------------
     Pin {
         path: "join.rs",
-        literals: 13,
-        routing: 5,
-        reason: "ROUTING DEBT: status/turns derivation and the acp/ row class; the other 8 \
-                 are cold-row synthesis defaults, pure data — see 10-join-split.md, \
-                 deliberately not started",
-    },
+        literals: 11,
+        routing: 3,
+        reason: "ROUTING DEBT: the cross-class dedup key and the tombstone-sid set ask \
+                 `row_is_acp` rather than an `acp/` prefix — the class they separate is a \
+                 LANE class, and once an ACP row carries `claude-code` the prefix cannot \
+                 see it. The remaining literals are the join's own provider defaults and \
+                 labels"    },
     Pin {
         path: "relay_server/mod.rs",
         literals: 1,
@@ -133,13 +134,11 @@ const PINS: &[Pin] = &[
         reason: "the `provider` field's default value in a synthesised JSON row — data, not a \
                  branch",
     },
-    Pin {
-        path: "resolve.rs",
-        literals: 1,
-        routing: 1,
-        reason: "ROUTING DEBT: `acp_floor_original` filters the acp/ row class out of a \
-                 name collision — an acp-shaped rule inside the generic resolver",
-    },
+    // `resolve.rs` HAD a row here (1/1): `acp_floor_original` filtered the row
+    // class with a `starts_with("acp/")` prefix. It asks `row_is_acp` now — the
+    // class is a LANE class, and the prefix stopped naming it when an ACP row's
+    // provider became the program name. No provider literal is left. Deleted per
+    // the gate's own STALE PIN rule.
     Pin {
         path: "setup/harness.rs",
         literals: 8,
@@ -161,13 +160,13 @@ const PINS: &[Pin] = &[
                  comparison-shaped ones pick which real lane script to run or assert a \
                  provider field in captured output",
     },
-    Pin {
-        path: "conformance/ids.rs",
-        literals: 10,
-        routing: 0,
-        reason: "the `Lane` wire spellings: five `#[serde(rename)]` and their five `as_str` \
-                 mirrors — the canonical id table itself",
-    },
+    // `conformance/ids.rs` HAD a row here (10/0): the conformance `Lane`'s five
+    // `#[serde(rename)]` spellings and their five `as_str` mirrors, when that axis
+    // was a list of provider ids. It is a list of LANE ids now
+    // (`claude-code/mux-pane`, `codex/daemon`, …) — the harness half is no longer
+    // spelled on its own anywhere in the file, and `Lane::harness_provider_id`
+    // asks `quorum_qw` for it rather than holding a table. The row is gone
+    // because the literals are, not because anything was exempted.
     Pin {
         path: "conformance/tier.rs",
         literals: 6,
@@ -177,25 +176,25 @@ const PINS: &[Pin] = &[
     },
     Pin {
         path: "conformance/tier_doc.rs",
-        literals: 5,
+        literals: 4,
         routing: 0,
         reason: "the documented lane-id list rendered into the tier doc — a coverage manifest \
                  row per lane",
     },
     Pin {
         path: "conformance/tier_tests.rs",
-        literals: 3,
+        literals: 2,
         routing: 0,
         reason: "a whole-file test module (`#[cfg(test)] mod tier_tests;` in conformance/mod.rs), \
                  so its fixtures are invisible to the in-file cfg(test) skip",
     },
     // ---- the qd binary ------------------------------------------------------
-    Pin {
-        path: "bin/qd/help.rs",
-        literals: 1,
-        routing: 0,
-        reason: "`help::provider_list` renders `Harness::ALL` for the help table and spells                  Opencode with its CLI alias — the set comes from qw, only the spelling is here",
-    },
+    // `bin/qd/help.rs` HAD a row here (1/0): `help::provider_list` matched on
+    // `Harness::Opencode` to spell it with its CLI alias, because the name a user
+    // typed and the id qd stored were different strings. ACP-as-a-lane collapsed
+    // that split — every harness has exactly one spelling — so the function is a
+    // bare `.map(|h| h.provider_id())` and names no provider at all. Deleted per
+    // the gate's own STALE PIN rule.
     Pin {
         path: "bin/qd/main.rs",
         literals: 3,
@@ -231,23 +230,27 @@ const PINS: &[Pin] = &[
     },
     Pin {
         path: "bin/qd/verbs/lifecycle.rs",
-        literals: 4,
-        routing: 3,
-        reason: "ROUTING DEBT: RATCHETED 7/6 -> 4/3. The create if-chain is GONE: `qd start` routes with \
-                 `Lane::for_create` and creates with `LaneOps::start`, so the five ordered \
-                 branches whose order was enforced only by a comment are one table in \
-                 `quorum_qw::lanes`. What is left is three REFUSALS that must fire before any \
-                 create is attempted — `--interactive` on acp/*, `--fork` on codex, and the \
-                 `--provider` default — plus the acp mask on the lane's interactive flag, \
-                 which reproduces the retired chain's own behaviour and is commented as such",
+        literals: 2,
+        routing: 1,
+        reason: "ROUTING DEBT: RATCHETED 4/3 -> 2/1. Two of the three refusals stopped \
+                 needing a provider string. `--interactive` on an ACP bridge asks \
+                 `Harness::supports(Mode::Pane)` — which also repairs it, since the old \
+                 prefix test caught `acp/claude-code` and missed the `opencode` alias for \
+                 the same bridge — and the acp mask on the interactive flag is GONE, \
+                 because `Lane::for_create` refuses a pinned spelling that disagrees with \
+                 an explicit flag. What is left is `--fork` on codex, a genuine \
+                 harness-specific refusal, and the `--provider` default",
     },
     Pin {
         path: "bin/qd/verbs/ls.rs",
-        literals: 10,
-        routing: 9,
-        reason: "ROUTING DEBT: liveness gates and the two duplicated provider-badge tables — \
-                 plan phase 1's `list()`, still on the old path",
-    },
+        literals: 8,
+        routing: 7,
+        reason: "ROUTING DEBT: RATCHETED 10/9 -> 8/7. The two ACP row-class tests \
+                 (`acp_human_status`'s gate and the liveness-gate exemption) ask \
+                 `row_is_acp` now — the prefix they used stopped matching real rows when \
+                 the ACP row's provider became the program name. What is left is liveness \
+                 gates and the two duplicated provider-badge tables — \
+                 plan phase 1's `list()`, still on the old path"    },
     Pin {
         path: "bin/qd/verbs/resume.rs",
         literals: 1,
@@ -263,14 +266,13 @@ const PINS: &[Pin] = &[
     // own STALE PIN rule. Routing debt is unmoved (the row carried none).
     Pin {
         path: "bin/qd/verbs/send_relay.rs",
-        literals: 12,
-        routing: 10,
-        reason: "ROUTING DEBT: the `send:relay` verb's own per-provider fan-out plus \
-                 `provider_uses_relay_fast_path`'s duplicate classification. The four \
-                 carrier BODIES moved to `quorum_qw::delivery` (stage-3 phase 3B), which \
-                 took their 4 enumeration literals with them; the fan-out that CHOOSES \
-                 between them is the verb's own and is what stays to be retired",
-    },
+        literals: 5,
+        routing: 4,
+        reason: "ROUTING DEBT: RATCHETED 7/6 -> 5/4. The ACP send arm and the \
+                 unknown-provider gate ask `row_is_acp`; the first was the URGENT one, \
+                 since a prefix that no longer matches sends `qd send` past the ACP path \
+                 and into \"has no relay\". What is left is the per-provider fan-out to the \
+                 codex and pi SEND ladders, the verb's own and what stays to be retired"    },
     Pin {
         path: "bin/qd/verbs/send_unified.rs",
         literals: 1,
@@ -306,7 +308,37 @@ const PINS: &[Pin] = &[
 /// five-arm ordered if-chain that routed `--provider`/`--interactive` to a
 /// per-lane create wrapper is `Lane::for_create` now, and its three
 /// provider-string branches went with it.
-const ROUTING_DEBT_TOTAL: usize = 38;
+///
+/// 38 -> 34 when the relay fast-path filter stopped classifying by provider
+/// name. `provider_uses_relay_fast_path` tested four provider strings to
+/// re-derive a fact the lane already states; `lane_uses_relay_fast_path` asks
+/// `lane_for` and compares against `CLAUDE_PANE`. This is the shape every
+/// remaining row is waiting for — not a literal deleted, a QUESTION moved to
+/// the type that can answer it.
+///
+/// 34 -> 32 when ACP became a lane. `qd start`'s `--interactive` refusal for an
+/// ACP bridge asks `Harness::supports(Mode::Pane)` instead of testing an `acp/`
+/// prefix, and the mask that reproduced the prefix test's blind spot is gone.
+///
+/// 32 -> 25 when the rest of the `starts_with("acp/")` row-class tests followed:
+/// the join's cross-class dedup key and tombstone-sid set, `acp_floor_original`,
+/// `qd ls`'s liveness-gate exemption and its ACP status override, `send:relay`'s
+/// ACP arm and its unknown-provider gate. Seven sites, one question —
+/// `quorum_qw::row_is_acp`.
+///
+/// **These were not paid down, they were REPAIRED.** `07-lane-gaps.md` ruled
+/// against the prefix as "a catch-all wearing a specific name", and it had
+/// already missed the bare `opencode` alias once. ACP-as-a-lane made it worse
+/// than imprecise: a new ACP row's provider is `claude-code`, so every one of
+/// these guards would have answered `false` for exactly the rows it exists to
+/// catch — the dedup key collapsing an ACP row into its plain twin, and
+/// `send:relay` answering "has no relay" instead of delivering. Silently, and
+/// only for sessions created after the remodel.
+///
+/// That is the argument for this ratchet in general: a provider string cannot
+/// answer a question about a lane, and the day the two stop coinciding it does
+/// not fail — it lies.
+const ROUTING_DEBT_TOTAL: usize = 25;
 
 /// The gate's own source: its token list and its classifier fixtures are provider
 /// literals by necessity, and pinning them would make every edit to the gate a

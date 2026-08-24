@@ -5,5 +5,6 @@
   "live": false,
   "pid": null,
   "provider": "claude-code",
+  "lane": "claude-code/mux-pane",
   "jsonlPath": "<HOME>/.claude/projects/proj/44444444-dddd-4ddd-8ddd-444444444444.jsonl"
 }

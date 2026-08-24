@@ -17,6 +17,7 @@ use dispatch::paths::QdPaths;
 use dispatch::provider::acp::{derive_tier, Tier};
 use dispatch::provider::{provider_for, InjectError, ProviderFx, SessionKey};
 use dispatch::tombstone::{self, IdentityTombstone};
+use quorum_qw::lane::Mode;
 use tempfile::TempDir;
 
 /// Build a minimal `ProviderFx` with `acp_client` set as given (None = ACP unavailable).
@@ -88,22 +89,35 @@ fn acp_unavailable_inject_errors_no_transport_and_never_hangs() {
 #[test]
 fn every_unavailable_shape_lands_in_the_refusal_lane() {
     // Child D: there is no auto-deliver tier. A dead endpoint, a historical
-    // pty latch (a never-deployed Child-B dev binary's write), and a non-acp
-    // provider all derive Unavailable — the verbs' refusal lane.
+    // pty latch (a never-deployed Child-B dev binary's write), and a lane that
+    // is not ACP at all derive Unavailable — the verbs' refusal lane.
+    //
+    // The first parameter is a `Mode`, and the change from the provider-id string
+    // is what makes the last case below mean anything. `derive_tier` used to take
+    // an id and prefix-test it for `acp/`; both production callers passed the
+    // literal `"acp/claude-code"`, so the test was against a constant and could
+    // not fail. Now that a real ACP row records `provider: "claude-code"`, that
+    // string would answer "not ACP" for the one lane that is — a false negative
+    // that costs the healthy path its structured transport. Asking the MODE is
+    // asking what those callers always meant.
     assert_eq!(
-        derive_tier("acp/claude-code", None, false),
+        derive_tier(Mode::Acp, None, false),
         Tier::Unavailable,
         "dead endpoint → refusal lane (never hang, never auto-deliver)"
     );
     assert_eq!(
-        derive_tier("acp/claude-code", Some("pty"), true),
+        derive_tier(Mode::Acp, Some("pty"), true),
         Tier::Unavailable,
         "a historically-latched row is never treated as structured"
     );
     assert_eq!(
-        derive_tier("codex", None, true),
+        // codex's daemon lane stands for "every lane that is not ACP". The tier is
+        // a property of the TOPOLOGY, not of the program: `claude-code/mux-pane`
+        // has no ACP tier either, and it shares a provider id with the lane that
+        // does — which is exactly why this argument stopped being a provider id.
+        derive_tier(Mode::Daemon, None, true),
         Tier::Unavailable,
-        "non-acp providers have no ACP tier"
+        "a non-ACP lane has no ACP tier, however alive its endpoint is"
     );
 }
 
@@ -111,7 +125,7 @@ fn every_unavailable_shape_lands_in_the_refusal_lane() {
 fn healthy_acp_session_prefers_the_acp_tier() {
     // The structured-preferred invariant: a healthy acp row with a live
     // endpoint and no latch drives ACP (Mode-A) — S5's healthy-path safety.
-    assert_eq!(derive_tier("acp/claude-code", None, true), Tier::Acp);
+    assert_eq!(derive_tier(Mode::Acp, None, true), Tier::Acp);
 }
 
 #[test]

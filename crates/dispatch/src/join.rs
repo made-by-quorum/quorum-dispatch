@@ -193,8 +193,17 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
     // Preserve first-seen order of sessionIds so the live-row emission order is
     // deterministic (TS iterates a Map whose insertion order is first-seen).
     let mut order: Vec<(String, bool)> = Vec::new();
+    // ASKED OF THE LANE. This was `p.starts_with("acp/")`, which stopped being a
+    // test for anything the moment ACP became a lane: a new ACP row's provider is
+    // `claude-code` — the same string its plain twin carries — so the prefix
+    // answers `false` for exactly the rows this key exists to keep apart, and the
+    // ACP row would be collapsed into its twin and shadowed out of every
+    // join-derived surface. Silently, and only for sessions created after the
+    // remodel.
     let provider_class_is_acp = |e: &registry::RegistryEntry| -> bool {
-        e.provider.as_deref().is_some_and(|p| p.starts_with("acp/"))
+        e.provider.as_deref().is_some_and(|p| {
+            quorum_qw::row_is_acp(p, e.hosting.as_deref())
+        })
     };
     // codex-interactive: an UNIDENTIFIED row (no sessionId yet) must key on its
     // PID, not on the empty string.
@@ -482,11 +491,9 @@ pub fn join_sessions_counted(inputs: &JoinInputs, opts: JoinOpts) -> (Vec<Sessio
             .tombstoned
             .iter()
             .filter(|t| {
-                t.data
-                    .provider
-                    .as_deref()
-                    .map(|p| p.starts_with("acp/"))
-                    .unwrap_or(false)
+                t.data.provider.as_deref().is_some_and(|p| {
+                    quorum_qw::row_is_acp(p, t.data.hosting.as_deref())
+                })
             })
             .filter_map(|t| t.data.session_id.as_deref())
             .collect()

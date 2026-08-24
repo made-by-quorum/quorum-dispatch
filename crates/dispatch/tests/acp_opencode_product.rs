@@ -22,11 +22,12 @@
 //!
 //! 2. **`acp_opencode_live_product_path`** (gated `QD_ACP_OPENCODE_LIVE=1`): drives the REAL `qd`
 //!    binary end-to-end — `qd start --provider opencode` → `qd send:relay` (a live OpenRouter turn,
-//!    gpt-4o-mini) → `qd wait` → `qd stop` — asserting the row is `acp/opencode`, the turn returned
-//!    a live turn-id, wait resolved done, and stop left no leak. Non-vacuity: it asserts the live
-//!    turn-id + provider row (a skip-mode no-op cannot pass). It also asserts the bridge's own
-//!    HTTP server was PINNED and is BOUND (`opencode acp --port <p>` in the live cmdline, plus a
-//!    TCP connect) — the address `qd attach` hands a viewer. CRED: the OpenRouter key is FILE-PATH
+//!    gpt-4o-mini) → `qd wait` → `qd stop` — asserting the row lands in the `opencode/acp`
+//!    LANE, the turn returned a live turn-id, wait resolved done, and stop left no leak.
+//!    Non-vacuity: it asserts the live turn-id + the lane the row landed in (a skip-mode no-op
+//!    cannot pass). It also asserts the bridge's own HTTP server was PINNED and is BOUND
+//!    (`opencode acp --port <p>` in the live cmdline, plus a TCP connect) — the address
+//!    `qd attach` hands a viewer. CRED: the OpenRouter key is FILE-PATH
 //!    ONLY (`~/.secrets/openrouter-pi.key`), read into the child env at drive-time; its VALUE never
 //!    appears in the test source, assertions, or output.
 
@@ -224,15 +225,31 @@ fn acp_opencode_live_product_path() {
         .expect("qd start runs");
     assert!(out.status.success(), "qd start --provider opencode failed: {out:?}");
 
-    // Non-vacuity: `qd info --json` must show the row persisted provider=acp/opencode (the
-    // product path resolved --provider opencode → acp/opencode and spawned the opencode bridge).
+    // Non-vacuity: `qd info --json` must show the row landed in the `opencode/acp`
+    // LANE — the product path resolved `--provider opencode`, stamped the ACP
+    // topology and spawned the opencode bridge.
+    //
+    // The lane is asserted rather than the provider because the provider stopped
+    // being able to say it. A row's `provider` is now the PROGRAM (`opencode`)
+    // and its `hosting` is the TOPOLOGY (`acp`); the compound `acp/opencode` that
+    // used to be the whole answer is a legacy spelling nothing writes any more.
+    // `provider == "opencode"` alone would be satisfied by a row in any opencode
+    // lane, and while opencode has exactly one today that is a fact about the
+    // harness table, not about this test — pinning it here would make this
+    // assertion go vacuous the moment a second one lands. `lane` is the derived
+    // `(harness, mode)` pair, and it is the only field that says "the bridge ran".
     let mut info = Command::new(qd);
     base(&mut info);
     let info_out = info.args(["info", "octest", "--json"]).output().expect("qd info");
     let info_json = String::from_utf8_lossy(&info_out.stdout);
     assert!(
-        info_json.contains("\"acp/opencode\""),
-        "the row must persist provider=acp/opencode: {info_json}"
+        info_json.contains("\"lane\": \"opencode/acp\""),
+        "the row must land in the opencode/acp lane: {info_json}"
+    );
+    assert!(
+        info_json.contains("\"provider\": \"opencode\""),
+        "…and record the PROGRAM as its provider, not the retired compound \
+         `acp/opencode`: {info_json}"
     );
 
     // The PIN, live. `opencode acp` runs an opencode HTTP server; its port
@@ -314,7 +331,7 @@ fn acp_opencode_live_product_path() {
     // Evidence (VALUE-redacted by construction — the key never enters this string).
     let evidence = format!(
         "A-OC.1 live product-path lane GREEN\n\
-         qd start --provider opencode → info provider=acp/opencode\n\
+         qd start --provider opencode → info lane=opencode/acp (provider opencode)\n\
          bridge http server pinned + bound: 127.0.0.1:{pinned_port}\n\
          send:relay turn id: {turn_id}\n\
          wait: done, stop: clean\n"

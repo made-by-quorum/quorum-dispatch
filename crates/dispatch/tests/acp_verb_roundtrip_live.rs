@@ -147,6 +147,17 @@ fn acp_verb_roundtrip_by_name_live() {
     let name = "acpwk";
 
     // 1. CREATE a proper DISPATCH acp row.
+    //
+    // Driven with the LEGACY `acp/claude-code` spelling on purpose. It is not the
+    // form qd advertises any more — ACP is a topology, so `--provider claude-code
+    // --acp` is what the help says — but the old spelling is supported forever
+    // (it is what every scripted `qd start` and every row on a user's disk says),
+    // and this is the only place a live run proves the whole verb chain still
+    // honours it. The row it writes is the CURRENT shape either way: provider
+    // `claude-code`, hosting `acp`. The `resume` assertion below is what makes
+    // that matter — resume reads the row, not the argv, so if the pinned spelling
+    // ever stopped resolving to the ACP lane this test would misroute to the
+    // claude pane path exactly as the bug it was written for did.
     let o = run_qd(qd, jail, &["start", name, "--provider", "acp/claude-code", "--cwd", &works]);
     assert!(out_str(&o).contains("Started detached acp session"), "start: {}", out_str(&o));
 

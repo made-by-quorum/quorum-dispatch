@@ -191,7 +191,7 @@ Options:
 //        longer one thing — a terminal is asked, everything else defaults.
 pub const START: &str = r####"Usage: qd start [options] <name> [claudeArgs...]
 
-Create a new session (claude-code, codex, pi, acp/claude-code, opencode)
+Create a new session (claude-code, codex, pi, opencode)
 
 start = new participant (fresh or forked) · resume = same participant wakes ·
 attach = enter live or cold session.
@@ -216,14 +216,24 @@ Options:
                          pane (`qd attach <name>`) — for codex instead of the
                          app server, for pi instead of the extension-carrying
                          pane, i.e. the same pane WITHOUT a control channel.
-                         Not supported for --provider acp/* (a protocol adapter,
-                         no terminal to attach)
+                         Not supported for --provider opencode, or with --acp
+                         (an ACP bridge is a protocol adapter with no terminal
+                         to attach)
   --extension            pi only, and pi's DEFAULT lane: run pi's TUI in an
                          attachable pane WITH the quorum control channel, so
                          `qd send` drives the same session a human is typing
                          into. Redundant since the default moved, and kept so
                          existing scripts keep working and the lane can still be
                          named explicitly
+  --acp                  Run the ACP bridge lane — a headless resident driven
+                         over the Agent Client Protocol, with no terminal of its
+                         own: drive it with `qd send`, not `qd attach`. Spells
+                         claude-code/acp (the same claude engine, reached through
+                         the bridge instead of a pane) and opencode/acp (which is
+                         opencode's ONLY lane, so there it names the default).
+                         Not available for codex or pi — no ACP adapter is wired
+                         up for them in qd yet. Conflicts with --interactive,
+                         --extension, --daemon and --app-server
   --app-server           codex only, and codex's DEFAULT lane: run the app
                          server (`codex app-server --listen ws://…`), a headless
                          resident a human can still open a viewer onto with
@@ -238,9 +248,9 @@ Options:
                          two lanes now that a bare start makes codex/app-server
                          and pi/extension. Conflicts with --interactive,
                          --extension and --app-server. Not supported for
-                         --provider claude-code
-                         (it has no daemon lane); a no-op for acp/*, whose only
-                         lane is already a daemon
+                         --provider claude-code (it has no daemon lane) or
+                         --provider opencode (its only residence is its ACP
+                         bridge — use --acp, or nothing, which means the same)
   --headless             Force a headless stream-json launch (override the
                          driver auto-detect)
   --json                 Emit the started session's identity as JSON on stdout:
@@ -251,8 +261,14 @@ Options:
                          means idle, not relay-reachable)
   -p, --prompt <prompt>  Send an initial prompt after the session starts
   --model <model>        Set the model before sending the prompt
-  --provider <provider>  Provider: claude-code, codex, pi,
-                         opencode (= acp/opencode), or acp/claude-code.
+  --provider <provider>  Which agent to run: claude-code, codex, pi or opencode.
+                         A LANE may be named instead, as <provider>/<lane> —
+                         `--provider codex/daemon` picks both the program and how
+                         it is hosted, in one word. Every lane id `qd ls --json`
+                         prints is accepted here, so a lane copied out of a
+                         listing can be pasted back. Naming a lane PINS it: a
+                         topology flag that asks for a different one is refused
+                         rather than silently winning.
                          OMITTED AT A TERMINAL, qd ASKS — the choice is offered
                          from the harnesses `qd setup` found installed on this
                          machine, and Enter takes the default. Omitted
@@ -263,10 +279,17 @@ Options:
                          attachable pane; codex runs an app server you can also
                          open a terminal on (`qd attach`); pi runs its TUI in an
                          attachable pane carrying the quorum control channel;
-                         acp/* is daemon-hosted only (drive it with `qd send`,
-                         not `qd attach`). Use --interactive for a plain TUI
-                         pane (codex, pi) or --daemon for the headless resident
-                         (codex, pi)
+                         opencode runs its ACP bridge, which is its only lane.
+                         A provider names a PROGRAM and a lane names how it is
+                         hosted, so each has a flag: --interactive for a plain
+                         TUI pane (codex, pi), --daemon for the headless
+                         resident (codex, pi), --acp for the Agent Client
+                         Protocol bridge (claude-code, opencode). Each flag is
+                         also sayable as a lane — `--provider pi --daemon` and
+                         `--provider pi/daemon` are the same request.
+                         The older spellings `acp/claude-code` and
+                         `acp/opencode` still work and mean `claude-code/acp`
+                         and `opencode/acp`
   --via <name>           Route through a backends.json profile (per-session backend)
   --alt-screen           Fullscreen (alt-screen) rendering for this session
                          (default: inline, so phone/SSH attach can scroll)
@@ -641,19 +664,21 @@ const SETUP_INCOMPLETE_NOTICE: &str =
 /// DERIVED from `Harness::ALL`, never hand-listed: the accept-set lives in
 /// `Harness::from_provider_id` (which is also what `Lane::for_create` routes
 /// on), so a harness added there shows up in the help on the next build and a
-/// harness removed there stops being advertised. The `opencode` spelling is the
-/// CLI alias for the internal `acp/opencode` id — both parse, and the alias is
-/// what a person types.
+/// harness removed there stops being advertised.
+///
+/// There is no alias parenthetical any more. `opencode` used to print as
+/// `opencode (= acp/opencode)` because the name a person typed and the id qd
+/// stored were different strings — a split ACP-as-a-harness forced, since the
+/// transport had to be in the id and so the id could not be the program name.
+/// Every harness has exactly one spelling now. The legacy `acp/*` ids still
+/// parse, for rows and scripts written before the remodel; they are not
+/// advertised, because advertising two spellings for one thing is how the
+/// split started.
 pub fn provider_list() -> String {
     use quorum_qw::lane::Harness;
     Harness::ALL
         .iter()
-        .map(|h| match h {
-            Harness::Opencode => "opencode",
-            Harness::ClaudeCode | Harness::Codex | Harness::Pi | Harness::AcpClaudeCode => {
-                h.provider_id()
-            }
-        })
+        .map(|h| h.provider_id())
         .collect::<Vec<_>>()
         .join(", ")
 }

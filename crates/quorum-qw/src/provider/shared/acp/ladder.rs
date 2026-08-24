@@ -139,15 +139,21 @@ pub fn classify_connect_failure(pid_alive_now: bool, cmdline_is_ours_now: bool) 
 /// provider with a LIVE endpoint gets the ACP tier; anything else (a dead ACP
 /// endpoint — the "ACP-claimed-but-dead" false-positive — or a non-acp
 /// provider) is unavailable, which the verbs surface as a refusal.
-pub fn derive_tier(provider_id: &str, transport_field: Option<&str>, endpoint_alive: bool) -> Tier {
+pub fn derive_tier(mode: crate::lane::Mode, transport_field: Option<&str>, endpoint_alive: bool) -> Tier {
     // A historically-latched row is never structured (conservative read).
     if transport_field == Some(PTY_TRANSPORT) {
         return Tier::Unavailable;
     }
-    // Only `acp/*` providers have an ACP tier. A dead endpoint → unavailable
-    // (never hang on a claimed-but-dead structured transport — the negative
-    // control).
-    if provider_id.starts_with("acp/") && endpoint_alive {
+    // Only the ACP lane has an ACP tier. A dead endpoint → unavailable (never
+    // hang on a claimed-but-dead structured transport — the negative control).
+    //
+    // The parameter WAS a `&str` provider id, and both production callers passed
+    // the literal `"acp/claude-code"` — not a value read from any row, just a
+    // constant standing in for "yes, this is ACP". The prefix test it fed was
+    // therefore never testing anything at those call sites, and would have gone
+    // quietly false had anyone ever passed a real row's provider, which now says
+    // `claude-code`. A `Mode` says what the callers meant and cannot drift.
+    if mode == crate::lane::Mode::Acp && endpoint_alive {
         return Tier::Acp;
     }
     Tier::Unavailable
@@ -161,7 +167,7 @@ mod tests {
     // structured-preferred invariant; a mutation forcing Unavailable here reds.
     #[test]
     fn healthy_acp_row_derives_acp_tier() {
-        assert_eq!(derive_tier("acp/claude-code", None, true), Tier::Acp);
+        assert_eq!(derive_tier(crate::lane::Mode::Acp, None, true), Tier::Acp);
     }
 
     // The false-positive control: ACP-CLAIMED-BUT-DEAD (endpoint not alive)
@@ -170,7 +176,7 @@ mod tests {
     #[test]
     fn acp_claimed_but_dead_endpoint_is_unavailable() {
         assert_eq!(
-            derive_tier("acp/claude-code", None, false),
+            derive_tier(crate::lane::Mode::Acp, None, false),
             Tier::Unavailable
         );
     }
@@ -181,7 +187,7 @@ mod tests {
     #[test]
     fn historically_latched_row_is_unavailable_even_if_endpoint_alive() {
         assert_eq!(
-            derive_tier("acp/claude-code", Some("pty"), true),
+            derive_tier(crate::lane::Mode::Acp, Some("pty"), true),
             Tier::Unavailable
         );
     }
@@ -189,7 +195,7 @@ mod tests {
     // A non-acp provider has no ACP tier.
     #[test]
     fn non_acp_provider_is_unavailable() {
-        assert_eq!(derive_tier("claude-code", None, true), Tier::Unavailable);
+        assert_eq!(derive_tier(crate::lane::Mode::Pane, None, true), Tier::Unavailable);
     }
 
     // Red-team round 1 (TOCTOU): the connect-failure classification keys on

@@ -156,7 +156,16 @@ pub struct AcpCreateParams {
     /// THIS row's provider id — `acp/claude-code` or `acp/opencode`. A-OC.1: the
     /// bridge is re-derived from it, and it is persisted so every other verb
     /// (kill/wait/resume/send:relay) routes and re-derives the same way.
-    pub provider_id: String,
+    /// WHICH ACP BRIDGE, as the harness behind it — never a provider-id string.
+    ///
+    /// It WAS a `String`, and it was the id `acp/claude-code` / `acp/opencode`,
+    /// which answered three different questions at once: which bridge program to
+    /// spawn, whether the claude transcript wiring applies, and what to stamp in
+    /// the registry row's `provider` field. Those questions came apart when ACP
+    /// became a lane — the row must now say `claude-code` while the bridge is
+    /// still claude's — and a string that had been standing in for all three
+    /// would have answered at least one of them wrong in silence.
+    pub harness: crate::lane::Harness,
     /// The adapter's cwd. The bridge resolves the CC JSONL by
     /// `encodeProjectPath(cwd)`, so this is identity-bearing, not cosmetic.
     pub cwd: PathBuf,
@@ -243,14 +252,22 @@ fn acp_log_path(home: &std::path::Path, name: &str) -> PathBuf {
         .join(format!("acp-{name}.log"))
 }
 
-/// A-OC.1: re-derive THIS provider's bridge so create and resume spawn the SAME
-/// one. `acp/claude-code` keeps the `BRIDGE_BIN` default (`bridge_cmd` None →
-/// `build_adapter_argv` emits NO `--bridge-cmd`, byte-identical to before this
-/// existed); `acp/opencode` yields `--bridge-cmd opencode --bridge-arg acp`.
-/// Without this a resumed opencode session would respawn `claude-code-acp`
-/// loading an opencode session — the verb-routing-arms trap.
-fn bridge_for(provider_id: &str, harness_port: Option<u16>) -> (Option<&'static str>, Vec<String>) {
-    let acp = super::acp_provider_for(provider_id);
+/// A-OC.1: re-derive THIS bridge so create and resume spawn the SAME one.
+/// claude keeps the `BRIDGE_BIN` default (`bridge_cmd` None → `build_adapter_argv`
+/// emits NO `--bridge-cmd`, byte-identical to before this existed); opencode
+/// yields `--bridge-cmd opencode --bridge-arg acp`. Without this a resumed
+/// opencode session would respawn `claude-code-acp` loading an opencode session —
+/// the verb-routing-arms trap.
+///
+/// Keyed on the HARNESS: which bridge to spawn is a fact about the program being
+/// bridged, and the row's provider id no longer encodes it. `harness_port` is the
+/// pinned listen port for a bridge that runs a server of its own (opencode's),
+/// which is what gives that lane a viewer a second client can join.
+fn bridge_for(
+    harness: crate::lane::Harness,
+    harness_port: Option<u16>,
+) -> (Option<&'static str>, Vec<String>) {
+    let acp = super::acp_provider_for_harness(harness);
     let bridge_cmd = acp.and_then(|p| p.bridge_cmd());
     let mut bridge_args: Vec<String> = acp
         .map(|p| p.bridge_args().iter().map(|a| a.to_string()).collect())
@@ -279,10 +296,10 @@ fn bridge_for(provider_id: &str, harness_port: Option<u16>) -> (Option<&'static 
 /// pressed on would leave the bridge listening on an ephemeral port, which is
 /// the un-nameable server this whole path exists to replace.
 fn alloc_harness_port(
-    provider_id: &str,
+    harness: crate::lane::Harness,
     alloc: &PortAllocator<'_>,
 ) -> Result<Option<u16>, std::io::Error> {
-    match super::acp_provider_for(provider_id).and_then(|p| p.harness_server()) {
+    match super::acp_provider_for_harness(harness).and_then(|p| p.harness_server()) {
         Some(_) => alloc().map(Some),
         None => Ok(None),
     }
@@ -292,8 +309,11 @@ fn alloc_harness_port(
 /// handed out. `None` whenever there is no server or no port — the row then
 /// carries no such key at all, which is what keeps every `acp/claude-code` row
 /// byte-stable.
-fn harness_endpoint_for(provider_id: &str, harness_port: Option<u16>) -> Option<String> {
-    let server = super::acp_provider_for(provider_id).and_then(|p| p.harness_server())?;
+fn harness_endpoint_for(
+    harness: crate::lane::Harness,
+    harness_port: Option<u16>,
+) -> Option<String> {
+    let server = super::acp_provider_for_harness(harness).and_then(|p| p.harness_server())?;
     Some(server.endpoint(harness_port?))
 }
 
@@ -347,7 +367,7 @@ pub fn create_acp_daemon(
     //     — the one the bridge listens on rather than the one the adapter does.
     //     Allocated here, beside the ws port, so both addresses this session will
     //     ever answer at are decided before anything is spawned.
-    let harness_port = alloc_harness_port(&params.provider_id, deps.alloc_port).map_err(|e| {
+    let harness_port = alloc_harness_port(params.harness, deps.alloc_port).map_err(|e| {
         AcpCreateError::PortAllocFailed {
             detail: e.to_string(),
         }
@@ -363,7 +383,7 @@ pub fn create_acp_daemon(
     // 3. spawn the adapter DETACHED (codex RealDaemonSpawner reuse: process_group(0),
     //    stdin null, stdout/stderr → log). The bridge child inherits the group.
     // create path: no `--load-session` (a brand-new session/new, not a resume).
-    let (bridge_cmd, bridge_args) = bridge_for(&params.provider_id, harness_port);
+    let (bridge_cmd, bridge_args) = bridge_for(params.harness, harness_port);
     let argv = build_adapter_argv(
         &deps.exe,
         &endpoint,
@@ -448,7 +468,7 @@ pub fn create_acp_daemon(
         spawned_by: None,
         // A-OC.1: persist THIS provider's id (acp/claude-code OR acp/opencode) so the other
         // verbs (kill/wait/resume/send:relay) route + re-derive the bridge from the row.
-        provider: Some(params.provider_id.clone()),
+        provider: Some(params.harness.provider_id().to_string()),
         endpoint: Some(endpoint.clone()),
         // A freshly-created healthy row carries NO `transport` field (the tier
         // is DERIVED per verb; the field is write-retired — historical
@@ -459,17 +479,17 @@ pub fn create_acp_daemon(
         // this session before its row ever existed. `None` only for a truly
         // prompt-less create.
         structured_send_issued: dispatched.then_some(true),
-        // acp/* is daemon-hosted with no second topology, so this token can
-        // never be anything else — which is exactly why it is written rather
-        // than left to be inferred. An absent field means "ask the harness
-        // default", and that is a question with an answer somewhere else; a
-        // present one means "this row is a daemon row" and needs no lookup.
-        hosting: Some(crate::lane::Mode::Daemon.hosting_token().to_string()),
         // The bridge's OWN server, for the one bridge that has one — the viewer's
         // reconnect handle (`acp/opencode`), absent for `acp/claude-code`. Written
         // from the port pinned at step 1b, so the row names the address the bridge
         // was actually told to listen on rather than one discovered afterwards.
-        harness_endpoint: harness_endpoint_for(&params.provider_id, harness_port),
+        harness_endpoint: harness_endpoint_for(params.harness, harness_port),
+        // `Mode::Acp`, and this pairing is load-bearing. The row's provider is
+        // now the PROGRAM (`claude-code`), so a `daemon` stamp here would make
+        // `lane_for` read `claude-code` + `daemon`, find that claude supports no
+        // daemon lane, fall back to the row default — `Mode::Pane` — and hand
+        // every verb a mux pane that was never opened.
+        hosting: Some(crate::lane::Mode::Acp.hosting_token().to_string()),
     };
     if let Err(e) = registry::write_entry(&deps.paths.sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);
@@ -498,7 +518,8 @@ pub struct AcpResumeParams {
     pub session_id: String,
     /// THIS row's provider id. A-OC.1: gates the CC-transcript requirement AND
     /// re-derives the bridge.
-    pub provider_id: String,
+    /// Which ACP bridge — see [`AcpCreateParams::harness`].
+    pub harness: crate::lane::Harness,
     /// The row's recorded cwd. Empty/absent ⇒ `"."`.
     pub cwd: Option<String>,
     /// Whether a CC transcript was resolved for the row. `acp/claude-code`
@@ -677,7 +698,11 @@ pub fn resume_acp(
     // persists to opencode's OWN store (NOT the CC projects dir), so it has no jsonl_path; gate it
     // on the sessionId alone (opencode advertises the `loadSession` capability). The provider
     // check keeps acp/claude-code's gate BYTE-IDENTICAL.
-    let needs_cc_transcript = params.provider_id == "acp/claude-code";
+    // The CLAUDE bridge specifically: it loads from claude's own JSONL store, and
+    // opencode's persists to `opencode.db` instead. A harness test, which is what
+    // this always was — the provider-id equality it replaces could only ask it
+    // while the transport was spelled into the id.
+    let needs_cc_transcript = params.harness == crate::lane::Harness::ClaudeCode;
     if params.session_id.is_empty() || (needs_cc_transcript && !params.has_jsonl) {
         return Err(AcpResumeError::NoResumableTranscript { name });
     }
@@ -758,7 +783,7 @@ pub fn resume_acp(
     // gone. Carrying it forward would publish a dead address as a live one, and a
     // viewer pointed at it would fail to connect — the same mistake reading
     // `endpoint` without a liveness check makes, written into the record instead.
-    let harness_port = match alloc_harness_port(&params.provider_id, deps.alloc_port) {
+    let harness_port = match alloc_harness_port(params.harness, deps.alloc_port) {
         Ok(p) => p,
         Err(e) => {
             return Err(AcpResumeError::PortAllocFailed {
@@ -783,7 +808,7 @@ pub fn resume_acp(
         .unwrap_or_else(|| ".".to_string());
     let cwd = PathBuf::from(&cwd_str);
 
-    let (bridge_cmd, bridge_args) = bridge_for(&params.provider_id, harness_port);
+    let (bridge_cmd, bridge_args) = bridge_for(params.harness, harness_port);
     // LOAD MODE: `--load-session <sessionId>` → the adapter boots via real `session/load`.
     let argv = build_adapter_argv(
         &deps.exe,
@@ -872,7 +897,7 @@ pub fn resume_acp(
         entrypoint: None,
         backend: None,
         spawned_by: None,
-        provider: Some(params.provider_id.clone()),
+        provider: Some(params.harness.provider_id().to_string()),
         endpoint: Some(endpoint.clone()),
         // A resumed healthy row carries NO degradation latch (tier is derived per verb).
         transport: None,
@@ -895,16 +920,15 @@ pub fn resume_acp(
             sessions_dir,
             params.current_pid,
         ),
-        // acp/* is daemon-hosted with no second topology. Stamped for the same
-        // reason the create stamps it, and the "byte-identical to a freshly
-        // created row" property that used to argue for `None` now argues for
-        // the token: the create writes it, so a revive that did not would make
-        // a resumed session's row differ from a fresh one in the one field that
-        // decides which lane drives it.
-        hosting: Some(crate::lane::Mode::Daemon.hosting_token().to_string()),
         // The NEW bridge's server address (see the re-allocation note above) —
         // never the old row's, which named a dead port.
-        harness_endpoint: harness_endpoint_for(&params.provider_id, harness_port),
+        harness_endpoint: harness_endpoint_for(params.harness, harness_port),
+        // `Mode::Acp`, and this pairing is load-bearing. The row's provider is
+        // now the PROGRAM (`claude-code`), so a `daemon` stamp here would make
+        // `lane_for` read `claude-code` + `daemon`, find that claude supports no
+        // daemon lane, fall back to the row default — `Mode::Pane` — and hand
+        // every verb a mux pane that was never opened.
+        hosting: Some(crate::lane::Mode::Acp.hosting_token().to_string()),
     };
     if let Err(e) = registry::write_entry(sessions_dir, &entry) {
         deps.spawner.kill(spawned.pid);
@@ -933,7 +957,7 @@ pub fn resume_acp(
     // NOT apply to acp/opencode (opencode persists to its own store, no CC JSONL to baseline), so
     // skip it for non-claude bridges — otherwise the wait-side verify would always read
     // Unconfirmed and emit a misleading degraded-confidence warning on every opencode resume.
-    if params.provider_id == "acp/claude-code" {
+    if params.harness == crate::lane::Harness::ClaudeCode {
         let projects_dir = &deps.paths.projects_dir;
         let requested = crate::jsonl::find_jsonl_path(
             projects_dir,
@@ -984,6 +1008,54 @@ mod tests {
     use super::*;
     use crate::registry::RegistryEntry;
 
+    /// **Every row this module writes must place back in an ACP lane.**
+    ///
+    /// A source scan, because the thing being pinned is a pair of LITERALS in two
+    /// row builders — the create's and the resume's — and the failure it guards
+    /// is that they can be edited independently of the lane they describe.
+    ///
+    /// This bug was real for the length of one commit. The `provider` stamp moved
+    /// to `Harness::provider_id()` (so `claude-code`, not `acp/claude-code`) while
+    /// both builders still wrote `hosting: Mode::Daemon`. `lane_for("claude-code",
+    /// Some("daemon"))` finds claude supports no daemon lane, falls back to
+    /// `row_default_mode` and answers `claude-code/mux-pane` — so every ACP
+    /// session created afterwards would have been addressed as a pane that was
+    /// never opened, by every verb, with nothing failing at the create itself.
+    ///
+    /// A round-trip test over `Lane::ALL` does NOT catch it: the pairing it
+    /// asserts is abstract, and this module's literals are not reached. Verified
+    /// by re-introducing the bug — 1245 tests passed. So the assertion has to be
+    /// about these bytes.
+    #[test]
+    fn the_row_builders_stamp_the_acp_lane_never_the_daemon_one() {
+        let src = include_str!("daemon.rs");
+        let stamps: Vec<&str> = src
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("hosting: Some(") && !l.contains("include_str"))
+            .collect();
+        assert_eq!(
+            stamps.len(),
+            2,
+            "expected exactly two row builders (create and resume) in this module; \
+             found {stamps:?}. A third would need its own reason to exist."
+        );
+        for line in stamps {
+            assert!(
+                line.contains("Mode::Acp.hosting_token()"),
+                "an ACP row must stamp `Mode::Acp`, derived from the enum and never \
+                 spelled as a literal. Found: {line}\n\
+                 A `Mode::Daemon` stamp here pairs with a `claude-code` provider to \
+                 re-derive as `claude-code/mux-pane` — silently, and for every verb."
+            );
+        }
+        // …and the provider half comes from the harness, so the two stay a pair.
+        assert!(
+            src.contains("provider: Some(params.harness.provider_id().to_string()),"),
+            "the provider stamp must derive from the harness, not a literal id"
+        );
+    }
+
     // R4-1 (conformance round 4, confirmed real by source): `structured_send_issued`
     // was silently lost across the ORDINARY `qd stop` → `qd resume` cycle, because
     // `qd stop` tombstones a row by RENAMING `<pid>.json` to
@@ -1031,7 +1103,7 @@ mod tests {
 
     #[test]
     fn opencode_bridge_argv_carries_the_pinned_port() {
-        let (cmd, args) = bridge_for("acp/opencode", Some(41234));
+        let (cmd, args) = bridge_for(crate::lane::Harness::Opencode, Some(41234));
         assert_eq!(cmd, Some("opencode"));
         assert_eq!(args, vec!["acp", "--port", "41234"]);
     }
@@ -1039,11 +1111,11 @@ mod tests {
     #[test]
     fn a_stdio_only_bridge_is_untouched_by_the_pin() {
         // BYTE-STABILITY, and it is the point of the `harness_server: None` arm:
-        // `acp/claude-code` must spawn exactly the argv it spawned before this
+        // claude's bridge must spawn exactly the argv it spawned before this
         // existed, whether or not a port is offered. The `Some(41234)` case is
         // the one that would regress if `bridge_for` appended unconditionally.
-        assert_eq!(bridge_for("acp/claude-code", None), (None, vec![]));
-        assert_eq!(bridge_for("acp/claude-code", Some(41234)), (None, vec![]));
+        assert_eq!(bridge_for(crate::lane::Harness::ClaudeCode, None), (None, vec![]));
+        assert_eq!(bridge_for(crate::lane::Harness::ClaudeCode, Some(41234)), (None, vec![]));
     }
 
     /// The pin must survive the `--bridge-arg` ENCODING, which is the one place
@@ -1064,7 +1136,7 @@ mod tests {
     fn the_pinned_port_survives_the_bridge_arg_round_trip() {
         use super::super::residence::{build_adapter_argv, parse_adapter_args};
 
-        let (cmd, args) = bridge_for("acp/opencode", Some(41234));
+        let (cmd, args) = bridge_for(crate::lane::Harness::Opencode, Some(41234));
         let argv = build_adapter_argv(
             std::path::Path::new("/usr/bin/qd"),
             "ws://127.0.0.1:9000",
@@ -1106,26 +1178,26 @@ mod tests {
         let next = std::cell::Cell::new(41000);
         let alloc = counting_alloc(&next);
         // opencode: allocated, and it consumes a port.
-        assert_eq!(alloc_harness_port("acp/opencode", &alloc).unwrap(), Some(41000));
+        assert_eq!(alloc_harness_port(crate::lane::Harness::Opencode, &alloc).unwrap(), Some(41000));
         // claude-code: asked, nothing to allocate, and NO port consumed — an
         // allocator call here would bind a socket for a server that will never
         // exist.
-        assert_eq!(alloc_harness_port("acp/claude-code", &alloc).unwrap(), None);
+        assert_eq!(alloc_harness_port(crate::lane::Harness::ClaudeCode, &alloc).unwrap(), None);
         assert_eq!(next.get(), 41001, "the no-server arm must not burn a port");
     }
 
     #[test]
     fn the_recorded_address_is_the_one_the_bridge_was_told_to_listen_on() {
         assert_eq!(
-            harness_endpoint_for("acp/opencode", Some(41234)).as_deref(),
+            harness_endpoint_for(crate::lane::Harness::Opencode, Some(41234)).as_deref(),
             Some("http://127.0.0.1:41234"),
         );
         // No server ⇒ no key on the row at all (skip-None), which is what keeps
         // every `acp/claude-code` row byte-stable.
-        assert_eq!(harness_endpoint_for("acp/claude-code", Some(41234)), None);
+        assert_eq!(harness_endpoint_for(crate::lane::Harness::ClaudeCode, Some(41234)), None);
         // And a server spec with no port is `None` rather than a URL with a hole
         // in it: the address must name a port something is actually bound to.
-        assert_eq!(harness_endpoint_for("acp/opencode", None), None);
+        assert_eq!(harness_endpoint_for(crate::lane::Harness::Opencode, None), None);
     }
 
     #[test]
@@ -1137,10 +1209,10 @@ mod tests {
         let next = std::cell::Cell::new(41000);
         let alloc = counting_alloc(&next);
         let ws = alloc().unwrap();
-        let harness = alloc_harness_port("acp/opencode", &alloc).unwrap().unwrap();
+        let harness = alloc_harness_port(crate::lane::Harness::Opencode, &alloc).unwrap().unwrap();
         assert_ne!(ws, harness);
         assert_eq!(
-            harness_endpoint_for("acp/opencode", Some(harness)).as_deref(),
+            harness_endpoint_for(crate::lane::Harness::Opencode, Some(harness)).as_deref(),
             Some("http://127.0.0.1:41001")
         );
     }
@@ -1396,7 +1468,7 @@ mod tests {
         AcpResumeParams {
             name: "wk".to_string(),
             session_id: session_id.to_string(),
-            provider_id: "acp/claude-code".to_string(),
+            harness: crate::lane::Harness::ClaudeCode,
             cwd: None,
             has_jsonl: true,
             current_pid: pid,

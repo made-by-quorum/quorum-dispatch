@@ -125,10 +125,23 @@ fn run_with_client(
         return run_codex_send(&session, message).code;
     }
 
-    // scoped-ACP-CC (residence SEND): an `acp/*` row is a daemon-hosted ACP thread with
-    // no relay port — route it to the ACP SEND path (reconnect to the resident adapter →
-    // AcpProvider::inject) BEFORE the relay-port-None check, exactly as the codex arm does.
-    if provider_id.starts_with("acp/") {
+    // The ACP bridge lanes (residence SEND): a daemon-hosted ACP thread with no
+    // relay port — route it to the ACP SEND path (reconnect to the resident
+    // adapter → AcpProvider::inject) BEFORE the relay-port-None check, exactly as
+    // the codex arm does.
+    //
+    // ASKED OF THE LANE, and this arm is the one that made the change urgent. It
+    // was `provider_id.starts_with("acp/")`, and a new ACP row's provider is
+    // `claude-code` — so the prefix stops matching, the send falls through to the
+    // relay-port check, and `qd send` to an ACP session answers "has no relay"
+    // instead of delivering. The row's hosting comes from the resolved session
+    // when there is one; a row that resolved to nothing keeps the old
+    // provider-only reading, which is all the fast path ever had.
+    let row_is_acp = session
+        .as_ref()
+        .map(|s| quorum_qw::row_is_acp(&s.provider, s.hosting.as_deref()))
+        .unwrap_or_else(|| quorum_qw::row_is_acp(&provider_id, None));
+    if row_is_acp {
         let Some(session) = session else {
             return no_relay_exit(&session_name, message, None);
         };
@@ -548,7 +561,7 @@ fn resolve_relay_port(
     // unknown one. run_with_client gives it an HONEST "send is a tier-b turn, deferred"
     // message rather than this loud unknown-provider refusal.
     if session.provider != "codex"
-        && !session.provider.starts_with("acp/")
+        && !quorum_qw::row_is_acp(&session.provider, session.hosting.as_deref())
         && session.provider != "pi"
     {
         if let Some(code) = common::refuse_unknown_provider("send:relay", session) {
@@ -603,10 +616,30 @@ fn resolve_relay_port(
 ///
 /// The rule is now stated as what it means — the relay is claude-code's carrier,
 /// and only claude-code's — with every non-relay provider named.
-fn provider_uses_relay_fast_path(provider: Option<&str>) -> bool {
+///
+/// **ASKED OF THE LANE, NOT THE PROVIDER STRING**, and that is load-bearing. The
+/// two drift corrections above are the same bug twice: a guard written as a set
+/// of provider-name tests, and a spelling that walked past it. There is now a
+/// third spelling that would — `claude-code/acp`, whose provider id IS
+/// `claude-code`, so every name-based form of this test admits it. It carries no
+/// relay port (its receive path is the resident adapter), so admitting it to the
+/// fast path is the F4 mis-route exactly, a third time.
+///
+/// The lane cannot be walked past: the relay is the carrier of ONE lane, and this
+/// names it.
+///
+/// An ABSENT provider still reads as claude-code — that is the boundary reading
+/// every caller has always made of a row written before providers were stamped.
+/// An UNPLACEABLE one is excluded, which is a deliberate strengthening: the old
+/// prefix test excluded `acp/anything` by accident of spelling, and the reason it
+/// was right to is general. A row this engine cannot place is a row it cannot
+/// prove carries a relay, and admitting it lets the fast path match it by name and
+/// resolve someone else's relay by ancestry — F4 again. The fallback refuses an
+/// unknown provider by name, which is the better failure.
+fn lane_uses_relay_fast_path(provider: Option<&str>, hosting: Option<&str>) -> bool {
     // An absent provider reads as claude-code at the boundary (relay-capable).
-    let p = provider.unwrap_or("claude-code");
-    p != "codex" && p != "pi" && p != "opencode" && !p.starts_with("acp/")
+    let Some(p) = provider else { return true };
+    quorum_qw::lane::lane_for(p, hosting).is_some_and(|lane| lane == quorum_qw::lane::CLAUDE_PANE)
 }
 
 struct FastLookup {
@@ -630,7 +663,12 @@ fn fast_lookup(query: &str) -> Option<FastLookup> {
     let pid_entries: Vec<PidEntryRef> =
         dispatch::registry::read_entries(&paths.sessions_dir, false)
             .into_iter()
-            .filter(|s| provider_uses_relay_fast_path(s.entry.provider.as_deref()))
+            .filter(|s| {
+                lane_uses_relay_fast_path(
+                    s.entry.provider.as_deref(),
+                    s.entry.hosting.as_deref(),
+                )
+            })
             .map(|s| PidEntryRef {
                 name: s.entry.name,
                 session_id: s.entry.session_id,
@@ -874,32 +912,36 @@ mod tests {
     }
 
     // F4 regression guard: the relay fast-path daemon-exclusion (the live-surfaced
-    // mis-route fix). Reverting `provider_uses_relay_fast_path` to allow codex/acp (or
-    // dropping the `acp/` check) reds this — a non-vacuous guard for the no-regression
-    // condition that previously had only the live turn-id-vs-relay-id discriminator.
+    // mis-route fix). Reverting `lane_uses_relay_fast_path` to a provider-name test
+    // reds this — a non-vacuous guard for the no-regression condition that
+    // previously had only the live turn-id-vs-relay-id discriminator.
     #[test]
-    fn daemon_providers_excluded_from_relay_fast_path() {
-        // The relay is claude-code's carrier and only claude-code's, so it is the
-        // only row shape that participates.
-        assert!(provider_uses_relay_fast_path(None), "absent → claude-code (relay)");
-        assert!(provider_uses_relay_fast_path(Some("claude-code")));
+    fn daemon_lanes_excluded_from_relay_fast_path() {
+        // The relay is claude-code's PANE carrier and only that lane's, so it is
+        // the only row shape that participates.
+        assert!(lane_uses_relay_fast_path(None, None), "absent → claude-code (relay)");
+        assert!(lane_uses_relay_fast_path(Some("claude-code"), None));
+        assert!(lane_uses_relay_fast_path(Some("claude-code"), Some("mux-pane")));
         // Non-relay rows are EXCLUDED → they take the full-scan fallback.
-        assert!(!provider_uses_relay_fast_path(Some("codex")), "codex is daemon-hosted");
+        assert!(!lane_uses_relay_fast_path(Some("codex"), None), "codex is daemon-hosted");
         assert!(
-            !provider_uses_relay_fast_path(Some("acp/claude-code")),
-            "acp/* is daemon-hosted"
+            !lane_uses_relay_fast_path(Some("acp/claude-code"), Some("daemon")),
+            "the legacy acp/claude-code spelling is the ACP lane, which has no relay"
         );
-        assert!(!provider_uses_relay_fast_path(Some("acp/anything")));
+        // An unplaceable provider is excluded: it cannot be PROVEN relay-carried,
+        // and the fallback refuses it by name.
+        assert!(!lane_uses_relay_fast_path(Some("acp/anything"), None));
+        assert!(!lane_uses_relay_fast_path(Some("not-a-provider"), None));
         // DRIFT CORRECTED. `pi` carries no relay port in EITHER lane (a resident's
         // ws endpoint; a TUI's pane), so a pi row inside the fast path could only
         // resolve someone ELSE's relay by ancestry — F4, one provider over.
-        assert!(!provider_uses_relay_fast_path(Some("pi")), "pi has no relay in either lane");
-        // …and `opencode` is the CLI ALIAS for `acp/opencode` (`join.rs` emits rows
-        // carrying the bare token). It asserted TRUE here until this change,
-        // walking past a guard written for the very thing it is an alias of.
+        assert!(!lane_uses_relay_fast_path(Some("pi"), None), "pi has no relay in either lane");
+        // …and `opencode` is an ACP bridge in its only lane. It asserted TRUE here
+        // until the drift correction, walking past a guard written for the very
+        // thing it is an alias of; now it cannot, because the lane says so.
         assert!(
-            !provider_uses_relay_fast_path(Some("opencode")),
-            "the bare `opencode` token is acp/opencode, and an ACP bridge has no relay"
+            !lane_uses_relay_fast_path(Some("opencode"), None),
+            "opencode's only lane is ACP, and an ACP bridge has no relay"
         );
     }
 

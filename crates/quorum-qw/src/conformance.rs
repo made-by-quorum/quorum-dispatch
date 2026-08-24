@@ -66,11 +66,18 @@ pub fn applicability(lane: Lane, op: &str) -> Applicability {
         // client can join — so it answers `Required` while `codex/daemon`,
         // `pi/daemon` and both ACP lanes keep this arm unchanged.
         //
-        // Note the arm below is still a `Mode::Daemon` wildcard, not a
-        // hand-listed set: `Mode::AppServer` is a different mode, so the app-server
-        // lane never reaches here and the other four are still caught by shape
-        // rather than by enumeration.
-        (_, Mode::Daemon, "attach") => NotApplicable {
+        // Note the arm below is still keyed by SHAPE, not a hand-listed set:
+        // `Mode::AppServer` is a different mode, so the app-server lane never
+        // reaches here and the other four are caught by their topology.
+        //
+        // `Mode::Acp` is named alongside `Mode::Daemon` because the ACP lanes
+        // used to arrive here AS daemon lanes — they were `acp/claude-code/daemon`
+        // and `acp/opencode/daemon`, so the `Mode::Daemon` test caught them by
+        // spelling. They are `claude-code/acp` and `opencode/acp` now and the
+        // answer is unchanged: an ACP bridge is a protocol adapter with no
+        // terminal of its own, and `Lane::is_daemon` answers `true` for it
+        // everywhere else in the engine for exactly this reason.
+        (_, Mode::Daemon | Mode::Acp, "attach") => NotApplicable {
             reason: "a daemon-hosted session has no terminal of its own; drive it with send",
         },
 

@@ -91,6 +91,17 @@ pub enum Hosting {
     /// a second client on the same thread. See [`crate::lane::Mode::AppServer`],
     /// which this mirrors.
     AppServer,
+    /// A headless resident reached over the Agent Client Protocol — the bridge
+    /// lanes `claude-code/acp` and `opencode/acp`. Mirrors
+    /// [`crate::lane::Mode::Acp`].
+    ///
+    /// This variant exists for the reason [`Hosting::Extension`]'s docs give for
+    /// theirs, one lane over: without a token of its own an ACP row cannot SAY
+    /// what it is. `claude-code/acp` is the case that makes it load-bearing —
+    /// `parse_hosting("acp")` answering `None` would fall back to claude's
+    /// structural `MuxPane`, and a bridge with no terminal would be addressed as
+    /// an attachable pane.
+    Acp,
 }
 
 impl Hosting {
@@ -101,6 +112,7 @@ impl Hosting {
             Hosting::Daemon => "daemon",
             Hosting::Extension => "extension",
             Hosting::AppServer => "app-server",
+            Hosting::Acp => "acp",
         }
     }
 }
@@ -139,6 +151,7 @@ pub fn parse_hosting(s: &str) -> Option<Hosting> {
         "daemon" => Some(Hosting::Daemon),
         "extension" => Some(Hosting::Extension),
         "app-server" => Some(Hosting::AppServer),
+        "acp" => Some(Hosting::Acp),
         _ => None,
     }
 }
@@ -164,6 +177,16 @@ pub fn parse_hosting(s: &str) -> Option<Hosting> {
 /// daemon, which is what keeps the cold store on `codex/daemon` (see
 /// `doc/tbd/provider-architecture/14-codex-app-server-lane.md` section 5).
 pub fn row_hosting(provider_id: &str, hosting_field: Option<&str>) -> Option<Hosting> {
+    // A legacy `acp/*` provider id NAMES its topology, and beats the row's own
+    // hosting stamp — the same precedence `lane::harness_and_pinned_mode` applies,
+    // and for the same reason. Those rows carry `hosting: "daemon"` because that
+    // is the token the bridge stamped while ACP was spelled as a harness; the
+    // provider half is the more specific fact. Without this the two readers of
+    // rows on disk would disagree about the same row, which is exactly the drift
+    // `lane_for_agrees_with_row_hosting_…` exists to catch.
+    if matches!(provider_id, "acp/claude-code" | "acp/opencode") {
+        return Some(Hosting::Acp);
+    }
     if let Some(h) = hosting_field.and_then(parse_hosting) {
         return Some(h);
     }
@@ -732,7 +755,16 @@ mod tests {
              pre-codex-interactive answer, so existing rows are untouched"
         );
         assert_eq!(row_hosting("pi", None), Some(Hosting::Daemon));
-        assert_eq!(row_hosting("acp/opencode", None), Some(Hosting::Daemon));
+        // The legacy ACP spellings do NOT reach the structural fallback at all:
+        // they name a lane outright, and the pin beats both the row's token and
+        // the provider's structural answer. Asserted here, in the fallback's own
+        // test, because "this input never gets here" is the claim that keeps an
+        // `acp/claude-code` row off claude's pane lane.
+        assert_eq!(row_hosting("acp/opencode", None), Some(Hosting::Acp));
+        assert_eq!(row_hosting("acp/claude-code", None), Some(Hosting::Acp));
+        assert_eq!(row_hosting("acp/claude-code", Some("daemon")), Some(Hosting::Acp));
+        // …and opencode's own structural answer is the bridge, its only lane.
+        assert_eq!(row_hosting("opencode", None), Some(Hosting::Acp));
     }
 
     #[test]

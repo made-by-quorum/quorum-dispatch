@@ -316,6 +316,16 @@ real-terminal run) can exercise the final attach; recorded here as
 
 ## Addendum (2026-07-08, opencode D1 Child D): acp/claude-code transport-loss = refuse-and-surface, identity preserved (named divergence)
 
+> **Spelling note, 2026-08-24 — the ruling is unamended; only the id it names has been
+> re-spelled.** `acp/claude-code` and `acp/opencode` were `Harness` variants when this
+> addendum was written. ACP is `Mode::Acp` now and the lanes are **`claude-code/acp`** and
+> **`opencode/acp`** (`doc/tbd/provider-architecture/17-acp-is-a-lane.md`). Read every
+> `acp/claude-code` below as `claude-code/acp` and every `acp/opencode` as `opencode/acp`.
+> Nothing about the divergence moves with the spelling: the scope is still exactly one
+> lane, the refusal is still the unconditional disposition, and the identity tombstone is
+> still written before it. The old provider strings continue to parse permanently — the
+> tombstones this addendum introduced are themselves one of the reasons they must.
+
 **Ruling:** clerk-4's Arm-B ratification (bond note `01KX01BY7G`, 2026-07-08, under
 Pete's overnight full-executive grant; resolves the conditional ruling `01KWZWT83B`
 on Child C's live probe evidence). Same class as the codex/opencode divergence

@@ -122,9 +122,13 @@ impl GridVerdict {
             self.uncertifiable().len(),
         ));
         for r in &self.rows {
+            // 20 = the longest lane id (`claude-code/mux-pane`). A lane id is
+            // `<harness>/<hosting>` now, and the old 10-column field was sized
+            // for the bare provider ids this axis used to carry — every id it
+            // cannot fit pushes the cell column out and the grid stops lining up.
             out.push_str(&format!(
-                "  {:<10} {:<28} {}\n",
-                r.lane.provider_id(),
+                "  {:<20} {:<28} {}\n",
+                r.lane.id(),
                 r.cell.0,
                 r.status.label(),
             ));
@@ -343,14 +347,7 @@ mod tests {
         let mut journal = AuthorityJournal::new();
         Lane::ALL
             .iter()
-            .map(|&lane| {
-                lane_artifact(
-                    &mut journal,
-                    lane,
-                    &format!("run-{}", lane.provider_id()),
-                    &[],
-                )
-            })
+            .map(|&lane| lane_artifact(&mut journal, lane, &format!("run-{}", lane.id()), &[]))
             .collect()
     }
 
@@ -389,14 +386,7 @@ mod tests {
         let arts: Vec<RunArtifact> = Lane::ALL
             .iter()
             .filter(|&&l| l != Lane::Pi)
-            .map(|&lane| {
-                lane_artifact(
-                    &mut journal,
-                    lane,
-                    &format!("run-{}", lane.provider_id()),
-                    &[],
-                )
-            })
+            .map(|&lane| lane_artifact(&mut journal, lane, &format!("run-{}", lane.id()), &[]))
             .collect();
         let grid = mint_grid(&conformance_battery(), &arts);
         assert!(
@@ -437,7 +427,7 @@ mod tests {
             arts.push(lane_artifact(
                 &mut journal,
                 lane,
-                &format!("run-{}", lane.provider_id()),
+                &format!("run-{}", lane.id()),
                 &ov,
             ));
         }
@@ -473,7 +463,7 @@ mod tests {
             arts.push(lane_artifact(
                 &mut journal,
                 lane,
-                &format!("run-{}", lane.provider_id()),
+                &format!("run-{}", lane.id()),
                 &[],
             ));
         }

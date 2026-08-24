@@ -158,9 +158,14 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
     match state {
         // The watcher found the session already idle — it never opened a progress
         // line, so the whole line is ours.
-        Ok(TurnState::IdleAtEntry) => match lane.harness {
+        // Keyed on the LANE, not the harness. It was `match lane.harness` while
+        // ACP was one, and `Harness::ClaudeCode` then meant the pane lane and
+        // nothing else; it now covers both claude lanes, whose entry-idle
+        // reporting differs in all three respects below. The ACP arm must come
+        // from the MODE or claude's pane wording would swallow its own bridge.
+        Ok(TurnState::IdleAtEntry) => match (lane.harness, lane.mode) {
             // stdout, no period. Pinned by `verbs_a4::wait_idle_session_reports_idle_exit_0`.
-            Harness::ClaudeCode | Harness::Codex => {
+            (Harness::ClaudeCode, Mode::Pane) | (Harness::Codex, _) => {
                 println!("{label} is idle");
                 invoked_wait(&session.session_id, session.name.as_deref());
                 0
@@ -169,13 +174,20 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
             // entry-idle arm has never appended an `invoked` line; that asymmetry
             // with pi is preserved rather than tidied, because tidying it would
             // change what `qd telemetry` reports for an existing workflow.
-            Harness::AcpClaudeCode | Harness::Opencode => {
+            (_, Mode::Acp) => {
                 eprintln!("{label} is idle.");
                 0
             }
-            Harness::Pi => {
+            (Harness::Pi, _) => {
                 eprintln!("{label} is idle.");
                 invoked_wait(&session.session_id, session.name.as_deref());
+                0
+            }
+            // Not lanes; unreachable through `Lane::new`. Reported on stderr
+            // without telemetry — the conservative half of the split above.
+            (Harness::ClaudeCode, Mode::Daemon | Mode::Extension | Mode::AppServer)
+            | (Harness::Opencode, Mode::Pane | Mode::Daemon | Mode::Extension | Mode::AppServer) => {
+                eprintln!("{label} is idle.");
                 0
             }
         },
@@ -189,7 +201,7 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
             // bridge JSONL — a fork-on-load is FAILED LOUD. Gated on the marker so a
             // normal wait pays only one cheap stat; a non-resume wait does nothing.
             // ACP-only, as it always was: the marker is written by the ACP resume.
-            if matches!(lane.harness, Harness::AcpClaudeCode | Harness::Opencode) {
+            if lane.mode == Mode::Acp {
                 if let Some(code) = verify_post_resume_if_marked(&paths, session) {
                     return code; // fork detected → fail loud; else proceed.
                 }
@@ -243,10 +255,7 @@ pub fn run_wait(m: &ArgMatches) -> i32 {
         // recovery; for the other lanes it falls to the honest generic arm below,
         // because they never produce this variant themselves.
         Err(LaneError::Transport { .. })
-            if matches!(
-                lane.harness,
-                Harness::AcpClaudeCode | Harness::Opencode | Harness::Pi
-            ) =>
+            if lane.mode == Mode::Acp || lane.harness == Harness::Pi =>
         {
             let word = if lane.harness == Harness::Pi {
                 "pi"

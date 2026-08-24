@@ -25,16 +25,28 @@
 //! code, not evidence (see the org's "never report an unrun result as
 //! observed" discipline). Implemented and live-probed, serialized one daemon
 //! at a time per conf-build-coord-2/mc-5's protocol (2026-07-14):
-//! `d1.boot-readiness` on all five lanes — `pi` (cred-free), `codex`
-//! (version-pin-gated on this box — resolves `Blocked`, zero RAM footprint),
-//! `acp/claude-code` (needs the bridge dir on `PATH`, see
-//! [`acp::bridge_bin_dir`]), `acp/opencode` (no PATH prep needed), and
-//! `claude-code` bare (via `bond commission`'s zero-completion warm-leaf
+//! `d1.boot-readiness` on all five lanes — `pi/daemon` (cred-free),
+//! `codex/daemon` (version-pin-gated on this box — resolves `Blocked`, zero RAM
+//! footprint), `claude-code/acp` (needs the bridge dir on `PATH`, see
+//! [`acp::bridge_bin_dir`]), `opencode/acp` (no PATH prep needed), and
+//! `claude-code/mux-pane` (via `bond commission`'s zero-completion warm-leaf
 //! boot — NOT `qd start`'s prompt-driven shapes, both of which `qd` itself
 //! refuses; see [`claude_code::boot_readiness`]'s doc comment for the full
 //! story). Every other cell in [`super::registry::conformance_battery`] is
 //! still unresolved — `run_cell` returns `None` for them, which is the
 //! correct, honest state, not a bug.
+//!
+//! **Why the ACP drivers still say `--provider acp/claude-code`.** A lane is
+//! `(harness, hosting)` now, and `--provider` names only the harness — so
+//! `--provider claude-code` starts the MUX PANE lane, not the bridge. The two
+//! ways to name `claude-code/acp` on a command line are `--provider claude-code
+//! --acp` and the legacy `--provider acp/claude-code`, which pins the ACP mode
+//! by itself (`quorum_qw::lane::harness_and_pinned_mode`) and is permanent — it
+//! is what real ACP rows carry on disk and what `qd info --json` still reports.
+//! These drivers keep the legacy spelling because it is the one the live probes
+//! recorded in the doc comments below were run with; either is correct, and a
+//! BARE `--provider claude-code` would silently measure a different lane, which
+//! is the mistake this note exists to prevent.
 
 use std::process::Command;
 
@@ -487,8 +499,7 @@ fn resume_same_session_id_via_cli(
     // zero-completion boot ("nothing to resume"). Manually verified this
     // works through a PLAIN `qd start`-booted ACP resident (not just the
     // D2 3-phase daemon fixture's `qd acp-daemon` boot path, which was the
-    // only prior proof) for both acp/claude-code and acp/opencode before
-    // committing this driver.
+    // only prior proof) for both ACP lanes before committing this driver.
     let prompt = "Reply with exactly the single word OK and nothing else. Do not use any tools.";
     let send_cmd = format!("qd send:relay {session_name} <a trivial real turn>");
     let send = qd(path_prefix)
@@ -579,7 +590,7 @@ fn resume_same_session_id_via_cli(
             }
         }
     };
-    // `acp/claude-code` wraps the real claude engine, which writes its own
+    // `claude-code/acp` wraps the real claude engine, which writes its own
     // transcript to ~/.claude/projects/<cwd>/<session>.jsonl — a SHARED
     // directory (this cwd is the caller's own, not a jail), so remove only
     // this run's own file by its exact path, never the directory. Found
@@ -2942,9 +2953,9 @@ fn resume_recall_via_host(runner: &Runner, provider_id: &str) -> Outcome {
 
     // --- Ground the claim in the underlying engine's OWN transcript,
     // never qd's cached fields — per the cell's own wording. ONLY
-    // acp/claude-code wraps the real `claude` binary and writes a jsonl
+    // `claude-code/acp` wraps the real `claude` binary and writes a jsonl
     // transcript to ~/.claude/projects/; live-caught 2026-07-15:
-    // acp/opencode's `opencode acp` is a DIFFERENT engine entirely (its
+    // `opencode/acp`'s `opencode acp` is a DIFFERENT engine entirely (its
     // own SQLite store at ~/.local/share/opencode/opencode.db, confirmed
     // by directory listing — no jsonl anywhere), so checking for a jsonl
     // file there isn't a bug to route around, it's the wrong technique for
@@ -4570,7 +4581,7 @@ pub mod acp {
         format!("{home}/work/acp-step0/node_modules/.bin")
     }
 
-    /// `d1.boot-readiness` on the `acp/claude-code` lane. Requires real
+    /// `d1.boot-readiness` on the `claude-code/acp` lane. Requires real
     /// claude-code credentials (`~/.claude/.credentials.json`) AND the
     /// bridge binary on `PATH` (see [`bridge_bin_dir`]) — live-probed
     /// 2026-07-14: WITHOUT the bridge dir on `PATH`, `qd start` hangs rather
@@ -4589,7 +4600,7 @@ pub mod acp {
         )
     }
 
-    /// `d1.teardown-reaps-process-group` on the `acp/claude-code` lane.
+    /// `d1.teardown-reaps-process-group` on the `claude-code/acp` lane.
     pub fn teardown_reaps(runner: &Runner, session_name: &str) -> Outcome {
         teardown_reaps_via_cli(
             runner,
@@ -4599,7 +4610,7 @@ pub mod acp {
         )
     }
 
-    /// `d1.launch-addressing` on the `acp/claude-code` lane.
+    /// `d1.launch-addressing` on the `claude-code/acp` lane.
     pub fn launch_addressing(runner: &Runner, session_name: &str) -> Outcome {
         launch_addressing_via_cli(
             runner,
@@ -4609,7 +4620,7 @@ pub mod acp {
         )
     }
 
-    /// `d1.transport-is-our-daemon` on the `acp/claude-code` lane.
+    /// `d1.transport-is-our-daemon` on the `claude-code/acp` lane.
     pub fn transport_is_our_daemon(runner: &Runner, session_name: &str) -> Outcome {
         transport_is_our_daemon_via_cli(
             runner,
@@ -4619,7 +4630,7 @@ pub mod acp {
         )
     }
 
-    /// `d1.liveness-process-alive` on the `acp/claude-code` lane.
+    /// `d1.liveness-process-alive` on the `claude-code/acp` lane.
     pub fn liveness_process_alive(runner: &Runner, session_name: &str) -> Outcome {
         liveness_process_alive_via_cli(
             runner,
@@ -4629,7 +4640,7 @@ pub mod acp {
         )
     }
 
-    /// `d1.reconnect-resolves-via-registry` on the `acp/claude-code` lane.
+    /// `d1.reconnect-resolves-via-registry` on the `claude-code/acp` lane.
     pub fn reconnect_resolves(runner: &Runner, session_name: &str) -> Outcome {
         reconnect_resolves_via_cli(
             runner,
@@ -4639,7 +4650,7 @@ pub mod acp {
         )
     }
 
-    /// `d1.resume-same-session-id` on the `acp/claude-code` lane.
+    /// `d1.resume-same-session-id` on the `claude-code/acp` lane.
     pub fn resume_same_session_id(runner: &Runner, session_name: &str) -> Outcome {
         resume_same_session_id_via_cli(
             runner,
@@ -4649,7 +4660,7 @@ pub mod acp {
         )
     }
 
-    /// `d1.multiplex-concurrent-distinct-residents` on the `acp/claude-code`
+    /// `d1.multiplex-concurrent-distinct-residents` on the `claude-code/acp`
     /// lane. NOT yet cleared to run live (mc-5 greenlit pi only, 2026-07-14 —
     /// re-check before firing this on any heavier lane).
     pub fn multiplex_concurrent(runner: &Runner, session_name: &str) -> Outcome {
@@ -4661,7 +4672,7 @@ pub mod acp {
         )
     }
 
-    /// `d6.cold-target-send-fails-loud-with-terminal` on the `acp/claude-code`
+    /// `d6.cold-target-send-fails-loud-with-terminal` on the `claude-code/acp`
     /// lane — no bridge dir needed (the fixture row is fabricated directly;
     /// `qd send:relay` never spawns a bridge for an unreachable target).
     pub fn cold_target_send_fails(runner: &Runner, session_name: &str) -> Outcome {
@@ -4670,19 +4681,19 @@ pub mod acp {
 
     /// `d6.bridge-death-detection-no-false-positive` — lane-agnostic across
     /// the ACP family (the mechanism under test is `AcpHost::bridge_confirmed_dead`
-    /// itself, not anything `acp/claude-code`-specific; `opencode` shares the
+    /// itself, not anything `claude-code/acp`-specific; `opencode/acp` shares the
     /// same driver). See [`bridge_death_detection_via_host`].
     pub fn bridge_death_detection(runner: &Runner, _session_name: &str) -> Outcome {
         bridge_death_detection_via_host(runner)
     }
 
-    /// `d3.queue-overflow-honors-configured-capacity` on the `acp/claude-code`
+    /// `d3.queue-overflow-honors-configured-capacity` on the `claude-code/acp`
     /// lane. See [`queue_overflow_via_host`].
     pub fn queue_overflow(runner: &Runner, _session_name: &str) -> Outcome {
         queue_overflow_via_host(runner, "acp/claude-code")
     }
 
-    /// `d3.queue-slot-released-no-leak` on the `acp/claude-code` lane. See
+    /// `d3.queue-slot-released-no-leak` on the `claude-code/acp` lane. See
     /// [`queue_slot_released_via_host`].
     pub fn queue_slot_released(runner: &Runner, _session_name: &str) -> Outcome {
         queue_slot_released_via_host(runner, "acp/claude-code")
@@ -4702,31 +4713,31 @@ pub mod acp {
         self_terminate_on_wedged_child_via_host(runner)
     }
 
-    /// `d2.turn-phase-sequence-strict-order` on the `acp/claude-code` lane.
+    /// `d2.turn-phase-sequence-strict-order` on the `claude-code/acp` lane.
     /// See [`three_phase_sequence_via_daemon`].
     pub fn turn_phase_sequence(runner: &Runner, _session_name: &str) -> Outcome {
         three_phase_sequence_via_daemon(runner, "acp/claude-code")
     }
 
     /// `d2.delivery-log-consistency-under-home-override` on the
-    /// `acp/claude-code` lane. See [`delivery_log_home_override_via_daemon`].
+    /// `claude-code/acp` lane. See [`delivery_log_home_override_via_daemon`].
     pub fn delivery_log_home_override(runner: &Runner, _session_name: &str) -> Outcome {
         delivery_log_home_override_via_daemon(runner, "acp/claude-code")
     }
 
-    /// `d2.turn-correlation-and-completion` on the `acp/claude-code` lane.
+    /// `d2.turn-correlation-and-completion` on the `claude-code/acp` lane.
     /// REAL model turn — see [`turn_correlation_via_host`].
     pub fn turn_correlation(runner: &Runner, _session_name: &str) -> Outcome {
         turn_correlation_via_host(runner, "acp/claude-code")
     }
 
-    /// `d5.transcript-tee-captures-assistant-text` on the `acp/claude-code`
+    /// `d5.transcript-tee-captures-assistant-text` on the `claude-code/acp`
     /// lane. REAL model turn — see [`transcript_tee_via_host`].
     pub fn transcript_tee(runner: &Runner, _session_name: &str) -> Outcome {
         transcript_tee_via_host(runner, "acp/claude-code")
     }
 
-    /// `d5.resume-jsonl-continuity-and-recall` on the `acp/claude-code`
+    /// `d5.resume-jsonl-continuity-and-recall` on the `claude-code/acp`
     /// lane. REAL model turns (x2) — see [`resume_recall_via_host`].
     pub fn resume_recall(runner: &Runner, _session_name: &str) -> Outcome {
         resume_recall_via_host(runner, "acp/claude-code")
@@ -4736,17 +4747,20 @@ pub mod acp {
 pub mod opencode {
     use super::*;
 
-    /// `d1.boot-readiness` on the `acp/opencode` lane. Requires real opencode
-    /// credentials. Unlike `acp/claude-code`, needs NO `PATH` prepending — the
+    /// `d1.boot-readiness` on the `opencode/acp` lane. Requires real opencode
+    /// credentials. Unlike `claude-code/acp`, needs NO `PATH` prepending — the
     /// `opencode` binary (which serves as its own ACP bridge via `opencode
     /// acp`, per `tests/acp_opencode_live.rs:222`'s `--bridge-cmd opencode
     /// --bridge-arg acp`) is already resolvable on this box's normal `PATH`.
     ///
     /// The CLI's DOCUMENTED `--provider` value is the bare `opencode` (`qd
-    /// start --help` lists "claude-code (default) or opencode" — it never
-    /// mentions the internal `acp/opencode` id `Lane::Opencode::provider_id`
-    /// returns; passing the internal id to the CLI flag is untested and not
-    /// assumed to work). Live-probed 2026-07-14 with `--provider opencode`:
+    /// start --help` lists "claude-code (default) or opencode"), and that is
+    /// also what [`Lane::harness_provider_id`] answers — `--provider` names a
+    /// program, and opencode's only lane is the ACP one, so no topology flag is
+    /// needed to reach it. The `acp/opencode` spelling below is the INTERNAL
+    /// provider id rows are written under; it still parses, and still pins the
+    /// ACP lane, but nothing emits it as a lane name any more. Live-probed
+    /// 2026-07-14 with `--provider opencode`:
     /// boot completed in well under a second, MemAvailable delta ~276MB
     /// (same order of magnitude as the other lanes, under the 1.5G trigger),
     /// `qd info --json` showed `live:true` + a real pid + `"provider":
@@ -4758,85 +4772,88 @@ pub mod opencode {
         boot_readiness_via_cli(runner, session_name, "opencode", None)
     }
 
-    /// `d1.teardown-reaps-process-group` on the `acp/opencode` lane.
+    /// `d1.teardown-reaps-process-group` on the `opencode/acp` lane.
     pub fn teardown_reaps(runner: &Runner, session_name: &str) -> Outcome {
         teardown_reaps_via_cli(runner, session_name, "opencode", None)
     }
 
-    /// `d1.launch-addressing` on the `acp/opencode` lane.
+    /// `d1.launch-addressing` on the `opencode/acp` lane.
     pub fn launch_addressing(runner: &Runner, session_name: &str) -> Outcome {
         launch_addressing_via_cli(runner, session_name, "opencode", None)
     }
 
-    /// `d1.transport-is-our-daemon` on the `acp/opencode` lane.
+    /// `d1.transport-is-our-daemon` on the `opencode/acp` lane.
     pub fn transport_is_our_daemon(runner: &Runner, session_name: &str) -> Outcome {
         transport_is_our_daemon_via_cli(runner, session_name, "opencode", None)
     }
 
-    /// `d1.liveness-process-alive` on the `acp/opencode` lane.
+    /// `d1.liveness-process-alive` on the `opencode/acp` lane.
     pub fn liveness_process_alive(runner: &Runner, session_name: &str) -> Outcome {
         liveness_process_alive_via_cli(runner, session_name, "opencode", None)
     }
 
-    /// `d1.reconnect-resolves-via-registry` on the `acp/opencode` lane.
+    /// `d1.reconnect-resolves-via-registry` on the `opencode/acp` lane.
     pub fn reconnect_resolves(runner: &Runner, session_name: &str) -> Outcome {
         reconnect_resolves_via_cli(runner, session_name, "opencode", None)
     }
 
-    /// `d1.resume-same-session-id` on the `acp/opencode` lane.
+    /// `d1.resume-same-session-id` on the `opencode/acp` lane.
     pub fn resume_same_session_id(runner: &Runner, session_name: &str) -> Outcome {
         resume_same_session_id_via_cli(runner, session_name, "opencode", None)
     }
 
-    /// `d1.multiplex-concurrent-distinct-residents` on the `acp/opencode`
+    /// `d1.multiplex-concurrent-distinct-residents` on the `opencode/acp`
     /// lane. NOT yet cleared to run live (mc-5 greenlit pi only, 2026-07-14).
     pub fn multiplex_concurrent(runner: &Runner, session_name: &str) -> Outcome {
         multiplex_concurrent_via_cli(runner, session_name, "opencode", None)
     }
 
-    /// `d6.cold-target-send-fails-loud-with-terminal` on the `acp/opencode`
+    /// `d6.cold-target-send-fails-loud-with-terminal` on the `opencode/acp`
     /// lane. Uses the on-disk provider id `"acp/opencode"` (matching what
     /// `qd info --json` actually shows for real opencode rows — the
     /// internal id, not the `opencode` CLI-flag alias) since this fabricates
     /// the registry row directly rather than going through `qd start`'s
-    /// flag-to-internal-id resolution.
+    /// flag-to-internal-id resolution. That spelling PINS the lane
+    /// (`harness_and_pinned_mode`), which is what a fabricated row needs: a row
+    /// stamped `opencode` with no hosting would re-derive the same lane today,
+    /// but only because opencode has one — the pinned spelling says it outright.
     pub fn cold_target_send_fails(runner: &Runner, session_name: &str) -> Outcome {
         cold_target_send_fails_via_jail(runner, session_name, "acp/opencode")
     }
 
     /// `d6.bridge-death-detection-no-false-positive` — shares the
-    /// `acp/claude-code` lane's driver; the mechanism is lane-agnostic
+    /// `claude-code/acp` lane's driver; the mechanism is lane-agnostic
     /// within the ACP family. See [`super::acp::bridge_death_detection`].
     pub fn bridge_death_detection(runner: &Runner, _session_name: &str) -> Outcome {
         super::bridge_death_detection_via_host(runner)
     }
 
-    /// `d3.queue-overflow-honors-configured-capacity` on the `acp/opencode`
+    /// `d3.queue-overflow-honors-configured-capacity` on the `opencode/acp`
     /// lane. Shares the identical `AcpProvider` implementation with
-    /// `acp/claude-code` (see [`queue_overflow_via_host`]'s doc comment).
+    /// `claude-code/acp` (see [`queue_overflow_via_host`]'s doc comment).
     pub fn queue_overflow(runner: &Runner, _session_name: &str) -> Outcome {
         super::queue_overflow_via_host(runner, "acp/opencode")
     }
 
-    /// `d3.queue-slot-released-no-leak` on the `acp/opencode` lane. Shares
-    /// the identical `AcpProvider` implementation with `acp/claude-code`.
+    /// `d3.queue-slot-released-no-leak` on the `opencode/acp` lane. Shares
+    /// the identical `AcpProvider` implementation with `claude-code/acp`.
     pub fn queue_slot_released(runner: &Runner, _session_name: &str) -> Outcome {
         super::queue_slot_released_via_host(runner, "acp/opencode")
     }
 
-    /// `d6.cancel-maps-to-truthful-terminal`. Shares the `acp/claude-code`
+    /// `d6.cancel-maps-to-truthful-terminal`. Shares the `claude-code/acp`
     /// lane's driver — see [`super::acp::cancel_maps_to_truthful_terminal`].
     pub fn cancel_maps_to_truthful_terminal(runner: &Runner, _session_name: &str) -> Outcome {
         super::cancel_maps_to_truthful_terminal_via_host(runner)
     }
 
-    /// `d6.self-terminate-on-wedged-child`. Shares the `acp/claude-code`
+    /// `d6.self-terminate-on-wedged-child`. Shares the `claude-code/acp`
     /// lane's driver — see [`super::acp::self_terminate_on_wedged_child`].
     pub fn self_terminate_on_wedged_child(runner: &Runner, _session_name: &str) -> Outcome {
         super::self_terminate_on_wedged_child_via_host(runner)
     }
 
-    /// `d2.turn-phase-sequence-strict-order` on the `acp/opencode` lane.
+    /// `d2.turn-phase-sequence-strict-order` on the `opencode/acp` lane.
     /// COMPOSITIONAL coverage per the seed's own doc comment: opencode
     /// routes through the identical `run_acp_send`/`run_acp_wait` verb
     /// path — the fake bridge is the only difference, and this cell
@@ -4846,26 +4863,26 @@ pub mod opencode {
     }
 
     /// `d2.delivery-log-consistency-under-home-override` on the
-    /// `acp/opencode` lane. Same compositional-coverage reasoning as
+    /// `opencode/acp` lane. Same compositional-coverage reasoning as
     /// [`turn_phase_sequence`].
     pub fn delivery_log_home_override(runner: &Runner, _session_name: &str) -> Outcome {
         super::delivery_log_home_override_via_daemon(runner, "acp/opencode")
     }
 
-    /// `d2.turn-correlation-and-completion` on the `acp/opencode` lane.
+    /// `d2.turn-correlation-and-completion` on the `opencode/acp` lane.
     /// REAL model turn via the real `opencode acp` bridge (its own
     /// binary — see `run_one_pong_turn`'s bridge-selection branch).
     pub fn turn_correlation(runner: &Runner, _session_name: &str) -> Outcome {
         super::turn_correlation_via_host(runner, "acp/opencode")
     }
 
-    /// `d5.transcript-tee-captures-assistant-text` on the `acp/opencode`
+    /// `d5.transcript-tee-captures-assistant-text` on the `opencode/acp`
     /// lane. REAL model turn.
     pub fn transcript_tee(runner: &Runner, _session_name: &str) -> Outcome {
         super::transcript_tee_via_host(runner, "acp/opencode")
     }
 
-    /// `d5.resume-jsonl-continuity-and-recall` on the `acp/opencode` lane.
+    /// `d5.resume-jsonl-continuity-and-recall` on the `opencode/acp` lane.
     /// REAL model turns (x2). Shares the driver — see
     /// [`super::acp::resume_recall`].
     pub fn resume_recall(runner: &Runner, _session_name: &str) -> Outcome {
@@ -5962,7 +5979,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
     match (lane, cell.0.as_str()) {
         (Lane::Pi, "d1.boot-readiness") => Some(pi::boot_readiness(runner, session_name)),
         (Lane::Codex, "d1.boot-readiness") => Some(codex::boot_readiness(runner, session_name)),
-        (Lane::AcpClaudeCode, "d1.boot-readiness") => {
+        (Lane::ClaudeCodeAcp, "d1.boot-readiness") => {
             Some(acp::boot_readiness(runner, session_name))
         }
         (Lane::Opencode, "d1.boot-readiness") => {
@@ -5977,7 +5994,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::Codex, "d1.teardown-reaps-process-group") => {
             Some(codex::teardown_reaps(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d1.teardown-reaps-process-group") => {
+        (Lane::ClaudeCodeAcp, "d1.teardown-reaps-process-group") => {
             Some(acp::teardown_reaps(runner, session_name))
         }
         (Lane::Opencode, "d1.teardown-reaps-process-group") => {
@@ -5990,7 +6007,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::Codex, "d1.launch-addressing") => {
             Some(codex::launch_addressing(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d1.launch-addressing") => {
+        (Lane::ClaudeCodeAcp, "d1.launch-addressing") => {
             Some(acp::launch_addressing(runner, session_name))
         }
         (Lane::Opencode, "d1.launch-addressing") => {
@@ -6005,7 +6022,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::Codex, "d1.transport-is-our-daemon") => {
             Some(codex::transport_is_our_daemon(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d1.transport-is-our-daemon") => {
+        (Lane::ClaudeCodeAcp, "d1.transport-is-our-daemon") => {
             Some(acp::transport_is_our_daemon(runner, session_name))
         }
         (Lane::Opencode, "d1.transport-is-our-daemon") => {
@@ -6020,7 +6037,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::Codex, "d1.liveness-process-alive") => {
             Some(codex::liveness_process_alive(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d1.liveness-process-alive") => {
+        (Lane::ClaudeCodeAcp, "d1.liveness-process-alive") => {
             Some(acp::liveness_process_alive(runner, session_name))
         }
         (Lane::Opencode, "d1.liveness-process-alive") => {
@@ -6035,7 +6052,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::Codex, "d1.reconnect-resolves-via-registry") => {
             Some(codex::reconnect_resolves(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d1.reconnect-resolves-via-registry") => {
+        (Lane::ClaudeCodeAcp, "d1.reconnect-resolves-via-registry") => {
             Some(acp::reconnect_resolves(runner, session_name))
         }
         (Lane::Opencode, "d1.reconnect-resolves-via-registry") => {
@@ -6062,7 +6079,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         // for both lanes (not just the D2 3-phase daemon fixture's `qd
         // acp-daemon` boot path, the only prior proof) — real turn sent,
         // completed, session id preserved across stop+resume, both lanes.
-        (Lane::AcpClaudeCode, "d1.resume-same-session-id") => {
+        (Lane::ClaudeCodeAcp, "d1.resume-same-session-id") => {
             Some(acp::resume_same_session_id(runner, session_name))
         }
         (Lane::Opencode, "d1.resume-same-session-id") => {
@@ -6076,11 +6093,12 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         }
         // AcpClaudeCode/Opencode/ClaudeCode's multiplex_concurrent drivers,
         // wired 2026-07-15 after mc-5 cleared the 3-lane ask (SERIALIZED
-        // across lanes, lightest-first: acp/cc -> acp/opencode -> cc-bare;
+        // across lanes, lightest-first: claude-code/acp -> opencode/acp -> the
+        // claude pane lane;
         // measure-before-each; cc-bare gated at <~1.8G avail; abort on
         // sustained vmstat so>0) — see the acceptance-candidate's
         // "what's still open" section for the clearance record.
-        (Lane::AcpClaudeCode, "d1.multiplex-concurrent-distinct-residents") => {
+        (Lane::ClaudeCodeAcp, "d1.multiplex-concurrent-distinct-residents") => {
             Some(acp::multiplex_concurrent(runner, session_name))
         }
         (Lane::Opencode, "d1.multiplex-concurrent-distinct-residents") => {
@@ -6095,7 +6113,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::Codex, "d6.cold-target-send-fails-loud-with-terminal") => {
             Some(codex::cold_target_send_fails(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d6.cold-target-send-fails-loud-with-terminal") => {
+        (Lane::ClaudeCodeAcp, "d6.cold-target-send-fails-loud-with-terminal") => {
             Some(acp::cold_target_send_fails(runner, session_name))
         }
         (Lane::Opencode, "d6.cold-target-send-fails-loud-with-terminal") => {
@@ -6109,7 +6127,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d6.cold-target-send-fails-loud-with-terminal") => {
             Some(claude_code::cold_target_send_fails(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d6.bridge-death-detection-no-false-positive") => {
+        (Lane::ClaudeCodeAcp, "d6.bridge-death-detection-no-false-positive") => {
             Some(acp::bridge_death_detection(runner, session_name))
         }
         (Lane::Opencode, "d6.bridge-death-detection-no-false-positive") => {
@@ -6124,7 +6142,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d6.bridge-death-detection-no-false-positive") => {
             Some(claude_code::bridge_death_detection(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d3.queue-overflow-honors-configured-capacity") => {
+        (Lane::ClaudeCodeAcp, "d3.queue-overflow-honors-configured-capacity") => {
             Some(acp::queue_overflow(runner, session_name))
         }
         (Lane::Opencode, "d3.queue-overflow-honors-configured-capacity") => {
@@ -6139,7 +6157,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d3.queue-overflow-honors-configured-capacity") => {
             Some(claude_code::queue_overflow(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d6.cancel-maps-to-truthful-terminal") => {
+        (Lane::ClaudeCodeAcp, "d6.cancel-maps-to-truthful-terminal") => {
             Some(acp::cancel_maps_to_truthful_terminal(runner, session_name))
         }
         (Lane::Opencode, "d6.cancel-maps-to-truthful-terminal") => Some(
@@ -6154,7 +6172,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d6.cancel-maps-to-truthful-terminal") => Some(
             claude_code::cancel_maps_to_truthful_terminal(runner, session_name),
         ),
-        (Lane::AcpClaudeCode, "d6.self-terminate-on-wedged-child") => {
+        (Lane::ClaudeCodeAcp, "d6.self-terminate-on-wedged-child") => {
             Some(acp::self_terminate_on_wedged_child(runner, session_name))
         }
         (Lane::Opencode, "d6.self-terminate-on-wedged-child") => Some(
@@ -6172,7 +6190,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         // Pi/Codex have no analogous serve-loop/child-confirmed-dead
         // self-terminate mechanism (registry NaPermitted, ruled 2026-07-15
         // — see the driver's doc comment) — no driver needed.
-        (Lane::AcpClaudeCode, "d3.queue-slot-released-no-leak") => {
+        (Lane::ClaudeCodeAcp, "d3.queue-slot-released-no-leak") => {
             Some(acp::queue_slot_released(runner, session_name))
         }
         (Lane::Opencode, "d3.queue-slot-released-no-leak") => {
@@ -6187,7 +6205,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d3.queue-slot-released-no-leak") => {
             Some(claude_code::queue_slot_released(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d2.turn-phase-sequence-strict-order") => {
+        (Lane::ClaudeCodeAcp, "d2.turn-phase-sequence-strict-order") => {
             Some(acp::turn_phase_sequence(runner, session_name))
         }
         (Lane::Opencode, "d2.turn-phase-sequence-strict-order") => {
@@ -6202,7 +6220,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d2.turn-phase-sequence-strict-order") => {
             Some(claude_code::turn_phase_sequence(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d2.delivery-log-consistency-under-home-override") => {
+        (Lane::ClaudeCodeAcp, "d2.delivery-log-consistency-under-home-override") => {
             Some(acp::delivery_log_home_override(runner, session_name))
         }
         (Lane::Opencode, "d2.delivery-log-consistency-under-home-override") => {
@@ -6217,13 +6235,13 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d2.delivery-log-consistency-under-home-override") => Some(
             claude_code::delivery_log_home_override(runner, session_name),
         ),
-        (Lane::AcpClaudeCode, "d2.turn-correlation-and-completion") => {
+        (Lane::ClaudeCodeAcp, "d2.turn-correlation-and-completion") => {
             Some(acp::turn_correlation(runner, session_name))
         }
         (Lane::Opencode, "d2.turn-correlation-and-completion") => {
             Some(opencode::turn_correlation(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d5.transcript-tee-captures-assistant-text") => {
+        (Lane::ClaudeCodeAcp, "d5.transcript-tee-captures-assistant-text") => {
             Some(acp::transcript_tee(runner, session_name))
         }
         (Lane::Opencode, "d5.transcript-tee-captures-assistant-text") => {
@@ -6247,7 +6265,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d5.transcript-tee-captures-assistant-text") => {
             Some(claude_code::transcript_tee(runner, session_name))
         }
-        (Lane::AcpClaudeCode, "d5.resume-jsonl-continuity-and-recall") => {
+        (Lane::ClaudeCodeAcp, "d5.resume-jsonl-continuity-and-recall") => {
             Some(acp::resume_recall(runner, session_name))
         }
         (Lane::Opencode, "d5.resume-jsonl-continuity-and-recall") => {
@@ -6288,11 +6306,16 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
         (Lane::ClaudeCode, "d7.zellij-nested-render-coverage") => {
             Some(c2::zellij_coverage_claude())
         }
-        // D7 (every cell) on a daemon lane → NotApplicable (no terminal to attach).
-        // ClaudeCode's d7 property drivers are all wired in their own arms above.
-        (l, c) if c.starts_with("d7.") && !matches!(l, Lane::ClaudeCode) => {
-            Some(c2::na_d7_daemon(l))
-        }
+        // D7 (every cell) on a lane with no terminal → NotApplicable: there is
+        // nothing to attach a qrmux client to. Keyed on the LANE's own hosting,
+        // the same predicate the manifest's applicability asks
+        // (`registry.rs`'s `has_terminal`), so the driver and the manifest cannot
+        // answer differently for one lane. `claude-code/mux-pane`'s d7 property
+        // drivers are all wired in their own arms above; a pane lane that enters
+        // the matrix without drivers falls through to the unrouted-cell arm and
+        // shows up as an unresolved cell, which is the honest signal — never a
+        // silent n-a it did not earn.
+        (l, c) if c.starts_with("d7.") && !l.qw_lane().is_pane() => Some(c2::na_d7_no_terminal(l)),
         // D6 dead-relay-sidecar: claude-code → real driver (honest FAIL); daemon → NA.
         (Lane::ClaudeCode, "d6.dead-relay-sidecar") => {
             Some(c2::dead_relay_sidecar(runner, session_name))
@@ -6334,19 +6357,21 @@ pub mod c2 {
     // observed outcome's reason matches the manifest's declared applicability.
     // ==================================================================
 
-    /// D7 (any cell) on a `Hosting::Daemon` lane: no terminal to attach.
-    pub fn na_d7_daemon(lane: Lane) -> Outcome {
-        Outcome::not_applicable(format!(
-            "{} is Hosting::Daemon — a provider-owned daemon thread with no qd-owned mux pane and no terminal to attach (lifecycle.rs:68), so the qrmux attach-client env-matrix / nested-render property has no referent on this lane",
-            lane.provider_id()
-        ))
+    /// D7 (any cell) on a lane with no terminal of its own: nothing to attach.
+    ///
+    /// The reason string is the manifest's own
+    /// ([`crate::conformance::registry::d7_no_terminal_reason`]), called rather
+    /// than copied — see there for why these two callers must not hold separate
+    /// literals.
+    pub fn na_d7_no_terminal(lane: Lane) -> Outcome {
+        Outcome::not_applicable(crate::conformance::registry::d7_no_terminal_reason(lane))
     }
 
     /// `d6.dead-relay-sidecar` on a daemon lane: no CcRelay sidecar POST.
     pub fn na_dead_relay_daemon(lane: Lane) -> Outcome {
         Outcome::not_applicable(format!(
             "{} routes send:relay to its daemon ws/ACP inject ladder before the relay-port check and carries no relay port — it never opens a CcRelay HTTP sidecar POST, so the dead-relay-sidecar transport door has no referent on this lane",
-            lane.provider_id()
+            lane.id()
         ))
     }
 
@@ -6400,7 +6425,7 @@ pub mod c2 {
     pub fn partial_write(runner: &Runner, lane: Lane) -> Outcome {
         use crate::events::{parse_events, read_merged};
 
-        let jail = match Jail::new(&format!("c2-pw-{}", lane.provider_id().replace('/', "-"))) {
+        let jail = match Jail::new(&format!("c2-pw-{}", lane.id().replace('/', "-"))) {
             Ok(j) => j,
             Err(e) => {
                 return runner.fail(
@@ -6460,7 +6485,7 @@ pub mod c2 {
              arm1 complete-record-read-as-terminal={saw_complete}; \
              arm2 torn-tail-terminals={torn_terminals} (expect 1 — truncated record dropped, not materialized); \
              arm3 interior: terminals={interior_terminals} corrupt_interior={} (expect 1/1 — forensic-counted, never a terminal, verdict unchanged)",
-            lane.provider_id(),
+            lane.id(),
             interior.corrupt_interior,
         );
         if saw_complete && torn_dropped && interior_ok {
@@ -6498,14 +6523,22 @@ pub mod c2 {
     /// `d6.advertised-surface-honesty` (all lanes). Audits a fixed set of documented
     /// flags: the `start --attach`/`--port` drift pair (advertised as functional in
     /// help.rs but unconditionally exit-1) and the `stop --force` honest-disclosure
-    /// control (help.rs discloses "deprecated no-op"). The `--attach` probe uses the
-    /// LANE's own `--provider` so the audit is lane-relevant.
+    /// control (help.rs discloses "deprecated no-op"). The `--attach` probe names
+    /// the lane's own HARNESS on `--provider` so the audit is lane-relevant.
+    ///
+    /// It deliberately does NOT add the lane's topology flag (`--acp`, `--daemon`).
+    /// `--provider` selects a program, not a lane, so the two claude lanes name the
+    /// same string here — and that costs nothing, because the drift this cell
+    /// measures (a flag advertised as functional whose handler unconditionally
+    /// rejects it) is decided before `qd start` ever resolves a lane. A probe that
+    /// pinned the topology would be measuring the same refusal through a longer
+    /// argv.
     pub fn advertised_surface(runner: &Runner, lane: Lane, session_name: &str) -> Outcome {
         // Harness-fault paths in this cell route to Blocked, NEVER runner.fail: the
         // DESIGNED outcome is FAIL (doc-drift RED) on every lane, so a
         // jail/spawn/read fault collapsed into Fail would be masked as the genuine
         // drift RED by the is_fail()-only test (the C2-TS class — proactively swept).
-        let jail = match Jail::new(&format!("c2-adv-{}", lane.provider_id().replace('/', "-"))) {
+        let jail = match Jail::new(&format!("c2-adv-{}", lane.id().replace('/', "-"))) {
             Ok(j) => j,
             Err(e) => {
                 return Outcome::blocked(
@@ -6515,7 +6548,7 @@ pub mod c2 {
             }
         };
         let sess = format!("c2-adv-{session_name}");
-        let provider = lane.provider_id();
+        let provider = lane.harness_provider_id();
         let probes = vec![
             // Drift pair — advertised as functional in help, always exit-1.
             FlagProbe {
@@ -6651,7 +6684,7 @@ pub mod c2 {
             "lane={}; audited {} documented flags via runtime `qd <verb> --help` (advertised surface) vs behavior; \
              honest-disclosure control (stop --force) classified HONEST={honest_control_ok}; drift_found={drift_found}; \
              per-flag: {}",
-            lane.provider_id(),
+            lane.id(),
             probes.len(),
             lines.join(" | ")
         );
@@ -7574,10 +7607,19 @@ pub mod c2 {
 
         let session_id = format!("c2-wedge-{session_name}");
         let name = format!("c2wd{}", std::process::id());
+        // The row carries BOTH halves of the lane: `provider` names the harness
+        // and `hosting` names the topology. Stamping only the provider would put
+        // this fixture on whatever lane a hosting-less row re-derives to
+        // (`Harness::row_default_mode`), which for `claude-code/acp` is the MUX
+        // PANE — so `qd send:relay` would take the pane branch and type into a
+        // PTY nobody opened, and the wedge this fixture exists to camp would
+        // never be dialled. A fixture that fabricates a row must fabricate the
+        // whole row.
         let entry = crate::registry::RegistryEntry {
             pid: Some(live_pid),
             session_id: Some(session_id.clone()),
-            provider: Some(lane.provider_id().to_string()),
+            provider: Some(lane.harness_provider_id().to_string()),
+            hosting: Some(lane.qw_lane().mode.hosting_token().to_string()),
             name: Some(name.clone()),
             cwd: Some(jail.home.to_string_lossy().to_string()),
             endpoint: Some(endpoint),
@@ -7684,7 +7726,7 @@ pub mod c2 {
                 commands,
                 format!(
                     "lane={}; wedge accepted={accepted}; qd send:relay did NOT return within {ceiling:?} (group-killed) — the wedged handshake is UNBOUNDED on this lane. Grounded: WsAppServer::connect (ws.rs:73) calls bare tungstenite::connect and applies the read timeout only AFTER it returns, so a camped ws upgrade read never bounds. stderr={:?}",
-                    lane.provider_id(),
+                    lane.id(),
                     run.stderr.lines().next().unwrap_or("")
                 ),
                 "HONEST FAIL: a wedged (camped) daemon makes qd send:relay HANG UNBOUNDED on this lane — it must fail loud within a bounded time. A real qd product defect: codex WsAppServer::connect (ws.rs:73) lacks the pre-handshake read/write timeout that acp AcpConnection::connect (wire.rs:436) and pi PiRemote::connect (remote.rs:80) set before the tungstenite handshake. The product fix is out of C-2 scope; surfaced + documented durably (cf. the C-1 pi self-terminate FAIL).",
@@ -7697,7 +7739,7 @@ pub mod c2 {
                 commands,
                 format!(
                     "lane={}; wedge accepted={accepted}; qd send:relay EXIT 0 against a camped daemon in {:?} — a false success; stderr={:?}",
-                    lane.provider_id(),
+                    lane.id(),
                     run.elapsed,
                     run.stderr.lines().next().unwrap_or("")
                 ),
@@ -7710,7 +7752,7 @@ pub mod c2 {
         let bounded = run.elapsed < ceiling;
         let observed = format!(
             "lane={}; wedge accepted={accepted}; qd send:relay exited {:?} (loud) in {:?} (bounded, < {ceiling:?}); send-failed-terminal-present={send_failed}; delivery-log lines={}",
-            lane.provider_id(),
+            lane.id(),
             status.code(),
             run.elapsed,
             raw.lines().count()
@@ -7847,7 +7889,7 @@ pub mod c2 {
         ];
         let observed = format!(
             "lane={}; wedge accepted={accepted} (>0 ⇒ the kill landed in a real mid-send window); sender killed mid-send (parked in the ws handshake); delivery-log success-terminals found={:?} (expect none); log lines={}",
-            lane.provider_id(),
+            lane.id(),
             terminals,
             raw.lines().count()
         );

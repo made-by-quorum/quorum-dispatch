@@ -170,7 +170,7 @@ pub fn send_acp(deps: &SendDeps<'_>, params: &SendParams<'_>) -> CarrierResult<A
             endpoint.as_deref(),
         );
 
-    let tier = derive_tier("acp/claude-code", transport_field.as_deref(), endpoint_alive);
+    let tier = derive_tier(crate::lane::Mode::Acp, transport_field.as_deref(), endpoint_alive);
 
     if tier != Tier::Acp {
         // Entry-lane transport loss (dead endpoint, or a historical pty latch):

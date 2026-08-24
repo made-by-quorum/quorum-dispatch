@@ -1851,10 +1851,12 @@ mod tests {
              mode rather than fabricating a lane"
         );
 
-        // Both ACP bridges, including the bare `opencode` CLI alias.
-        assert_eq!(lane_of("acp/claude-code", None), Some((Harness::AcpClaudeCode, Mode::Daemon)));
-        assert_eq!(lane_of("acp/opencode", None), Some((Harness::Opencode, Mode::Daemon)));
-        assert_eq!(lane_of("opencode", None), Some((Harness::Opencode, Mode::Daemon)));
+        // Both ACP lanes, reached through the legacy spellings that still name
+        // them and through opencode's single current one.
+        assert_eq!(lane_of("acp/claude-code", None), Some((Harness::ClaudeCode, Mode::Acp)));
+        assert_eq!(lane_of("acp/opencode", None), Some((Harness::Opencode, Mode::Acp)));
+        assert_eq!(lane_of("opencode", None), Some((Harness::Opencode, Mode::Acp)));
+        assert_eq!(lane_of("claude-code", Some("acp")), Some((Harness::ClaudeCode, Mode::Acp)));
 
         // AND THE DRIFT THIS CHANGE ACCEPTS, named rather than discovered.
         // `select_carrier` matched `acp/*` by PREFIX, so a hypothetical

@@ -307,20 +307,47 @@ fn crate_src(rel: &str) -> String {
 #[test]
 fn structural_canary_surviving_sites_reference_shared_predicate() {
     // E2: lifecycle.rs run_start — `forbidden_in(` between the claudeArgs parse and
-    // the provider split.
+    // the provider/lane split.
+    //
+    // WHAT THE ORDERING IS FOR. `run_start` parses `claudeArgs` once, for every
+    // provider, and then routes to a lane. Everything after the routing point is
+    // per-lane spawn code; a guard placed there would have to be placed on each
+    // arm, and the arm somebody forgets is the one that spawns claude with
+    // `--print` in its argv. So the property is positional and not merely
+    // presence: the forbidden-flag chokepoint must sit ABOVE the split, where
+    // there is exactly one of it.
+    //
+    // WHY THE LOWER ANCHOR IS `Lane::for_create` AND NOT A STRING TEST. It was
+    // `provider_impl.id().starts_with("acp/")`, which is gone — and it is worth
+    // being precise about what died, because the phrase still appears in this
+    // file's sibling assertions and in `lifecycle.rs`'s own prose. The `acp/`
+    // SPELLINGS are alive: `harness_and_pinned_mode` still parses them and they
+    // still pin the ACP lane. What died is qd branching ON that spelling. ACP is a
+    // Mode now, so the routing question is "which lane does this create ask for",
+    // and `Lane::for_create` is the one expression that answers it. That call IS
+    // the split the guard has to precede — it is where one code path becomes nine
+    // — so anchoring here pins the real property rather than the string that used
+    // to stand in for it, and it will keep pinning it when the tenth lane lands.
+    //
+    // The argument is `provider_id` — the string the USER TYPED — and not
+    // `provider_impl.id()`. That distinction is load-bearing rather than
+    // incidental: `provider_for("opencode")` resolves an impl whose internal id is
+    // still the legacy `acp/opencode`, so routing on the impl would quote a
+    // spelling the caller never typed in every refusal below the split, and would
+    // treat a plain `--provider opencode` as though it had pinned a lane.
     let life = crate_src("src/bin/qd/verbs/lifecycle.rs");
     let parse_at = life
         .find(r#".get_many::<String>("claudeArgs")"#)
         .expect("the claudeArgs parse site");
     let split_at = life
-        .find(r#"provider_impl.id().starts_with("acp/")"#)
-        .expect("the provider/lane split (acp early-return)");
+        .find(r#"Lane::for_create(provider_id, topology)"#)
+        .expect("the provider/lane split (the create's single routing point)");
     let guard_at = life
         .find("forbidden_in(")
         .expect("lifecycle.rs run_start must reference the shared forbidden_in predicate");
     assert!(
         parse_at < guard_at && guard_at < split_at,
-        "E2 guard must sit between the claudeArgs parse and the provider split"
+        "E2 guard must sit between the claudeArgs parse and the provider/lane split"
     );
 
     // H9 (daemon_headless.rs resolve) is RETIRED with the P4DB drive-burn: the

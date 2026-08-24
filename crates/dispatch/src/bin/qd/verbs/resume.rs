@@ -400,7 +400,11 @@ fn resumed(session: &dispatch::model::Session, lane: Lane, out: &WakeOutcome) ->
     // attach <…>` pointer must both name, which is why the lane reports it.
     let pane = out.pane.as_ref().map(|p| p.zmx_name.clone()).unwrap_or_default();
     match (lane.harness, lane.mode) {
-        (Harness::ClaudeCode, _) => {
+        // `Mode::Pane`, NOT a mode wildcard. claude-code has two lanes now, and
+        // the other one is a headless ACP resident whose revive prints the daemon
+        // line below — a wildcard here would swallow it and promise an
+        // attachable pane that does not exist.
+        (Harness::ClaudeCode, Mode::Pane) => {
             println!(
                 "Resumed session \"{}\" from {} (detached); attach with \"qd attach {}\".",
                 pane,
@@ -457,9 +461,16 @@ fn resumed(session: &dispatch::model::Session, lane: Lane, out: &WakeOutcome) ->
             println!("{}", daemon_line(out, &name, pi_already_running_line, pi_revived_line));
             0
         }
-        (Harness::AcpClaudeCode | Harness::Opencode, _) => {
+        (_, Mode::Acp) => {
             println!("{}", daemon_line(out, &name, acp_already_running_line, acp_revived_line));
             0
+        }
+        // Not lanes; `Lane::new` refuses each, so no resume can reach here.
+        // Enumerated rather than wildcarded so a new mode has to be decided.
+        (Harness::ClaudeCode, Mode::Daemon | Mode::Extension | Mode::AppServer)
+        | (Harness::Opencode, Mode::Pane | Mode::Daemon | Mode::Extension | Mode::AppServer) => {
+            eprintln!("qd resume: {} is not a lane this engine can build", lane.id());
+            1
         }
     }
 }

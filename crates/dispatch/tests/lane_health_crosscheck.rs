@@ -250,7 +250,19 @@ fn run() -> HealthRun {
 
     // --- (5) a live ACP row with a dead adapter pid. The stored status says
     //     `busy`; the truth is that nothing is running. That gap IS the reason
-    //     `acp_human_status` never reads the stored field. ---
+    //     `acp_human_status` never reads the stored field.
+    //
+    //     The row's `provider` is the compound `acp/claude-code` and stays that
+    //     way. ACP is a MODE now — the lane is `claude-code/acp` — but a lane is
+    //     not what a registry row stores: it stores the provider string the
+    //     writer wrote, and `harness_and_pinned_mode` maps this one onto
+    //     `(ClaudeCode, Acp)` precisely so rows already on disk keep meaning the
+    //     lane they were written under. Rewriting the fixture to `claude-code` +
+    //     `hosting: "acp"` would test a row shape no user has and stop testing
+    //     the one every ACP user does. Note also that it carries no `hosting`
+    //     field at all: the pinned mode has to beat the absent stamp, or this row
+    //     would re-derive to `claude-code/mux-pane` and be addressed as a pane
+    //     session that has no pane. ---
     write_row(
         &sessions_dir,
         5105,
@@ -323,11 +335,19 @@ fn as_lane(s: SessionStatus) -> LaneStatus {
 #[test]
 fn lane_health_agrees_with_what_qd_ls_renders() {
     let r = run();
+    // Three of these four rows are claude-code, and two DIFFERENT lanes of it.
+    // That is the shape to keep in mind reading this table: the harness no longer
+    // picks the health source on its own, the MODE does. `claude-code/mux-pane`
+    // reads the registry string through the liveness gate; `claude-code/acp`
+    // reads the bridge adapter's pid and nothing else. A `health_for` that keyed
+    // on the harness would answer the pane lane's way for all three and this
+    // table would still be green for two of them — which is why SID_ACP's row is
+    // here rather than only in the discriminator below.
     let cases: Vec<(Lane, &str)> = vec![
         (lane(Harness::ClaudeCode, Mode::Pane), SID_CLAUDE),
         (lane(Harness::ClaudeCode, Mode::Pane), SID_CLAUDE_GATED),
         (lane(Harness::Codex, Mode::Daemon), SID_CODEX),
-        (lane(Harness::AcpClaudeCode, Mode::Daemon), SID_ACP),
+        (lane(Harness::ClaudeCode, Mode::Acp), SID_ACP),
     ];
     for (l, sid) in cases {
         assert_eq!(
@@ -374,7 +394,7 @@ fn every_lane_names_the_source_it_actually_read() {
         ),
         // Adapter pid + `--listen` identity. Not a status string, not an RPC.
         (
-            lane(Harness::AcpClaudeCode, Mode::Daemon),
+            lane(Harness::ClaudeCode, Mode::Acp),
             SID_ACP,
             HealthSource::ProcessLiveness,
         ),
@@ -506,7 +526,7 @@ fn the_cross_check_discriminates_each_source_answered() {
             "the pi transcript's last message is a `user` entry",
         ),
         (
-            lane(Harness::AcpClaudeCode, Mode::Daemon),
+            lane(Harness::ClaudeCode, Mode::Acp),
             SID_ACP,
             LaneStatus::Killed,
             "the adapter pid is gone, whatever the stored status claims",

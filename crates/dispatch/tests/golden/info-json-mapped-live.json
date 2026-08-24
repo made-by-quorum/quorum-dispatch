@@ -6,5 +6,6 @@
   "status": "idle",
   "live": true,
   "pid": "<PID>",
-  "provider": "claude-code"
+  "provider": "claude-code",
+  "lane": "claude-code/mux-pane"
 }

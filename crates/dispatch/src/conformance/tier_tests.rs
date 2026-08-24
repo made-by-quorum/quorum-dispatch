@@ -84,7 +84,7 @@ fn tiny_battery() -> Battery {
     for lane in [Lane::Pi, Lane::Codex] {
         for c in [C_D1, C_D6, C_D3, C_D5] {
             applicability.insert(
-                (lane.provider_id().to_string(), c.to_string()),
+                (lane.id().to_string(), c.to_string()),
                 Applicability::Required,
             );
         }
@@ -950,7 +950,12 @@ fn neg_forged_promotion_event() {
             "body": {
                 "event": "designation",
                 "kind": "promotion",
-                "lane": "pi",
+                // The wire lane token, taken from `Lane::id` rather than
+                // spelled by hand: this forgery has to DESERIALIZE (the point is
+                // a semantically invalid journal, not an unparseable one), so a
+                // stale literal here fails as a parse error and stops testing
+                // what the test is named for.
+                "lane": Lane::Pi.id(),
                 "box_id": "lima",
                 "policy_basis": "forged",
                 "rationale": "forged promotion",
@@ -1779,12 +1784,12 @@ fn coverage_battery() -> Battery {
     let mut applicability = BTreeMap::new();
     for c in [C_D1, C_D6, C_D3] {
         applicability.insert(
-            (Lane::Pi.provider_id().to_string(), c.to_string()),
+            (Lane::Pi.id().to_string(), c.to_string()),
             Applicability::Required,
         );
     }
     applicability.insert(
-        (Lane::Pi.provider_id().to_string(), "d5.cov".to_string()),
+        (Lane::Pi.id().to_string(), "d5.cov".to_string()),
         Applicability::CoveragePermitted,
     );
     Battery {
@@ -1818,12 +1823,12 @@ fn coverage_gating_battery() -> Battery {
     let mut applicability = BTreeMap::new();
     for c in [C_D1, C_D3] {
         applicability.insert(
-            (Lane::Pi.provider_id().to_string(), c.to_string()),
+            (Lane::Pi.id().to_string(), c.to_string()),
             Applicability::Required,
         );
     }
     applicability.insert(
-        (Lane::Pi.provider_id().to_string(), "d6.cov".to_string()),
+        (Lane::Pi.id().to_string(), "d6.cov".to_string()),
         Applicability::CoveragePermitted,
     );
     Battery {
@@ -2400,7 +2405,7 @@ fn rate_battery() -> Battery {
     let mut applicability = BTreeMap::new();
     for c in [C_D1, C_D6, C_D3, C_D5, "d3.n2"] {
         applicability.insert(
-            (Lane::Pi.provider_id().to_string(), c.to_string()),
+            (Lane::Pi.id().to_string(), c.to_string()),
             Applicability::Required,
         );
     }

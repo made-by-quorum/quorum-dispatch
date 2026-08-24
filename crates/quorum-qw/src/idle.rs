@@ -732,7 +732,11 @@ pub fn await_idle_acp(
         // registry row entirely) — preserve identity and refuse to the SAME
         // human-recovery surface as the dead-tier branch below. Any other
         // acp/* provider keeps the pre-Child-D wording, byte-identical.
-        if session.provider == "acp/claude-code" {
+        // The CLAUDE bridge specifically — asked of the lane, because the row now
+        // says `claude-code` and a provider-string equality would never fire.
+        if crate::lane::lane_for(&session.provider, session.hosting.as_deref())
+            == crate::lane::Lane::new(crate::lane::Harness::ClaudeCode, crate::lane::Mode::Acp)
+        {
             preserve_identity(env, session, "acp session has no live daemon pid at wait entry");
             return Err(unreachable("acp session has no live daemon pid at wait entry"));
         }
@@ -754,7 +758,7 @@ pub fn await_idle_acp(
             cmdline.as_deref(),
             endpoint.as_deref(),
         );
-    if derive_tier("acp/claude-code", transport_field.as_deref(), endpoint_alive) != Tier::Acp {
+    if derive_tier(crate::lane::Mode::Acp, transport_field.as_deref(), endpoint_alive) != Tier::Acp {
         // Child D (opencode D1 — clerk-4's Arm-B ratification, bond note
         // 01KX01BY7G): `acp/claude-code` is a NAMED DIVERGENCE — a dead (or
         // historically pty-latched) row REFUSES cold with identity preserved in

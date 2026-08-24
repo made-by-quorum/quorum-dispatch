@@ -147,7 +147,7 @@ pub use contract::{
     LedgerAddress, Listing, Message, MessageId, Receipt, SessionHandle, SessionId, SessionStatus,
     SessionSummary, StartRequest, Terminal, TerminalExpectation,
 };
-pub use lane::{lane_for, Harness, Lane, Mode};
+pub use lane::{lane_for, row_is_acp, Harness, Lane, Mode};
 // `lane_ops_with_carriers` and `Carriers` were here until phase 3B. `lane_ops` is
 // now the ONLY constructor, because `deliver`'s bodies are `delivery` functions
 // rather than callbacks into the `qd` binary.

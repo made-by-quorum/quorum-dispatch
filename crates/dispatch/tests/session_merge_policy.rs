@@ -945,9 +945,13 @@ fn every_lane_row_qd_drops_is_dropped_by_a_named_merge_rule() {
 }
 
 /// The ownership claim from `quorum_qw::lane_read`, asserted against a fixture
-/// that has one populated store per harness — including the three lanes that
-/// must list NOTHING because their harness's store belongs to a sibling, and the
-/// ACP lane that has no store of its own at all.
+/// that has one populated store per harness.
+///
+/// Four of the nine lanes read zero because their harness's store belongs to a
+/// sibling lane, and a fifth — `claude-code/acp` — reads zero because the ACP
+/// bridge has no store of its own at all: it writes into claude's. Nine rows in
+/// this table, four non-zero counts, one per harness. That last sentence is the
+/// invariant; the rest is which lane holds the count.
 #[test]
 fn each_cold_store_is_enumerated_by_exactly_one_lane() {
     let (run, _sessions) = joined();
@@ -970,6 +974,28 @@ fn each_cold_store_is_enumerated_by_exactly_one_lane() {
         vec![
             // 4 claude transcripts: L1, A3 (the bridge's shadow), C4, cold-claude.
             (expect(Harness::ClaudeCode, Mode::Pane), 4),
+            // The ACP lane of the SAME harness, and the arm this whole test exists
+            // to protect. `claude-code/acp` reads `~/.claude/projects` — the very
+            // directory the line above just enumerated four rows out of — because
+            // the ACP bridge runs the real claude engine and writes claude-shaped
+            // JSONL into claude's own store. A cold transcript records no hosting,
+            // so nothing in those four files says whether the turn came from a
+            // human's pane or from the bridge; there is no split to make, and any
+            // number here other than zero DOUBLE-COUNTS every cold claude session
+            // in `qd ls`.
+            //
+            // It reads zero for the same reason `acp/claude-code/daemon` did before
+            // ACP became a mode, but the risk is new and larger. The two lanes now
+            // share a harness, so a `list_for` arm written as
+            // `(Harness::ClaudeCode, _)` — the shape a reader reaches for once the
+            // pane arm above is the "obvious" claude arm — would absorb this lane
+            // silently and give claude's store two claimants. That is why the
+            // wildcard is refused in `lane_read::list_for` and why this row is
+            // asserted here and not left to `Harness::cold_store_owner_mode`'s own
+            // unit test: this file measures the actual partition over a populated
+            // fixture, so a second claimant shows up as 4 and 4 rather than as a
+            // table that merely looks plausible.
+            (expect(Harness::ClaudeCode, Mode::Acp), 0),
             // A rollout on disk records no hosting, so the store belongs to the
             // STRUCTURAL-default lane and its sibling reports nothing.
             (expect(Harness::Codex, Mode::Pane), 0),
@@ -986,10 +1012,14 @@ fn each_cold_store_is_enumerated_by_exactly_one_lane() {
             // hosting, so `pi/extension` enumerates nothing and the one pi cold
             // row above is counted exactly once.
             (expect(Harness::Pi, Mode::Extension), 0),
-            // The ACP-CC bridge has NO store: its transcripts ARE claude's, found
-            // by claude's scan above wearing claude's label.
-            (expect(Harness::AcpClaudeCode, Mode::Daemon), 0),
-            (expect(Harness::Opencode, Mode::Daemon), 1),
+            // opencode's one lane, and the one harness where the store owner is
+            // an ACP lane rather than a pane or a daemon one. Everything opencode
+            // does live goes over its bridge, and unlike claude's bridge it
+            // persists to a store of its OWN (`opencode.db`) — so here `Mode::Acp`
+            // is the claimant, not the abstainer. The two ACP entries in this
+            // table reading 0 and 1 is the whole point: the mode does not decide
+            // who owns a store, the harness's `cold_store_owner_mode` does.
+            (expect(Harness::Opencode, Mode::Acp), 1),
         ],
         "the per-lane cold-store partition changed"
     );

@@ -22,42 +22,184 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RunId(pub String);
 
-/// The provider-lane a cell was measured on. A closed set (QS-3 uniformity: the
-/// same dimension list applies to every lane; only per-cell applicability varies).
+/// The lane a cell was measured on — the conformance matrix's lane axis. A
+/// closed set (QS-3 uniformity: the same dimension list applies to every lane;
+/// only per-cell applicability varies).
+///
+/// # This is a LANE, and a lane is `(harness, hosting)`
+///
+/// These five used to be provider ids, because a provider id used to BE a lane:
+/// each of the five registered providers had exactly one topology, so
+/// `"codex"` named a program and a hosting in one string. That is no longer
+/// true — `quorum_qw::lane` carries nine lanes over four harnesses, and ACP is
+/// a hosting (`Mode::Acp`) rather than a program — so a bare provider id names
+/// a HARNESS and leaves the topology open. The battery's axis is not the
+/// harness: `claude-code/mux-pane` and `claude-code/acp` are the same program
+/// with different lifecycle, delivery, attach and transcript mechanisms, which
+/// is precisely what D1–D7 measure. So each variant here names ONE lane, and
+/// [`Lane::id`] — the serde rename, this type's wire surface — is that lane's
+/// stable `quorum_qw` id. [`Lane::qw_lane`] is the same fact as a value, and
+/// `conformance_lane_ids_are_real_qd_lanes` pins the two spellings together so
+/// they cannot drift.
+///
+/// # Which five of the nine, and why those
+///
+/// The battery measures the lane its seeds actually drive, which is a fact
+/// about the drivers in `harness.rs` and not a preference:
+///
+///   - `claude-code/mux-pane` — the bare claude TUI in a qd-owned pane; the
+///     only lane in the matrix with a terminal, hence the only one D7 is
+///     `Required` on.
+///   - `claude-code/acp` — the same claude engine behind the `claude-code-acp`
+///     bridge. Was `acp/claude-code`, a harness, and the rename is the whole
+///     content of the change: same drivers, same cells, same bridge argv.
+///   - `codex/daemon` — the headless codex resident. The C-2 D6 fixtures dial
+///     a ws endpoint and fabricate a resident registry row; nothing in the
+///     matrix opens a codex terminal.
+///   - `pi/daemon` — likewise: the D6 fixtures fabricate a `pi-daemon` identity
+///     row, and the D1 cells assert a qd-owned resident's pid.
+///   - `opencode/acp` — opencode's only lane. Was `acp/opencode`.
+///
+/// The other four (`codex/mux-pane`, `codex/app-server`, `pi/mux-pane`,
+/// `pi/extension`) are NOT in the matrix, and saying so is the point of putting
+/// hosting on this axis: the battery never measured them, and while the axis
+/// was provider-shaped it could not admit that — a `codex` tier read as a claim
+/// about every codex topology. Adding one is a variant plus its drivers, and
+/// nothing else here changes shape.
+///
+/// # Two of the harnesses are named without a suffix, deliberately
+///
+/// `ClaudeCode`/`ClaudeCodeAcp` carry their hosting in the variant name because
+/// claude-code contributes TWO lanes and the bare name would be ambiguous.
+/// `Codex`, `Pi` and `Opencode` contribute exactly one lane each, so the
+/// harness name identifies it unambiguously; the id is where the hosting is
+/// spelled. A second lane for any of them arrives with the suffix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Lane {
-    #[serde(rename = "claude-code")]
+    #[serde(rename = "claude-code/mux-pane")]
     ClaudeCode,
-    #[serde(rename = "codex")]
+    #[serde(rename = "codex/daemon")]
     Codex,
-    #[serde(rename = "acp/claude-code")]
-    AcpClaudeCode,
-    #[serde(rename = "opencode")]
+    #[serde(rename = "claude-code/acp")]
+    ClaudeCodeAcp,
+    #[serde(rename = "opencode/acp")]
     Opencode,
-    #[serde(rename = "pi")]
+    #[serde(rename = "pi/daemon")]
     Pi,
 }
 
 impl Lane {
-    /// The five registry lanes (`provider.rs:368-388`). `opencode` ≡ `acp/opencode`.
+    /// The five lanes the battery measures, in the published order. See the type
+    /// docs for why these five of `quorum_qw::lane::Lane::ALL`'s nine.
     pub const ALL: [Lane; 5] = [
         Lane::ClaudeCode,
         Lane::Codex,
-        Lane::AcpClaudeCode,
+        Lane::ClaudeCodeAcp,
         Lane::Opencode,
         Lane::Pi,
     ];
 
-    /// The canonical provider id `qd start --provider <id>` resolves (matches
-    /// `provider_for`). `Opencode` carries the internal `acp/opencode` id.
-    pub fn provider_id(self) -> &'static str {
+    /// The stable lane id — the wire surface, byte-identical to the
+    /// `#[serde(rename)]` above and to `quorum_qw::lane::Lane::id()`.
+    ///
+    /// This is the key every evidence artifact, applicability entry, grid cell
+    /// key and observation id is written under, so it is what a stranger reads
+    /// off the ledger. It is NOT a `--provider` argument any more — see
+    /// [`Lane::harness_provider_id`] for that.
+    pub fn id(self) -> &'static str {
         match self {
-            Lane::ClaudeCode => "claude-code",
-            Lane::Codex => "codex",
-            Lane::AcpClaudeCode => "acp/claude-code",
-            Lane::Opencode => "acp/opencode",
-            Lane::Pi => "pi",
+            Lane::ClaudeCode => "claude-code/mux-pane",
+            Lane::Codex => "codex/daemon",
+            Lane::ClaudeCodeAcp => "claude-code/acp",
+            Lane::Opencode => "opencode/acp",
+            Lane::Pi => "pi/daemon",
         }
+    }
+
+    /// The `quorum_qw` lane this measures — the authority on harness and
+    /// hosting, and the operand every structural question about a lane goes
+    /// through (`is_pane`, `is_daemon`, `harness`).
+    ///
+    /// Asking it here rather than re-deriving from the id string is what keeps
+    /// the conformance grid from disagreeing with the dispatcher about what a
+    /// lane IS: when the D7 applicability asks whether this lane has a terminal,
+    /// it asks the same value `attach` and `kill` route on.
+    pub fn qw_lane(self) -> quorum_qw::lane::Lane {
+        use quorum_qw::lane::{Harness, Mode};
+        let (harness, mode) = match self {
+            Lane::ClaudeCode => (Harness::ClaudeCode, Mode::Pane),
+            Lane::Codex => (Harness::Codex, Mode::Daemon),
+            Lane::ClaudeCodeAcp => (Harness::ClaudeCode, Mode::Acp),
+            Lane::Opencode => (Harness::Opencode, Mode::Acp),
+            Lane::Pi => (Harness::Pi, Mode::Daemon),
+        };
+        quorum_qw::lane::Lane { harness, mode }
+    }
+
+    /// The harness's `--provider` argument — a bare program name, and NOT an
+    /// identifier for this lane.
+    ///
+    /// Both claude lanes answer `"claude-code"` here, which is the honest shape:
+    /// `--provider` selects the program, and the topology is selected by the
+    /// flag beside it (`--acp`, `--daemon`, `--interactive`) or left to the
+    /// harness default. Only the handful of drivers that assemble a real `qd`
+    /// command line want this; everything that IDENTIFIES a lane wants
+    /// [`Lane::id`].
+    pub fn harness_provider_id(self) -> &'static str {
+        self.qw_lane().harness.provider_id()
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use super::Lane;
+
+    /// Every conformance lane names a lane qd actually has, spelled the way qd
+    /// spells it. Two spellings of one fact (the `#[serde(rename)]`/[`Lane::id`]
+    /// string and the [`Lane::qw_lane`] pair) can only stay honest if something
+    /// compares them: without this, a renamed hosting token would leave the
+    /// ledger publishing an id no dispatcher would recognise, and nothing would
+    /// fail until a stranger tried to re-run the battery from the document.
+    #[test]
+    fn conformance_lane_ids_are_real_qd_lanes() {
+        for lane in Lane::ALL {
+            let qw = lane.qw_lane();
+            assert_eq!(
+                qw.id(),
+                lane.id(),
+                "{lane:?}'s published id and its qw lane disagree"
+            );
+            assert!(
+                quorum_qw::lane::Lane::ALL.contains(&qw),
+                "{lane:?} names {}, which is not one of qd's nine lanes",
+                qw.id()
+            );
+            assert_eq!(
+                quorum_qw::lane::Lane::from_id(lane.id()),
+                Some(qw),
+                "{} does not parse back to the lane it names",
+                lane.id()
+            );
+        }
+    }
+
+    /// The matrix is a SUBSET of qd's lanes, and the four it omits are omitted
+    /// because no seed drives them — not because they do not exist. Pinned so
+    /// that adding a lane to `quorum_qw` does not silently read as "measured".
+    #[test]
+    fn the_matrix_is_five_distinct_lanes_of_the_nine() {
+        let mut ids: Vec<&str> = Lane::ALL.iter().map(|l| l.id()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            Lane::ALL.len(),
+            "two conformance lanes share an id"
+        );
+        assert!(
+            Lane::ALL.len() < quorum_qw::lane::Lane::ALL.len(),
+            "the battery claims to measure every lane qd has — if that became true, say so here rather than letting the assertion rot"
+        );
     }
 }
 
@@ -122,8 +264,13 @@ pub struct ObservationId(pub String);
 impl ObservationId {
     /// Deterministic id for a (run, lane, cell) triple. Uniqueness within a run
     /// reduces to uniqueness of (lane, cell), which the registry guarantees.
+    ///
+    /// Keyed on [`Lane::id`], the LANE id, so two lanes of one harness never
+    /// collide: `claude-code/mux-pane` and `claude-code/acp` measure the same
+    /// cell ids on the same run, and under a harness-shaped key every one of
+    /// those pairs would derive one observation id for two observations.
     pub fn derive(run: &RunId, lane: Lane, cell: &CellId) -> Self {
-        ObservationId(format!("{}::{}::{}", run.0, lane.provider_id(), cell.0))
+        ObservationId(format!("{}::{}::{}", run.0, lane.id(), cell.0))
     }
 }
 

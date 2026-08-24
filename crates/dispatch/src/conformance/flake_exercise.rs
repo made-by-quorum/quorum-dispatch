@@ -87,7 +87,7 @@ fn base_battery() -> Battery {
     let mut applicability = BTreeMap::new();
     for c in ["d1.g", "d6.g", "d3.n", "d5.n"] {
         applicability.insert(
-            (Lane::Pi.provider_id().to_string(), c.to_string()),
+            (Lane::Pi.id().to_string(), c.to_string()),
             Applicability::Required,
         );
     }

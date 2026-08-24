@@ -216,6 +216,26 @@ pub fn acp_provider_for(id: &str) -> Option<&'static AcpProvider> {
     }
 }
 
+/// The same registry, keyed on the HARNESS behind the bridge.
+///
+/// This is the lookup the ACP create and resume paths use, and the string one
+/// above is now only for callers still holding a provider id. Which bridge to
+/// spawn is a fact about the program being bridged — claude's is
+/// `claude-code-acp`, opencode's is `opencode acp` — and since ACP became a lane
+/// the row's provider id names that program directly rather than encoding the
+/// transport, so the harness is both the honest key and the available one.
+///
+/// `None` for codex and pi: no ACP adapter is wired up for them in qd yet. See
+/// `Harness::supports`, which holds the same answer and explains why it is "not
+/// built" rather than "cannot exist".
+pub fn acp_provider_for_harness(harness: crate::lane::Harness) -> Option<&'static AcpProvider> {
+    match harness {
+        crate::lane::Harness::ClaudeCode => Some(&ACP_CC_PROVIDER),
+        crate::lane::Harness::Opencode => Some(&ACP_OPENCODE_PROVIDER),
+        crate::lane::Harness::Codex | crate::lane::Harness::Pi => None,
+    }
+}
+
 impl Provider for AcpProvider {
     fn id(&self) -> &'static str {
         // Namespaced `acp/<bridge>` (A2 §A3-ACP): the registry/dispatch key + `--json` value.
@@ -223,8 +243,12 @@ impl Provider for AcpProvider {
     }
 
     fn hosting(&self) -> Hosting {
-        // Daemon-hosted: the bridge is a subprocess thread of conversation, no mux pane.
-        Hosting::Daemon
+        // The ACP bridge lane. Daemon-SHAPED in every respect — the bridge is a
+        // subprocess thread of conversation, no mux pane, nothing to attach — and
+        // `Lane::is_daemon` answers `true` for it, which is why no daemon-branch
+        // path had to move when ACP stopped being a harness. It is its own token
+        // because the row must be able to say which of claude's two lanes it is.
+        Hosting::Acp
     }
 
     /// The bridge launch command. The argv is this provider's bridge program + args (+ passthrough

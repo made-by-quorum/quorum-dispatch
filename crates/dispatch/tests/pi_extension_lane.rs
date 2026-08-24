@@ -388,6 +388,25 @@ fn the_extension_lane_launches_channelled_records_it_and_answers_on_the_socket()
 /// The wording matters: `Lane::for_create` answers `None` for this combination,
 /// and the same `None` means "unknown provider" one branch over. A user who
 /// typed `--provider codex --extension` must not be told codex is unknown.
+///
+/// # Why `acp/claude-code` is expected to say something ELSE
+///
+/// One `None`, several reasons, and the verb has to pick the one that tells the
+/// user what to do next. For codex and claude-code the reason is the flag: the
+/// harness has no extension lane, full stop. For `acp/claude-code` the reason is
+/// the PROVIDER SPELLING — it is not a program name at all, it is a lane name,
+/// the older way of writing `claude-code --acp`. So the pair does not read "this
+/// harness has no extension lane" (claude-code plainly could have had one); it
+/// reads "you named two different lanes in one command". Telling that user about
+/// pi's extension loader would send them to fix a flag when the thing to fix is
+/// that they pinned a lane and then asked for another.
+///
+/// That arm is checked BEFORE the flag-specific ones in `run_start` for exactly
+/// this reason, and this case only became reachable with the ACP remodel: while
+/// ACP was a harness the engine MASKED a conflicting topology flag for `acp/*`
+/// and returned a daemon with exit 0. The invariant the loop asserts is the one
+/// that has not moved — every refusal names a real, actionable reason, and none
+/// of them claims the provider is unknown.
 #[test]
 fn the_extension_flag_is_refused_for_every_other_harness_by_name() {
     let j = establish_jail(Path::new("/tmp/qd-piext"), "piextrefuse");
@@ -397,7 +416,16 @@ fn the_extension_flag_is_refused_for_every_other_harness_by_name() {
     let work = j.root.join("work");
     std::fs::create_dir_all(&work).expect("work dir");
 
-    for provider in ["codex", "claude-code", "acp/claude-code"] {
+    for (provider, wanted) in [
+        ("codex", "--extension is pi's alone"),
+        ("claude-code", "--extension is pi's alone"),
+        // The lane-naming spelling: the conflict is the reason, not the flag.
+        (
+            "acp/claude-code",
+            "already names the claude-code/acp lane, and the topology flag you passed \
+             names a different one",
+        ),
+    ] {
         let (code, _out, err) = qd(
             &j,
             &pi_sessions,
@@ -407,7 +435,7 @@ fn the_extension_flag_is_refused_for_every_other_harness_by_name() {
         );
         assert_ne!(code, 0, "--extension on {provider} must refuse");
         assert!(
-            err.contains("--extension is pi's alone"),
+            err.contains(wanted),
             "the refusal must name the real reason for {provider}; got {err:?}"
         );
         assert!(

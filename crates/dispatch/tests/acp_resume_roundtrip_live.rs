@@ -230,13 +230,22 @@ fn acp_resume_roundtrip_live() {
     assert!(lines_pre.iter().any(|l| l.contains(&nonce)), "pre-stop JSONL records the nonce");
 
     // ---- 2. STOP: kill_acp group-reaps adapter1 + bridge child + tombstones. ----
+    // The row shape the ACP create actually writes: the PROGRAM in `provider` and
+    // the TOPOLOGY in `hosting`, as a pair. Neither half names the lane on its
+    // own — `claude-code` alone re-derives to the mux pane, and `acp` alone names
+    // no harness — so a fixture that drops either one is testing a row the
+    // product cannot produce. `lane_for` reads the pair and answers
+    // `claude-code/acp`, which is what routes this kill down the daemon branch
+    // (group-reap of the adapter plus its bridge child) rather than at a pane
+    // that was never opened.
     let captured = RegistryEntry {
         pid: Some(pid1),
         session_id: Some(session.clone()),
         cwd: Some(cwd.to_string_lossy().into_owned()),
         status: Some("idle".into()),
         name: Some("rt".into()),
-        provider: Some("acp/claude-code".into()),
+        provider: Some("claude-code".into()),
+        hosting: Some("acp".into()),
         endpoint: Some(ep1.clone()),
         ..Default::default()
     };

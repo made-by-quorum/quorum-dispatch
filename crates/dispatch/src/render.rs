@@ -409,7 +409,7 @@ fn stray_short_code(session_id: &str) -> String {
 ///   `is_live_with_pid`) and renders as `null`, matching what `live` consulted.
 ///
 /// Key order: name, sessionId, qdId?, qdIdPrefix?, status, live, pid,
-/// provider, jsonlPath?. `jsonlPath` follows the same absent-not-null
+/// provider, lane?, jsonlPath?. `jsonlPath` follows the same absent-not-null
 /// convention as `qdId` (omitted, never `null`, when the session has no
 /// resolved transcript path) — mirrors `ls --json`'s `session_to_value`,
 /// which reads the same `Session.jsonl_path` field (persist-relocation:
@@ -445,6 +445,19 @@ pub fn info_json(
         },
     );
     m.insert("provider".into(), json!(s.provider));
+    // The row's LANE, on the same terms `ls --json` emits it (see
+    // `session_to_value`): derived through `lane_for`, absent-never-null when the
+    // provider cannot be placed, and sitting directly after `provider`.
+    //
+    // It was missing here while `provider` alone identified a session's carrier.
+    // It no longer does — `claude-code` names two lanes, one delivered over a PTY
+    // composer and one over an ACP bridge — so a consumer choosing a transport
+    // from `provider` is choosing from a field that cannot answer. `qf` is that
+    // consumer (`frame/src/delivery.rs`), it reads THIS object, and this key is
+    // what lets it route on the lane rather than guess from the harness name.
+    if let Some(lane) = quorum_qw::lane_for(&s.provider, s.hosting.as_deref()) {
+        m.insert("lane".into(), Value::String(lane.id()));
+    }
     if let Some(jsonl_path) = &s.jsonl_path {
         m.insert("jsonlPath".into(), Value::String(jsonl_path.clone()));
     }
@@ -1487,6 +1500,7 @@ mod tests {
                 "live",
                 "pid",
                 "provider",
+                "lane",
                 "jsonlPath"
             ],
             "the EXACT promised field list, in order"
@@ -1499,6 +1513,8 @@ mod tests {
         assert_eq!(obj["live"], json!(true));
         assert_eq!(obj["pid"], json!(4242));
         assert_eq!(obj["provider"], json!("claude-code"));
+        // Derived, not echoed — the same `lane_for` every acting verb asks.
+        assert_eq!(obj["lane"], json!("claude-code/mux-pane"));
         assert_eq!(obj["jsonlPath"], json!("/p/sess-a6.jsonl"));
     }
 
@@ -1583,12 +1599,19 @@ mod tests {
         // An UNSTAMPED row re-derives through the harness default — the same answer
         // `lane_for` gives every acting verb, so the listing and the router agree.
         assert_eq!(lane_of("codex", None).as_deref(), Some("codex/daemon"));
-        // `acp/*` is why the key carries the whole id rather than a bare token: the
-        // provider half itself contains a slash, and `Lane::from_id` splits on the
-        // LAST one.
+        // The two claude lanes, which is the case this key exists for: they share
+        // a provider id and differ only in topology, so a consumer reading
+        // `provider` alone cannot tell a PTY composer from an ACP bridge.
         assert_eq!(
-            lane_of("acp/claude-code", None).as_deref(),
-            Some("acp/claude-code/daemon")
+            lane_of("claude-code", Some("acp")).as_deref(),
+            Some("claude-code/acp")
+        );
+        // …and the legacy spelling of the same lane, which rows written before
+        // the remodel still carry. It pins its lane off the provider id, so the
+        // `hosting: "daemon"` those rows also carry cannot move it.
+        assert_eq!(
+            lane_of("acp/claude-code", Some("daemon")).as_deref(),
+            Some("claude-code/acp")
         );
         // A row whose hosting token names a combination the harness cannot support
         // falls back to the harness default rather than inventing a lane.

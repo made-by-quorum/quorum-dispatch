@@ -1,8 +1,13 @@
 //! The dimension registry — one battery, defined once, uniform dimensions
-//! D1–D7 parameterized over the five lanes (T1, QS-3). The registry is the
-//! **manifest**: the cell set plus the per-(lane, cell) applicability map. Its
-//! content hash is the [`ManifestDigest`] A2's window eligibility keys on — any
-//! change to cells or applicability starts a fresh window.
+//! D1–D7 parameterized over the five lanes the battery measures (T1, QS-3). A
+//! lane is `(harness, hosting)` — see [`super::ids::Lane`] for which five of
+//! qd's nine, and why a bare `codex` row would have been a claim about three
+//! topologies the battery only has evidence for one of.
+//!
+//! The registry is the **manifest**: the cell set plus the per-(lane, cell)
+//! applicability map. Its content hash is the [`ManifestDigest`] A2's window
+//! eligibility keys on — any change to cells or applicability starts a fresh
+//! window.
 //!
 //! C-1 owns the manifest and the operands it carries; C-3's A10 v5 (a run's
 //! observation set == the manifest-authorized domain, checked over the assembled
@@ -108,8 +113,10 @@ impl Applicability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Battery {
     pub cells: Vec<Cell>,
-    /// (lane provider-id, cell id) → applicability. A `BTreeMap` so serialization
-    /// (hence the digest) is canonical. Serialized as a `Vec` of triples: a JSON
+    /// (lane id, cell id) → applicability — the lane id being the full
+    /// `<harness>/<hosting>` spelling ([`Lane::id`]), so the two lanes of one
+    /// harness hold independent entries rather than overwriting each other.
+    /// A `BTreeMap` so serialization (hence the digest) is canonical. Serialized as a `Vec` of triples: a JSON
     /// object cannot use a tuple as a key ("key must be a string"), so a plain
     /// derive would fail to round-trip through JSON — which C-3's corpus (which
     /// embeds the battery as the commit-derived manifest) requires for the
@@ -153,7 +160,7 @@ impl Battery {
     /// The applicability of a (lane, cell); `OutOfDomain` if unmapped.
     pub fn applicability(&self, lane: Lane, cell: &CellId) -> &Applicability {
         self.applicability
-            .get(&(lane.provider_id().to_string(), cell.0.clone()))
+            .get(&(lane.id().to_string(), cell.0.clone()))
             .unwrap_or(&Applicability::OutOfDomain)
     }
 
@@ -228,11 +235,11 @@ impl Battery {
         let mut breaches = Vec::new();
         for lane in Lane::ALL {
             for cell in &self.cells {
-                let key = (lane.provider_id().to_string(), cell.id.0.clone());
+                let key = (lane.id().to_string(), cell.id.0.clone());
                 if !self.applicability.contains_key(&key) {
                     breaches.push(format!(
                         "uniformity breach: lane {} has no declared applicability for cell {} — a lane's variance must be a DECLARED n-a, never an absent cell",
-                        lane.provider_id(),
+                        lane.id(),
                         cell.id.0
                     ));
                 }
@@ -244,6 +251,26 @@ impl Battery {
             Err(breaches)
         }
     }
+}
+
+/// The declared n-a reason every D7 cell carries on a lane with no terminal of
+/// its own.
+///
+/// A free function because it has TWO callers that must agree exactly: the
+/// manifest below, which declares the applicability, and
+/// `conformance::harness::c2::na_d7_no_terminal`, which is what the driver
+/// actually reports when the cell is run. A stranger reading the grid sees the
+/// observed reason; a stranger reading the manifest sees the declared one; if
+/// those two were kept as separate string literals they would drift the first
+/// time either was edited, and the drift would read as a lane quietly changing
+/// its story about why it is exempt.
+pub fn d7_no_terminal_reason(lane: Lane) -> String {
+    format!(
+        "{} is a headless lane ({}) — no qd-owned mux pane, no terminal of its own, and `qd attach` has none to hand over (an ACP bridge is a protocol adapter with no terminal at all; a daemon resident is driven over RPC), so the qrmux attach-client env-matrix / nested-render property has no referent on this lane. It is a fact about THIS lane, not about {}: a sibling lane of the same harness that does own a pane is measured on its own row.",
+        lane.id(),
+        lane.qw_lane().mode.hosting_token(),
+        lane.harness_provider_id()
+    )
 }
 
 /// The canonical C-1 battery: D1/D2/D3/D5/D6 cells absorbed from the existing
@@ -265,13 +292,14 @@ impl Battery {
 ///
 /// **Applicability judgment calls, recorded here (no out-of-band knowledge —
 /// every reason a stranger would need is in the `NaPermitted` string itself):**
-/// - `claude-code` (the bare, non-ACP lane) has **zero** existing-seed coverage
-///   across every source file the extraction searched — every seed test
-///   touches `pi`, `codex`, or an `acp/*` lane. The dimension genuinely
-///   applies to `claude-code` (it has the same start/turn/stop lifecycle), so
-///   cells are `Required` here, not `NaPermitted` — an unresolved cell is a
-///   correctly-surfaced C-1 defect (open coverage work), never papered over.
-/// - `acp/opencode` shares `AcpHost`/`client.rs` with `acp/claude-code` for
+/// - `claude-code/mux-pane` (the bare claude TUI, not the ACP lane) has **zero**
+///   existing-seed coverage across every source file the extraction searched —
+///   every seed test touches `pi/daemon`, `codex/daemon`, or an ACP lane. The
+///   dimension genuinely applies to it (it has the same start/turn/stop
+///   lifecycle), so cells are `Required` here, not `NaPermitted` — an unresolved
+///   cell is a correctly-surfaced C-1 defect (open coverage work), never papered
+///   over.
+/// - `opencode/acp` shares `AcpHost`/`client.rs` with `claude-code/acp` for
 ///   most of these mechanisms per `provider.rs`'s registration, but the
 ///   extraction found no seed that independently EXERCISES opencode's bridge
 ///   — so these are `Required`, not assumed-passing by compositional
@@ -280,9 +308,9 @@ impl Battery {
 ///   nothing ran").
 /// - ACP-protocol-specific mechanisms (`session/cancel` semantics, ACP queue
 ///   capacity, `session/load` resume) have no analogous primitive in pi's or
-///   codex's own wire protocol — those get `NaPermitted` for `pi`/`codex`
-///   with the protocol-difference reason stated, which IS a stranger-
-///   acceptable n-a (a different transport, not a coverage gap).
+///   codex's own wire protocol — those get `NaPermitted` for `pi/daemon` and
+///   `codex/daemon` with the protocol-difference reason stated, which IS a
+///   stranger-acceptable n-a (a different transport, not a coverage gap).
 pub fn conformance_battery() -> Battery {
     use Applicability::{NaPermitted, Required};
 
@@ -426,9 +454,12 @@ pub fn conformance_battery() -> Battery {
             "every flag the curated help advertises is either functional or discloses that it is unsupported — no flag is advertised as a working feature while the handler unconditionally rejects it, and no documented flag silently no-ops",
         ),
         // D7 — env-matrix: the qd attach client (qrmux) nested inside a real outer
-        // mux. Required only on claude-code (the sole Hosting::MuxPane lane — the
-        // one with a terminal-grid attach surface); the daemon lanes have "no
-        // terminal to attach" (lifecycle.rs:68), so the property has no referent.
+        // mux. Required only on a lane that HAS a terminal — today that is
+        // `claude-code/mux-pane` alone, the one lane in the matrix with a qd-owned
+        // pane and thus a terminal-grid attach surface; the headless lanes have
+        // "no terminal to attach" (lifecycle.rs:68), so the property has no
+        // referent there. The applicability arm below keys on the lane's own
+        // hosting, so this stays true as pane lanes enter the matrix.
         // Render code is server-side + provider-invariant (VTE Screen/Grid); qd's
         // claude MuxPane attaches via the IDENTICAL attach_session path
         // (embedded_mux.rs:461) the standalone qrmux binary uses — so these are
@@ -472,14 +503,14 @@ pub fn conformance_battery() -> Battery {
 
     let mut applicability = BTreeMap::new();
     let mut put = |lane: Lane, id: &str, app: Applicability| {
-        applicability.insert((lane.provider_id().to_string(), id.to_string()), app);
+        applicability.insert((lane.id().to_string(), id.to_string()), app);
     };
 
     for lane in Lane::ALL {
         // D1 cells that apply uniformly across every lane's start/stop
         // lifecycle — no lane has a domain reason to exclude them; unresolved
-        // today (claude-code bare, acp/opencode) is a visible C-1 defect, not
-        // a silent narrowing.
+        // today (`claude-code/mux-pane`, `opencode/acp`) is a visible C-1 defect,
+        // not a silent narrowing.
         for id in [
             "d1.boot-readiness",
             "d1.launch-addressing",
@@ -551,7 +582,7 @@ pub fn conformance_battery() -> Battery {
                         NaPermitted {
                             reason: format!(
                                 "{} does not route turns through the ACP-family delivery-log store any existing seed measures",
-                                lane.provider_id()
+                                lane.id()
                             ),
                         },
                     );
@@ -593,7 +624,7 @@ pub fn conformance_battery() -> Battery {
                         NaPermitted {
                             reason: format!(
                                 "{} has no measured analogous outbound-queue/in-flight primitive to the ACP host's",
-                                lane.provider_id()
+                                lane.id()
                             ),
                         },
                     );
@@ -709,7 +740,7 @@ pub fn conformance_battery() -> Battery {
                     NaPermitted {
                         reason: format!(
                             "{} has no ACP bridge child process for this liveness primitive to apply to",
-                            lane.provider_id()
+                            lane.id()
                         ),
                     },
                 );
@@ -719,7 +750,7 @@ pub fn conformance_battery() -> Battery {
                     NaPermitted {
                         reason: format!(
                             "{} has no measured ACP session/cancel-equivalent primitive",
-                            lane.provider_id()
+                            lane.id()
                         ),
                     },
                 );
@@ -758,7 +789,7 @@ pub fn conformance_battery() -> Battery {
                 NaPermitted {
                     reason: format!(
                         "{} routes send:relay to its daemon ws/ACP inject ladder before the relay-port check and carries no relay port — it never opens a CcRelay HTTP sidecar POST, so the dead-relay-sidecar transport door has no referent on this lane",
-                        lane.provider_id()
+                        lane.id()
                     ),
                 },
             ),
@@ -798,15 +829,12 @@ pub fn conformance_battery() -> Battery {
         // torn-tail / malformed-line rejection is shared. Required everywhere.
         put(lane, "d6.partial-write", Required);
 
-        // D7 env-matrix (all 7): Required ONLY on claude-code (bare) — the sole
-        // Hosting::MuxPane lane (provider.rs:60-64), the one with a qd-owned mux
-        // pane and thus a terminal-grid attach surface. Every other lane is
-        // Hosting::Daemon: a provider-owned daemon thread with "no terminal to
-        // attach" (lifecycle.rs:68 says so outright for codex; pi/acp report the
-        // same Hosting::Daemon), so the attach-client env-matrix / nested-render
-        // property has NO referent there — a stranger-acceptable NaPermitted, not
-        // a coverage gap. (Whether a daemon lane exhibits render coverage through
-        // some OTHER surface — e.g. `qd live` tailing — is preregistered for the
+        // D7 env-matrix (all 7): the qrmux attach client nested in a real outer
+        // mux. The property needs a terminal to render INTO, so it is `Required`
+        // exactly on the lanes that have one and a declared n-a on the lanes that
+        // do not — a stranger-acceptable NaPermitted, not a coverage gap.
+        // (Whether a terminal-less lane exhibits render coverage through some
+        // OTHER surface — e.g. `qd live` tailing — is preregistered for the
         // per-cell why-holder; if found, this reason is revised, not papered over.)
         let d7_cells = [
             "d7.nested-render-correctness",
@@ -817,41 +845,48 @@ pub fn conformance_battery() -> Battery {
             "d7.cross-size-reattach-both-directions",
             "d7.zellij-nested-render-coverage",
         ];
-        // codex-interactive / pi-interactive: this arm USED to read
-        // `Lane::ClaudeCode => Required, _ => NaPermitted`, on the stated grounds
-        // that every other lane is `Hosting::Daemon`. That stopped being true when
-        // codex and pi grew `--interactive` mux-pane lanes: a pane-hosted codex or
-        // pi has a real terminal, so the d7 attach/render property DOES have a
-        // referent there and NaPermitted was over-claiming.
+        // THE LANE's terminal, not its harness's. This arm has been wrong twice,
+        // in opposite directions, and both times because it was keyed on
+        // something coarser than the lane:
         //
-        // The honest key is whether the harness has a pane lane AT ALL, which
-        // `quorum_qw::lane` answers structurally. (This grid still indexes by provider
-        // id, so it cannot yet say "codex/mux-pane Required, codex/daemon
-        // NaPermitted" — that needs the hosting axis on `Lane` itself. Until then,
-        // keying on "has a pane lane" is strictly closer to the truth than
-        // assuming everything non-claude is daemon-only.)
-        let has_pane_lane = quorum_qw::lane::Harness::from_provider_id(lane.provider_id())
-            .is_some_and(|h| h.supports(quorum_qw::lane::Mode::Pane));
+        //   - It read `Lane::ClaudeCode => Required, _ => NaPermitted` on the
+        //     grounds that every other lane was `Hosting::Daemon`. codex and pi
+        //     grew `--interactive` mux-pane lanes and that stopped being true, so
+        //     the n-a over-claimed for the harness.
+        //   - It then read "does this HARNESS have a pane lane anywhere", which
+        //     was as close as it could get while the axis was a provider id. That
+        //     answer is wrong the moment a harness has two lanes and only one of
+        //     them has a terminal: it Requires the full nested-render battery of
+        //     `claude-code/acp`, a bridge process with no terminal at all, purely
+        //     because `claude-code/mux-pane` exists somewhere else in the matrix.
+        //
+        // The hosting axis exists now — on `quorum_qw::lane::Lane` and, through
+        // `Lane::qw_lane`, on this grid's own axis — so the question can be asked
+        // of the thing it is actually about. `is_pane` is the same predicate
+        // `attach` and `kill` route on, so a lane whose terminal the dispatcher
+        // will hand over is exactly a lane this dimension is owed for.
+        //
+        // What that buys, concretely: `codex/mux-pane` and `pi/extension` are
+        // pane lanes, and when a seed drives one into the matrix its D7 cells are
+        // `Required` with no edit here — while `codex/daemon` and `pi/daemon`,
+        // which is what the matrix measures today, stay a declared n-a. That is
+        // the "codex/mux-pane Required, codex/daemon NaPermitted" sentence this
+        // comment used to say the grid could not yet express.
+        let has_terminal = lane.qw_lane().is_pane();
 
-        match lane {
-            _ if has_pane_lane => {
-                for id in d7_cells {
-                    put(lane, id, Required);
-                }
+        if has_terminal {
+            for id in d7_cells {
+                put(lane, id, Required);
             }
-            _ => {
-                for id in d7_cells {
-                    put(
-                        lane,
-                        id,
-                        NaPermitted {
-                            reason: format!(
-                                "{} has NO mux-pane lane at all — an ACP bridge is a protocol adapter with no terminal of its own (lifecycle.rs:504-521 refuses --interactive for acp/*), so the qrmux attach-client env-matrix / nested-render property has no referent on this lane",
-                                lane.provider_id()
-                            ),
-                        },
-                    );
-                }
+        } else {
+            for id in d7_cells {
+                put(
+                    lane,
+                    id,
+                    NaPermitted {
+                        reason: d7_no_terminal_reason(lane),
+                    },
+                );
             }
         }
     }

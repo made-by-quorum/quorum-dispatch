@@ -97,7 +97,7 @@ fn run_one_lane_cells(
 ) -> RunArtifact {
     let run_id = RunId(format!(
         "c2-pipeline-{}-{}-{run_index}",
-        lane.provider_id().replace('/', "-"),
+        lane.id().replace('/', "-"),
         std::process::id()
     ));
     let session_name = run_id.0.clone();
@@ -115,7 +115,7 @@ fn run_one_lane_cells(
             "c2-executor-1",
             &mut || {
                 tok_n += 1;
-                format!("c2-pipeline-tok-{}-{run_index}-{tok_n}", lane.provider_id())
+                format!("c2-pipeline-tok-{}-{run_index}-{tok_n}", lane.id())
             },
         )
         .expect("commission_run");
@@ -124,7 +124,7 @@ fn run_one_lane_cells(
     let nonce = journal
         .start_run(&tuple.run, "c2-runner-1", &mut || {
             nonce_n += 1;
-            format!("c2-pipeline-nonce-{}-{run_index}-{nonce_n}", lane.provider_id())
+            format!("c2-pipeline-nonce-{}-{run_index}-{nonce_n}", lane.id())
         })
         .expect("start_run");
 
@@ -134,7 +134,7 @@ fn run_one_lane_cells(
     for cell in cells {
         let cell_session = format!("{session_name}-{}", cell.0.replace('.', "-"));
         let outcome = harness::run_cell(lane, cell, builder.runner(), &cell_session)
-            .unwrap_or_else(|| panic!("{}: no harness driver for {} yet", lane.provider_id(), cell.0));
+            .unwrap_or_else(|| panic!("{}: no harness driver for {} yet", lane.id(), cell.0));
         builder.observe(lane, cell.clone(), RunMode::Automated, outcome);
     }
 
@@ -173,7 +173,7 @@ fn c2_partial_write_all_lanes() {
     let lanes = [
         Lane::Pi,
         Lane::Codex,
-        Lane::AcpClaudeCode,
+        Lane::ClaudeCodeAcp,
         Lane::Opencode,
         Lane::ClaudeCode,
     ];
@@ -181,11 +181,11 @@ fn c2_partial_write_all_lanes() {
     for (i, lane) in lanes.into_iter().enumerate() {
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
             assert!(
                 obs.outcome.is_pass(),
                 "{}/{}: partial-write must PASS (reader rejects the truncated record), got {:?}",
-                lane.provider_id(),
+                lane.id(),
                 obs.cell.0,
                 obs.outcome
             );
@@ -212,7 +212,7 @@ fn c2_advertised_surface_all_lanes() {
     let lanes = [
         Lane::Pi,
         Lane::Codex,
-        Lane::AcpClaudeCode,
+        Lane::ClaudeCodeAcp,
         Lane::Opencode,
         Lane::ClaudeCode,
     ];
@@ -220,13 +220,13 @@ fn c2_advertised_surface_all_lanes() {
     for (i, lane) in lanes.into_iter().enumerate() {
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
             // EXPECTED FAIL while the start --attach/--port drift is live. A Pass
             // here would mean the advertised surface was corrected (revisit).
             assert!(
                 obs.outcome.is_fail(),
                 "{}/{}: expected FAIL (start --attach/--port advertised-but-broken doc-drift is live); got {:?}. A Pass means the drift was fixed — revisit this expectation.",
-                lane.provider_id(),
+                lane.id(),
                 obs.cell.0,
                 obs.outcome
             );
@@ -235,9 +235,12 @@ fn c2_advertised_surface_all_lanes() {
     journal.integrity_check().expect("journal integrity");
 }
 
-/// D7 on the four `Hosting::Daemon` lanes — every D7 cell resolves NotApplicable
-/// (no terminal to attach). Cred-free, no fixture. Confirms the daemon-NA guard
-/// resolves (never a None fall-through, never a silent narrowing).
+/// D7 on the four lanes with no terminal of their own — every D7 cell resolves
+/// NotApplicable (nothing to attach a qrmux client to). That is the four of the
+/// five that are not `claude-code/mux-pane`: two ACP bridges and two headless
+/// residents, which `Lane::is_pane` answers `false` for alike. Cred-free, no
+/// fixture. Confirms the no-terminal guard resolves (never a None fall-through,
+/// never a silent narrowing).
 #[test]
 fn c2_d7_daemon_lanes_not_applicable() {
     if !live() {
@@ -258,15 +261,15 @@ fn c2_d7_daemon_lanes_not_applicable() {
     .iter()
     .map(|s| CellId(s.to_string()))
     .collect();
-    let lanes = [Lane::Pi, Lane::Codex, Lane::AcpClaudeCode, Lane::Opencode];
+    let lanes = [Lane::Pi, Lane::Codex, Lane::ClaudeCodeAcp, Lane::Opencode];
     let mut journal = AuthorityJournal::new();
     for (i, lane) in lanes.into_iter().enumerate() {
         let artifact = run_one_lane_cells(&mut journal, lane, &d7_cells, &manifest_digest, i);
         for obs in artifact.observations() {
             assert!(
                 matches!(obs.outcome, dispatch::conformance::Outcome::NotApplicable { .. }),
-                "{}/{}: expected NotApplicable (Hosting::Daemon, no terminal), got {:?}",
-                lane.provider_id(),
+                "{}/{}: expected NotApplicable (the lane has no terminal of its own), got {:?}",
+                lane.id(),
                 obs.cell.0,
                 obs.outcome
             );
@@ -384,12 +387,12 @@ fn c2_wedged_daemon_lanes() {
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d6.wedged-daemon".to_string())];
     // acp/pi bound the wedged handshake (PASS); codex does NOT (unbounded → FAIL).
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode, Lane::Pi, Lane::Codex];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode, Lane::Pi, Lane::Codex];
     let mut journal = AuthorityJournal::new();
     for (i, lane) in lanes.into_iter().enumerate() {
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
             if lane == Lane::Codex {
                 assert!(
                     obs.outcome.is_fail(),
@@ -401,7 +404,7 @@ fn c2_wedged_daemon_lanes() {
                 assert!(
                     obs.outcome.is_pass(),
                     "{}/{}: wedged-daemon must PASS (fail loud within the timeout + truthful send-failed terminal), got {:?}",
-                    lane.provider_id(),
+                    lane.id(),
                     obs.cell.0,
                     obs.outcome
                 );
@@ -424,16 +427,16 @@ fn c2_sender_killed_lanes() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     let cells = [CellId("d6.sender-killed-mid-send".to_string())];
-    let lanes = [Lane::AcpClaudeCode, Lane::Opencode, Lane::Pi, Lane::Codex];
+    let lanes = [Lane::ClaudeCodeAcp, Lane::Opencode, Lane::Pi, Lane::Codex];
     let mut journal = AuthorityJournal::new();
     for (i, lane) in lanes.into_iter().enumerate() {
         let artifact = run_one_lane_cells(&mut journal, lane, &cells, &manifest_digest, i);
         for obs in artifact.observations() {
-            eprintln!("{}: {}: {:?}", lane.provider_id(), obs.cell.0, obs.outcome);
+            eprintln!("{}: {}: {:?}", lane.id(), obs.cell.0, obs.outcome);
             assert!(
                 obs.outcome.is_pass(),
                 "{}/{}: sender-killed must PASS (no phantom success terminal), got {:?}",
-                lane.provider_id(),
+                lane.id(),
                 obs.cell.0,
                 obs.outcome
             );

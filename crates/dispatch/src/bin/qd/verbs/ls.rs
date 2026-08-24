@@ -430,7 +430,9 @@ fn run_inner(
             // `(pid,starttime)` or qrmux socket, so the headless gate would mis-classify
             // them. They get a primary-sourced acp Status override at render time
             // (`acp_human_status`) instead.
-            if s.provider != "codex" && !s.provider.starts_with("acp/") {
+            if s.provider != "codex"
+                && !quorum_qw::row_is_acp(&s.provider, s.hosting.as_deref())
+            {
                 s.status = dispatch::liveness::gated_ls_status_headless(
                     s.status,
                     s.entrypoint.as_deref(),
@@ -815,7 +817,7 @@ fn acp_human_status(
     s: &Session,
     sessions_dir: &std::path::Path,
 ) -> Option<(String, SessionStatus)> {
-    if !s.provider.starts_with("acp/") {
+    if !quorum_qw::row_is_acp(&s.provider, s.hosting.as_deref()) {
         return None;
     }
     let pid = s.pid.filter(|&p| p != 0);

@@ -411,16 +411,35 @@ mod tests {
     /// is asserted here too rather than only where the type is defined.
     #[test]
     fn a_lane_crosses_as_its_stable_string_id() {
-        let lane = Lane::from_id("acp/claude-code/daemon").expect("a real lane");
+        let lane = Lane::from_id("claude-code/acp").expect("a real lane");
         let line = encode(&Request {
             id: 1,
             call: Call::List { lane },
         })
         .unwrap();
         assert!(
-            line.contains("\"lane\":\"acp/claude-code/daemon\""),
+            line.contains("\"lane\":\"claude-code/acp\""),
             "lane must cross as its id: {line}"
         );
+    }
+
+    /// The legacy three-segment ACP ids still DECODE, and decode to the lane they
+    /// have always meant.
+    ///
+    /// A `qw` on the far side of an upgrade — or a hand-written call from
+    /// `13-calling-qw-directly.md`, or a script that saved a lane id — may still
+    /// send `acp/claude-code/daemon`. It must not fail to parse. Nothing emits it
+    /// any more, which is why this is asserted separately from the encode above
+    /// rather than as a round trip.
+    #[test]
+    fn the_legacy_acp_lane_ids_still_decode() {
+        for (legacy, current) in [
+            ("acp/claude-code/daemon", "claude-code/acp"),
+            ("acp/opencode/daemon", "opencode/acp"),
+        ] {
+            let lane = Lane::from_id(legacy).expect("the legacy id must still parse");
+            assert_eq!(lane.id(), current, "{legacy} means {current}");
+        }
     }
 
     #[test]

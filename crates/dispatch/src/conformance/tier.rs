@@ -644,8 +644,7 @@ fn build_citation(corpus: &Corpus, release_commit: &str) -> Citation {
 /// so this check removes the ambiguity at the source: any run id or cell id
 /// containing `"::"`, anywhere in the corpus, is malformed → INVALID_EVIDENCE.
 /// After this, `starts_with("{rec.run}::")` (v9) and `split_once("::")`
-/// (`parse_cell_key`) are sound, and lane provider-ids (a fixed enum) are already
-/// safe.
+/// (`parse_cell_key`) are sound, and lane ids (a fixed enum) are already safe.
 fn v0_id_wellformedness(corpus: &Corpus) -> Vec<String> {
     let mut errs = Vec::new();
     let mut bad_run = |ctx: &str, id: &str| {
@@ -719,7 +718,7 @@ fn v1_journal_integrity(journal: &AuthorityJournal) -> Vec<String> {
             }) => {
                 errs.push(format!(
                     "v1: forged promotion event for lane {} — promotion is DERIVED replay arithmetic, no promotion event kind exists (R5-O5)",
-                    lane.provider_id()
+                    lane.id()
                 ));
             }
             JournalBody::Terminal(t) => {
@@ -1042,7 +1041,7 @@ fn v5_exact_observation_domain(corpus: &Corpus, battery: &Battery) -> Vec<String
                 errs.push(format!(
                     "v5: run {:?} carries an observation for lane {} outside its commissioned scope (R5-O3)",
                     art.header.tuple.run.0,
-                    lane.provider_id()
+                    lane.id()
                 ));
                 continue;
             }
@@ -1079,7 +1078,7 @@ fn v5_exact_observation_domain(corpus: &Corpus, battery: &Battery) -> Vec<String
                     if o.lane != lane {
                         errs.push(format!(
                             "v5: run {:?} observation at {key:?} carries lane {} ≠ its grid-key lane {} (RT-5 class)",
-                            run.0, o.lane.provider_id(), lane.provider_id()
+                            run.0, o.lane.id(), lane.id()
                         ));
                     }
                     if o.cell != cell {
@@ -1134,7 +1133,7 @@ fn v5_exact_observation_domain(corpus: &Corpus, battery: &Battery) -> Vec<String
                     if cov.lane != lane {
                         errs.push(format!(
                             "v5: run {:?} coverage record at {key:?} names lane {} ≠ its grid-key lane {} (RT-5 class)",
-                            run.0, cov.lane.provider_id(), lane.provider_id()
+                            run.0, cov.lane.id(), lane.id()
                         ));
                     }
                     if cov.cell != cell {
@@ -2235,25 +2234,62 @@ fn ga_point_in_time(
 }
 
 // ===========================================================================
-// (e) Provider badge = tier of the WEAKEST lane qd selects by default (T2).
+// (e) Provider badge = tier of the WEAKEST lane the battery measures for a
+// program (T2). "By default" was the same sentence while a program had one lane.
 // ===========================================================================
 
-/// The default lanes qd selects for a provider. Each provider maps to the lane(s)
-/// its default start resolves; the badge is the weakest of them.
+/// The MEASURED lanes a provider's badge reads — the lanes `qd start --provider
+/// <id>` reaches that the battery actually has evidence for. The badge is the
+/// weakest of them.
+///
+/// # Why this is not simply `Lane::for_create(provider, Default)`
+///
+/// It was one lane per provider because a provider HAD one lane. It now has up
+/// to three, `qd start` picks between them by flag, and the battery measures
+/// five of the nine — so "the lane qd selects by default" and "a lane this
+/// ledger can speak about" are two different sets, and this function is where
+/// they meet. Deriving the create default and looking it up would answer `None`
+/// for codex and pi (their defaults moved to `codex/app-server` and
+/// `pi/extension`, neither of which any seed drives), turning two published
+/// badges into em-dashes overnight — a REGRESSION in what the document says,
+/// dressed up as rigor: the evidence for the daemon lanes did not stop existing.
+///
+/// So each arm names the measured lane, and where that is no longer the lane a
+/// bare `qd start` creates, the divergence is stated rather than hidden:
+///
+///   - `claude-code` → `claude-code/mux-pane`, which IS its create default.
+///   - `codex` → `codex/daemon`, while the create default is now
+///     `codex/app-server`. The two are the same process — `start_codex_app_server`
+///     is `start_codex_daemon(req, Some("app-server"))`, identical spawn,
+///     delivery, kill and wake — and differ only in that a human can open a
+///     terminal onto the app-server. Every dimension in this battery except D7's
+///     attach surface is therefore measuring the same mechanism, and D7 is a
+///     declared n-a on both.
+///   - `pi` → `pi/daemon`, while the create default is now `pi/extension`. This
+///     one is a GENUINE gap, not a re-labelling: the extension lane is a pi TUI
+///     in a mux pane with a control socket, a different carrier and a different
+///     attach surface. The badge reads the daemon lane because that is where the
+///     evidence is; it under-describes what a bare `qd start --provider pi`
+///     gives a user, and the honest repair is a `pi/extension` row in the matrix
+///     with its own drivers, not a rewrite of this table.
+///   - `opencode` → `opencode/acp`, its only lane. The legacy `acp/*` spellings
+///     stay accepted here for the same reason `harness_and_pinned_mode` accepts
+///     them: they are on disk and in scripts, and they name these same lanes.
 pub fn provider_default_lanes(provider: &str) -> Vec<Lane> {
     match provider {
         "claude-code" => vec![Lane::ClaudeCode],
         "codex" => vec![Lane::Codex],
-        "acp/claude-code" => vec![Lane::AcpClaudeCode],
+        "acp/claude-code" => vec![Lane::ClaudeCodeAcp],
         "acp/opencode" | "opencode" => vec![Lane::Opencode],
         "pi" => vec![Lane::Pi],
         _ => Vec::new(),
     }
 }
 
-/// The provider badge (e): the tier of the weakest lane qd selects by default for
-/// the provider. An unknown provider or a provider with no default lanes has no
-/// badge (None).
+/// The provider badge (e): the tier of the weakest lane
+/// [`provider_default_lanes`] names for the provider — the measured lanes qd
+/// selects for it. An unknown provider, or one with no measured lane, has no
+/// badge (None); it is never given a made-up one.
 pub fn provider_badge(
     corpus: &Corpus,
     provider: &str,
@@ -2274,10 +2310,12 @@ pub fn provider_badge(
 // Small helpers.
 // ===========================================================================
 
-/// Parse a grid cell key `"<provider-id>::<cell-id>"` back into (lane, cell).
+/// Parse a grid cell key `"<lane-id>::<cell-id>"` back into (lane, cell). The
+/// lane half is the full `<harness>/<hosting>` id ([`Lane::id`]) — it carries a
+/// `/`, never a `::`, so the split stays unambiguous.
 fn parse_cell_key(key: &str) -> Option<(Lane, CellId)> {
-    let (prov, cell) = key.split_once("::")?;
-    let lane = Lane::ALL.into_iter().find(|l| l.provider_id() == prov)?;
+    let (lane_id, cell) = key.split_once("::")?;
+    let lane = Lane::ALL.into_iter().find(|l| l.id() == lane_id)?;
     Some((lane, CellId(cell.to_string())))
 }
 

@@ -38,15 +38,26 @@ use serde::{Deserialize, Serialize};
 
 /// The agent program behind a session.
 ///
-/// Distinct from a *provider id*: `acp/claude-code` and `acp/opencode` share one
-/// transport and one `Provider` impl, but they are different harnesses driving
-/// different agents, so they are different lanes.
+/// FOUR of them, and the fourth used to be five. `AcpClaudeCode` was a harness
+/// here, with provider id `acp/claude-code`, and it was never an agent program:
+/// it named a TRANSPORT in front of the claude-code program that
+/// [`Harness::ClaudeCode`] already names. The bridge runs the real claude
+/// engine, writes claude-shaped JSONL into claude's own store, and shares
+/// claude's session-id space so completely that `join.rs` had to widen its dedup
+/// key to keep an ACP row and a plain row with ONE sessionId apart. That is one
+/// harness in two topologies, which is what a [`Mode`] is for — so ACP is
+/// [`Mode::Acp`] now, and the lanes are `claude-code/acp` and `opencode/acp`.
+///
+/// The count is what makes the case: nine lanes before, nine lanes after. No
+/// lane was created or destroyed, only re-coordinated onto the axis it belonged
+/// on. `setup::HarnessId` had already been enumerating four for as long as it has
+/// existed, and `lifecycle::harness_for_detected` was the adapter between the two
+/// views — its own doc comment admitting that two of its four arms were traps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Harness {
     ClaudeCode,
     Codex,
     Pi,
-    AcpClaudeCode,
     Opencode,
 }
 
@@ -100,44 +111,93 @@ pub enum Mode {
     /// Same binary, same store, same rollouts, same `Provider` impl. What
     /// differs is topology, and topology is what `Mode` is.
     AppServer,
+    /// A headless resident reached over the **Agent Client Protocol** — a bridge
+    /// process (`claude-code-acp`, `opencode acp`) that qd speaks ACP to and that
+    /// drives the real agent behind it.
+    ///
+    /// # Why this is a mode and not two harnesses
+    ///
+    /// It was two harnesses — `acp/claude-code` and `acp/opencode` — and that was
+    /// a category error the rest of the codebase kept having to work around. ACP
+    /// is a TRANSPORT. Behind `claude-code/acp` is the same claude-code program
+    /// `claude-code/mux-pane` runs: same engine, same `~/.claude/projects` store,
+    /// same claude-shaped JSONL, same `--session-id` identity space. The proof it
+    /// is the same space is that `join.rs` had to widen its dedup key to
+    /// `(String, bool)` because an ACP row and a plain claude row can legitimately
+    /// carry ONE sessionId, and `resolve::acp_floor_original` exists for the same
+    /// collision.
+    ///
+    /// Measured against [`Mode::Extension`]'s own bar for why IT is not a third
+    /// harness — "same binary, same store, same sessions, same `Provider` impl,
+    /// same `--session-id` identity" — the ACP claude lane scored four of five.
+    /// The miss was the `Provider` impl, and that is a consequence of the
+    /// modelling rather than a fact about the world: `provider::provider_for`
+    /// keys on a provider-id STRING, so the only way to give the bridge its own
+    /// impl was to give it its own id.
+    ///
+    /// That registry is STILL string-keyed, and both legacy ids still resolve
+    /// through it — replacing it with a `(harness, mode)` lookup is real work
+    /// this change did not do. What the remodel did do is take the DECISIONS off
+    /// the string: which bridge to spawn is `acp::acp_provider_for_harness`, and
+    /// every carrier and topology question asks the lane.
+    ///
+    /// # This is a daemon lane
+    ///
+    /// [`Lane::is_daemon`] answers `true`, and every daemon-branch path must keep
+    /// taking the daemon branch: no terminal of its own, kill is a pid-group
+    /// reap, the receive path is the resident adapter's endpoint, health is
+    /// process liveness. It has no viewer exception either: `attach_target`
+    /// hands a terminal to `codex/app-server` alone ([`Lane::is_app_server`]),
+    /// and an ACP bridge is refused there exactly as it was as a harness.
+    ///
+    /// # What still differs per harness
+    ///
+    /// The bridge program and its argv, and where the transcript lands. The claude
+    /// bridge writes into claude's store (so `claude-code/acp` has NO cold store
+    /// of its own — claude's pane lane owns it); opencode's bridge persists to
+    /// opencode's own `opencode.db`. Both are harness facts, keyed on the harness,
+    /// which is exactly the shape this remodel makes available.
+    Acp,
 }
 
 impl Harness {
     /// Every harness, in a stable order.
-    pub const ALL: [Harness; 5] = [
+    pub const ALL: [Harness; 4] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::Pi,
-        Harness::AcpClaudeCode,
         Harness::Opencode,
     ];
 
     /// The canonical provider id `qd start --provider <id>` resolves — the same
-    /// string `dispatch::provider::provider_for` keys on. `Opencode` carries the
-    /// INTERNAL id `acp/opencode`; the bare `opencode` CLI ergonomic is an alias
-    /// handled by [`Harness::from_provider_id`].
+    /// string `dispatch::provider::provider_for` keys on.
+    ///
+    /// EVERY ONE OF THESE IS NOW A BARE PROGRAM NAME, with no `/` in it. That is
+    /// not tidiness: `Lane::id()` joins a provider id and a hosting token with a
+    /// `/`, and while a provider id could itself contain one, the lane id was
+    /// three segments for `acp/*` and two for everything else, and
+    /// [`Lane::from_id`] had to split on the LAST `/` to survive it. A lane id is
+    /// now always exactly `<program>/<topology>`.
     pub fn provider_id(self) -> &'static str {
         match self {
             Harness::ClaudeCode => "claude-code",
             Harness::Codex => "codex",
             Harness::Pi => "pi",
-            Harness::AcpClaudeCode => "acp/claude-code",
-            Harness::Opencode => "acp/opencode",
+            Harness::Opencode => "opencode",
         }
     }
 
-    /// Parse a provider id. Accepts the `opencode` CLI alias for `acp/opencode`
-    /// (the same aliasing `provider_for` does). An unknown id is `None` — never a
-    /// guess.
+    /// Parse a provider id into its harness, discarding any lane the spelling
+    /// pins. An unknown id is `None` — never a guess.
+    ///
+    /// **Most callers want [`harness_and_pinned_mode`] instead.** This answers
+    /// "which program", and the legacy `acp/*` spellings answer more than that —
+    /// they name a lane outright. A caller that asks only for the harness and then
+    /// reaches for a default mode will place every ACP row in its harness's
+    /// DEFAULT lane, which for `acp/claude-code` means the mux pane: a session
+    /// with no pane, addressed by every verb as though it had one.
     pub fn from_provider_id(id: &str) -> Option<Harness> {
-        match id {
-            "claude-code" => Some(Harness::ClaudeCode),
-            "codex" => Some(Harness::Codex),
-            "pi" => Some(Harness::Pi),
-            "acp/claude-code" => Some(Harness::AcpClaudeCode),
-            "opencode" | "acp/opencode" => Some(Harness::Opencode),
-            _ => None,
-        }
+        harness_and_pinned_mode(id).map(|(h, _)| h)
     }
 
     // --- The three defaults -------------------------------------------------
@@ -197,9 +257,10 @@ impl Harness {
             // variant had to exist before this line could change.
             Harness::Codex => Mode::AppServer,
             Harness::Pi => Mode::Extension,
-            // The ACP bridges have exactly one lane each; there is nothing here
-            // to move them to.
-            Harness::AcpClaudeCode | Harness::Opencode => Mode::Daemon,
+            // opencode has exactly one lane and this is it: everything live goes
+            // over ACP (`provider/opencode/mod.rs` — "There is no opencode-only
+            // PROTOCOL code to hold here"). There is nothing here to move it to.
+            Harness::Opencode => Mode::Acp,
         }
     }
 
@@ -242,9 +303,28 @@ impl Harness {
     pub fn row_default_mode(self) -> Mode {
         match self {
             Harness::ClaudeCode => Mode::Pane,
-            Harness::Codex | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode => {
-                Mode::Daemon
-            }
+            Harness::Codex | Harness::Pi => Mode::Daemon,
+            // AMENDED 2026-08-24, and the ONLY amendment DEC-3 has ever taken.
+            // Was `Mode::Daemon`, with every other harness.
+            //
+            // Read the freeze's own rule and it REQUIRES this move rather than
+            // forbidding it: an unstamped row means the lane it was written
+            // under. Every opencode row ever written was written under the ACP
+            // bridge — opencode has no other live path, and never had one — so
+            // `Mode::Daemon` was not the lane those rows were written under. It
+            // was the token the bridge happened to stamp while ACP was spelled as
+            // a harness rather than a topology, and `Harness::Opencode` no longer
+            // SUPPORTS `Mode::Daemon`, so leaving it here would re-derive every
+            // hosting-less opencode row into a lane that does not exist.
+            //
+            // What the freeze forbids is re-pointing this at
+            // `create_default_mode` so that a moved default silently relabels
+            // rows on disk. That is untouched: the two functions still disagree
+            // for codex and pi, deliberately, and this arm agrees with its
+            // `create_default_mode` twin for the same reason `ClaudeCode` does —
+            // because the harness has one lane, not because anything was
+            // resynchronised.
+            Harness::Opencode => Mode::Acp,
         }
     }
 
@@ -272,53 +352,77 @@ impl Harness {
     /// against the whole nine-lane partition.
     pub fn cold_store_owner_mode(self) -> Mode {
         match self {
+            // `claude-code/mux-pane` owns claude's store, and `claude-code/acp`
+            // therefore enumerates ZERO — exactly as `acp/claude-code/daemon` did
+            // before it was folded in. This is the arm that would double-count if
+            // it were wrong: the ACP bridge writes into `~/.claude/projects`, so
+            // the two claude lanes read the SAME directory, and two claimants
+            // means every cold claude row appears twice in `qd ls`.
             Harness::ClaudeCode => Mode::Pane,
-            Harness::Codex | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode => {
-                Mode::Daemon
-            }
+            Harness::Codex | Harness::Pi => Mode::Daemon,
+            // Tracks the ROW default, as this function must — see its docs.
+            Harness::Opencode => Mode::Acp,
         }
     }
 
     /// Whether this harness can be hosted in `mode` at all.
     ///
     /// This is a STRUCTURAL fact, not an unimplemented feature: claude-code has
-    /// no daemon lane, and an ACP bridge has no terminal to put in a pane.
+    /// no daemon lane, and opencode has no terminal of its own to put in a pane.
     pub fn supports(self, mode: Mode) -> bool {
         // Written as the NEGATIVE set on purpose: the impossible combinations
         // are the interesting content, and listing them keeps this readable as
         // "what does not exist" rather than "what does".
         !matches!(
             (self, mode),
-            (Harness::ClaudeCode, Mode::Daemon)
-                | (Harness::AcpClaudeCode | Harness::Opencode, Mode::Pane)
+            // claude-code is a TUI in a mux pane, or the same engine reached
+            // through an ACP bridge. There is no headless claude to host, and no
+            // pi-style extension loader or codex-style app-server residence.
+            (Harness::ClaudeCode, Mode::Daemon | Mode::Extension | Mode::AppServer)
+                // opencode has exactly ONE lane. `opencode acp` is how qd drives
+                // it and the only way qd drives it; the sibling `store` reader is
+                // a cold read of `opencode.db`, not a lane. There is no opencode
+                // TUI in a qd pane, no headless opencode resident, no extension.
+                | (Harness::Opencode, Mode::Pane | Mode::Daemon | Mode::Extension | Mode::AppServer)
                 // `extension` is pi's alone, and structurally so: it names a
                 // SPECIFIC affordance — pi's `--extension <path>` loader plus an
                 // extension API with `sendUserMessage`, `isIdle` and `abort`
                 // (verified against pi 0.84.1) — that no other harness in this
-                // repo has. claude-code and codex expose no in-process
-                // extension surface at all, and an ACP bridge has no TUI to put
-                // one in. These four are "does not exist", never "not yet
-                // built".
-                | (
-                    Harness::ClaudeCode
-                        | Harness::Codex
-                        | Harness::AcpClaudeCode
-                        | Harness::Opencode,
-                    Mode::Extension
-                )
+                // repo has. codex exposes no in-process extension surface at
+                // all, and claude-code is already answered by the arm above.
+                | (Harness::Codex, Mode::Extension)
                 // `app-server` is codex's alone, and structurally so: it names a
                 // SPECIFIC residence (`codex app-server --listen ws://…`) that a
                 // human TUI can be pointed at (`codex --remote <endpoint>`). No
                 // other harness in this repo has either half — pi's residence is
-                // `<exe> pi-daemon` and an ACP bridge has no TUI at all — so
-                // these four are "does not exist", never "not yet built".
-                | (
-                    Harness::ClaudeCode
-                        | Harness::Pi
-                        | Harness::AcpClaudeCode
-                        | Harness::Opencode,
-                    Mode::AppServer
-                )
+                // `<exe> pi-daemon`, and claude-code is answered above.
+                | (Harness::Pi, Mode::AppServer)
+                // --- Mode::Acp's negatives, and why they are a DIFFERENT KIND --
+                //
+                // Every other entry in this table means "does not exist". These
+                // two mean **"not built here yet"**, and that distinction is
+                // worth stating rather than hiding, because it is the first time
+                // this function has held one.
+                //
+                // ACP is not an affordance of a particular program the way
+                // `--extension` and `app-server` are. It is a general protocol
+                // with adapters written for many agents, and
+                // `doc/tbd/acp-everywhere-report.md` argues precisely that qd
+                // could drive codex and pi through it;
+                // `doc/tbd/pi-acp-exploration/` carries a skeleton for pi.
+                // Neither adapter is wired into this repo, so neither lane can be
+                // built today, and `supports` must answer for what qd can
+                // actually host — but a reader who finds these two arms and
+                // assumes the usual "structurally impossible" reading would be
+                // wrong, and would conclude the wrong thing about how much work
+                // `codex/acp` is.
+                //
+                // The rule this table keeps is therefore unchanged in substance:
+                // an arm here means qd cannot host that lane. What is new is that
+                // for these two the reason is a missing adapter rather than a
+                // missing affordance, and when one lands the arm is deleted and
+                // `Lane::ALL` grows.
+                | (Harness::Codex | Harness::Pi, Mode::Acp)
         )
     }
 }
@@ -331,6 +435,7 @@ impl Mode {
             Mode::Daemon => "daemon",
             Mode::Extension => "extension",
             Mode::AppServer => "app-server",
+            Mode::Acp => "acp",
         }
     }
 
@@ -344,6 +449,7 @@ impl Mode {
             "daemon" => Some(Mode::Daemon),
             "extension" => Some(Mode::Extension),
             "app-server" => Some(Mode::AppServer),
+            "acp" => Some(Mode::Acp),
             _ => None,
         }
     }
@@ -360,13 +466,34 @@ pub struct Lane {
     pub mode: Mode,
 }
 
+/// claude-code's mux-pane lane, by name.
+///
+/// Exists because several guards are about THAT LANE and not about the
+/// claude-code harness, and once the harness has two lanes the difference stops
+/// being academic. The relay fast-path filter is the worked example: the relay is
+/// this lane's carrier, `claude-code/acp` has none, and both answer
+/// `provider_id() == "claude-code"` — so any guard spelled as a provider-name
+/// test admits the wrong one. Naming the lane makes that unwriteable.
+pub const CLAUDE_PANE: Lane = Lane {
+    harness: Harness::ClaudeCode,
+    mode: Mode::Pane,
+};
+
 impl Lane {
     /// Every VALID lane — nine, not the twenty of the cartesian product. See
-    /// the module docs for why the seven missing combinations are structural.
+    /// the module docs for why the missing combinations are structural.
+    ///
+    /// It was nine before ACP became a mode and it is nine after. Nothing was
+    /// added or removed; `acp/claude-code/daemon` and `acp/opencode/daemon` are
+    /// `claude-code/acp` and `opencode/acp`, on the axis they belonged on.
     pub const ALL: [Lane; 9] = [
         Lane {
             harness: Harness::ClaudeCode,
             mode: Mode::Pane,
+        },
+        Lane {
+            harness: Harness::ClaudeCode,
+            mode: Mode::Acp,
         },
         Lane {
             harness: Harness::Codex,
@@ -393,12 +520,8 @@ impl Lane {
             mode: Mode::Extension,
         },
         Lane {
-            harness: Harness::AcpClaudeCode,
-            mode: Mode::Daemon,
-        },
-        Lane {
             harness: Harness::Opencode,
-            mode: Mode::Daemon,
+            mode: Mode::Acp,
         },
     ];
 
@@ -456,19 +579,39 @@ impl Lane {
     /// that something, and the two changes had to land together or the flip would
     /// have deleted two working lanes.
     pub fn for_create(provider_id: &str, topology: CreateTopology) -> Option<Lane> {
-        let harness = Harness::from_provider_id(provider_id)?;
-        let mode = match topology {
-            CreateTopology::Default => harness.create_default_mode(),
+        let (harness, pinned) = parse_provider_arg(provider_id)?;
+        let requested = match topology {
+            CreateTopology::Default => {
+                // A spelling that NAMES a lane is its own default — `--provider
+                // codex/daemon` creates that lane and not codex's, and `--provider
+                // acp/claude-code` creates the ACP lane and not claude's pane.
+                return Lane::new(harness, pinned.unwrap_or_else(|| harness.create_default_mode()));
+            }
             CreateTopology::Interactive => Mode::Pane,
             CreateTopology::Extension => Mode::Extension,
             CreateTopology::AppServer => Mode::AppServer,
             CreateTopology::Daemon => Mode::Daemon,
+            CreateTopology::Acp => Mode::Acp,
         };
-        Lane::new(harness, mode)
+        // A spelling that pins a lane and a flag that names a different one are a
+        // REFUSAL, not a preference. `--provider codex/daemon --interactive` asks
+        // for two lanes at once, and so does `--provider acp/claude-code
+        // --interactive`; neither gets a silent winner.
+        //
+        // The older engine caught the second with a string test on what the user
+        // typed, which is why `--provider opencode --interactive` — the alias for
+        // the same bridge — slipped past it and got a daemon at exit 0. There is
+        // no string to test now and no alias to slip: the two requests disagree,
+        // so there is no lane, and the verb renders that.
+        if pinned.is_some_and(|p| p != requested) {
+            return None;
+        }
+        Lane::new(harness, requested)
     }
 
     /// The stable wire id: `<provider-id>/<hosting-token>`, e.g.
-    /// `"acp/claude-code/daemon"`, `"codex/mux-pane"`.
+    /// `"claude-code/acp"`, `"codex/mux-pane"`. Always exactly two segments —
+    /// no provider id contains a `/` of its own any more.
     pub fn id(self) -> String {
         format!(
             "{}/{}",
@@ -477,11 +620,26 @@ impl Lane {
         )
     }
 
-    /// Parse a stable wire id. Splits on the LAST `/` because a provider id may
-    /// itself contain one (`acp/claude-code`).
+    /// Parse a stable wire id.
+    ///
+    /// Splits on the LAST `/`, which no longer matters for ids this code EMITS —
+    /// every provider id is a bare program name now, so every emitted lane id is
+    /// exactly two segments. It still matters for ids already written down:
+    /// `acp/claude-code/daemon` is in `ls --json` goldens, on `qw attach`'s argv
+    /// and in `13-calling-qw-directly.md`, and it must keep parsing to the lane it
+    /// has always meant.
+    ///
+    /// A legacy compound provider pins its mode and the trailing token is
+    /// IGNORED, deliberately: `acp/claude-code/daemon` says `daemon` because that
+    /// is the token the bridge stamped while ACP was a harness, and the provider
+    /// half is the more specific fact. Honouring the token instead would ask for
+    /// `claude-code/daemon`, which is not a lane at all.
     pub fn from_id(s: &str) -> Option<Lane> {
         let (provider, hosting) = s.rsplit_once('/')?;
-        let harness = Harness::from_provider_id(provider)?;
+        let (harness, pinned) = harness_and_pinned_mode(provider)?;
+        if let Some(mode) = pinned {
+            return Lane::new(harness, mode);
+        }
         let mode = Mode::from_hosting_token(hosting)?;
         Lane::new(harness, mode)
     }
@@ -507,8 +665,18 @@ impl Lane {
     /// the PANE branch and the lane would be wrong everywhere at once — so the
     /// attach exception is spelled at `attach` (keyed on [`Lane::mode`]), where
     /// it is one visible arm, rather than hidden in this predicate.
+    ///
+    /// **`Mode::Acp` answers `true` for the same reason**, and this arm is why
+    /// ACP could become a mode without touching a single daemon-branch path. As
+    /// `acp/claude-code` and `acp/opencode` the ACP lanes WERE `Mode::Daemon`, so
+    /// every `is_daemon()` call site already routed them correctly; keeping that
+    /// answer is what makes the remodel a re-coordination rather than a rewrite.
+    /// If this omitted `Mode::Acp`, kill would stop reaping the pid group, the
+    /// receive path would look for a pane, health would read a transcript tail
+    /// and `attach` would try to hand over a terminal that does not exist — all
+    /// silently, all at once.
     pub fn is_daemon(self) -> bool {
-        matches!(self.mode, Mode::Daemon | Mode::AppServer)
+        matches!(self.mode, Mode::Daemon | Mode::AppServer | Mode::Acp)
     }
 
     /// Is this lane's residence the `codex app-server` specifically?
@@ -554,7 +722,14 @@ impl Lane {
             (Harness::Codex, Mode::AppServer)
             // opencode's HTTP server inside the ACP bridge, joined by
             // `opencode attach <http> --session <id>`.
-            | (Harness::Opencode, Mode::Daemon)
+            //
+            // `Mode::Acp`, not `Mode::Daemon`. This lane was `acp/opencode/daemon`
+            // when the viewer landed; it is `opencode/acp` now, and `Opencode`
+            // does not support `Mode::Daemon` at all — so a `Daemon` arm here
+            // would answer `false` for every opencode session there is, and
+            // `attach` would report that the residence is not joinable on the one
+            // lane this predicate was written for.
+            | (Harness::Opencode, Mode::Acp)
         )
     }
 
@@ -594,14 +769,19 @@ pub enum CreateTopology {
     /// The `codex app-server` residence, joinable by a second `codex --remote`
     /// TUI. codex only — [`Lane::new`] answers `None` for every other harness.
     ///
-    /// **Has no `qd start` flag**, and does not need one: it is what
-    /// [`CreateTopology::Default`] resolves to for codex, so the plain
-    /// `qd start --provider codex` reaches it. This variant is the way a caller
-    /// names the lane EXPLICITLY — `qw`'s wire
-    /// (`{"m":"start","lane":"codex/app-server"}`) and any future flag — and it
-    /// exists separately from `Default` so that pinning "the default is
-    /// app-server" and "app-server is requestable" stay two different
-    /// assertions.
+    /// It is what [`CreateTopology::Default`] resolves to for codex, so the plain
+    /// `qd start --provider codex` reaches it — and it exists separately from
+    /// `Default` so that pinning "the default is app-server" and "app-server is
+    /// requestable BY NAME" stay two different assertions. Three spellings ask
+    /// for it explicitly now: `--app-server`, `--provider codex/app-server`, and
+    /// `qw`'s wire (`{"m":"start","lane":"codex/app-server"}`).
+    ///
+    /// This paragraph read "**has no `qd start` flag**, and does not need one"
+    /// until `--app-server` landed, and the sentence outlived the fact by two
+    /// changes. It is worth knowing why the claim was safe to make and then
+    /// stopped being: a variant with no producer is a documented no-op, which is
+    /// the dead-arm shape this enum exists to avoid, so "no flag" was always a
+    /// statement with a short shelf life.
     AppServer,
     /// `--daemon`: the headless resident, explicitly. No mux pane, no TTY, no
     /// terminal to attach — the CI / over-ssh / no-mux escape hatch.
@@ -615,12 +795,26 @@ pub enum CreateTopology {
     /// ONLY way `qd start` reaches `codex/daemon` or `pi/daemon`. Folding it
     /// into `Default` would delete two lanes from the CLI.
     ///
-    /// For `acp/*` it is a no-op that names the truth — those harnesses have one
-    /// lane and it is this one. For `claude-code` it is a REFUSAL, because
-    /// `Harness::ClaudeCode.supports(Mode::Daemon)` is `false`: there is no
-    /// headless claude to host, so `Lane::new` answers `None` and the caller
-    /// renders that rather than quietly handing back the pane lane.
+    /// For `claude-code` and `opencode` it is a REFUSAL, because neither
+    /// supports `Mode::Daemon`: there is no headless claude to host, and
+    /// opencode's only residence is its ACP bridge. `Lane::new` answers `None`
+    /// and the caller renders that rather than quietly handing back another lane.
     Daemon,
+    /// `--acp`: the Agent Client Protocol bridge lane.
+    ///
+    /// This variant is what keeps `claude-code/acp` REACHABLE. While ACP was a
+    /// harness, naming the bridge and naming the program were the same act
+    /// (`--provider acp/claude-code`); now that it is a topology, `--provider
+    /// claude-code` names claude's default lane — the mux pane — and something
+    /// has to spell the other one. Without this variant the remodel would delete
+    /// a working lane from the CLI, which is exactly what `CreateTopology` exists
+    /// to make visible: `start_routing_is_total_over_every_real_input` asserts
+    /// that every one of the nine lanes is reachable from `qd start`.
+    ///
+    /// For `opencode` it is a no-op that names the truth — its only lane is this
+    /// one. For `codex` and `pi` it is a refusal today, and the reason is a
+    /// missing adapter rather than a missing affordance; see `Harness::supports`.
+    Acp,
 }
 
 /// THE lane question, asked once: how is this row hosted?
@@ -638,7 +832,13 @@ pub enum CreateTopology {
 /// (a corrupt row claiming a pane-hosted ACP bridge) falls back to the harness
 /// default rather than returning a lane that cannot exist.
 pub fn lane_for(provider_id: &str, hosting_field: Option<&str>) -> Option<Lane> {
-    let harness = Harness::from_provider_id(provider_id)?;
+    let (harness, pinned) = harness_and_pinned_mode(provider_id)?;
+    // A legacy `acp/*` provider id NAMES the lane, and beats the row's own
+    // hosting stamp. See `harness_and_pinned_mode` for why that precedence is the
+    // whole point rather than a detail.
+    if let Some(mode) = pinned {
+        return Lane::new(harness, mode);
+    }
     let recorded = hosting_field
         .and_then(Mode::from_hosting_token)
         .filter(|&m| harness.supports(m));
@@ -646,6 +846,117 @@ pub fn lane_for(provider_id: &str, hosting_field: Option<&str>) -> Option<Lane> 
         harness,
         mode: recorded.unwrap_or_else(|| harness.row_default_mode()),
     })
+}
+
+/// Parse a provider spelling into its harness and, for the spellings that name
+/// one, the lane they pin.
+///
+/// # The legacy `acp/*` ids, and why this returns a PAIR
+///
+/// `acp/claude-code` and `acp/opencode` are how every ACP session already on a
+/// user's disk records its provider, and they are still accepted on `--provider`.
+/// They are not aliases for a harness — they are aliases for a LANE, and treating
+/// them as the former is the one way this remodel could have corrupted live
+/// sessions.
+///
+/// Concretely, the shape that does not work. Map `acp/claude-code` to
+/// `Harness::ClaudeCode` alone and hand the row's own `hosting: "daemon"` stamp
+/// to the usual derivation, and: `ClaudeCode.supports(Daemon)` is `false`, so the
+/// recorded token is dropped; the fallback is `row_default_mode(ClaudeCode)`,
+/// which is `Mode::Pane`; and every ACP session on disk silently becomes
+/// `claude-code/mux-pane`. Nothing errors. `kill` then reaps a pane that does not
+/// exist, `attach` hands over a terminal that was never opened, and `deliver`
+/// types into a PTY nothing is listening to. It is exactly the failure
+/// `row_default_mode`'s freeze warns about, arriving through a door the freeze
+/// does not watch — a ROW rewrite rather than a moved default.
+///
+/// So the pinned mode wins over the recorded token, deliberately. A legacy row
+/// says `daemon` because that is what the bridge stamped while ACP was spelled as
+/// a harness; the provider half of the same row is the more specific fact, and it
+/// is the half that survived the rename with its meaning intact.
+///
+/// The pin is also a REFUSAL surface at create time — see [`Lane::for_create`],
+/// where a pinned spelling that disagrees with an explicit topology flag yields
+/// no lane at all.
+/// Is THIS ROW an ACP bridge session?
+///
+/// The question a dozen call sites were asking as `provider.starts_with("acp/")`,
+/// and the reason that spelling had to go: a new ACP row's provider is the
+/// PROGRAM (`claude-code`, `opencode`), so the prefix stopped matching the moment
+/// ACP became a lane, and every one of those guards would silently have answered
+/// `false` for exactly the sessions it exists to catch.
+///
+/// Takes both fields because that is what a row carries and what places it.
+/// `lane_for` owns the legacy-spelling rule and the absent-means-default rule,
+/// and neither belongs re-implemented at a call site.
+pub fn row_is_acp(provider_id: &str, hosting_field: Option<&str>) -> bool {
+    lane_for(provider_id, hosting_field).is_some_and(|l| l.mode == Mode::Acp)
+}
+
+/// Parse a `--provider` argument, which may name a PROGRAM or a LANE.
+///
+/// `--provider codex` says which agent to run and leaves the topology to the
+/// default and the flags. `--provider codex/daemon` says both at once. Both are
+/// first-class, and the second is not sugar for the first plus a flag — it is
+/// the same act of naming a lane that `Lane::id()` performs in the other
+/// direction, and it is the spelling `qd ls --json` already hands back.
+///
+/// # Why `a/b` is not ambiguous
+///
+/// A lane id and a legacy compound provider id are both `a/b`, and they mean
+/// opposite things: in `claude-code/acp` the FIRST segment is the program, and in
+/// `acp/claude-code` the SECOND one is. Nothing about their SHAPE separates them.
+///
+/// What separates them is that the two readings are DISJOINT — no string is both.
+/// `Lane::from_id` rsplits and asks for the head, and for every id the
+/// whole-string lookup accepts that head is either absent or `acp`, which stopped
+/// being a provider id when ACP became a lane. So the order of the two branches
+/// below is a readability choice and not a correctness one, and saying otherwise
+/// would be a comfortable lie: an order that merely PREFERS one reading leaves
+/// the other reachable by a future edit, and this cannot be reordered into a
+/// different answer at all. Pinned by
+/// `the_provider_reading_and_the_lane_reading_are_disjoint`.
+///
+/// Disjointness is what the ACP remodel bought, and it is stronger than a
+/// tiebreak. `acp/*` is now a frozen set of two legacy spellings rather than a
+/// growing family of `acp/<program>` harnesses — both
+/// `doc/tbd/acp-everywhere-report.md` and `doc/tbd/pi-acp-exploration/` were
+/// arguing for more of those — so the head of a compound id can never again be a
+/// program name.
+///
+/// This is what made `provider/lane` unimplementable while ACP was a harness.
+/// `--provider acp/claude-code` was then the ADVERTISED way to name that agent,
+/// and `acp` was the head of an OPEN family: a rule stating which segment is the
+/// program would have been a membership test against a table that was still
+/// growing and that no user could see. ACP-as-a-lane closed the family, which is
+/// what left room for this.
+///
+/// A lane id that names a real shape but not a real lane (`codex/acp`,
+/// `claude-code/daemon`) is `None`, exactly as `Lane::from_id` answers it — the
+/// caller refuses rather than being handed a lane with nothing behind it.
+pub fn parse_provider_arg(arg: &str) -> Option<(Harness, Option<Mode>)> {
+    if let Some(hit) = harness_and_pinned_mode(arg) {
+        return Some(hit);
+    }
+    Lane::from_id(arg).map(|l| (l.harness, Some(l.mode)))
+}
+
+pub fn harness_and_pinned_mode(id: &str) -> Option<(Harness, Option<Mode>)> {
+    match id {
+        "claude-code" => Some((Harness::ClaudeCode, None)),
+        "codex" => Some((Harness::Codex, None)),
+        "pi" => Some((Harness::Pi, None)),
+        "opencode" => Some((Harness::Opencode, None)),
+        // LEGACY, and permanent. These are on disk in registry rows, in identity
+        // tombstones, in `ls --json` goldens and in scripted `--provider`
+        // arguments. `16-default-lane-switch.md` dropped its backfill rather than
+        // deferring it, on the rule that a row means the lane it was written
+        // under; by that same rule these two strings mean the ACP lane forever,
+        // and there is no release at which dropping them becomes safe.
+        "acp/claude-code" => Some((Harness::ClaudeCode, Some(Mode::Acp))),
+        "acp/opencode" => Some((Harness::Opencode, Some(Mode::Acp))),
+        _ => None,
+    }
 }
 
 impl fmt::Display for Lane {
@@ -705,7 +1016,13 @@ mod tests {
         // hand-maintained list that can drift from `supports`.
         let mut expected: Vec<Lane> = Vec::new();
         for h in Harness::ALL {
-            for m in [Mode::Pane, Mode::Daemon, Mode::Extension, Mode::AppServer] {
+            for m in [
+                Mode::Pane,
+                Mode::Daemon,
+                Mode::Extension,
+                Mode::AppServer,
+                Mode::Acp,
+            ] {
                 if let Some(l) = Lane::new(h, m) {
                     expected.push(l);
                 }
@@ -723,27 +1040,25 @@ mod tests {
     }
 
     #[test]
-    fn the_three_missing_combinations_are_structural() {
+    fn the_missing_combinations_are_structural() {
         assert!(
             !Harness::ClaudeCode.supports(Mode::Daemon),
-            "claude has no daemon lane"
-        );
-        assert!(
-            !Harness::AcpClaudeCode.supports(Mode::Pane),
-            "an ACP bridge has no terminal"
+            "claude has no headless lane: it is a TUI in a pane, or the same \
+             engine behind an ACP bridge"
         );
         assert!(
             !Harness::Opencode.supports(Mode::Pane),
-            "an ACP bridge has no terminal"
+            "qd hosts no opencode TUI in a pane"
+        );
+        assert!(
+            !Harness::Opencode.supports(Mode::Daemon),
+            "opencode's only residence IS its ACP bridge — `opencode/daemon` \
+             would be a second spelling for the same thing, and a lane with no \
+             arm behind it"
         );
         assert_eq!(Lane::new(Harness::ClaudeCode, Mode::Daemon), None);
         // `app-server` is codex's alone.
-        for h in [
-            Harness::ClaudeCode,
-            Harness::Pi,
-            Harness::AcpClaudeCode,
-            Harness::Opencode,
-        ] {
+        for h in [Harness::ClaudeCode, Harness::Pi, Harness::Opencode] {
             assert!(
                 !h.supports(Mode::AppServer),
                 "{h:?} must not claim an app-server residence"
@@ -752,8 +1067,73 @@ mod tests {
         assert!(Harness::Codex.supports(Mode::AppServer));
     }
 
+    /// **The two ACP lanes, and the two that are absent for a DIFFERENT REASON.**
+    ///
+    /// Kept apart from the structural test above on purpose. Every refusal there
+    /// means "does not exist": there is no headless claude, no opencode TUI, no
+    /// second app-server. The two refusals here mean **"not built here yet"** —
+    /// ACP is a general protocol and adapters for codex and pi are conceivable
+    /// (`doc/tbd/acp-everywhere-report.md` argues for them,
+    /// `doc/tbd/pi-acp-exploration/` carries a skeleton), they are simply not
+    /// wired into this repo.
+    ///
+    /// If one lands, THIS is the test that should go red — not the structural
+    /// one — and the fix is to delete an arm from `Harness::supports` rather than
+    /// to argue with a claim about what cannot exist.
     #[test]
-    fn ids_round_trip_including_the_slash_carrying_provider() {
+    fn acp_is_a_lane_of_the_program_behind_it() {
+        assert!(
+            Harness::ClaudeCode.supports(Mode::Acp),
+            "the bridge runs the real claude engine into claude's own store"
+        );
+        assert!(
+            Harness::Opencode.supports(Mode::Acp),
+            "everything live for opencode goes over ACP"
+        );
+        assert_eq!(
+            Lane::new(Harness::ClaudeCode, Mode::Acp).map(|l| l.id()).as_deref(),
+            Some("claude-code/acp")
+        );
+        assert_eq!(
+            Lane::new(Harness::Opencode, Mode::Acp).map(|l| l.id()).as_deref(),
+            Some("opencode/acp")
+        );
+        // NOT YET BUILT, which is not the same claim as the arms above.
+        for h in [Harness::Codex, Harness::Pi] {
+            assert!(
+                !h.supports(Mode::Acp),
+                "{h:?} has no ACP adapter wired up in qd YET — if one lands, \
+                 delete its arm from `supports` and update this test"
+            );
+        }
+    }
+
+    /// Both claude lanes are the same PROGRAM, and the ACP one is a daemon.
+    ///
+    /// The three assertions the remodel turns on. If `is_daemon` ever stopped
+    /// answering `true` for `Mode::Acp`, kill would stop reaping the pid group,
+    /// the receive path would look for a pane, and attach would try to hand over
+    /// a terminal that does not exist — all silently.
+    #[test]
+    fn the_two_claude_lanes_share_a_program_and_split_on_topology() {
+        let pane = Lane::new(Harness::ClaudeCode, Mode::Pane).unwrap();
+        let acp = Lane::new(Harness::ClaudeCode, Mode::Acp).unwrap();
+        assert_eq!(pane.harness, acp.harness, "one program, two topologies");
+        assert_eq!(
+            pane.harness.provider_id(),
+            acp.harness.provider_id(),
+            "…and therefore ONE provider id — which is exactly why no guard may \
+             route on the provider string alone"
+        );
+        assert!(pane.is_pane() && !pane.is_daemon());
+        assert!(acp.is_daemon() && !acp.is_pane());
+        // The ACP lane is not attachable: `attach_target` hands a terminal to
+        // `codex/app-server` alone.
+        assert!(!acp.is_app_server());
+    }
+
+    #[test]
+    fn ids_round_trip() {
         for lane in Lane::ALL {
             assert_eq!(
                 Lane::from_id(&lane.id()),
@@ -761,13 +1141,288 @@ mod tests {
                 "{lane} must round-trip"
             );
         }
-        // The acp ids contain a `/` of their own — the parse must split on the LAST one.
-        let acp = Lane {
-            harness: Harness::AcpClaudeCode,
-            mode: Mode::Daemon,
-        };
-        assert_eq!(acp.id(), "acp/claude-code/daemon");
-        assert_eq!(Lane::from_id("acp/claude-code/daemon"), Some(acp));
+        // Every EMITTED id is exactly two segments now — no provider id carries a
+        // `/` of its own any more.
+        for lane in Lane::ALL {
+            assert_eq!(
+                lane.id().matches('/').count(),
+                1,
+                "{lane} must be <program>/<topology>, one slash"
+            );
+        }
+    }
+
+    /// **`row_is_acp` sees an ACP row however it is spelled — and the prefix it
+    /// replaced sees neither.**
+    ///
+    /// Seven guards asked `provider.starts_with("acp/")` to decide a row's class:
+    /// the join's cross-class dedup key and its tombstone-sid set,
+    /// `acp_floor_original`, `qd ls`'s liveness-gate exemption and its status
+    /// override, and `send:relay`'s ACP routing arm and unknown-provider gate.
+    ///
+    /// Every one of them broke the moment an ACP row started carrying the PROGRAM
+    /// as its provider. Not loudly: the prefix simply answers `false`, so the
+    /// dedup key collapses an ACP row into its plain claude twin and shadows it
+    /// out of every join-derived surface, and `qd send` walks past the ACP path
+    /// to report "has no relay". The assertion that matters is the last one here.
+    #[test]
+    fn row_is_acp_sees_both_spellings_and_the_prefix_sees_neither() {
+        // The current spelling, as a create stamps it.
+        assert!(row_is_acp("claude-code", Some("acp")));
+        assert!(row_is_acp("opencode", Some("acp")));
+        // …and opencode's hosting-less rows, whose only lane is the bridge.
+        assert!(row_is_acp("opencode", None));
+        // The legacy spelling, as rows written before the remodel carry it.
+        assert!(row_is_acp("acp/claude-code", Some("daemon")));
+        assert!(row_is_acp("acp/opencode", Some("daemon")));
+
+        // Not ACP: the other claude lane, which shares the provider id. This is
+        // the pair no provider-string test can separate.
+        assert!(!row_is_acp("claude-code", Some("mux-pane")));
+        assert!(!row_is_acp("claude-code", None));
+        assert!(!row_is_acp("codex", Some("daemon")));
+        assert!(!row_is_acp("nonsense", None));
+
+        // MUTATION EVIDENCE: the prefix these guards used cannot see a
+        // current-spelling ACP row at all. If this ever passes, `row_is_acp` has
+        // been quietly replaced by the thing it was written to remove.
+        assert!(
+            !"claude-code".starts_with("acp/"),
+            "an ACP row's provider is the PROGRAM — the prefix test is blind to it"
+        );
+    }
+
+    /// **A NEWLY WRITTEN row must round-trip back to the lane that wrote it.**
+    ///
+    /// The create path stamps two fields, and after the remodel they come from
+    /// different places: `provider` from `Harness::provider_id()` and `hosting`
+    /// from the lane's `Mode`. That split is where a real bug lived for the
+    /// length of one commit. The provider stamp moved first — `claude-code`
+    /// instead of `acp/claude-code` — while the ACP create still wrote
+    /// `hosting: "daemon"`, and `lane_for("claude-code", Some("daemon"))` finds
+    /// that claude supports no daemon lane, falls back to `row_default_mode`,
+    /// and answers `claude-code/mux-pane`. Every ACP session created after that
+    /// point would have been addressed as a pane that was never opened: kill
+    /// reaping nothing, attach handing over a terminal that does not exist,
+    /// deliver typing into a PTY with no reader.
+    ///
+    /// Nothing would have failed at the moment of the create. This asserts the
+    /// property that was violated — a round trip through the two fields a row
+    /// actually carries — for every lane, so no future change to either stamp
+    /// can separate them again in silence.
+    #[test]
+    fn every_lane_round_trips_through_the_two_fields_a_row_carries() {
+        for lane in Lane::ALL {
+            let provider = lane.harness.provider_id();
+            let hosting = lane.mode.hosting_token();
+            assert_eq!(
+                lane_for(provider, Some(hosting)),
+                Some(lane),
+                "a row stamped provider={provider:?} hosting={hosting:?} must read back \
+                 as {lane}, not as some other lane of the same harness"
+            );
+        }
+    }
+
+    /// **`--provider <program>/<lane>` names a lane, and cannot be confused with
+    /// the legacy compound provider ids.**
+    ///
+    /// The two shapes are both `a/b` and they mean opposite things — in
+    /// `claude-code/acp` the first segment is the program, in `acp/claude-code`
+    /// the second one is. This is the collision that made the syntax
+    /// unimplementable while ACP was a harness, because `acp/claude-code` was then
+    /// the ADVERTISED way to name that agent and a first-segment-is-the-program
+    /// rule read it as a program that does not exist.
+    ///
+    /// It resolves by asking the closed question first: is the whole string a
+    /// provider id? The legacy set is frozen at two, so no lane id can ever fall
+    /// into it.
+    #[test]
+    fn a_lane_id_may_be_named_as_the_provider_argument() {
+        for (arg, expected) in [
+            ("codex/daemon", Some("codex/daemon")),
+            ("codex/mux-pane", Some("codex/mux-pane")),
+            ("codex/app-server", Some("codex/app-server")),
+            ("claude-code/mux-pane", Some("claude-code/mux-pane")),
+            ("claude-code/acp", Some("claude-code/acp")),
+            ("pi/extension", Some("pi/extension")),
+            ("opencode/acp", Some("opencode/acp")),
+            // A bare program still means its default lane, unchanged.
+            ("codex", Some("codex/app-server")),
+            ("claude-code", Some("claude-code/mux-pane")),
+            // The legacy compound ids keep meaning the ACP lane — read as a
+            // provider id, never split as `acp` + a lane.
+            ("acp/claude-code", Some("claude-code/acp")),
+            ("acp/opencode", Some("opencode/acp")),
+            // Shapes that parse but name no lane.
+            ("claude-code/daemon", None),
+            ("codex/acp", None),
+            ("pi/acp", None),
+            ("opencode/mux-pane", None),
+            ("codex/sideways", None),
+            ("weird/daemon", None),
+            ("acp/pi", None),
+            ("", None),
+        ] {
+            assert_eq!(
+                Lane::for_create(arg, CreateTopology::Default)
+                    .map(|l| l.id())
+                    .as_deref(),
+                expected,
+                "--provider {arg}"
+            );
+        }
+    }
+
+    /// **The two readings of `a/b` never both match — which is why the grammar is
+    /// unambiguous rather than merely disambiguated.**
+    ///
+    /// `parse_provider_arg` tries the whole string as a provider id and then reads
+    /// it as a lane, and it is tempting to describe that order as load-bearing. It
+    /// is not, and the difference matters: an order that merely PREFERS one
+    /// reading leaves the other reachable by a future edit, while disjoint
+    /// branches cannot be reordered into a different answer at all.
+    ///
+    /// They are disjoint because `Lane::from_id` rsplits and then asks
+    /// `harness_and_pinned_mode` for the FIRST part. For the six provider ids
+    /// that whole-string lookup accepts, that first part is either absent (no
+    /// slash) or `acp` — which stopped being a provider id when ACP became a
+    /// lane. So every string one branch accepts, the other refuses.
+    ///
+    /// This asserts that over both closed sets, rather than asserting an order.
+    /// It is the property `18-provider-names-a-lane.md` §3 argues the ACP remodel
+    /// bought: not "we picked a winner" but "there is nothing to pick between".
+    #[test]
+    fn the_provider_reading_and_the_lane_reading_are_disjoint() {
+        // Every spelling the whole-string branch accepts is refused by the lane
+        // branch…
+        for id in [
+            "claude-code",
+            "codex",
+            "pi",
+            "opencode",
+            "acp/claude-code",
+            "acp/opencode",
+        ] {
+            assert!(harness_and_pinned_mode(id).is_some(), "{id} is a provider id");
+            assert_eq!(
+                Lane::from_id(id),
+                None,
+                "{id} must NOT also read as a lane id, or the grammar would have to \
+                 choose and the choice could be edited"
+            );
+        }
+        // …and every lane id is refused by the whole-string branch.
+        for lane in Lane::ALL {
+            let id = lane.id();
+            assert_eq!(
+                harness_and_pinned_mode(&id),
+                None,
+                "{id} must NOT also read as a provider id"
+            );
+            assert_eq!(Lane::from_id(&id), Some(lane));
+        }
+    }
+
+    /// The legacy spellings resolve, in both the two- and three-segment forms.
+    ///
+    /// Two segments (`acp/claude-code`) reach the lane only through the
+    /// whole-string branch; three (`acp/claude-code/daemon`) only through the lane
+    /// branch, whose rsplit leaves the compound provider id intact as the head.
+    /// Both forms are written down in places that outlive a release — registry
+    /// rows, scripted `--provider` arguments, saved `ls --json` output — so both
+    /// are asserted rather than assumed.
+    #[test]
+    fn both_legacy_forms_resolve_to_the_acp_lanes() {
+        for (arg, expected) in [
+            ("acp/claude-code", "claude-code/acp"),
+            ("acp/opencode", "opencode/acp"),
+            ("acp/claude-code/daemon", "claude-code/acp"),
+            ("acp/opencode/daemon", "opencode/acp"),
+        ] {
+            assert_eq!(
+                Lane::for_create(arg, CreateTopology::Default)
+                    .map(|l| l.id())
+                    .as_deref(),
+                Some(expected),
+                "--provider {arg}"
+            );
+        }
+    }
+
+    /// Naming a lane PINS it, so a topology flag that disagrees is refused rather
+    /// than silently winning — the same rule the legacy spellings get, reached
+    /// through the same mechanism.
+    #[test]
+    fn a_named_lane_refuses_a_flag_that_contradicts_it() {
+        use CreateTopology::{Acp, Daemon, Interactive};
+        assert_eq!(Lane::for_create("codex/daemon", Interactive), None);
+        assert_eq!(Lane::for_create("codex/mux-pane", Daemon), None);
+        assert_eq!(Lane::for_create("claude-code/acp", Interactive), None);
+        assert_eq!(Lane::for_create("claude-code/mux-pane", Acp), None);
+        // …and a flag that AGREES is a no-op, not a conflict.
+        assert_eq!(
+            Lane::for_create("codex/daemon", Daemon).map(|l| l.id()).as_deref(),
+            Some("codex/daemon")
+        );
+        assert_eq!(
+            Lane::for_create("claude-code/acp", Acp).map(|l| l.id()).as_deref(),
+            Some("claude-code/acp")
+        );
+    }
+
+    /// Every lane `qd ls --json` can PRINT is a lane `qd start --provider` will
+    /// TAKE. The round trip is the promise the syntax makes: copy the `lane` field
+    /// out of a listing, paste it after `--provider`, get that lane.
+    #[test]
+    fn every_printed_lane_id_is_accepted_as_a_provider_argument() {
+        for lane in Lane::ALL {
+            assert_eq!(
+                Lane::for_create(&lane.id(), CreateTopology::Default),
+                Some(lane),
+                "{lane} is printed by `ls --json`; `--provider {}` must create it",
+                lane.id()
+            );
+        }
+    }
+
+    /// **The legacy lane ids still parse, and to the lane they have always
+    /// meant.**
+    ///
+    /// These strings are on disk and on wires that predate the remodel: in
+    /// registry rows, in identity tombstones, in `ls --json` goldens, on `qw
+    /// attach`'s argv and in `13-calling-qw-directly.md`. The trailing token says
+    /// `daemon` because that is what the bridge stamped while ACP was spelled as
+    /// a harness; the provider half is the more specific fact and wins.
+    #[test]
+    fn the_legacy_acp_ids_still_parse_to_the_acp_lanes() {
+        assert_eq!(
+            Lane::from_id("acp/claude-code/daemon").map(|l| l.id()).as_deref(),
+            Some("claude-code/acp")
+        );
+        assert_eq!(
+            Lane::from_id("acp/opencode/daemon").map(|l| l.id()).as_deref(),
+            Some("opencode/acp")
+        );
+        // The legacy PROVIDER half alone also places a row, which is what
+        // `lane_for` needs for every ACP session already on disk.
+        assert_eq!(
+            lane_for("acp/claude-code", Some("daemon")).map(|l| l.id()).as_deref(),
+            Some("claude-code/acp"),
+            "an ACP row on disk must NOT re-derive to claude's pane lane"
+        );
+        assert_eq!(
+            lane_for("acp/opencode", Some("daemon")).map(|l| l.id()).as_deref(),
+            Some("opencode/acp")
+        );
+        // …and it wins over whatever the row happens to say, including nothing.
+        for hosting in [None, Some("daemon"), Some("mux-pane"), Some("garbage")] {
+            assert_eq!(
+                lane_for("acp/claude-code", hosting).map(|l| l.id()).as_deref(),
+                Some("claude-code/acp"),
+                "the legacy provider id pins the lane; hosting {hosting:?} cannot move it"
+            );
+        }
     }
 
     #[test]
@@ -784,6 +1439,10 @@ mod tests {
         assert_eq!(Lane::from_id(""), None);
         // Structurally impossible, even though both halves parse.
         assert_eq!(Lane::from_id("claude-code/daemon"), None);
+        assert_eq!(Lane::from_id("opencode/daemon"), None);
+        // Not built here yet — parses as a shape, refused as a lane.
+        assert_eq!(Lane::from_id("codex/acp"), None);
+        assert_eq!(Lane::from_id("pi/acp"), None);
     }
 
     // --- for_create: the routing table that replaced the if-chain ----------
@@ -805,16 +1464,18 @@ mod tests {
     #[test]
     fn start_routing_is_total_over_every_real_input() {
         use CreateTopology::{
-            AppServer as App, Daemon as Dae, Default as Def, Extension as Ext, Interactive as Inter,
+            Acp, AppServer as App, Daemon as Dae, Default as Def, Extension as Ext,
+            Interactive as Inter,
         };
         // (provider id as typed, the topology asked for, the lane created)
-        let table: [(&str, CreateTopology, Option<&str>); 35] = [
-            // claude has one lane; --interactive is its only shape, so the flag
-            // changes nothing rather than being refused. --daemon IS refused:
-            // there is no headless claude to host, so this is a lane that does
-            // not exist rather than a flag qd declines to honour.
+        let table: [(&str, CreateTopology, Option<&str>); 42] = [
+            // claude has TWO lanes now, and `--acp` is what spells the second
+            // one. --daemon is still refused: there is no headless claude to
+            // host, and the ACP resident is not one — it is the same engine
+            // behind a bridge, which is what `--acp` asks for.
             ("claude-code", Def, Some("claude-code/mux-pane")),
             ("claude-code", Inter, Some("claude-code/mux-pane")),
+            ("claude-code", Acp, Some("claude-code/acp")),
             ("claude-code", Ext, None),
             ("claude-code", Dae, None),
             ("claude-code", App, None),
@@ -827,6 +1488,9 @@ mod tests {
             ("codex", Dae, Some("codex/daemon")),
             ("codex", App, Some("codex/app-server")),
             ("codex", Ext, None),
+            // Not built here yet, and refused the same way an impossible lane is
+            // — `qd start` cannot create what qd cannot host.
+            ("codex", Acp, None),
             // The pi block, the same shape. `--extension` survives as an
             // explicit flag even though it now names the default — existing
             // scripts pass it, and it costs nothing.
@@ -835,28 +1499,37 @@ mod tests {
             ("pi", Ext, Some("pi/extension")),
             ("pi", Dae, Some("pi/daemon")),
             ("pi", App, None),
-            // An ACP bridge is a protocol adapter with no terminal of its own, so
-            // the interactive row is not a refusal to implement — it is a lane
-            // that does not exist. --daemon is a no-op that names the truth: the
-            // daemon lane is the only lane it has.
-            ("acp/claude-code", Def, Some("acp/claude-code/daemon")),
-            ("acp/claude-code", Inter, None),
-            ("acp/claude-code", Dae, Some("acp/claude-code/daemon")),
-            ("acp/claude-code", Ext, None),
-            ("acp/claude-code", App, None),
-            ("acp/opencode", Def, Some("acp/opencode/daemon")),
-            ("acp/opencode", Inter, None),
-            ("acp/opencode", Dae, Some("acp/opencode/daemon")),
-            ("acp/opencode", Ext, None),
-            ("acp/opencode", App, None),
-            // The CLI ergonomic alias resolves to the SAME lane as the internal
-            // id, under every topology — including the new ones, so the alias
-            // cannot acquire a routing of its own.
-            ("opencode", Def, Some("acp/opencode/daemon")),
+            ("pi", Acp, None),
+            // opencode has exactly one lane and it is the bridge. `--acp` names
+            // it; every other flag asks for something opencode does not have.
+            ("opencode", Def, Some("opencode/acp")),
+            ("opencode", Acp, Some("opencode/acp")),
             ("opencode", Inter, None),
-            ("opencode", Dae, Some("acp/opencode/daemon")),
+            ("opencode", Dae, None),
             ("opencode", Ext, None),
             ("opencode", App, None),
+            // --- the LEGACY spellings, which PIN a lane --------------------
+            //
+            // `acp/claude-code` names the ACP lane outright, so it is its own
+            // default and `--acp` is a no-op that agrees with it. Every flag
+            // naming a DIFFERENT lane is refused — including `--interactive`,
+            // which is the bug this pinning fixes: the old engine tested the
+            // string the user typed, so `--provider acp/claude-code
+            // --interactive` was caught while `--provider opencode --interactive`
+            // (the alias for the same harness) slipped past and silently got a
+            // daemon. There is no string to test now and no alias to slip.
+            ("acp/claude-code", Def, Some("claude-code/acp")),
+            ("acp/claude-code", Acp, Some("claude-code/acp")),
+            ("acp/claude-code", Inter, None),
+            ("acp/claude-code", Dae, None),
+            ("acp/claude-code", Ext, None),
+            ("acp/claude-code", App, None),
+            ("acp/opencode", Def, Some("opencode/acp")),
+            ("acp/opencode", Acp, Some("opencode/acp")),
+            ("acp/opencode", Inter, None),
+            ("acp/opencode", Dae, None),
+            ("acp/opencode", Ext, None),
+            ("acp/opencode", App, None),
             // Fail-closed on garbage, in every mode — never a claude
             // fall-through, which is what the pre-refusal engine did.
             ("nope", Def, None),
@@ -864,6 +1537,7 @@ mod tests {
             ("nope", Ext, None),
             ("nope", Dae, None),
             ("nope", App, None),
+            ("nope", Acp, None),
         ];
         for (provider, topology, expected) in table {
             assert_eq!(
@@ -948,11 +1622,11 @@ mod tests {
             // Moved (B7). A pi TUI in a pane with a control channel, in place of
             // a headless resident; `--daemon` is the way back.
             ("pi", "pi/extension"),
-            ("acp/claude-code", "acp/claude-code/daemon"),
-            ("acp/opencode", "acp/opencode/daemon"),
+            ("acp/claude-code", "claude-code/acp"),
+            ("acp/opencode", "opencode/acp"),
             // The CLI ergonomic alias, which must default to the same lane as
             // the internal id rather than acquiring a default of its own.
-            ("opencode", "acp/opencode/daemon"),
+            ("opencode", "opencode/acp"),
         ];
         for (provider, expected) in defaults {
             assert_eq!(
@@ -992,13 +1666,24 @@ mod tests {
     /// exactly that derivation, so an owner that disagreed would list a session
     /// under one lane while every acting verb addressed it as another.
     #[test]
-    fn the_frozen_defaults_are_frozen_at_pane_for_claude_and_daemon_for_everything_else() {
+    fn the_frozen_defaults_are_frozen() {
         for h in Harness::ALL {
             let expected = match h {
                 Harness::ClaudeCode => Mode::Pane,
-                Harness::Codex | Harness::Pi | Harness::AcpClaudeCode | Harness::Opencode => {
-                    Mode::Daemon
-                }
+                Harness::Codex | Harness::Pi => Mode::Daemon,
+                // AMENDED 2026-08-24 — the one amendment DEC-3 has taken, and
+                // the freeze's own rule is what REQUIRED it. Every opencode row
+                // ever written was written under the ACP bridge (opencode has no
+                // other live path), so `Mode::Daemon` was never the lane those
+                // rows meant; it was the token stamped while ACP was spelled as
+                // a harness. `Harness::Opencode` no longer supports
+                // `Mode::Daemon`, so leaving it would re-derive every
+                // hosting-less opencode row into a lane that does not exist.
+                //
+                // What DEC-3 forbids — re-pointing this at `create_default_mode`
+                // so a moved default relabels rows — is untouched: codex and pi
+                // still disagree between the two, deliberately.
+                Harness::Opencode => Mode::Acp,
             };
             assert_eq!(
                 h.row_default_mode(),
@@ -1056,9 +1741,15 @@ mod tests {
             lane_for("claude-code", None),
             Lane::new(Harness::ClaudeCode, Mode::Pane)
         );
+        // The legacy ACP spelling pins its lane rather than taking a default —
+        // see `the_legacy_acp_ids_still_parse_to_the_acp_lanes`.
         assert_eq!(
             lane_for("acp/claude-code", None),
-            Lane::new(Harness::AcpClaudeCode, Mode::Daemon)
+            Lane::new(Harness::ClaudeCode, Mode::Acp)
+        );
+        assert_eq!(
+            lane_for("opencode", None),
+            Lane::new(Harness::Opencode, Mode::Acp)
         );
     }
 
@@ -1080,7 +1771,7 @@ mod tests {
         // that cannot exist — it degrades to the harness default.
         assert_eq!(
             lane_for("acp/opencode", Some("mux-pane")),
-            Lane::new(Harness::Opencode, Mode::Daemon)
+            Lane::new(Harness::Opencode, Mode::Acp)
         );
     }
 
@@ -1092,7 +1783,20 @@ mod tests {
     }
 
     #[test]
-    fn opencode_cli_alias_resolves_to_the_internal_id() {
+    /// **opencode has ONE spelling now, and the alias is retired into history.**
+    ///
+    /// It used to have three: `opencode` (what a user typed), `acp/opencode`
+    /// (what qd stored), and a bare `opencode` label on cold rows read from
+    /// `opencode.db`. The split was a direct consequence of ACP being modelled as
+    /// a harness — the transport had to be in the id, so the id could not be the
+    /// program name — and it cost real correctness: `send_relay`'s F4 guard had
+    /// to name both spellings, and missed one for a while.
+    ///
+    /// `acp/opencode` still PARSES, because it is on disk. It is no longer what
+    /// anything emits.
+    #[test]
+    fn opencode_has_one_spelling_and_the_legacy_id_still_parses() {
+        assert_eq!(Harness::Opencode.provider_id(), "opencode");
         assert_eq!(
             Harness::from_provider_id("opencode"),
             Some(Harness::Opencode)
@@ -1101,11 +1805,15 @@ mod tests {
             Harness::from_provider_id("acp/opencode"),
             Some(Harness::Opencode)
         );
-        // ...and always SERIALIZES as the internal id.
-        assert_eq!(Harness::Opencode.provider_id(), "acp/opencode");
         assert_eq!(
             lane_for("opencode", None).map(|l| l.id()).as_deref(),
-            Some("acp/opencode/daemon")
+            Some("opencode/acp")
+        );
+        // The legacy spelling lands on the SAME lane — one lane, two spellings,
+        // rather than two lanes.
+        assert_eq!(
+            lane_for("acp/opencode", None),
+            lane_for("opencode", None)
         );
     }
 

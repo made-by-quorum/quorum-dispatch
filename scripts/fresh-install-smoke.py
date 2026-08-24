@@ -57,21 +57,46 @@ import time
 # --- provider table ---------------------------------------------------------
 
 # harness id (`qd setup --json` .harnesses[].id) -> `--provider` spelling.
-# The two mismatched rows are why this is a table and not `id`: setup probes for
-# the BINARY (`claude`), while the provider is the LANE (`claude-code`); and
-# opencode's provider id is `acp/opencode`. Mirrors
-# `verbs/lifecycle.rs::provider_id_for_harness`.
+# ONE mismatched row remains, and it is why this is still a table and not `id`:
+# setup probes for the BINARY (`claude`) while the provider names the PROGRAM
+# (`claude-code`). Mirrors `verbs/lifecycle.rs::provider_id_for_harness`.
+#
+# opencode used to be the second mismatch (`opencode` -> `acp/opencode`) and no
+# longer is. That row existed because ACP was modelled as a harness, so the
+# transport had to be in the provider id; ACP is a LANE now, so the program is
+# just `opencode` and the bridge is `--acp` (which is also its only lane, hence
+# its default).
 HARNESS_TO_PROVIDER = {
     "claude": "claude-code",
     "codex": "codex",
     "pi": "pi",
-    "opencode": "acp/opencode",
+    "opencode": "opencode",
 }
 
-# `acp/claude-code` has no harness row of its own — it is the claude binary
+# The claude ACP lane has no harness row of its own — it is the claude binary
 # spoken to over ACP — so it is derived from the claude harness rather than
 # detected. Daemon-only; opt out with --no-acp-claude.
-ACP_CLAUDE = "acp/claude-code"
+#
+# Carried as a (provider, extra-flags) pair rather than a provider string,
+# because naming this lane now takes a FLAG: `--provider claude-code --acp`.
+# While ACP was a harness the id said both halves at once.
+ACP_CLAUDE = "claude-code+acp"
+
+
+def provider_argv(provider: str) -> list[str]:
+    """The `--provider …` argv naming a lane, from this script's label for it.
+
+    Every label but one is a bare provider id and expands to two words. The
+    derived claude-ACP entry is `claude-code+acp` and expands to three, because
+    naming that lane takes a program AND a topology flag — `--provider
+    claude-code --acp`. While ACP was modelled as a harness the provider id said
+    both halves at once, which is exactly the conflation the lane model undid.
+    """
+    program, _, mode = provider.partition("+")
+    argv = ["--provider", program]
+    if mode:
+        argv.append(f"--{mode}")
+    return argv
 
 # The mux client's detach key, Ctrl+\ (`qrmux/src/client/mod.rs::DETACH_KEY`).
 DETACH_KEY = b"\x1c"
@@ -303,7 +328,10 @@ class Smoke:
         )
 
     def session_name(self, lane: str, provider: str) -> str:
-        slug = provider.replace("/", "-")
+        # `+` as well as `/`: no provider id contains a slash any more, but the
+        # derived claude-ACP entry is spelled `claude-code+acp` so that one label
+        # can name a lane that takes a provider AND a flag.
+        slug = provider.replace("/", "-").replace("+", "-")
         return f"{self.args.prefix}-{lane[0]}-{slug}"
 
     def ls_rows(self, *extra) -> list[dict]:
@@ -451,7 +479,7 @@ class Smoke:
                 "preflight", provider, "harness detected", PASS,
                 f"{h.get('version') or 'version unknown'} at {h.get('path') or 'unknown path'}",
             )
-        # acp/claude-code rides the claude binary rather than a harness row of
+        # claude's ACP lane rides the claude binary rather than a harness row of
         # its own, so it is derived, never detected.
         if "claude-code" in found and not self.args.no_acp_claude:
             found.append(ACP_CLAUDE)
@@ -505,7 +533,7 @@ class Smoke:
         # so that start and attach stay two separately-attributable checks — a
         # start that attached would fold any attach failure into its exit code.
         rc, out, to = self.qd_tty(
-            "start", name, "--provider", provider, "--cwd", self.workdir, *self.detach_argv,
+            "start", name, *provider_argv(provider), "--cwd", self.workdir, *self.detach_argv,
             timeout=self.args.start_timeout,
         )
         self.report.record(
@@ -634,7 +662,7 @@ class Smoke:
         # and --interactive would select a DIFFERENT topology there, so it is
         # passed for exactly one provider.
         extra = ["--interactive"] if provider == "claude-code" else []
-        argv = ["start", name, "--provider", provider, "--cwd", self.workdir, "--json", *extra]
+        argv = ["start", name, *provider_argv(provider), "--cwd", self.workdir, "--json", *extra]
         self.created.append(name)  # see the human lane: a failed start can still leave one live
         rc, out, err, to = self.qd_pipe(*argv, agent_marker=marker, timeout=self.args.start_timeout)
         # The EXIT CODE is the cross-lane contract (help::START: 0 ready, 10 created
@@ -789,7 +817,7 @@ def parse_args(argv=None):
                    help="qd to test (default: QD_BIN, else the qd on PATH — i.e. the installed one)")
     p.add_argument("--providers",
                    help="comma-separated provider ids to test instead of auto-detecting "
-                        "(claude-code, codex, pi, acp/opencode, acp/claude-code)")
+                        "(claude-code, codex, pi, opencode, claude-code+acp)")
     p.add_argument("--lane", choices=("human", "agent", "both"), default="both",
                    help="which driver to exercise (default: both)")
     p.add_argument("--prefix", default="qdsmoke", help="session name prefix (default: qdsmoke)")
@@ -812,7 +840,7 @@ def parse_args(argv=None):
                    help="also export QD_SESSION_ID for the agent lane, the signal a real "
                         "in-session agent carries (driver.rs: the marker beats the TTY)")
     p.add_argument("--no-acp-claude", action="store_true",
-                   help="skip the derived acp/claude-code provider")
+                   help="skip the derived claude-code/acp lane")
     p.add_argument("--keep", action="store_true", help="do not stop sessions left behind by failures")
     p.add_argument("--json-report", metavar="PATH", help="also write the checks as JSON")
     p.add_argument("--verbose", "-v", action="store_true", help="print command output for passing checks too")
