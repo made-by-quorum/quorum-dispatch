@@ -2513,44 +2513,47 @@ mod tests {
     }
 
     /// The human page answers for every harness a person can actually start —
-    /// it groups them, but it does not omit any. `acp/` covers the two bridge
-    /// ids in one row because their answer is identical and a person types
-    /// `opencode`, which is spelled out beside it.
+    /// it groups them by what you GET, but it does not omit any. Derived from
+    /// `Harness::ALL` for the same reason the lane test is derived from
+    /// `Lane::ALL`: this assert once carried a literal `"acp/"`, which was a
+    /// real provider prefix until ACP stopped being a harness and became a
+    /// mode. A harness added, removed or respelled must red this page, not
+    /// pass it.
     #[test]
     fn attach_human_view_names_every_startable_harness() {
-        for h in ["claude-code", "codex", "pi", "opencode", "acp/"] {
+        for h in quorum_qw::lane::Harness::ALL {
+            let id = h.provider_id();
             assert!(
-                help::ATTACH_HUMAN.contains(h),
-                "the human attach view omits {h}: {}",
+                help::ATTACH_HUMAN.contains(id),
+                "the human attach view omits the harness {id}: {}",
                 help::ATTACH_HUMAN
             );
         }
     }
 
-    /// The agent page answers for every LANE — all nine of `Lane::ALL`, by the
-    /// id `Lane::id()` spells (the two acp lanes have exactly one mode each, so
-    /// they are named by their provider id and the `/daemon` suffix is dropped).
+    /// The agent page answers for every LANE, by the id `Lane::id()` spells —
+    /// DERIVED from `Lane::ALL`, never listed here.
     ///
-    /// This is the assert the old help could never have passed: it named four
-    /// providers and had nothing to say about a topology.
+    /// It was a hand-typed list of nine ids for exactly one merge. `Lane::ALL`
+    /// then kept its length while two of its ids were RESPELLED — ACP stopped
+    /// being a harness and became a mode, so `acp/claude-code` became
+    /// `claude-code/acp` and `acp/opencode` became `opencode/acp`. A literal
+    /// list plus a `len() == 9` count passed that merge green while the page it
+    /// guards had gone stale, which is the whole failure mode this help exists
+    /// to end: the text naming a taxonomy the engine has since renamed.
+    ///
+    /// Asking `Lane::ALL` instead makes both halves impossible — a lane ADDED
+    /// and a lane RENAMED both red this until the page answers for it.
     #[test]
     fn attach_agent_view_names_every_lane() {
-        for lane in [
-            "claude-code/mux-pane",
-            "pi/extension",
-            "pi/mux-pane",
-            "codex/mux-pane",
-            "codex/app-server",
-            "codex/daemon",
-            "pi/daemon",
-            "acp/claude-code",
-            "acp/opencode",
-        ] {
-            assert!(help::ATTACH.contains(lane), "the agent attach view omits {lane}");
+        for lane in quorum_qw::lane::Lane::ALL {
+            let id = lane.id();
+            assert!(
+                help::ATTACH.contains(&id),
+                "the agent attach view omits the lane {id} — every lane in \
+                 Lane::ALL needs a row, or attach cannot answer for it"
+            );
         }
-        // Nine rows for nine lanes — a lane added to `Lane::ALL` and not to the
-        // page is a lane this help silently cannot answer for.
-        assert_eq!(quorum_qw::lane::Lane::ALL.len(), 9);
     }
 
     /// REGRESSION GUARD — the defect this whole change exists to remove.

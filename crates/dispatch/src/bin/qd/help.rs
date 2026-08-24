@@ -117,8 +117,8 @@ answers differently depending on how it was started:
   codex/daemon            a viewer, but only while the row still carries a live
                           endpoint. Without one, refused (exit 1). Never revived
   pi/daemon               nothing to attach — refused (exit 1). Never revived
-  acp/claude-code         nothing to attach, in ANY state: an ACP bridge is
-  acp/opencode            headless by construction and has no terminal of its
+  claude-code/acp         nothing to attach, in ANY state: an ACP bridge is
+  opencode/acp            headless by construction and has no terminal of its
                           own. Refused (exit 1), and never revived — drive it
                           with `qd send`, revive it with `qd resume`
 
@@ -173,13 +173,13 @@ What you get depends on how the session is hosted:
                     <session>.view pane — not the session's own terminal. Send
                     it a message before attaching: a session that has not taken
                     a turn yet has no rollout for a viewer to resume
-  opencode, acp/*   nothing to attach to — an ACP bridge is headless by
-                    construction. Drive it with `qd send`, revive it with
-                    `qd resume`
+  opencode          nothing to attach to — its only lane is an ACP bridge,
+                    headless by construction. Drive it with `qd send`, revive
+                    it with `qd resume`
 
-Started it with --daemon or --interactive? That changes the answer — the full
-page lists every lane. A stopped session is refused whatever its lane: resume
-it first.
+Started it with --acp, --daemon or --interactive? That changes the answer —
+the full page lists every lane. A stopped session is refused whatever its
+lane: resume it first.
 
 Options:
   --alt-screen  Fullscreen rendering, but only if this attach revives the
