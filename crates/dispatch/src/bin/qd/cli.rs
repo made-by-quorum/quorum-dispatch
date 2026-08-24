@@ -12,7 +12,9 @@
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, Command};
 
+use crate::driver::Driver;
 use crate::help;
+use crate::verbs;
 
 /// Version string (index.ts:32 — `program.version("0.1.0")`).
 pub const VERSION: &str = "0.1.0";
@@ -201,7 +203,12 @@ fn cmd_ls() -> Command {
 // Dispatches on provider hosting then liveness (verbs/attach.rs).
 fn cmd_attach() -> Command {
     Command::new("attach")
-        .about("Connect to a running agent session's TUI (a cold session is revived first)")
+        // NOT "…a cold session is revived first": that was unconditionally false
+        // for the four daemon lanes, where `attach` answers `NotSupported`
+        // (verbs/attach.rs:273) before any revive is reachable (:279). What is
+        // true for all nine is that the LANE decides, so the row says so and
+        // sends the reader to the page that lists them.
+        .about("Connect your terminal to a running session (what you get depends on its lane)")
         .override_help(help::ATTACH)
         .arg(positional("session"))
         // Revive a cold session into a PERSISTENT, relay-serving daemon and return
@@ -1086,6 +1093,26 @@ fn trailing_passthrough() -> Arg {
 /// Map a clap parse error, given the full argv (the unknown-verb arm names the
 /// token the user actually typed, so it needs argv when clap's context is empty).
 pub fn map_clap_error_with_argv(e: clap::Error, argv: &[String]) -> i32 {
+    use crate::driver::{resolve_driver_real, DriverOverride};
+    // The launch flags are read straight off argv rather than off the parse:
+    // this is the FAILED-parse path, so there are no matches to ask. Both flags
+    // are the same tokens `DriverOverride::from_flags` reads everywhere else.
+    let over = DriverOverride::from_flags(
+        argv.iter().any(|a| a == "--headless"),
+        argv.iter().any(|a| a == "--interactive"),
+    );
+    let driver = resolve_driver_real(over, &dispatch::effects::RealEnv);
+    map_clap_error_for(e, argv, driver)
+}
+
+/// The pure core of [`map_clap_error_with_argv`]: same mapping, with the driver
+/// handed in instead of probed.
+///
+/// The split exists so the human/agent fork is testable. Under `cargo test`
+/// stdout is not a TTY, so a test that went through the wrapper would only ever
+/// see [`Driver::Agent`] — the human branch would be unreachable from a unit
+/// test, which is exactly the branch worth pinning.
+pub fn map_clap_error_for(e: clap::Error, argv: &[String], driver: Driver) -> i32 {
     match e.kind() {
         // commander's `.version("0.1.0")` prints JUST the version string (TS
         // `qd --version` → "0.1.0"); clap would prepend the bin name ("qd 0.1.0").
@@ -1097,7 +1124,16 @@ pub fn map_clap_error_with_argv(e: clap::Error, argv: &[String]) -> i32 {
             0
         }
         ErrorKind::DisplayHelp | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
-            print!("{e}");
+            // A verb that HAS a short human view prints it at a terminal; every
+            // other help — a verb with no human view, and any verb at all for an
+            // agent or a pipe — prints the text clap already rendered from
+            // `build_cli`. `help::human_view` is the whole of the decision, so
+            // adding a verb to that list is the only edit either site needs.
+            // Exit 0 either way: this is help, not an error.
+            match human_help(argv, driver) {
+                Some(v) => print!("{v}"),
+                None => print!("{e}"),
+            }
             0
         }
         ErrorKind::InvalidSubcommand => {
@@ -1111,11 +1147,31 @@ pub fn map_clap_error_with_argv(e: clap::Error, argv: &[String]) -> i32 {
             // passed too many arguments describes qd's internals instead of their
             // mistake, and gives them nothing to do next. Exit 1 is unchanged.
             eprintln!("error: unknown command '{}'", unknown_verb_token(&e, argv));
-            eprintln!("Run `qd --help` for the list of commands.");
+            // A human who mistyped a verb is one keystroke from the list they
+            // need, so give them the list instead of the address of the list.
+            // An agent gets the pointer unchanged — its output is parsed, and a
+            // whole help table dumped after an error line is noise it did not
+            // ask for. The error line and the exit code are the same for both.
+            if driver == Driver::Human {
+                let incomplete = verbs::setup::install_is_incomplete();
+                print!("{}", help::render_top(&build_cli(), false, incomplete));
+            } else {
+                eprintln!("Run `qd --help` for the list of commands.");
+            }
             1
         }
         _ => {
             eprintln!("{}", commander_message(&e));
+            // Same trade as the arm above, scoped to the verbs this fork covers:
+            // a human who got `qd start` or `qd attach` wrong sees WHAT the verb
+            // takes, right under the line saying what was wrong with what they
+            // typed. Other verbs keep today's bare error — a help view is owed to
+            // them too, and inventing one here would be guessing at text no one
+            // wrote. Same lookup as the help arm, so the two cannot disagree
+            // about which verbs have a human page.
+            if let Some(v) = human_help(argv, driver) {
+                print!("{v}");
+            }
             1
         }
     }
@@ -1181,6 +1237,36 @@ fn unknown_verb_token(e: &clap::Error, argv: &[String]) -> String {
                 .cloned()
         })
         .unwrap_or_default()
+}
+
+/// The verb this invocation NAMED — the first non-option token after the program
+/// name — or `None` for a bare `qd` / an all-flags argv.
+///
+/// Sibling of [`unknown_verb_token`], deliberately not the same function: that
+/// one answers "what did clap reject?" and prefers clap's own context, which on
+/// a `start` parse error names something else entirely (or nothing). This one
+/// answers "which verb's help does the user want?" and only argv can say.
+fn invoked_verb(argv: &[String]) -> Option<&str> {
+    argv.iter()
+        .skip(1)
+        .find(|a| !a.starts_with('-'))
+        .map(|s| s.as_str())
+}
+
+/// The short human page this invocation should print INSTEAD of clap's, or
+/// `None` for "print what clap rendered".
+///
+/// Two facts, one place: the driver must be [`Driver::Human`], and the verb
+/// argv named must have a human view ([`help::human_view`]). Both arms of
+/// [`map_clap_error_for`] that fork on the driver ask exactly this, so neither
+/// can drift into covering a different set of verbs than the other — which is
+/// what the two hand-written `== Some("start")` comparisons it replaces were
+/// one verb away from doing.
+fn human_help(argv: &[String], driver: Driver) -> Option<String> {
+    if driver != Driver::Human {
+        return None;
+    }
+    invoked_verb(argv).and_then(help::human_view)
 }
 
 /// clap renders a missing-required context value as e.g. `<session>` or a list;
@@ -2170,12 +2256,15 @@ mod tests {
     fn zmx_is_gone_from_the_help_surface_and_the_resume_flags() {
         let all = help::render_top(&build_cli(), true, false);
         assert!(!all.to_lowercase().contains("zmx"), "{all}");
+        let human = help::start_human();
         for (surface, text) in [
             ("RESUME", help::RESUME),
             ("START", help::START),
+            ("START_HUMAN", human.as_str()),
             ("RECONCILE", help::RECONCILE),
             ("SEND_PTY", help::SEND_PTY),
             ("ATTACH", help::ATTACH),
+            ("ATTACH_HUMAN", help::ATTACH_HUMAN),
         ] {
             assert!(
                 !text.to_lowercase().contains("zmx"),
@@ -2189,6 +2278,375 @@ mod tests {
         }
         // --no-attach is NOT a zmx flag and still parses.
         assert!(parse(&["resume", "wk", "--no-attach"]).is_ok());
+    }
+
+    // --- the human/agent split of `qd start --help` ---
+
+    /// A human at a terminal asking `qd start --help` gets the SHORT view, exit
+    /// 0, and that view carries the four options a person actually chooses
+    /// between: where it runs, what to say, which model, which harness.
+    ///
+    /// MUTATION EVIDENCE: routing the human branch back to `print!("{e}")` still
+    /// exits 0, but the four asserts below are about `start_human()` itself, so
+    /// deleting any option row from it reds this test.
+    #[test]
+    fn start_help_in_human_view_is_the_short_four_option_page() {
+        let e = parse(&["start", "--help"]).unwrap_err();
+        let argv: Vec<String> = ["qd", "start", "--help"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(map_clap_error_for(e, &argv, Driver::Human), 0);
+
+        let h = help::start_human();
+        for opt in ["--cwd", "-p, --prompt", "--model", "--provider"] {
+            assert!(h.contains(opt), "human view lost {opt}: {h}");
+        }
+    }
+
+    /// ...and it carries NOTHING else. This is the whole point of the split: the
+    /// lane/topology/plumbing surface and the exit-code contract are what an
+    /// agent composes on, and every one of them is a thing a person at a prompt
+    /// has to read past to find `--prompt`.
+    ///
+    /// MUTATION EVIDENCE: pasting any row of `help::START` into the human view
+    /// reds the matching entry here.
+    #[test]
+    fn start_human_view_omits_the_whole_agent_surface() {
+        let h = help::start_human();
+        for banned in [
+            "Exit codes",
+            "--fork",
+            "--turn",
+            "--no-attach",
+            "--interactive",
+            "--extension",
+            "--acp",
+            "--app-server",
+            "--daemon",
+            "--headless",
+            "--json",
+            "--no-await-relay",
+            "--via",
+            "--alt-screen",
+            "--inline",
+        ] {
+            assert!(!h.contains(banned), "human view leaked {banned}: {h}");
+        }
+    }
+
+    /// The example comes FIRST — above the description, under the usage line —
+    /// because a person who mistyped `qd start` is looking for a command to
+    /// retype, not a sentence to read.
+    ///
+    /// MUTATION EVIDENCE: moving the example block below the description (or
+    /// dropping either line) reds this.
+    #[test]
+    fn start_human_view_leads_with_a_retypable_example() {
+        let h = help::start_human();
+        let lines: Vec<&str> = h.lines().collect();
+        let usage = lines.iter().position(|l| l.starts_with("Usage:")).expect("usage line");
+        let desc = lines
+            .iter()
+            .position(|l| l.starts_with("Create a new qd wrapped session"))
+            .expect("description line");
+        for ex in [
+            "qd start claude1 --provider claude-code",
+            "qd start pi1 --provider pi",
+        ] {
+            let at = lines
+                .iter()
+                .position(|l| l.contains(ex))
+                .unwrap_or_else(|| panic!("human view lost the example {ex}: {h}"));
+            assert!(usage < at && at < desc, "{ex} is not between usage and description: {h}");
+        }
+    }
+
+    /// The human view FITS THE PAGE — every line, 80 columns or fewer.
+    ///
+    /// This is the guard the hand-wrapped first draft did not have, and the
+    /// reason `help::start_human` computes the `--provider` line instead of
+    /// typing it: that description interpolates `provider_list()`, so a harness
+    /// added to `Harness::ALL` lengthens it. A frozen wrap would have pushed the
+    /// line to 110 columns on a page whose whole purpose is being readable at a
+    /// terminal, and nothing would have said so.
+    ///
+    /// CHARACTERS, not bytes. The `start = new participant …` line carries two
+    /// `·` (U+00B7) and so measures 79 bytes against 77 real columns; `str::len`
+    /// would score it 79 and pass, which is the trap — it passes today with two
+    /// columns of phantom width already charged against the budget, and turns
+    /// into a false failure the moment that line is edited to a genuine 79. The
+    /// byte count is not the width the terminal draws, so it is not the number
+    /// this test may assert on.
+    ///
+    /// MUTATION EVIDENCE: hard-coding the old one-line `--provider` description
+    /// reds this at 110 columns. Note that swapping `.chars().count()` for
+    /// `.len()` does NOT red it at present — the margin absorbs the two phantom
+    /// bytes — which is precisely why the correct unit is written in rather than
+    /// discovered later by a mystery failure.
+    #[test]
+    fn start_human_view_fits_an_80_column_page() {
+        let h = help::start_human();
+        for (i, line) in h.lines().enumerate() {
+            let width = line.chars().count();
+            assert!(
+                width <= 80,
+                "human help line {} is {width} columns (max 80):\n{line}",
+                i + 1
+            );
+        }
+    }
+
+    /// The human page says WHY you would start a session, not which providers
+    /// exist — that is the table's question, and this reader already answered
+    /// it by opening this page. It also drops the start/resume/attach
+    /// orientation line: a verb's own help is not where the verb list belongs.
+    ///
+    /// The provider set is still pinned here, but at the line that actually
+    /// carries it (`--provider`, interpolating `provider_list()`), so this view
+    /// can no more drift from the accept-set than the table can.
+    #[test]
+    fn start_human_description_says_why_not_which_providers() {
+        let h = help::start_human();
+        assert!(
+            h.contains("communicate with any other\nqd wrapped session"),
+            "the human view stopped explaining what a qd session buys you: {h}"
+        );
+        for gone in ["start = new participant", "resume = same participant", "attach = enter live"] {
+            assert!(!h.contains(gone), "human view still carries the verb-list line {gone:?}: {h}");
+        }
+        for p in quorum_qw::lane::Harness::ALL.iter().map(|h| h.provider_id()) {
+            assert!(
+                h.contains(p) || p.starts_with("acp/"),
+                "human view omits provider {p}: {h}"
+            );
+        }
+    }
+
+    /// The split SUBTRACTED a view, it did not gut the canonical one: the agent
+    /// page still carries the surface the human page dropped.
+    ///
+    /// MUTATION EVIDENCE: trimming `help::START` down to the human text reds this.
+    #[test]
+    fn agent_start_help_still_carries_the_full_surface() {
+        assert!(help::START.contains("Exit codes"), "{}", help::START);
+        assert!(help::START.contains("--fork"), "{}", help::START);
+    }
+
+    /// A mistyped verb costs 1 in BOTH views — the fork changes what is printed
+    /// after the error line, never the status the caller branches on.
+    ///
+    /// MUTATION EVIDENCE: returning 0 from either branch reds this.
+    #[test]
+    fn unknown_verb_exits_1_in_both_views() {
+        let argv: Vec<String> = ["qd", "lss"].iter().map(|s| s.to_string()).collect();
+        for d in [Driver::Human, Driver::Agent] {
+            let e = parse(&["lss"]).unwrap_err();
+            assert_eq!(e.kind(), ErrorKind::InvalidSubcommand);
+            assert_eq!(map_clap_error_for(e, &argv, d), 1, "{d:?}");
+        }
+    }
+
+    /// The verb-name helper reads ARGV, not clap's context: it must skip the
+    /// program name and every option, and answer `None` when no verb was named.
+    #[test]
+    fn invoked_verb_is_the_first_non_option_token_after_the_program() {
+        let v = |args: &[&str]| -> Option<String> {
+            let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            invoked_verb(&argv).map(|s| s.to_string())
+        };
+        assert_eq!(v(&["qd", "start", "--help"]).as_deref(), Some("start"));
+        assert_eq!(v(&["qd", "--headless", "start", "wk"]).as_deref(), Some("start"));
+        assert_eq!(v(&["qd", "ls", "--json"]).as_deref(), Some("ls"));
+        assert_eq!(v(&["qd"]), None);
+        assert_eq!(v(&["qd", "--help"]), None);
+    }
+
+    // --- the human/agent split of `qd attach --help` ---
+
+    /// The fork works for `attach` in BOTH directions: a human at a terminal
+    /// gets the short page, an agent (or a pipe) gets the canonical one. Exit 0
+    /// for both — this is help, not an error.
+    ///
+    /// MUTATION EVIDENCE: dropping `"attach"` from `help::human_view` reds the
+    /// human half; routing the Agent branch through `human_view` reds the other.
+    #[test]
+    fn attach_help_forks_on_the_driver() {
+        let argv: Vec<String> = ["qd", "attach", "--help"].iter().map(|s| s.to_string()).collect();
+
+        let e = parse(&["attach", "--help"]).unwrap_err();
+        assert_eq!(map_clap_error_for(e, &argv, Driver::Human), 0);
+        // The human page is the one with the retypable example and the pointer
+        // at the full list; the agent page has neither.
+        assert!(help::ATTACH_HUMAN.contains("Example: qd attach claude1"));
+        assert!(help::ATTACH_HUMAN.contains("`qd attach --help | cat`"));
+        assert!(!help::ATTACH.contains("Example: qd attach claude1"));
+
+        let e = parse(&["attach", "--help"]).unwrap_err();
+        assert_eq!(map_clap_error_for(e, &argv, Driver::Agent), 0);
+        // ...and the agent page is the one that carries the lane table and the
+        // flag a human never types.
+        assert!(help::ATTACH.contains("--no-attach"));
+        assert!(!help::ATTACH_HUMAN.contains("--no-attach"));
+    }
+
+    /// BOTH attach pages fit the 80-column page, counted in CHARACTERS.
+    ///
+    /// This test is load-bearing in a way the `start` one is not: swap
+    /// `.chars().count()` for `.len()` and it REDS TODAY, which is the whole
+    /// difference. `help::ATTACH` carries `⇒` (U+21D2) as its cold-revive
+    /// marker and `—` in its prose, three bytes apiece, so its `--no-attach`
+    /// line measures 81 bytes against 79 real columns and a byte count fails a
+    /// page that fits. The margin the `start` view had to absorb that mistake
+    /// is gone here, and the failure it produces is a false one — the trap is
+    /// not that the page is too wide, it is that the number was never the
+    /// width the terminal draws.
+    #[test]
+    fn both_attach_views_fit_an_80_column_page() {
+        for (name, text) in [("ATTACH_HUMAN", help::ATTACH_HUMAN), ("ATTACH", help::ATTACH)] {
+            for (i, line) in text.lines().enumerate() {
+                let width = line.chars().count();
+                assert!(
+                    width <= 80,
+                    "{name} line {} is {width} columns (max 80):\n{line}",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    /// The human page answers for every harness a person can actually start —
+    /// it groups them, but it does not omit any. `acp/` covers the two bridge
+    /// ids in one row because their answer is identical and a person types
+    /// `opencode`, which is spelled out beside it.
+    #[test]
+    fn attach_human_view_names_every_startable_harness() {
+        for h in ["claude-code", "codex", "pi", "opencode", "acp/"] {
+            assert!(
+                help::ATTACH_HUMAN.contains(h),
+                "the human attach view omits {h}: {}",
+                help::ATTACH_HUMAN
+            );
+        }
+    }
+
+    /// The agent page answers for every LANE — all nine of `Lane::ALL`, by the
+    /// id `Lane::id()` spells (the two acp lanes have exactly one mode each, so
+    /// they are named by their provider id and the `/daemon` suffix is dropped).
+    ///
+    /// This is the assert the old help could never have passed: it named four
+    /// providers and had nothing to say about a topology.
+    #[test]
+    fn attach_agent_view_names_every_lane() {
+        for lane in [
+            "claude-code/mux-pane",
+            "pi/extension",
+            "pi/mux-pane",
+            "codex/mux-pane",
+            "codex/app-server",
+            "codex/daemon",
+            "pi/daemon",
+            "acp/claude-code",
+            "acp/opencode",
+        ] {
+            assert!(help::ATTACH.contains(lane), "the agent attach view omits {lane}");
+        }
+        // Nine rows for nine lanes — a lane added to `Lane::ALL` and not to the
+        // page is a lane this help silently cannot answer for.
+        assert_eq!(quorum_qw::lane::Lane::ALL.len(), 9);
+    }
+
+    /// REGRESSION GUARD — the defect this whole change exists to remove.
+    ///
+    /// The replaced `help::ATTACH` said "A codex session is daemon-hosted —
+    /// there is no TUI to connect to". That was true when codex had one lane and
+    /// it was `Mode::Daemon`. It is not true now: `Harness::create_default_mode`
+    /// moved codex to `Mode::AppServer` (`quorum-qw/src/lane.rs:184-196`), the
+    /// one daemon lane that DOES hand a human a terminal — a viewer, a second
+    /// client on the session's app server — and `codex/mux-pane` gives codex a
+    /// real TUI besides. The sentence outlived the code by two lanes, and
+    /// nothing failed when it did, because no test read the help for truth.
+    /// This one does.
+    #[test]
+    fn neither_attach_view_still_says_codex_has_no_tui() {
+        for (name, text) in [("ATTACH_HUMAN", help::ATTACH_HUMAN), ("ATTACH", help::ATTACH)] {
+            assert!(
+                !text.contains("A codex session is daemon-hosted"),
+                "{name} still carries the retired daemon-hosted sentence: {text}"
+            );
+            for lie in ["there is no TUI to connect to", "no TUI"] {
+                assert!(
+                    !text.contains(lie),
+                    "{name} still claims codex has no TUI ({lie:?}): {text}"
+                );
+            }
+        }
+        // And the truth is positively asserted, not merely un-denied.
+        assert!(help::ATTACH.contains("codex's DEFAULT lane"), "{}", help::ATTACH);
+        assert!(help::ATTACH.contains("the session's own codex TUI"), "{}", help::ATTACH);
+    }
+
+    /// The table row `qd --help` prints for `attach` is true for all NINE lanes,
+    /// which is why it no longer promises a revive: `attach` answers
+    /// `NotSupported` on the four daemon lanes (`verbs/attach.rs:273`) before the
+    /// cold-revive arm (`:279`) is reachable at all.
+    ///
+    /// One line, and it stays one line — it sits in a two-column table.
+    #[test]
+    fn attach_table_row_does_not_promise_a_revive() {
+        let cmd = build_cli();
+        let about = cmd
+            .find_subcommand("attach")
+            .and_then(|c| c.get_about())
+            .map(|s| s.to_string())
+            .expect("attach is registered with an about");
+        assert!(!about.contains("revived"), "the attach row still promises a revive: {about}");
+        assert!(about.contains("lane"), "the attach row must say the lane decides: {about}");
+        assert_eq!(about.lines().count(), 1, "the table row must be one line: {about}");
+        assert!(about.chars().count() <= 80, "{about}");
+    }
+
+    /// The human-view lookup is a LOOKUP: `Some` for the two verbs that have a
+    /// short page, `None` for every other verb — and `None` is what preserves
+    /// today's output for all of them.
+    ///
+    /// `connect` is in because it IS attach (`verbs::run` routes it to
+    /// `attach::run`); the argv helper hands it over under its own spelling, so
+    /// the lookup has to know that spelling or the alias silently falls back to
+    /// the four-line renamed stub.
+    #[test]
+    fn human_view_is_some_only_for_the_verbs_that_have_one() {
+        assert!(help::human_view("start").is_some());
+        assert_eq!(help::human_view("attach").as_deref(), Some(help::ATTACH_HUMAN));
+        // `connect` is attach, so it gets the attach ANSWER — with the rename
+        // said out loud on top, because a page headed `qd attach` explains
+        // nothing to someone who typed `qd connect`.
+        let c = help::human_view("connect").expect("connect has a human view");
+        assert!(
+            c.starts_with("`qd connect` was renamed — this is `qd attach`."),
+            "connect's human view dropped the rename notice: {c}"
+        );
+        assert!(
+            c.contains(help::ATTACH_HUMAN),
+            "connect's human view dropped the attach answer: {c}"
+        );
+        for none in ["reconcile", "ls", "resume", "send", "wrap", ""] {
+            assert!(help::human_view(none).is_none(), "{none} should have no human view");
+        }
+        // The alias really does arrive spelled `connect`.
+        let argv: Vec<String> = ["qd", "connect", "--help"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(invoked_verb(&argv), Some("connect"));
+        let e = parse(&["connect", "--help"]).unwrap_err();
+        assert_eq!(map_clap_error_for(e, &argv, Driver::Human), 0);
+    }
+
+    /// A bad option on `attach` still costs 1 in both views — the fork changes
+    /// what is printed under the error line, never the status.
+    #[test]
+    fn bad_attach_option_exits_1_in_both_views() {
+        let argv: Vec<String> = ["qd", "attach", "--bogus", "wk"].iter().map(|s| s.to_string()).collect();
+        for d in [Driver::Human, Driver::Agent] {
+            let e = parse(&["attach", "--bogus", "wk"]).unwrap_err();
+            assert_eq!(e.kind(), ErrorKind::UnknownArgument);
+            assert_eq!(map_clap_error_for(e, &argv, d), 1, "{d:?}");
+        }
     }
 
     #[test]

@@ -73,26 +73,121 @@ surface (--json never carries the trailer). Live Claude rows include an honest
 bare/managed classification (`management` in JSON; `Mode` in the human table).
 "####;
 
-// `attach` is the human "get me into this session" verb. The help
-// text describes the provider/liveness matrix in human terms (no mux
-// internals leak to the user — the daemon/cold wording matches what the verb
-// actually prints).
+/// The AGENT / canonical view of `qd attach --help` — [`ATTACH_HUMAN`] is the
+/// short human one.
+///
+/// REWRITTEN, not reformatted: the string this replaces was FALSE. It named
+/// PROVIDERS ("a codex session is daemon-hosted — there is no TUI to connect
+/// to"), and attach has not dispatched on a provider since the lane split.
+/// `verbs/attach.rs:260-267` derives the row's `Lane` from its provider PLUS
+/// its hosting and hands the whole question to `LaneOps::attach`, so one
+/// harness answers up to three different ways depending on how it was started
+/// — and codex in particular moved its create default to `Mode::AppServer`
+/// (`quorum-qw/src/lane.rs:184-196`), the one daemon lane that DOES open a
+/// terminal, a viewer on the session's app server. The old sentence outlived
+/// the code it described by two lanes.
+///
+/// So the rows below are keyed on LANE ids and each carries its own prose,
+/// because each lane's answer is genuinely a different answer. They are
+/// LITERAL rather than derived from `Lane::ALL` — unlike [`provider_list`],
+/// which can be generated because the accept-set is all it says. A generated
+/// lane list could name the nine and say nothing about any of them, and what
+/// they do is the entire content of this page.
 pub const ATTACH: &str = r####"Usage: qd attach [options] <session>
 
-Connect your terminal to a running agent session's own TUI.
+Connect your terminal to a running agent session.
 
-For a live Claude session this drops you straight into its interface. A cold
-Claude session is revived first and then opened. A codex session is
-daemon-hosted — there is no TUI to connect to, so it points you at
-`qd send:relay` / `qd resume` instead.
+Attach dispatches on the session's LANE, not on its provider, so one harness
+answers differently depending on how it was started:
+
+  claude-code/mux-pane    the session's own TUI. Cold ⇒ revived, then attached
+  pi/extension            the session's own pi TUI (pi's default lane). Cold ⇒
+                          revived, then attached
+  pi/mux-pane             the session's own pi TUI. Cold ⇒ revived, then
+                          attached
+  codex/mux-pane          the session's own codex TUI. Cold ⇒ revived, then
+                          attached
+  codex/app-server        codex's DEFAULT lane, and NOT the session's own
+                          terminal: a viewer, i.e. a second client on the app
+                          server, opened in a separate <session>.view pane. A
+                          session that has not taken a turn yet is refused
+                          (exit 1) — it has no rollout for a viewer to resume,
+                          so send it a message first. Cold ⇒ the app server is
+                          respawned, then the viewer opens
+  codex/daemon            a viewer, but only while the row still carries a live
+                          endpoint. Without one, refused (exit 1). Never revived
+  pi/daemon               nothing to attach — refused (exit 1). Never revived
+  acp/claude-code         nothing to attach, in ANY state: an ACP bridge is
+  acp/opencode            headless by construction and has no terminal of its
+                          own. Refused (exit 1), and never revived — drive it
+                          with `qd send`, revive it with `qd resume`
+
+A stopped session is refused (exit 1) whatever its lane: resume it first. So is
+an id shared by two live sessions — kill the duplicate first.
 
 Options:
-  --no-attach   Revive a cold session to a persistent daemon and return 0
-                WITHOUT attaching a TTY (headless — e.g. a systemd ExecStart)
+  --no-attach   claude-code ONLY — exit 1 for any other provider. Revive a cold
+                session to a persistent daemon and return 0 WITHOUT attaching a
+                TTY (headless — e.g. a systemd ExecStart). A session that is
+                already live is left alone and returns 0 without reviving
   --alt-screen  Fullscreen (alt-screen) rendering if this attach revives the
                 session (default: inline, so phone/SSH attach can scroll)
   --inline      Force inline rendering (overrides `render-default = alt-screen`)
   -h, --help    display help for command
+
+--alt-screen and --inline are consumed by the REVIVE, so they are inert on a
+live attach, on every daemon lane, and on the codex viewer even when it opens a
+new pane. They bite only on a cold revive of claude-code/mux-pane,
+codex/mux-pane, pi/mux-pane or pi/extension.
+"####;
+
+/// The HUMAN view of `qd attach --help` — [`ATTACH`] is the agent/canonical one.
+///
+/// The same split, for the same reason, as [`start_human`]: by AUDIENCE, not by
+/// truth. Nothing here contradicts [`ATTACH`]; it is a strict subset of it plus
+/// a pointer at the rest, and the pointer is `qd attach --help | cat` because a
+/// pipe is the signal that already resolves the driver to Agent.
+///
+/// What it subtracts is the lane TAXONOMY. A person at a prompt has one
+/// question — "will this give me a terminal, and if not, what do I type
+/// instead?" — so the three answers are grouped under the harness names they
+/// would recognise, and the three non-default lanes are left to the full page,
+/// named only by the flags that produce them. That grouping is a simplification
+/// the page ADMITS to ("started it with --daemon or --interactive? that changes
+/// the answer"), which is what keeps it short without making it the old lie
+/// again.
+///
+/// A plain `const` where [`start_human`] is a `fn`, and deliberately: that one
+/// must be computed because it interpolates [`provider_list`]. Nothing on this
+/// page is derived — see [`ATTACH`] for why per-lane prose cannot be — so
+/// there is nothing here for a `format!` to do.
+pub const ATTACH_HUMAN: &str = r####"Usage: qd attach [options] <session>
+
+Example: qd attach claude1
+
+Connect your terminal to a running session.
+
+What you get depends on how the session is hosted:
+  claude-code, pi   its own TUI. A cold session is revived first
+  codex             a viewer onto its app server, opened in a separate
+                    <session>.view pane — not the session's own terminal. Send
+                    it a message before attaching: a session that has not taken
+                    a turn yet has no rollout for a viewer to resume
+  opencode, acp/*   nothing to attach to — an ACP bridge is headless by
+                    construction. Drive it with `qd send`, revive it with
+                    `qd resume`
+
+Started it with --daemon or --interactive? That changes the answer — the full
+page lists every lane. A stopped session is refused whatever its lane: resume
+it first.
+
+Options:
+  --alt-screen  Fullscreen rendering, but only if this attach revives the
+                session (default: inline, so phone/SSH attach can scroll)
+  --inline      Force inline rendering (overrides `render-default = alt-screen`)
+  -h, --help    display help for command
+
+Every option: `qd attach --help | cat` (the full agent-facing list).
 "####;
 
 // `connect` is a retired spelling, kept as a hidden backward-compat alias for attach.
@@ -687,6 +782,150 @@ pub fn provider_list() -> String {
 /// the table and the verb's own `--help` can never name different providers.
 pub fn start_about() -> String {
     format!("Create a new session ({})", provider_list())
+}
+
+/// Width of the option gutter in [`start_human`]: two spaces, the widest flag
+/// spelling (`--provider <provider>`, 21 chars), two spaces. Descriptions start
+/// here and continuations hang here.
+const GUTTER: usize = 25;
+
+/// Hard-wrap an option's description to the help's 80-column page, hanging the
+/// continuation lines under `indent` (the width of the `  --flag <val>  ` gutter).
+///
+/// WHY this is code and not a hand-wrapped literal: the only description in
+/// [`start_human`] that needs it is `--provider`, and the reason it needs it is
+/// that it interpolates [`provider_list`] — a string DERIVED from `Harness::ALL`.
+/// A hand-wrap is correct for exactly the harness set it was typed against and
+/// silently overruns the page on the next harness added, which is the same class
+/// of drift `provider_list` itself exists to prevent. Wrapping at print time
+/// makes the layout a function of the content instead of a snapshot of it.
+///
+/// Word boundaries only — a single word longer than the available width is left
+/// to overrun rather than broken mid-token, because every "word" here is a
+/// provider id or a flag name and a split one would be a lie. (`start_human`'s
+/// 80-column guarantee is pinned by test; provider ids are far short of 55.)
+///
+/// Widths are counted in CHARACTERS, not bytes: this help carries `·` and `—`,
+/// and `str::len` would under-wrap every line containing them.
+fn wrap_hanging(desc: &str, indent: usize) -> String {
+    const PAGE: usize = 80;
+    let avail = PAGE.saturating_sub(indent);
+    let pad = " ".repeat(indent);
+    let mut out = String::new();
+    let mut col = 0usize;
+    for word in desc.split_whitespace() {
+        let w = word.chars().count();
+        if col == 0 {
+            out.push_str(word);
+            col = w;
+        } else if col + 1 + w <= avail {
+            out.push(' ');
+            out.push_str(word);
+            col += 1 + w;
+        } else {
+            out.push('\n');
+            out.push_str(&pad);
+            out.push_str(word);
+            col = w;
+        }
+    }
+    out
+}
+
+/// The HUMAN view of `qd start --help` — [`START`] is the agent/canonical one.
+///
+/// WHY there are two: [`START`] documents the whole verb, and the whole verb is
+/// a composition surface — lanes (`--extension`, `--app-server`, `--daemon`),
+/// topology (`--interactive`, `--alt-screen`, `--inline`), machine plumbing
+/// (`--json`, `--no-await-relay`, `--via`) and the exit-code contract an
+/// external composer branches on. That page is CORRECT and it is what an agent
+/// needs; it is also thirty options deep, and a person who typed `qd start` and
+/// got it wrong does not need a lane taxonomy — they need the four options they
+/// actually choose between (where it runs, what to say, which model, which
+/// harness) and one example they can retype.
+///
+/// So the split is by AUDIENCE, not by truth: nothing here contradicts
+/// [`START`], it is a strict subset of it plus a pointer at the rest. The
+/// driver decides which one prints (`cli::map_clap_error_for`), and the pointer
+/// is `qd start --help | cat` because a pipe is exactly the signal that already
+/// resolves the driver to Agent — the escape hatch is the same fact, not a new
+/// flag.
+///
+/// The description line does NOT reuse [`start_about`]. That string answers
+/// "which providers?", which is the table's job in a list of twenty verbs; a
+/// person who opened THIS page has already chosen the verb and needs to know
+/// what starting a session buys them — that it is qd-wrapped, and therefore
+/// reachable from every other qd-wrapped session. The provider set is still
+/// derived, one line down, where `--provider` interpolates [`provider_list`],
+/// so the accept-set cannot drift here either. That derivation is also why the
+/// `--provider` entry is laid out by [`wrap_hanging`] rather than typed: its
+/// text grows with `Harness::ALL`, so its line breaks have to be computed from
+/// the text, not frozen against one day's harness set. The other three options
+/// are static and already fit, and stay literal.
+pub fn start_human() -> String {
+    format!(
+        r####"Usage: qd start [options] <name> [claudeArgs...]
+
+Example: qd start claude1 --provider claude-code
+         qd start pi1 --provider pi
+
+Create a new qd wrapped session that can communicate with any other
+qd wrapped session
+
+Options:
+  --cwd <dir>            Working directory for the session
+  -p, --prompt <prompt>  Send an initial prompt after the session starts
+  --model <model>        Set the model before sending the prompt
+  --provider <provider>  {provider}
+  -h, --help             display help for command
+
+Every option: `qd start --help | cat` (the full agent-facing list).
+"####,
+        provider = wrap_hanging(
+            &format!(
+                "Provider: {}. At a terminal qd asks if you omit it; anywhere \
+                 else it defaults to claude-code.",
+                provider_list()
+            ),
+            GUTTER,
+        ),
+    )
+}
+
+/// The SHORT, human view of one verb's `--help`, or `None` for a verb that has
+/// only the one page.
+///
+/// This is the lookup [`crate::cli::map_clap_error_for`] asks in both places it
+/// forks on the driver — the `--help` arm and the bad-option arm. It is a
+/// function rather than an `invoked_verb(argv) == Some("start")` written twice
+/// because the SECOND verb to earn a human view is what proved the shape: that
+/// comparison was already duplicated across two arms in one file, and a third
+/// verb would have meant six sites to keep in agreement. Here a new human view
+/// costs one arm of one match, and every verb without one keeps today's output
+/// by falling out as `None` — the fork's default is "print what clap rendered",
+/// and it stays that way for the twenty-odd verbs nobody has written a short
+/// page for.
+///
+/// `connect` answers with the ATTACH view because it IS attach: a hidden
+/// backward-compat spelling that `verbs::run` routes straight to `attach::run`,
+/// so a person who typed the retired name asked the attach question and is owed
+/// the attach answer — not a stub that spends their `--help` telling them to
+/// type it again.
+///
+/// But they are owed the RENAME too, and it does not survive on its own: hand
+/// someone a page headed `qd attach` when they typed `qd connect` and nothing
+/// on it says why. So the human `connect` view is the notice AND the answer.
+/// The agent path is untouched — [`CONNECT`] still prints there verbatim,
+/// because a script that reads the stub is testing for the stub.
+pub fn human_view(verb: &str) -> Option<String> {
+    match verb {
+        "start" => Some(start_human()),
+        "attach" => Some(ATTACH_HUMAN.to_string()),
+        "connect" => Some(format!(
+            "`qd connect` was renamed — this is `qd attach`.\n\n{ATTACH_HUMAN}"
+        )),
+        _ => None,
+    }
 }
 
 /// Section header for the hidden surface, printed only by `qd --help-all`.
