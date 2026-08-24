@@ -150,6 +150,22 @@ impl RealExec {
     }
 }
 
+/// First gap between `try_wait` polls on the timeout path.
+///
+/// The loop used to sleep a flat 25ms, which charged EVERY timed run a ~25ms
+/// floor no matter how fast the child actually exited. That was invisible while
+/// the only timed callers were things a person waits on — but a `command -v`
+/// probe finishes in well under a millisecond, and four of them behind
+/// `qd --help` (R28's harness roster) turned an instant surface into a tenth of
+/// a second of pure sleep. Starting small and doubling costs a few extra
+/// `try_wait` syscalls on a slow child, which is noise next to the wait itself.
+const POLL_MIN: std::time::Duration = std::time::Duration::from_micros(200);
+
+/// Ceiling for the backoff — the old flat interval. A genuinely slow child ends
+/// up polled exactly as often as it was before, so nothing that waits on a real
+/// workload spins.
+const POLL_MAX: std::time::Duration = std::time::Duration::from_millis(25);
+
 impl Exec for RealExec {
     fn run(
         &self,
@@ -187,6 +203,7 @@ impl Exec for RealExec {
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
         let mut timed_out = false;
+        let mut backoff = POLL_MIN;
         let status = loop {
             match child.try_wait()? {
                 Some(s) => break Some(s),
@@ -197,7 +214,8 @@ impl Exec for RealExec {
                         timed_out = true;
                         break None;
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    std::thread::sleep(backoff);
+                    backoff = (backoff * 2).min(POLL_MAX);
                 }
             }
         };
@@ -253,6 +271,7 @@ impl Exec for RealExec {
             None => Some(child.wait()?),
             Some(ms) => {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+                let mut backoff = POLL_MIN;
                 loop {
                     match child.try_wait()? {
                         Some(s) => break Some(s),
@@ -263,7 +282,8 @@ impl Exec for RealExec {
                                 timed_out = true;
                                 break None;
                             }
-                            std::thread::sleep(std::time::Duration::from_millis(25));
+                            std::thread::sleep(backoff);
+                            backoff = (backoff * 2).min(POLL_MAX);
                         }
                     }
                 }
@@ -570,6 +590,41 @@ mod tests {
         assert_eq!(r.status, Some(0));
         assert_eq!(r.stdout.trim(), "hi");
         assert!(!r.timed_out);
+    }
+
+    /// A child that exits immediately must COST immediately, even when the
+    /// caller passed a deadline.
+    ///
+    /// The poll loop used to sleep a flat 25ms between `try_wait` calls, so a
+    /// program that was already finished still charged the caller ~25ms. That is
+    /// invisible for the survey's 120s-per-model runs and ruinous for the four
+    /// `command -v` probes behind `qd --help` (R28's harness roster), which went
+    /// from free to ~120ms of pure sleeping.
+    ///
+    /// The bound here is deliberately loose — 10 runs in under 100ms is ~10ms
+    /// each, still 2.5x slack against the old 25ms floor, so this asserts the
+    /// floor is GONE without becoming a flaky benchmark on a loaded CI box.
+    ///
+    /// MUTATION EVIDENCE: restoring the flat `sleep(25ms)` (or raising
+    /// `POLL_MIN` to it) makes 10 runs cost ~250ms and reds this.
+    #[test]
+    fn a_finished_child_does_not_pay_a_poll_interval() {
+        let exec = RealExec;
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            let r = exec
+                .run("/bin/echo", &["hi".to_string()], &[], None, Some(10_000))
+                .unwrap();
+            assert_eq!(r.status, Some(0), "the deadline path still captures");
+            assert_eq!(r.stdout.trim(), "hi");
+            assert!(!r.timed_out);
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "10 instant children took {elapsed:?} — the timeout path is sleeping on a \
+             child that already exited"
+        );
     }
 
     #[test]

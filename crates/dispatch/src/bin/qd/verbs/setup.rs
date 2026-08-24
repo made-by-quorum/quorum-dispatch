@@ -44,12 +44,29 @@ use super::super::tty;
 /// hang a setup run (the L3 discipline the zmx probe established).
 const PROBE_TIMEOUT_MS: u64 = 10_000;
 
+/// The budget one harness probe gets when the top-level help is what is waiting
+/// on it (R28).
+///
+/// [`PROBE_TIMEOUT_MS`] is sized for a verb whose whole job is the report: `qd
+/// setup` may reasonably spend ten seconds establishing that a harness is
+/// wedged, because saying so IS the output. The help's roster is a garnish on a
+/// verb table, and four probes at the setup budget would put a 40-second
+/// ceiling on `qd --help` — the one command a confused person types, and the one
+/// that used to be instant.
+///
+/// A second and a half is far past any healthy `command -v` (they measure in
+/// single-digit milliseconds here) and far short of a wait anyone would sit
+/// through. A probe that overruns it is reported as an absent harness, which is
+/// the honest answer for the case that produces it: a `$PATH` entry on a stalled
+/// mount is a machine where qd could not have launched that harness either.
+const HELP_PROBE_TIMEOUT_MS: u64 = 1_500;
+
 pub fn run(m: &ArgMatches) -> i32 {
     run_with(m.get_flag("fix"), m.get_flag("json"), m.get_flag("yes"))
 }
 
 fn run_with(fix: bool, json: bool, yes: bool) -> i32 {
-    let code = run_report(fix, json, yes);
+    let (code, harnesses) = run_report(fix, json, yes);
 
     // --- FTUE punch R23: a completed setup ENDS IN THE HELP -----------------
     //
@@ -70,7 +87,17 @@ fn run_with(fix: bool, json: bool, yes: bool) -> i32 {
         // `false`: this tail only follows an exit-0 run, which IS the finished
         // install — re-probing to print "not fully set up" under a report that
         // just said everything is in place would be the contradiction.
-        print!("{}", crate::help::render_top(&crate::cli::build_cli(), false, false));
+        //
+        // The roster, by contrast, is exactly what this reader wants and is
+        // already in hand (R28): a completed setup's last word should be which
+        // harnesses they can now start, not just which verbs exist. It restates
+        // the rows printed above, and deliberately — those rows have scrolled
+        // past a `--fix` run's bootstrap output by the time the shell prompt
+        // comes back, and the four-line summary is what survives the scroll.
+        print!(
+            "{}",
+            crate::help::render_top(&crate::cli::build_cli(), false, false, &harnesses)
+        );
     }
     code
 }
@@ -86,7 +113,14 @@ fn help_tail_follows(exit_code: i32, json: bool) -> bool {
 
 /// The report/fix pass itself — everything `qd setup` did before R23 bolted the
 /// help onto the end of a successful one.
-fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
+///
+/// Returns the exit code AND the harness roster it just probed. R28 wants that
+/// roster in the tail, and this run has already paid for it in full — versions,
+/// pins and all. Handing it back is what keeps the tail from re-probing four
+/// harnesses to print what setup worked out seconds earlier, and (on a `--fix`
+/// run) what makes the tail describe the machine as it is AFTER the fixes
+/// rather than as it was when the run started.
+fn run_report(fix: bool, json: bool, yes: bool) -> (i32, Vec<HarnessFacts>) {
     let env = RealEnv;
     let exec = RealExec;
 
@@ -94,7 +128,7 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
         Some(h) => PathBuf::from(h),
         None => {
             eprintln!("qd setup: HOME is not set — cannot resolve the install layout.");
-            return 1;
+            return (1, Vec::new());
         }
     };
 
@@ -122,7 +156,7 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
     // `qd setup --json` and then `qd setup --fix`.
     if json {
         println!("{}", serde_json::to_string_pretty(&to_json(&facts, &report)).unwrap_or_default());
-        return report.exit_code();
+        return (report.exit_code(), facts.harnesses);
     }
 
     print!("{}", report.render(style));
@@ -131,7 +165,7 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
         // Nothing to offer, so the run is over right here and the verdict is
         // the last word.
         print!("{}", report.render_verdict(style));
-        return report.exit_code();
+        return (report.exit_code(), facts.harnesses);
     }
 
     // The pending changes as their own section, before anything decides what to
@@ -174,7 +208,7 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
             );
         }
         print!("{}", report.render_verdict(style));
-        return report.exit_code();
+        return (report.exit_code(), facts.harnesses);
     }
 
     let applied = apply_fixes(&report, style);
@@ -190,7 +224,7 @@ fn run_report(fix: bool, json: bool, yes: bool) -> i32 {
     let report = assess(&facts);
     print!("{}", report.render(style));
     print!("{}", report.render_verdict(style));
-    report.exit_code()
+    (report.exit_code(), facts.harnesses)
 }
 
 
@@ -316,18 +350,10 @@ fn gather_inner<E: Env, X: Exec>(home: &Path, env: &E, exec: Option<&X>) -> Setu
 
     // The one piece of harness wiring that depends on the pin: Claude Code's.
     // Reported in full by the `relay-pin` check; cross-referenced onto the
-    // harness line so that line is self-contained.
-    if let Some(h) = harnesses
-        .iter_mut()
-        .find(|h| h.id == HarnessId::ClaudeCode && h.presence.found())
-    {
-        let pinned = matches!(pin_state, relay_pin::PinState::Entry { .. });
-        h.wired = Some(pinned);
-        h.wiring_note = if pinned {
-            "relay pinned in ~/.claude.json".to_string()
-        } else {
-            "relay NOT pinned (see the relay-pin line)".to_string()
-        };
+    // harness line so that line is self-contained. Shared with the help's cheap
+    // roster (`harness_readiness`) so the two surfaces cannot disagree about it.
+    for h in harnesses.iter_mut() {
+        claude_wiring(h, &pin_state);
     }
 
     SetupFacts {
@@ -365,10 +391,10 @@ fn newer(a: &Path, b: &Path) -> bool {
 
 /// Resolve a program on `PATH` (`command -v`, the same probe
 /// `dispatch::bootstrap::real_command_exists` uses) and return its path.
-fn which(exec: &impl Exec, name: &str) -> Option<String> {
+fn which(exec: &impl Exec, name: &str, timeout_ms: u64) -> Option<String> {
     let arg = format!("command -v '{}'", name.replace('\'', "'\\''"));
     let out = exec
-        .run("sh", &["-c".to_string(), arg], &[], None, Some(PROBE_TIMEOUT_MS))
+        .run("sh", &["-c".to_string(), arg], &[], None, Some(timeout_ms))
         .ok()?;
     if out.status != Some(0) {
         return None;
@@ -396,8 +422,14 @@ fn version_of(exec: &impl Exec, program: &str) -> Option<String> {
 /// presence half of [`probe_harness`], split out because it is the only half
 /// [`present_harnesses`] needs — a version sniff costs a subprocess per harness
 /// and answers a question `qd start`'s provider prompt never asks.
-fn harness_presence(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec) -> Presence {
-    let on_path = which(exec, id.program());
+fn harness_presence(
+    id: HarnessId,
+    home: &Path,
+    env: &impl Env,
+    exec: &impl Exec,
+    timeout_ms: u64,
+) -> Presence {
+    let on_path = which(exec, id.program(), timeout_ms);
     match (&on_path, id) {
         (Some(p), _) => Presence::OnPath {
             path: Some(p.clone()),
@@ -406,9 +438,24 @@ fn harness_presence(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec
         // PATH — so "not on PATH" is not the same as "not installed". Only pi
         // gets the off-PATH sweep; the other three are installed onto PATH by
         // every documented path they have.
+        //
+        // The sweep leads with whatever `QD_PI_BIN` names, because that is where
+        // the LAUNCH path looks first (`quorum_qw::provider::pi::pi_bin` reads
+        // it before falling back to a bare `pi`). Without this, a pi pinned to
+        // somewhere the candidate list does not guess — the whole point of an
+        // override — was reported as NOT INSTALLED by a `qd setup` that had just
+        // told the human to set that variable, and by the R28 roster after it.
         (None, HarnessId::Pi) => {
-            match harness::pi_candidates(home, env.var("NPM_CONFIG_PREFIX").as_deref())
+            let pinned = env
+                .var(harness::PI_BIN_ENV)
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from);
+            match pinned
                 .into_iter()
+                .chain(harness::pi_candidates(
+                    home,
+                    env.var("NPM_CONFIG_PREFIX").as_deref(),
+                ))
                 .find(|c| c.exists())
             {
                 Some(p) => Presence::OffPath {
@@ -444,16 +491,139 @@ pub fn present_harnesses(home: &Path, env: &impl Env, exec: &impl Exec) -> Vec<H
     HarnessId::ALL
         .iter()
         .copied()
-        .filter(|id| harness_presence(*id, home, env, exec).found())
+        .filter(|id| harness_presence(*id, home, env, exec, PROBE_TIMEOUT_MS).found())
         .collect()
+}
+
+/// FTUE punch **R28** — presence and wiring for every harness, and NOTHING that
+/// costs a version probe.
+///
+/// # Why this half exists on its own
+///
+/// R28 puts a harness roster in the top-level help, which means the roster is
+/// paid for by `qd --help` and by bare `qd`. [`gather`] answers the same two
+/// questions, but on the way it runs `--version` on everything it found —
+/// four more subprocesses with a ten-second ceiling each, for a version string
+/// the help has no room to print. So the probe is split rather than duplicated:
+/// [`harness_wiring`] is the half both callers need, and [`probe_harness`] is
+/// that half plus the version sniff that only the report can afford.
+///
+/// The remaining cost is the `command -v` sweep [`present_harnesses`] already
+/// pays on `qd start`'s prompt: four `sh -c` runs, ~20ms for the set on a warm
+/// macOS laptop, and it buys the one thing the help could not otherwise say.
+/// It is still bounded, and on a TIGHTER budget than the report's:
+/// [`HELP_PROBE_TIMEOUT_MS`] per probe, so the whole roster cannot hold the help
+/// for longer than four times that however pathological the `$PATH`.
+///
+/// Getting it to 20ms took a fix one layer down. `RealExec`'s timeout path used
+/// to poll a finished child on a flat 25ms sleep, so four probes cost ~120ms of
+/// pure sleeping however fast they exited; it backs off from 200µs now
+/// (`quorum_core::exec::POLL_MIN`). Worth knowing if this number ever drifts
+/// back up: the probes themselves were never the expensive part.
+///
+/// Note what this does NOT do: re-derive presence. [`harness_presence`] stays
+/// the single answer to "do you have pi", for the R20 reason — a second sweep
+/// would get the C5 off-`PATH` case wrong the first time it drifted.
+pub fn harness_readiness(home: &Path, env: &impl Env, exec: &impl Exec) -> Vec<HarnessFacts> {
+    let mut out: Vec<HarnessFacts> = HarnessId::ALL
+        .iter()
+        .map(|id| harness_wiring(*id, home, env, exec, HELP_PROBE_TIMEOUT_MS))
+        .collect();
+    // Claude Code's wiring IS the relay pin, so it needs the file the full
+    // gather reads. Cheap here for the reason the ORDER MATTERS note in
+    // `gather_inner` explains in reverse: this path never runs `claude
+    // --version`, so nothing it does can create the file it is about to read.
+    let pin_state = relay_pin::classify(
+        std::fs::read_to_string(home.join(".claude.json"))
+            .ok()
+            .as_deref(),
+    );
+    for h in out.iter_mut() {
+        claude_wiring(h, &pin_state);
+    }
+    out
+}
+
+/// The harness roster for the surfaces that print the top-level help, gathered
+/// through the real seams.
+///
+/// Mirrors [`install_is_incomplete`]: a `HOME`-less machine answers "nothing
+/// known" rather than guessing, and says so by printing no roster at all.
+pub fn help_harnesses() -> Vec<HarnessFacts> {
+    let env = RealEnv;
+    let Some(home) = env.var("HOME").filter(|h| !h.is_empty()).map(PathBuf::from) else {
+        return Vec::new();
+    };
+    harness_readiness(&home, &env, &RealExec)
+}
+
+/// The WIRING half of a harness probe: where it is, and whether qd can reach
+/// it. No `--version` anywhere in here — see [`harness_readiness`].
+fn harness_wiring(
+    id: HarnessId,
+    home: &Path,
+    env: &impl Env,
+    exec: &impl Exec,
+    timeout_ms: u64,
+) -> HarnessFacts {
+    let presence = harness_presence(id, home, env, exec, timeout_ms);
+
+    let mut f = HarnessFacts::new(id, presence);
+    if !f.presence.found() {
+        return f;
+    }
+
+    match id {
+        HarnessId::ClaudeCode => {
+            // `wired`/`wiring_note` need the relay pin, which both callers read
+            // for themselves — see `claude_wiring`.
+        }
+        HarnessId::Codex => {
+            // codex needs no persistent wiring: qd spawns `codex app-server`
+            // per session.
+            f.wiring_note = "no wiring needed (qd spawns `codex app-server` per session)".into();
+        }
+        HarnessId::Pi => {
+            let pinned = env.var(harness::PI_BIN_ENV).filter(|s| !s.is_empty());
+            f.wired = Some(pinned.is_some() || matches!(f.presence, Presence::OnPath { .. }));
+            f.wiring_note = match pinned {
+                Some(p) => format!("{}={p}", harness::PI_BIN_ENV),
+                None => format!("{} unset (qd will run a bare `pi`)", harness::PI_BIN_ENV),
+            };
+        }
+        HarnessId::Opencode => {
+            // C4 notes opencode "has literally nothing" — and needs nothing:
+            // its only live transport is the shared ACP driver bridged to
+            // `opencode acp`, spawned on demand.
+            f.wiring_note = "no wiring needed (qd spawns `opencode acp` per session)".into();
+        }
+    }
+    f
+}
+
+/// Cross-reference the relay pin onto Claude Code's harness row — THE one
+/// definition of "is Claude Code wired", shared by the full [`gather`] and by
+/// the help's cheap roster so the two surfaces cannot disagree.
+///
+/// A no-op for every other harness and for a Claude Code that is not installed,
+/// so callers can run it over the whole roster without a guard.
+fn claude_wiring(f: &mut HarnessFacts, pin_state: &relay_pin::PinState) {
+    if f.id != HarnessId::ClaudeCode || !f.presence.found() {
+        return;
+    }
+    let pinned = matches!(pin_state, relay_pin::PinState::Entry { .. });
+    f.wired = Some(pinned);
+    f.wiring_note = if pinned {
+        "relay pinned in ~/.claude.json".to_string()
+    } else {
+        "relay NOT pinned (see the relay-pin line)".to_string()
+    };
 }
 
 /// Probe one harness: presence, version where the probe is cheap, and whether
 /// qd's wiring for it is in place (C2's three questions).
 fn probe_harness(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec) -> HarnessFacts {
-    let presence = harness_presence(id, home, env, exec);
-
-    let mut f = HarnessFacts::new(id, presence);
+    let mut f = harness_wiring(id, home, env, exec, PROBE_TIMEOUT_MS);
     if !f.presence.found() {
         return f;
     }
@@ -472,9 +642,6 @@ fn probe_harness(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec) -
             f.version = v;
             f.pin_ok = ok;
             f.pin_note = note;
-            // codex needs no persistent wiring: qd spawns `codex app-server`
-            // per session.
-            f.wiring_note = "no wiring needed (qd spawns `codex app-server` per session)".into();
         }
         HarnessId::Pi => {
             // Probe the binary we actually FOUND, not a bare `pi` — for an
@@ -490,19 +657,9 @@ fn probe_harness(id: HarnessId, home: &Path, env: &impl Env, exec: &impl Exec) -
                 f.pin_ok = ok;
                 f.pin_note = note;
             }
-            let pinned = env.var(harness::PI_BIN_ENV).filter(|s| !s.is_empty());
-            f.wired = Some(pinned.is_some() || matches!(f.presence, Presence::OnPath { .. }));
-            f.wiring_note = match pinned {
-                Some(p) => format!("{}={p}", harness::PI_BIN_ENV),
-                None => format!("{} unset (qd will run a bare `pi`)", harness::PI_BIN_ENV),
-            };
         }
         HarnessId::Opencode => {
             f.version = version_of(exec, id.program());
-            // C4 notes opencode "has literally nothing" — and needs nothing:
-            // its only live transport is the shared ACP driver bridged to
-            // `opencode acp`, spawned on demand.
-            f.wiring_note = "no wiring needed (qd spawns `opencode acp` per session)".into();
         }
     }
     f

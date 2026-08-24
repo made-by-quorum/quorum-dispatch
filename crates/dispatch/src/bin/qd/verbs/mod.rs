@@ -101,9 +101,10 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         // reaching for. `qd ls` is one word away for anyone who wanted the list.
         None => {
             let incomplete = setup::install_is_incomplete();
+            let harnesses = setup::help_harnesses();
             println!(
                 "{}",
-                crate::help::render_top(&crate::cli::build_cli(), false, incomplete)
+                crate::help::render_top(&crate::cli::build_cli(), false, incomplete, &harnesses)
             );
             0
         }

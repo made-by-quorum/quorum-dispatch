@@ -78,24 +78,40 @@ impl HarnessId {
         self.as_str()
     }
 
-    /// Human label. Only Claude Code has a display name that is not its
-    /// command.
+    /// How each harness is WRITTEN when qd is talking to a person about it.
+    ///
+    /// Every one of these differs from [`as_str`](Self::as_str) by case, and
+    /// that split is the point: the id is what you TYPE — `qd start --provider
+    /// codex`, the `harness.codex` check id, the `"codex"` key in `--json` — and
+    /// it stays lowercase everywhere, because it is an argument, not a name. The
+    /// label is what you READ, and each vendor writes their own product with
+    /// capitals. A roster that listed "Claude Code" beside "codex" was using
+    /// both conventions in one column and looked like a typo in the one.
+    ///
+    /// So: labels in prose and in display columns; [`as_str`](Self::as_str) in
+    /// anything a person or a script types or parses.
     pub fn label(self) -> &'static str {
         match self {
             HarnessId::ClaudeCode => "Claude Code",
-            _ => self.as_str(),
+            HarnessId::Codex => "Codex",
+            HarnessId::Pi => "Pi",
+            HarnessId::Opencode => "OpenCode",
         }
     }
 
     /// What qd gains from this harness — printed when it is NOT found, so the
     /// "not found" line says what the human is missing rather than just
     /// reporting an absence.
+    ///
+    /// Prose, so the product names are [`label`](Self::label)-cased. The
+    /// backticked spellings inside are COMMANDS (`codex app-server` is a thing
+    /// you run), and those stay exactly as the shell wants them.
     pub fn offers(self) -> &'static str {
         match self {
             HarnessId::ClaudeCode => "relay-native sessions (agent-to-agent messaging)",
-            HarnessId::Codex => "codex/app-server sessions",
-            HarnessId::Pi => "pi sessions (daemon + interactive lanes)",
-            HarnessId::Opencode => "opencode sessions over ACP",
+            HarnessId::Codex => "Codex sessions (`codex app-server`)",
+            HarnessId::Pi => "Pi sessions (daemon + interactive lanes)",
+            HarnessId::Opencode => "OpenCode sessions over ACP",
         }
     }
 }
@@ -234,7 +250,7 @@ pub fn pi_verdict(version_output: &str) -> (Option<String>, Option<bool>, String
             Some(found),
             Some(false),
             format!(
-                "qd is pinned to pi {} ({}); pi's RPC surface moves between 0.x minors",
+                "qd is pinned to Pi {} ({}); Pi's RPC surface moves between 0.x minors",
                 pi_pin::PINNED_VERSION,
                 pi_pin::PIN_SPEC
             ),
@@ -280,6 +296,120 @@ pub fn pi_candidates(home: &std::path::Path, npm_prefix: Option<&str>) -> Vec<Pa
 /// deliverable: "report the exact `QD_PI_BIN` export the user needs").
 pub fn pi_bin_export(path: &str) -> String {
     format!("export {PI_BIN_ENV}=\"{path}\"")
+}
+
+// ---------------------------------------------------------------------------
+// R28 — the two-word answer the top-level help prints.
+// ---------------------------------------------------------------------------
+
+/// Where one harness stands, collapsed to the question a person actually asks
+/// before they type `qd start`: **can I use this one right now?**
+///
+/// # Why a third verdict and not just `wired`
+///
+/// [`HarnessFacts`] already carries the three facts `qd setup` reports —
+/// presence, pin drift, wiring — and reports them as three columns because a
+/// setup run is where the detail belongs. The help is not that surface. It has
+/// room for one word per harness, and the word has to fold `wired == None`
+/// ("needs no wiring") together with `wired == Some(true)` ("wired"), because
+/// the difference between them is qd's business and not the reader's: both mean
+/// *ready*. It also has to fold the C5 off-`PATH` pi in with an unwired one,
+/// because both mean *installed, but qd will not reach it until you act*.
+///
+/// Deliberately NOT folded in: pin drift. A harness qd is wired to but pinned
+/// away from still starts sessions (codex patch drift is warn-and-go, and
+/// `QD_CODEX_UNPINNED` exists for the rest), so calling it unconfigured in the
+/// help would be a lie in the direction that costs someone a session they could
+/// have had. `qd setup` says it in full, which is where a verdict that nuanced
+/// belongs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Readiness {
+    /// Installed, and qd's integration for it is in place — or it needs none.
+    Configured,
+    /// Installed, but qd cannot reach it until something is done.
+    Unconfigured,
+    /// Not on this machine at all.
+    NotInstalled,
+}
+
+impl Readiness {
+    /// Is this harness usable right now? The one place the three-way verdict
+    /// collapses back to a yes/no, so a caller that wants a count does not
+    /// re-derive the rule.
+    pub fn usable(self) -> bool {
+        matches!(self, Readiness::Configured)
+    }
+}
+
+impl HarnessFacts {
+    /// Fold this harness's facts into the one word the help prints.
+    ///
+    /// # `wired` outranks `presence`
+    ///
+    /// The order of these arms is the whole content of this function, and it
+    /// was wrong the first time: `OffPath` was checked first, so a pi that the
+    /// human had pinned with `QD_PI_BIN` — having done EXACTLY what `qd setup`
+    /// told them to do — still read "installed, not configured" on every
+    /// `qd --help`, forever, with no way to clear it. A verdict a person cannot
+    /// act their way out of is worse than no verdict.
+    ///
+    /// So `wired == Some(true)` wins wherever the binary lives: it is the
+    /// launch path's own question ("will qd find this when it spawns"), and
+    /// `quorum_qw::provider::pi::pi_bin` answers it with `QD_PI_BIN` before it
+    /// ever consults `PATH`. Being off `PATH` only means unconfigured when
+    /// nothing has told qd where to look instead — which is the `wired == None`
+    /// case below.
+    ///
+    /// MUTATION EVIDENCE: hoisting the `OffPath` arm back above the `wired`
+    /// arms reds `an_off_path_pi_that_is_pinned_reads_as_configured`; deleting
+    /// the `OffPath` arm entirely reds
+    /// `an_off_path_harness_with_nothing_pointing_at_it_is_unconfigured`.
+    pub fn readiness(&self) -> Readiness {
+        if !self.presence.found() {
+            return Readiness::NotInstalled;
+        }
+        // Explicitly reachable, wherever it lives.
+        if self.wired == Some(true) {
+            return Readiness::Configured;
+        }
+        // Explicitly waiting on something.
+        if self.wired == Some(false) {
+            return Readiness::Unconfigured;
+        }
+        // `wired == None` is "needs no wiring" — ready, UNLESS the only copy we
+        // found is somewhere qd will not look (C5). Nothing points at it and
+        // nothing needs to be pointed, so it is stranded.
+        if matches!(self.presence, Presence::OffPath { .. }) {
+            return Readiness::Unconfigured;
+        }
+        Readiness::Configured
+    }
+
+    /// This harness's line in the top-level help: `(label, state)`.
+    ///
+    /// PURE, and it names no harness — the label comes from [`HarnessId::label`]
+    /// and the "what you are missing" clause from [`HarnessId::offers`], so the
+    /// help layer that prints these rows stays free of provider spellings and
+    /// the literal gate keeps its one pinned home for them (this file).
+    pub fn help_row(&self) -> (String, String) {
+        let state = match self.readiness() {
+            Readiness::Configured => "configured".to_string(),
+            Readiness::Unconfigured => "installed, not configured — run `qd setup`".to_string(),
+            Readiness::NotInstalled => {
+                format!("not installed — it would give you {}", self.id.offers())
+            }
+        };
+        (self.id.label().to_string(), state)
+    }
+}
+
+/// Every harness's help row, in [`HarnessId::ALL`] order.
+///
+/// Takes a slice rather than gathering, because gathering means touching the
+/// disk and this module is pure by construction (see the module doc on
+/// [`crate::setup`]). The bin layer probes; this decides what the probe means.
+pub fn help_rows(facts: &[HarnessFacts]) -> Vec<(String, String)> {
+    facts.iter().map(HarnessFacts::help_row).collect()
 }
 
 #[cfg(test)]
@@ -423,5 +553,125 @@ mod tests {
     fn the_env_var_matches_what_the_launch_path_reads() {
         // If these ever diverge, setup would report an export qd ignores.
         assert_eq!(PI_BIN_ENV, "QD_PI_BIN");
+    }
+
+    // --- R28: the help's one-word verdict ------------------------------------
+
+    fn on_path(id: HarnessId) -> HarnessFacts {
+        HarnessFacts::new(
+            id,
+            Presence::OnPath {
+                path: Some("/usr/local/bin/x".into()),
+            },
+        )
+    }
+
+    #[test]
+    fn a_harness_that_needs_no_wiring_is_configured_not_unknown() {
+        // `wired: None` is codex's and opencode's honest state — qd spawns them
+        // per session and there is nothing to set up. The help must read that
+        // as ready, or two of the four harnesses would permanently advertise
+        // themselves as unfinished business.
+        let f = on_path(HarnessId::Codex);
+        assert_eq!(f.wired, None, "the fixture is the needs-no-wiring shape");
+        assert_eq!(f.readiness(), Readiness::Configured);
+        assert!(f.readiness().usable());
+    }
+
+    #[test]
+    fn a_wired_harness_is_configured_and_an_unwired_one_is_not() {
+        let mut f = on_path(HarnessId::ClaudeCode);
+        f.wired = Some(true);
+        assert_eq!(f.readiness(), Readiness::Configured);
+
+        f.wired = Some(false);
+        assert_eq!(f.readiness(), Readiness::Unconfigured);
+        assert!(!f.readiness().usable());
+        assert!(f.help_row().1.contains("qd setup"), "{:?}", f.help_row());
+    }
+
+    fn off_path_pi() -> HarnessFacts {
+        HarnessFacts::new(
+            HarnessId::Pi,
+            Presence::OffPath {
+                path: "/h/.npm-pi-global/bin/pi".into(),
+            },
+        )
+    }
+
+    #[test]
+    fn an_off_path_harness_with_nothing_pointing_at_it_is_unconfigured() {
+        // C5's pi: present on disk, invisible to the bare command qd runs, and
+        // nothing set to tell qd otherwise.
+        // MUTATION EVIDENCE: deleting the `OffPath` arm in `readiness` reds this.
+        let mut f = off_path_pi();
+        f.wired = Some(false);
+        assert!(f.presence.found(), "it IS installed");
+        assert_eq!(
+            f.readiness(),
+            Readiness::Unconfigured,
+            "found off PATH is not the same as reachable"
+        );
+
+        // The same shape for a harness that needs no wiring at all: still
+        // stranded, because nothing will point at it either.
+        let mut g = off_path_pi();
+        g.wired = None;
+        assert_eq!(g.readiness(), Readiness::Unconfigured);
+    }
+
+    #[test]
+    fn an_off_path_pi_that_is_pinned_reads_as_configured() {
+        // The regression this arm order exists to prevent: a human who ran
+        // `qd setup`, was told to `export QD_PI_BIN=…`, and did it. `wired`
+        // is how the bin layer reports that they did (`QD_PI_BIN` set =>
+        // `Some(true)`), and the launch path reads `QD_PI_BIN` BEFORE `PATH`,
+        // so this pi genuinely starts sessions.
+        //
+        // MUTATION EVIDENCE: checking `OffPath` before `wired` reds this — and
+        // reproduces a "not configured" the reader cannot act their way out of.
+        let mut f = off_path_pi();
+        f.wired = Some(true);
+        assert_eq!(f.readiness(), Readiness::Configured);
+        assert_eq!(f.help_row().1, "configured");
+    }
+
+    #[test]
+    fn pin_drift_alone_never_reads_as_unconfigured() {
+        // A drifted-but-wired harness still starts sessions. Calling it
+        // unconfigured in the help would cost someone a session they could have
+        // had; `qd setup` reports the drift in full.
+        let mut f = on_path(HarnessId::Codex);
+        f.pin_ok = Some(false);
+        f.pin_note = "BREAKING drift".into();
+        assert_eq!(f.readiness(), Readiness::Configured);
+    }
+
+    #[test]
+    fn a_missing_harness_says_what_it_would_have_given_you() {
+        let f = HarnessFacts::new(HarnessId::Opencode, Presence::Missing);
+        assert_eq!(f.readiness(), Readiness::NotInstalled);
+        let (label, state) = f.help_row();
+        assert_eq!(label, HarnessId::Opencode.label());
+        assert!(state.starts_with("not installed"), "{state}");
+        assert!(
+            state.contains(HarnessId::Opencode.offers()),
+            "a not-found row is only worth a line if it says what is missing: {state}"
+        );
+    }
+
+    #[test]
+    fn help_rows_covers_every_harness_in_report_order() {
+        // Derived, never hand-listed: a fifth harness added to `ALL` gets a help
+        // row without anyone editing the help.
+        let facts: Vec<HarnessFacts> = HarnessId::ALL
+            .iter()
+            .map(|id| HarnessFacts::new(*id, Presence::Missing))
+            .collect();
+        let rows = help_rows(&facts);
+        assert_eq!(rows.len(), HarnessId::ALL.len());
+        let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
+        let expected: Vec<&str> = HarnessId::ALL.iter().map(|h| h.label()).collect();
+        assert_eq!(labels, expected, "report order, and every one of them");
     }
 }

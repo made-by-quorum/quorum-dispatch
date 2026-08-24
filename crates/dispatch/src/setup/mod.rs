@@ -484,8 +484,11 @@ fn check_harness(h: &HarnessFacts) -> Check {
         HarnessId::Pi => "harness.pi",
         HarnessId::Opencode => "harness.opencode",
     };
-    // The column label IS the harness id — spelled once, in `HarnessId`.
-    let name = h.id.as_str();
+    // The DISPLAYED column is the harness's label, not its id: this is the
+    // human report, and `id` above already carries the lowercase spelling that
+    // `--json` and check-id lookups key on. Spelled once either way, in
+    // `HarnessId`.
+    let name = h.id.label();
 
     if !h.presence.found() {
         return Check::new(
@@ -1020,7 +1023,17 @@ mod tests {
         let r = assess(&f);
         let c = check_of(&r, "harness.opencode");
         assert_eq!(c.status, Status::Info, "not having a harness is not a failure");
-        assert!(c.detail.contains("opencode sessions over ACP"), "{}", c.detail);
+        // DERIVED from `offers()`, not a copy of it: this test exists to prove
+        // the FYI names what you are missing, not to pin the wording, and a
+        // hard-coded copy reds on every rephrasing without catching anything.
+        assert!(
+            c.detail.contains(HarnessId::Opencode.offers()),
+            "{}",
+            c.detail
+        );
+        // The DISPLAYED column is the label, while the check id keeps the
+        // lowercase spelling scripts key on — the two must not collapse.
+        assert_eq!(c.name, HarnessId::Opencode.label());
         assert_eq!(r.exit_code(), 0);
     }
 

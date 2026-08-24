@@ -30,7 +30,7 @@ Run this when you first install quorum-dispatch, whenever you install a new
 agent harness, and any time an existing integration needs repairing. It checks
 everything qd needs and prints a verdict per check — that `qd` is on PATH, and
 the `~/.quorum` layout, where quorum keeps its configuration. It then reports
-which agent harnesses you have — Claude Code, codex, pi, opencode — with their
+which agent harnesses you have — Claude Code, Codex, Pi, OpenCode — with their
 versions, and wires up the ones that are present.
 
 By default it changes NOTHING: it reports what is wrong and, under each failing
@@ -753,6 +753,28 @@ pub const HUMAN_VERBS: [&str; 5] = ["ls", "start", "stop", "attach", "setup"];
 const SETUP_INCOMPLETE_NOTICE: &str =
     "This machine is not fully set up — run `qd setup` to see what is missing.";
 
+/// Heading for the harness roster (FTUE punch **R28**).
+///
+/// "on this machine" earns its three words: every other section of this help is
+/// a property of `qd` and reads the same everywhere, and this one is the only
+/// one that describes the reader's laptop. Without the qualifier the block reads
+/// as a catalogue of what qd supports, which is what the `start` row already
+/// says and is exactly the wrong thing for someone trying to work out why their
+/// harness will not start.
+const HARNESS_HEADING: &str = "Harnesses on this machine:";
+
+/// What running `qd setup` will actually do to a machine — the two facts that
+/// decide whether a person is willing to type it.
+///
+/// It sits under the roster rather than in its own section because it is the
+/// roster's answer: every `run \`qd setup\`` in the rows above is a suggestion
+/// to run something, and a suggestion is worth less than nothing to someone who
+/// does not know whether it writes to their shell profile. `setup` used to own a
+/// three-line `First run:` block that said this to everyone, on every run, on
+/// every machine; this says it to the people the rows just pointed at setup.
+const SETUP_POSTURE: &str = "Report-only by default: `qd setup` reports what is missing and writes \
+                             nothing; `qd setup --fix` applies it. Safe to re-run.";
+
 /// Every provider `qd start --provider` actually accepts, as the help prints
 /// them.
 ///
@@ -954,7 +976,28 @@ const HIDDEN_HEADING: &str = "Hidden from `qd --help` (agent-facing, machinery, 
 /// builds — a filesystem probe in there would be paid by `qd send:relay` to
 /// print nothing. The print sites that can afford the probe pass it; the ones
 /// that cannot pass `false`.
-pub fn render_top(cmd: &clap::Command, include_hidden: bool, setup_incomplete: bool) -> String {
+///
+/// `harnesses` is the R28 roster, and it is a parameter for exactly the same
+/// reason and on exactly the same terms: an EMPTY slice means "not probed", not
+/// "you have no harnesses", and renders no block at all. `cli::build_cli` passes
+/// `&[]` because it may not touch the disk; the four surfaces that actually
+/// print this text — `qd --help`, `qd --help-all`, bare `qd`, and the tail of a
+/// completed `qd setup` — pass the real roster.
+///
+/// So the help now has TWO state-dependent parts rather than one. The rule the
+/// single one was defending still holds and is worth restating: neither part
+/// diagnoses. `qd setup` remains the only surface that explains a harness —
+/// version, pin drift, the exact export for an off-`PATH` install — and the
+/// roster deliberately carries none of that, because a second place that
+/// explains is a second place to keep true. What it carries is the fact you
+/// cannot get from a verb table: which of these four this machine can actually
+/// run right now.
+pub fn render_top(
+    cmd: &clap::Command,
+    include_hidden: bool,
+    setup_incomplete: bool,
+    harnesses: &[dispatch::setup::harness::HarnessFacts],
+) -> String {
     let row = |sub: &clap::Command| (signature(sub), about_line(sub));
     let find = |name: &str| cmd.get_subcommands().find(|s| s.get_name() == name);
     let classified = |name: &str| HUMAN_VERBS.contains(&name);
@@ -1023,7 +1066,20 @@ pub fn render_top(cmd: &clap::Command, include_hidden: bool, setup_incomplete: b
     for (heading, rows) in &sections {
         push_section(&mut out, heading, rows, width);
     }
-    // The only line here that depends on the machine rather than the tree — and
+    // R28: the roster, on its OWN alignment. Sharing `width` with the verb table
+    // would let a harness label move every command description in the help, and
+    // the two blocks are not one table — the terms above are things you type,
+    // and these are things you have installed.
+    if !harnesses.is_empty() {
+        let rows = dispatch::setup::harness::help_rows(harnesses);
+        let rw = rows.iter().map(|(t, _)| t.chars().count()).max().unwrap_or(0);
+        push_section(&mut out, HARNESS_HEADING, &rows, rw);
+        out.push('\n');
+        out.push_str(SETUP_POSTURE);
+        out.push('\n');
+    }
+
+    // The other line that depends on the machine rather than the tree — and
     // the reason the help no longer greets everyone with "First run": a wired
     // machine says nothing, and an unwired one says the one thing that is true
     // of it.

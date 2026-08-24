@@ -131,7 +131,11 @@ fn run(argv: &[String]) -> i32 {
         // nothing here to shadow.
         Some("--help-all") => {
             let incomplete = verbs::setup::install_is_incomplete();
-            print!("{}", help::render_top(&cli::build_cli(), true, incomplete));
+            let harnesses = verbs::setup::help_harnesses();
+            print!(
+                "{}",
+                help::render_top(&cli::build_cli(), true, incomplete, &harnesses)
+            );
             return 0;
         }
         // `qd --help` / `qd -h`: dispatched PRE-CLAP for one reason — the help
@@ -142,7 +146,11 @@ fn run(argv: &[String]) -> i32 {
         // `qd start --help` is clap's, unchanged.
         Some("--help") | Some("-h") if rest.len() == 1 => {
             let incomplete = verbs::setup::install_is_incomplete();
-            print!("{}", help::render_top(&cli::build_cli(), false, incomplete));
+            let harnesses = verbs::setup::help_harnesses();
+            print!(
+                "{}",
+                help::render_top(&cli::build_cli(), false, incomplete, &harnesses)
+            );
             return 0;
         }
         _ => {}

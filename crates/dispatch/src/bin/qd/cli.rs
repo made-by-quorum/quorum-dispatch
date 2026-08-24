@@ -64,12 +64,12 @@ pub fn build_cli() -> Command {
     // (`dispositions`, `mark`, `delivery:recover`) were missing from it.
     // `subcommands()` below is now the one place a verb is declared, so that
     // drift cannot recur. See `help::render_top`.
-    // `false` — NOT a claim that setup is finished, but the statement that this
-    // string is built on every invocation and therefore may not touch the disk.
-    // The surfaces that actually print the top-level help (bare `qd`, `qd
-    // --help`, `qd --help-all`) probe and pass the real answer; see
-    // `help::render_top`.
-    let top = help::render_top(&cmd, false, false);
+    // `false` and `&[]` — NOT a claim that setup is finished and this machine
+    // has no harnesses, but the statement that this string is built on every
+    // invocation and therefore may not touch the disk. The surfaces that
+    // actually print the top-level help (bare `qd`, `qd --help`, `qd
+    // --help-all`) probe and pass the real answers; see `help::render_top`.
+    let top = help::render_top(&cmd, false, false, &[]);
     cmd.override_help(top)
 }
 
@@ -1154,7 +1154,16 @@ pub fn map_clap_error_for(e: clap::Error, argv: &[String], driver: Driver) -> i3
             // ask for. The error line and the exit code are the same for both.
             if driver == Driver::Human {
                 let incomplete = verbs::setup::install_is_incomplete();
-                print!("{}", help::render_top(&build_cli(), false, incomplete));
+                // The roster too (R28): this arm is the human help surface, and
+                // it already pays for a probe. A mistyped verb is also the most
+                // common way someone arrives here on a machine they have not
+                // finished setting up, which is exactly when "which harnesses do
+                // I actually have" is the next question.
+                let harnesses = verbs::setup::help_harnesses();
+                print!(
+                    "{}",
+                    help::render_top(&build_cli(), false, incomplete, &harnesses)
+                );
             } else {
                 eprintln!("Run `qd --help` for the list of commands.");
             }
@@ -1457,7 +1466,7 @@ mod tests {
         assert!(help::SEND_HTTP.contains("Compatibility/debug control"));
         // The carriers are off the human table now (R14) but still described in
         // the generated full surface, with the compat/debug label intact.
-        let all = help::render_top(&build_cli(), true, false);
+        let all = help::render_top(&build_cli(), true, false, &[]);
         assert!(all.contains("send [options] [session] [message]"));
         assert!(all.contains("(compatibility/debug) Force a PTY send"));
     }
@@ -1997,10 +2006,10 @@ mod tests {
         // the four session verbs plus `setup` are the whole of it. Both are still
         // registered, so both are on the `--help-all` surface.
         let cmd = build_cli();
-        let top = help::render_top(&cmd, false, false);
+        let top = help::render_top(&cmd, false, false, &[]);
         assert!(!top.contains("wrap ["), "wrap is off the human table: {top}");
         assert!(!top.contains("adopt ["), "adopt is off the human table: {top}");
-        let all = help::render_top(&cmd, true, false);
+        let all = help::render_top(&cmd, true, false, &[]);
         assert!(all.contains("wrap [options] <session>"));
         assert!(all.contains("adopt [options] <session>"));
     }
@@ -2031,7 +2040,7 @@ mod tests {
         let expected: BTreeSet<&str> = ["ls", "start", "stop", "attach", "setup"].into();
         assert_eq!(visible, expected, "the human surface is R14's five rows");
 
-        let top = help::render_top(&cmd, false, false);
+        let top = help::render_top(&cmd, false, false, &[]);
         // Commander layout is preserved — only the source of the bytes changed.
         assert!(top.starts_with("Usage: qd [options] [command]\n"));
         // `-h` says what it does AND that it works on every row below it — the
@@ -2068,7 +2077,7 @@ mod tests {
     /// MUTATION EVIDENCE: putting a single-provider summary back reds this.
     #[test]
     fn top_help_summary_is_cross_provider_and_names_the_messaging() {
-        let top = help::render_top(&build_cli(), false, false);
+        let top = help::render_top(&build_cli(), false, false, &[]);
         let summary = top.lines().nth(2).expect("summary line");
         assert!(summary.contains("across providers"), "{summary:?}");
         assert!(summary.contains("message"), "{summary:?}");
@@ -2086,7 +2095,7 @@ mod tests {
     /// hard-coding the row again reds the derivation assert.
     #[test]
     fn start_row_names_every_provider_the_engine_accepts() {
-        let top = help::render_top(&build_cli(), false, false);
+        let top = help::render_top(&build_cli(), false, false, &[]);
         for h in quorum_qw::lane::Harness::ALL {
             let advertised = match h {
                 quorum_qw::lane::Harness::Opencode => "opencode",
@@ -2160,9 +2169,9 @@ mod tests {
     #[test]
     fn setup_notice_appears_only_when_the_install_is_unfinished() {
         let cmd = build_cli();
-        let finished = help::render_top(&cmd, false, false);
+        let finished = help::render_top(&cmd, false, false, &[]);
         assert!(!finished.to_lowercase().contains("not fully set up"), "{finished}");
-        let unfinished = help::render_top(&cmd, false, true);
+        let unfinished = help::render_top(&cmd, false, true, &[]);
         assert!(unfinished.contains("not fully set up"), "{unfinished}");
         assert!(unfinished.contains("`qd setup`"), "{unfinished}");
         // It is a TRAILER: the table is intact and the notice follows it.
@@ -2170,6 +2179,235 @@ mod tests {
             unfinished.starts_with(finished.trim_end()),
             "the notice must only ADD to the finished help:\n{unfinished}"
         );
+    }
+
+    // === FTUE punch R28 — the harness roster the top-level help prints ===
+
+    /// The roster block's heading, spelled out because `help`'s const is private.
+    /// A unit test that retypes a string is normally a smell; here it is the
+    /// asset — this is the line a person scans for when they are working out why
+    /// their harness will not start, and a silent reword should red a test rather
+    /// than quietly ship a different help.
+    const ROSTER_HEADING: &str = "\nHarnesses on this machine:\n";
+
+    /// One `HarnessFacts` per harness in `HarnessId::ALL`, covering all three
+    /// readiness verdicts, and DERIVED from `ALL` rather than hand-listed — a
+    /// fifth harness is covered by every test below without anyone editing them.
+    fn roster() -> Vec<dispatch::setup::harness::HarnessFacts> {
+        use dispatch::setup::harness::{HarnessFacts, HarnessId, Presence};
+        HarnessId::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let presence = match i % 3 {
+                    // configured, and installed-but-not-configured, both resolve
+                    // on PATH — what separates them is the wiring below.
+                    0 | 1 => Presence::OnPath { path: None },
+                    _ => Presence::Missing,
+                };
+                let mut f = HarnessFacts::new(*id, presence);
+                f.wired = match i % 3 {
+                    0 => Some(true),
+                    1 => Some(false),
+                    _ => None,
+                };
+                f
+            })
+            .collect()
+    }
+
+    /// An EMPTY roster means "not probed", and renders NOTHING — no heading, no
+    /// posture line. This is the property that lets `build_cli()` render the
+    /// top-level help on EVERY invocation without touching the disk: `qd
+    /// send:relay` pays for `render_top`, so if an empty slice printed a block
+    /// the cheap path would have to start probing to fill it in.
+    ///
+    /// MUTATION EVIDENCE: dropping the `if !harnesses.is_empty()` guard reds
+    /// this — an empty roster would emit a bare heading with no rows under it.
+    #[test]
+    fn an_unprobed_roster_renders_no_harness_block_at_all() {
+        let top = help::render_top(&build_cli(), false, false, &[]);
+        assert!(!top.contains(ROSTER_HEADING.trim()), "{top}");
+        assert!(!top.contains("Report-only by default"), "{top}");
+        assert!(!top.contains("Safe to re-run"), "{top}");
+        // And the same is true of the help clap itself carries — `build_cli`
+        // passes `&[]` precisely because it may not probe.
+        let baked = build_cli().render_help().to_string();
+        assert!(!baked.contains(ROSTER_HEADING.trim()), "{baked}");
+        assert!(!baked.contains("Report-only by default"), "{baked}");
+    }
+
+    /// The roster only ever APPENDS. Everything above it — usage, summary,
+    /// options, the verb table — is byte-identical to the unprobed help, so a
+    /// block that varies with the machine can never move or reword anything a
+    /// reader has already learned to find.
+    ///
+    /// This is the same shape as the assertion
+    /// `setup_notice_appears_only_when_the_install_is_unfinished` makes for the
+    /// install notice, and for the same reason: two state-dependent parts now
+    /// hang off this string, and both are trailers or neither is safe.
+    ///
+    /// MUTATION EVIDENCE: rendering the roster before the verb sections reds the
+    /// `starts_with`.
+    #[test]
+    fn the_roster_only_appends_to_the_unprobed_help() {
+        let cmd = build_cli();
+        let unprobed = help::render_top(&cmd, false, false, &[]);
+        let probed = help::render_top(&cmd, false, false, &roster());
+        assert!(
+            probed.starts_with(unprobed.trim_end()),
+            "the roster must only ADD to the help:\n{probed}"
+        );
+        assert!(probed.contains(ROSTER_HEADING), "{probed}");
+        assert!(probed.len() > unprobed.len());
+    }
+
+    /// The roster does not perturb the verb table. The two blocks are NOT one
+    /// table — the terms above are things you type and these are things you have
+    /// installed — so they get their own columns: the `Commands:` rows come out
+    /// byte-identical either way, and the roster aligns on its OWN longest label
+    /// (exactly the two-space gutter past it), not on the width of
+    /// `start [options] <name> [claudeArgs...]`.
+    ///
+    /// MUTATION EVIDENCE: pushing the roster through `sections` — the obvious
+    /// refactor, since every other block goes that way — makes it share the verb
+    /// table's `width` and reds the gutter assert.
+    #[test]
+    fn the_roster_keeps_its_own_column_and_leaves_the_verb_table_alone() {
+        use dispatch::setup::harness::HarnessId;
+        let cmd = build_cli();
+        let facts = roster();
+        let commands = |help: &str| {
+            help.split("\nCommands:\n")
+                .nth(1)
+                .expect("a Commands: section")
+                .lines()
+                .take_while(|l| l.starts_with("  "))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let unprobed = help::render_top(&cmd, false, false, &[]);
+        let probed = help::render_top(&cmd, false, false, &facts);
+        assert_eq!(
+            commands(&unprobed),
+            commands(&probed),
+            "a harness label must not move a single byte of the verb table"
+        );
+
+        // The roster's own column: the longest label is followed by exactly the
+        // two-space gutter, which it could not be if it were padded out to the
+        // verb table's much wider column.
+        let widest = HarnessId::ALL
+            .iter()
+            .map(|h| h.label())
+            .max_by_key(|l| l.chars().count())
+            .expect("at least one harness");
+        let block = probed.split(ROSTER_HEADING).nth(1).expect("a roster block");
+        let row = block
+            .lines()
+            .find(|l| l.starts_with(&format!("  {widest}")))
+            .unwrap_or_else(|| panic!("a row for the widest label:\n{block}"));
+        assert!(
+            !row[2 + widest.len()..].starts_with("   "),
+            "the roster is aligned on its own longest label, not the verb table's: {row:?}"
+        );
+    }
+
+    /// One row per harness, in `HarnessId::ALL` order, and a harness this
+    /// machine does NOT have says what having it would give you. An absence is
+    /// only worth a line if the line is actionable — "not installed" on its own
+    /// is a fact about a laptop; naming what it would have bought you is a
+    /// reason to go and install it.
+    ///
+    /// MUTATION EVIDENCE: filtering the roster down to the harnesses that are
+    /// present reds the row count; rendering the rows in probe-completion order
+    /// rather than `ALL` order reds the label sequence.
+    #[test]
+    fn the_roster_carries_every_harness_in_report_order() {
+        use dispatch::setup::harness::{HarnessId, Readiness};
+        let facts = roster();
+        let top = help::render_top(&build_cli(), false, false, &facts);
+        let block = top.split(ROSTER_HEADING).nth(1).expect("a roster block");
+        let rows: Vec<&str> = block.lines().take_while(|l| l.starts_with("  ")).collect();
+        assert_eq!(
+            rows.len(),
+            HarnessId::ALL.len(),
+            "every harness gets a line, present or not: {rows:?}"
+        );
+        let labels: Vec<&str> = HarnessId::ALL.iter().map(|h| h.label()).collect();
+        for (row, label) in rows.iter().zip(&labels) {
+            assert!(
+                row.starts_with(&format!("  {label}")),
+                "{rows:?} is not {labels:?} in order"
+            );
+        }
+
+        let absent: Vec<_> = facts
+            .iter()
+            .filter(|f| f.readiness() == Readiness::NotInstalled)
+            .collect();
+        assert!(!absent.is_empty(), "the fixture covers the absent case");
+        for f in absent {
+            let row = rows
+                .iter()
+                .find(|l| l.starts_with(&format!("  {}", f.id.label())))
+                .expect("a row for the absent harness");
+            assert!(row.contains("not installed"), "{row:?}");
+            assert!(
+                row.contains(f.id.offers()),
+                "an absence is only worth a line if it says what is missing: {row:?}"
+            );
+        }
+    }
+
+    /// The two state-dependent parts COMPOSE, and in that order: the roster
+    /// (what this machine has) then the notice (that this machine is
+    /// unfinished). A machine missing both its wiring and its harnesses is
+    /// exactly the machine that needs both lines, and the order is the order you
+    /// act in — see what you have, then go and finish the install.
+    ///
+    /// MUTATION EVIDENCE: emitting the roster after the notice reds the ordering
+    /// assert; making either block exclusive of the other reds a `contains`.
+    #[test]
+    fn the_roster_and_the_setup_notice_both_render_in_that_order() {
+        let top = help::render_top(&build_cli(), false, true, &roster());
+        let roster_at = top.find(ROSTER_HEADING).expect("the roster is present");
+        let notice_at = top.find("not fully set up").expect("the notice is present");
+        assert!(
+            roster_at < notice_at,
+            "the roster comes before the notice:\n{top}"
+        );
+        // The notice stays the last thing on the page — a trailer under both.
+        assert!(
+            top.trim_end().ends_with("run `qd setup` to see what is missing."),
+            "{top}"
+        );
+    }
+
+    /// The posture line states the two facts that decide whether a person is
+    /// willing to type `qd setup` at all — that it writes NOTHING by default,
+    /// and that re-running it is safe — and names the form that does apply the
+    /// fixes. Every row above it that says "run `qd setup`" is worth nothing to
+    /// someone who does not know whether it edits their shell profile.
+    ///
+    /// `tests/setup_wizard.rs::the_help_says_what_setup_will_do` asserts these
+    /// same strings end-to-end through a real `qd` invocation; pinning them here
+    /// catches a reword before the binary is even linked.
+    #[test]
+    fn the_posture_line_says_setup_writes_nothing_and_names_the_fix_form() {
+        let top = help::render_top(&build_cli(), false, false, &roster());
+        assert!(top.contains("Report-only by default"), "{top}");
+        assert!(top.contains("writes nothing"), "{top}");
+        assert!(top.contains("Safe to re-run"), "{top}");
+        assert!(
+            top.contains("qd setup --fix"),
+            "the posture must name the form that applies the fixes: {top}"
+        );
+        // It belongs to the roster: it is the roster's answer, so it renders
+        // under the block and never without it.
+        let roster_at = top.find(ROSTER_HEADING).expect("the roster is present");
+        let posture_at = top.find("Report-only by default").expect("the posture");
+        assert!(roster_at < posture_at, "{top}");
     }
 
     /// R14's load-bearing claim: `.hide(true)` is help-only. Every hidden verb
@@ -2234,7 +2472,7 @@ mod tests {
     #[test]
     fn help_all_lists_every_registered_verb() {
         let cmd = build_cli();
-        let all = help::render_top(&cmd, true, false);
+        let all = help::render_top(&cmd, true, false, &[]);
         for sub in cmd.get_subcommands() {
             let name = sub.get_name();
             assert!(
@@ -2254,7 +2492,7 @@ mod tests {
     /// parked flags are gone from the parser as well as from the help.
     #[test]
     fn zmx_is_gone_from_the_help_surface_and_the_resume_flags() {
-        let all = help::render_top(&build_cli(), true, false);
+        let all = help::render_top(&build_cli(), true, false, &[]);
         assert!(!all.to_lowercase().contains("zmx"), "{all}");
         let human = help::start_human();
         for (surface, text) in [
