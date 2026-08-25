@@ -2982,8 +2982,8 @@ mod tests {
         assert!(about.chars().count() <= 80, "{about}");
     }
 
-    /// The human-view lookup is a LOOKUP: `Some` for the two verbs that have a
-    /// short page, `None` for every other verb — and `None` is what preserves
+    /// The human-view lookup is a LOOKUP: `Some` for the verbs that have a page
+    /// of their own, `None` for every other verb — and `None` is what preserves
     /// today's output for all of them.
     ///
     /// `connect` is in because it IS attach (`verbs::run` routes it to
@@ -2994,6 +2994,9 @@ mod tests {
     fn human_view_is_some_only_for_the_verbs_that_have_one() {
         assert!(help::human_view("start").is_some());
         assert_eq!(help::human_view("attach").as_deref(), Some(help::ATTACH_HUMAN));
+        // `stop` has no shorter page to show, so it shows its own — the entry
+        // exists for the error arm, not to subtract anything from `--help`.
+        assert_eq!(help::human_view("stop").as_deref(), Some(help::STOP));
         // `connect` is attach, so it gets the attach ANSWER — with the rename
         // said out loud on top, because a page headed `qd attach` explains
         // nothing to someone who typed `qd connect`.
@@ -3014,6 +3017,52 @@ mod tests {
         assert_eq!(invoked_verb(&argv), Some("connect"));
         let e = parse(&["connect", "--help"]).unwrap_err();
         assert_eq!(map_clap_error_for(e, &argv, Driver::Human), 0);
+    }
+
+    /// A malformed `qd stop` prints the verb's help under the error line for a
+    /// human, exactly as `qd start` does — that parity is the whole change.
+    /// Both spellings of malformed are covered: the missing required argument
+    /// (`qd stop` with no session, the common one) and an unknown option.
+    ///
+    /// The agent driver is asserted too, and asserted to be UNCHANGED: it keeps
+    /// the bare error line, because its output is parsed and a help page dumped
+    /// under an error is noise it did not ask for. Exit 1 either way — the fork
+    /// decides what is printed, never the status.
+    ///
+    /// MUTATION EVIDENCE: deleting the `"stop"` arm of `help::human_view` reds
+    /// the two human assertions; widening `human_help` to print for agents too
+    /// reds the two agent ones.
+    #[test]
+    fn malformed_stop_shows_the_help_for_a_human_and_not_for_an_agent() {
+        for args in [vec!["stop"], vec!["stop", "--bogus", "wk"]] {
+            let argv: Vec<String> = std::iter::once("qd".to_string())
+                .chain(args.iter().map(|s| s.to_string()))
+                .collect();
+            assert_eq!(
+                human_help(&argv, Driver::Human).as_deref(),
+                Some(help::STOP),
+                "{args:?} should carry the stop page for a human"
+            );
+            assert_eq!(
+                human_help(&argv, Driver::Agent),
+                None,
+                "{args:?} must stay a bare error line for an agent"
+            );
+            for d in [Driver::Human, Driver::Agent] {
+                let e = parse(&args).unwrap_err();
+                assert_eq!(map_clap_error_for(e, &argv, d), 1, "{args:?} {d:?}");
+            }
+        }
+        // ...and the two error kinds a malformed `stop` actually produces are
+        // the ones routed through that arm, not through help or unknown-command.
+        assert_eq!(
+            parse(&["stop"]).unwrap_err().kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(
+            parse(&["stop", "--bogus", "wk"]).unwrap_err().kind(),
+            ErrorKind::UnknownArgument
+        );
     }
 
     /// A bad option on `attach` still costs 1 in both views — the fork changes

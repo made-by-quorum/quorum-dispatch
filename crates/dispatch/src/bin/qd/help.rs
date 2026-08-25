@@ -985,6 +985,24 @@ Every option: `qd start --help | cat` (the full agent-facing list).
 pub fn human_view(verb: &str) -> Option<String> {
     match verb {
         "start" => Some(start_human()),
+        // `stop` answers with its CANONICAL page, and that is the whole edit:
+        // what a person who typed `qd stop` wrong was missing is not a shorter
+        // page, it is ANY page — the bad-option/missing-argument arm of
+        // `cli::map_clap_error_for` prints a help view only for the verbs this
+        // lookup knows, so `qd stop` was ending at a bare `error: missing
+        // required argument 'session'` with nothing saying what the verb takes.
+        // Entering it here gives it `start`'s behaviour.
+        //
+        // No `STOP_HUMAN` sibling, deliberately. The split that `start` and
+        // `attach` pay for is a SUBSET: those pages have an agent-facing surface
+        // (lanes, topology, exit codes) worth subtracting for a human. [`STOP`]
+        // is one required argument and two options, all four lines of it already
+        // the human answer — a second string here would be a copy to keep in
+        // agreement with the first, and the "Every option: `… --help | cat`"
+        // pointer the other human views carry would point at the same text the
+        // reader is already looking at. So `qd stop --help` is byte-for-byte
+        // what it was in both drivers; only the error path gained the page.
+        "stop" => Some(STOP.to_string()),
         "attach" => Some(ATTACH_HUMAN.to_string()),
         "connect" => Some(format!(
             "`qd connect` was renamed — this is `qd attach`.\n\n{ATTACH_HUMAN}"
