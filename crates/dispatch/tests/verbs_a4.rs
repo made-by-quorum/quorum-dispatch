@@ -165,9 +165,18 @@ fn send_http_engine_session_is_never_opencode_error_block() {
         err.contains("is not an OpenCode session"),
         "expected the not-an-OpenCode ERROR block, got: {err}"
     );
+    // The bullets used to name `qd send:relay` / `qd send:pty`. Both are now
+    // DEPRECATED spellings, and a verb whose whole job is to teach the way out
+    // must not hand you two more verbs on their way out — so they name `qd send`
+    // and its `--carrier pty` escape hatch instead. The block above them is
+    // unchanged: `send:http` still resolves, still refuses, still exits 1.
     assert!(
-        err.contains("qd send:relay wk") && err.contains("qd send:pty wk"),
-        "expected the send:relay / send:pty guidance bullets, got: {err}"
+        err.contains("qd send wk") && err.contains("--carrier pty"),
+        "expected the qd send guidance bullets, got: {err}"
+    );
+    assert!(
+        !err.contains("send:relay") && !err.contains("send:pty"),
+        "the guidance must not point at the deprecated carrier verbs: {err}"
     );
 }
 

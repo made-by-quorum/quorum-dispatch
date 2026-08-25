@@ -35,6 +35,10 @@ const MAX_RETRIES: u32 = 3;
 const RETRY_SLEEP: Duration = Duration::from_secs(2);
 
 pub fn run(m: &ArgMatches) -> i32 {
+    // DEPRECATED. One stderr line, then the verb below runs exactly as it did
+    // yesterday — see `super::carrier::notice` for why nothing on stdout and no
+    // exit code may move (this verb prints a bare `message_id` scripts capture).
+    super::carrier::deprecated_relay();
     let query = m.get_one::<String>("session").expect("required by clap");
     let message = m.get_one::<String>("message").expect("required by clap");
     let wait = m.get_flag("wait");
@@ -68,7 +72,14 @@ pub fn run(m: &ArgMatches) -> i32 {
 // `LaneOps::deliver` uses.
 
 /// The verb body, parameterized on the relay client so tests inject a fake.
-fn run_with_client(
+///
+/// `pub(super)` because it is now TWO surfaces' body: the deprecated
+/// `qd send:relay` above, and `qd send --carrier relay` through
+/// [`super::carrier::run_from_unified`]. It is shared rather than copied
+/// deliberately — the `--wait` long-poll below, its 3-retry connection-drop
+/// budget and its five outcome arms are a contract, and a second copy would be a
+/// second contract to keep in step.
+pub(super) fn run_with_client(
     query: &str,
     message: &str,
     wait: bool,
@@ -91,13 +102,6 @@ fn run_with_client(
             "qd send:relay: \"{session_name}\": target is this session — send rejected."
         );
         return 1;
-    }
-
-    // A live registry row + MCP sidecar does not prove the development channel
-    // is loaded. Refuse before POST unless the process snapshot positively proved
-    // receivability; a bare session must never silently accept/lose a message.
-    if access.management == Management::Bare {
-        return bare_destination_exit(&session_name, message, session.as_ref());
     }
 
     // codex P2 W6 (codex-p2-spec section 7.5): a codex row is a DAEMON-hosted
@@ -158,6 +162,29 @@ fn run_with_client(
             return no_relay_exit(&session_name, message, None);
         };
         return run_pi_send(&session, message).code;
+    }
+
+    // A live registry row + MCP sidecar does not prove the development channel
+    // is loaded. Refuse before POST unless the process snapshot positively proved
+    // receivability; a bare session must never silently accept/lose a message.
+    //
+    // AFTER the three residence arms above, and that ORDER IS THE FIX. This gate
+    // ran FIRST, and `classify_session` only short-circuits to `NotApplicable`
+    // for a provider that is not `claude-code` — so codex and pi were never
+    // reached by it, but an ACP row was: `qd start --acp` stamps
+    // `provider = "claude-code"`, the row has a pid and a live status, and it has
+    // no relay port because its receive path is the resident adapter. Bare is
+    // exactly what that classifies as, so a `claude-code/acp` session was refused
+    // with a `qd wrap` remediation naming a relay it is not supposed to have and
+    // a manual qrmux restart that would not have helped. It is deliverable, and
+    // the arm that delivers it is now above this line.
+    //
+    // The remediation itself is UNCHANGED and still reached, for the rows it was
+    // written for: a genuinely bare `claude-code/mux-pane` row matches none of
+    // the three arms and lands here exactly as before (its wording is pinned by
+    // `tests/adopt_cli.rs`).
+    if access.management == Management::Bare {
+        return bare_destination_exit(&session_name, message, session.as_ref());
     }
 
     // No port on the resolved session → "has no relay." exit 1 (send.ts:406-409).
@@ -858,6 +885,13 @@ fn finish_reply(reply: RelayReply) -> i32 {
 /// TS interpolates `err.message`; our errors carry a class-derived string.
 fn send_err_text(e: &RelayError) -> String {
     e.to_string()
+}
+
+/// [`parse_timeout`] with this verb's own default applied — the `--timeout`
+/// reading `qd send --carrier relay` shares, so the two spellings cannot drift
+/// into two timeout parsers.
+pub(super) fn parse_timeout_or_default(s: &str) -> u64 {
+    parse_timeout(s).unwrap_or(DEFAULT_TIMEOUT_S)
 }
 
 /// `parseInt(opts.timeout)` leading-integer parse (send.ts:440). A non-integer

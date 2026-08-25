@@ -491,7 +491,12 @@ fn load_handshake_fixture() -> Option<Value> {
 // value that actually crossed an MCP handshake.
 //
 // R9 grew it to 871 chars: 666 (the answer half, frozen since server.ts:88) + 1
-// + 204 (the shared origination wording, `quorum_qw::how_to_reach_peers!`). The
+// + 204 (the shared origination wording, `quorum_qw::how_to_reach_peers!`). It
+// is 859 now: the answer half gave back 12 when `qd send:relay [--wait]` was
+// repointed at `qd send [--wait]` in both places it names the command, which is
+// the deprecation of the carrier verbs reaching the one string every Claude
+// session reads at handshake. The halves are 654 + 1 + 204 — the origination
+// wording did not move. The
 // cross-server assertions this constant used to serve were briefly weakened to
 // prefix-equality so R9 could land beside a bun twin that could not follow;
 // retiring the bun half restored them to equality. See the module docs.
@@ -538,18 +543,18 @@ fn run_core_scenario(kind: RelayKind) {
         init_resp["result"]["serverInfo"]["version"], "0.1.0",
         "[{kind:?}] serverInfo.version must be '0.1.0'"
     );
-    // instructions — VERBATIM 871-char string (byte-equality)
+    // instructions — VERBATIM 859-char string (byte-equality)
     let instructions = init_resp["result"]["instructions"]
         .as_str()
         .unwrap_or_else(|| panic!("[{kind:?}] instructions field must be a string"));
     assert_eq!(
         instructions, EXPECTED_INSTRUCTIONS,
-        "[{kind:?}] instructions must be the verbatim 871-char string"
+        "[{kind:?}] instructions must be the verbatim 859-char string"
     );
     assert_eq!(
         instructions.chars().count(),
-        871,
-        "[{kind:?}] instructions must be exactly 871 Unicode chars, got {}",
+        859,
+        "[{kind:?}] instructions must be exactly 859 Unicode chars, got {}",
         instructions.chars().count()
     );
 

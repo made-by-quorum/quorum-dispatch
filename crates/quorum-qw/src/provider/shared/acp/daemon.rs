@@ -71,7 +71,7 @@ use crate::registry::{self, RegistryEntry};
 use crate::resume::IdCollisionRefusal;
 
 use super::rpc::AcpClient;
-use super::residence::{build_adapter_argv, connect_ready};
+use super::residence::{build_adapter_argv, connect_ready_watching};
 use super::resume::{
     acp_resume_is_alive, acquire_resume_claim, resume_verify_marker_path,
     write_resume_verify_marker, ResumeVerifyMarker,
@@ -411,7 +411,13 @@ pub fn create_acp_daemon(
     // 4. readiness: poll connect+status until the resident ACP session is established
     //    (the codex connect-with-retry analog). On failure: group-kill the adapter (no
     //    orphan), surface the error.
-    let conn = match connect_ready(&endpoint, READY_BUDGET) {
+    // WATCHED readiness: an adapter that died at boot (a missing/mute bridge is the usual
+    // reason) can never become ready, so the poll stops the moment it is gone instead of
+    // spending the whole budget and then blaming a connection refusal. `NotReady` already
+    // appends the log path, which is where the adapter wrote WHY.
+    let conn = match connect_ready_watching(&endpoint, READY_BUDGET, &|| {
+        deps.spawner.has_exited(spawned.pid)
+    }) {
         Ok(c) => c,
         Err(detail) => {
             deps.spawner.kill(spawned.pid);
@@ -846,7 +852,9 @@ pub fn resume_acp(
 
     // Readiness: poll connect+status until the resident session is re-established. On
     // failure: group-kill the just-spawned adapter (no orphan).
-    let conn = match connect_ready(&endpoint, READY_BUDGET) {
+    let conn = match connect_ready_watching(&endpoint, READY_BUDGET, &|| {
+        deps.spawner.has_exited(spawned.pid)
+    }) {
         Ok(c) => c,
         Err(detail) => {
             deps.spawner.kill(spawned.pid);

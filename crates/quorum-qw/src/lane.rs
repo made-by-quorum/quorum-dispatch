@@ -742,6 +742,62 @@ impl Lane {
     pub fn has_control_channel(self) -> bool {
         self.mode == Mode::Extension
     }
+
+    /// Can a caller that blocks on a send get the **reply body** back?
+    ///
+    /// This is `qd send --wait`'s gate, and it is a LANE property for the same
+    /// reason [`Lane::has_viewer`] is: the alternative is a provider-name list at
+    /// the call site, which is the shape that has already been walked past three
+    /// times in this file's history (`acp/` prefix tests, the `opencode` alias,
+    /// `claude-code/acp`). A lane cannot be walked past.
+    ///
+    /// # It is NOT "does a send block", and it is not [`LaneOps::await_terminal`]
+    ///
+    /// Every lane can answer *did this message reach a terminal*
+    /// (`LaneOps::await_terminal`, implemented for all nine), and `qd wait` can
+    /// block any session busy→idle. Neither produces the assistant's TEXT. This
+    /// predicate answers the third, narrower question — *is there a channel that
+    /// hands the reply body back to the sender* — and only one lane has one, by
+    /// two independent routes that are both its own:
+    ///
+    ///   - the **relay wire**: the recipient calls the relay's `reply` MCP tool
+    ///     with the message id and the relay server buffers the body for a
+    ///     long-poll to collect (`qd send --wait --carrier relay`);
+    ///   - the **pane wire**: the sender anchors on the message's own user record
+    ///     in claude's JSONL transcript and reads the assistant blocks that follow
+    ///     it (`qd send --wait --carrier pty`).
+    ///
+    /// The daemon lanes have neither. A codex turn, an ACP prompt and a pi
+    /// resident turn all report ACCEPTANCE and mint a turn id; none of them
+    /// carries the completed text back to whoever sent it, which is why the
+    /// codex / ACP / pi send arms have always ignored a `--wait` rather than
+    /// implementing one. Answering `true` for them would make `--wait` a silent
+    /// no-op — the failure mode this predicate exists to turn into a refusal.
+    ///
+    /// # And the OTHER two pane lanes answer `false`, which is the sharp edge
+    ///
+    /// `codex/mux-pane` and `pi/mux-pane` DO reach the pane carrier — the PTY
+    /// body is provider-generic and `crate::delivery::pty` resolves their
+    /// transcripts through the provider rather than under claude's tree. What
+    /// they do not reach is a reply. The extractor on the far side of that wait
+    /// is [`crate::sendpty::extract_response`], and it reads ONE schema: records
+    /// with `type: "assistant"`, a `message.content` array, and
+    /// `stop_reason == "end_turn"`, with `thinking` and `tool_use` block types
+    /// for `--full`. That is claude's transcript, not a codex rollout and not a
+    /// pi transcript, so the capture comes back empty and
+    /// [`crate::sendpty::capture_or_defect`] turns it into a loud non-zero
+    /// "capture EMPTY" — a wait that costs the full timeout and answers nothing.
+    ///
+    /// Which is why this is not [`Lane::is_pane`] with an exception bolted on.
+    /// The property is "there is a channel that hands the reply body back", and
+    /// for the pane wire that channel is a transcript SHAPE. Widening this
+    /// predicate is a real change with a real prerequisite: teach the extractor
+    /// the other harness's records first, then add the lane here.
+    ///
+    /// [`LaneOps::await_terminal`]: crate::contract::LaneOps::await_terminal
+    pub fn captures_reply(self) -> bool {
+        self == CLAUDE_PANE
+    }
 }
 
 /// What topology a create is asking for — the input to [`Lane::for_create`].

@@ -16,6 +16,7 @@ use dispatch::mux_selector::{self, Backend};
 use dispatch::paths::QdPaths;
 use dispatch::relay_http::HttpRelayProbe;
 use dispatch::resolve::{is_live_status, resolve_session_with_liveness, Resolution};
+use quorum_qw::lane::Lane;
 
 /// Resolve HOME → `QdPaths` (L9a: never the real home directly — read the env).
 /// Returns `Err(exit)` with a printed message if HOME is unset.
@@ -327,13 +328,50 @@ pub fn refuse_unknown_provider(verb: &str, s: &Session) -> Option<i32> {
 // cold path auto-revives (and revive_claude prints its own loud error on
 // failure), so no caller remained.
 
-/// SHARED codex (daemon-hosted) redirect (W1 ADD-26): a `Hosting::Daemon`
-/// session has NO terminal to attach. Emitted by `qd attach` (codex IS
-/// supported, just not attachable — the verb-agnostic wording survived the
-/// attach-verb retirement, STATE 22). eprintln!s + returns exit 1.
-pub fn daemon_redirect(name: &str) -> i32 {
+/// The unattachable-lane redirect: this session is a headless resident, so there
+/// is no terminal for `qd attach` to hand over. eprintln!s + returns exit 1.
+///
+/// # It names the LANE, and taking one is the whole point
+///
+/// It said "codex sessions are daemon-hosted" as a literal, from the W1 ADD-26 era
+/// when `codex/daemon` was the only lane that could reach it. THREE lanes reach it
+/// now — `codex/daemon`, `pi/daemon` and `claude-code/acp` — so the sentence was
+/// telling two thirds of its readers the wrong harness: attaching to a claude ACP
+/// session reported a codex session. The caller passes the lane it already
+/// resolved and [`Lane`]'s `Display` names it, as its stable `<program>/<topology>`
+/// id — the SAME string `qd ls --json` puts in the `lane` key, so a reader can
+/// paste it straight back into `--provider`.
+///
+/// The set is `is_daemon() && !has_viewer()`, pinned by
+/// `only_unattachable_daemon_lanes_refuse_attach` in `quorum_qw::lanes`. It is NOT
+/// every daemon lane: `codex/app-server` and `opencode/acp` are daemons whose
+/// residence a second client can JOIN, so their `attach` succeeds and they never
+/// arrive here. "daemon-hosted" is therefore the REASON, not the criterion — which
+/// is why the lane id is what identifies the row and the phrase only explains it.
+///
+/// # Why the drive pointer is `qd send` and not `qd send:relay`
+///
+/// `qd send:relay` was wrong twice over. It is the hidden compatibility/debug verb
+/// ("force relay/daemon send routing") while `qd send` is the primary surface, and
+/// `qd send` routes on the LANE (`LaneOps::deliver` picks the carrier) — which is
+/// precisely the question a reader of this line cannot answer for themselves.
+///
+/// And for `claude-code/acp` it does not merely read oddly, it FAILS. `send:relay`
+/// runs its `Management::Bare` refusal AHEAD of its own acp arm, and an ACP row's
+/// provider is `claude-code` now that ACP is a mode rather than a harness — so the
+/// claude-only classifier calls the row bare and answers with relay-wrapping advice
+/// for a session that has no relay and never wanted one. That is the same
+/// "a claude lane fell into a claude-shaped guard" fallout as the retired
+/// `starts_with("acp/")` checks, reached through a different door. Pointing a user
+/// at a command that cannot work is worse than naming the wrong harness, because
+/// they will run it.
+///
+/// `qd resume` is correct for all three and stays: each has its own arm in `qd
+/// resume`'s exhaustive lane match, and resuming an already-alive resident is a
+/// success no-op rather than a second daemon.
+pub fn daemon_redirect(lane: Lane, name: &str) -> i32 {
     eprintln!(
-        "codex sessions are daemon-hosted (no terminal to attach). Drive it with: qd send:relay {name} <text>   ·   revive it with: qd resume {name}"
+        "{lane} sessions are daemon-hosted (no terminal to attach). Drive it with: qd send {name} <text>   ·   revive it with: qd resume {name}"
     );
     1
 }

@@ -287,9 +287,13 @@ pub fn attach_resolved(session: &Session, render: RenderMode) -> i32 {
         Ok(code) => attached(session, code),
 
         // A daemon lane has no terminal of its own. The viewer above already had
-        // its chance, so this is the honest redirect — the SAME wording, from the
-        // SAME helper, as before.
-        Err(LaneError::NotSupported { .. }) => common::daemon_redirect(display_name(session)),
+        // its chance, so this is the honest redirect, from the SAME helper as
+        // before — now handed the `lane` resolved above so it can NAME the row it
+        // is refusing. Three lanes land here and the message used to call every one
+        // of them "codex"; see [`common::daemon_redirect`].
+        Err(LaneError::NotSupported { .. }) => {
+            common::daemon_redirect(lane, display_name(session))
+        }
 
         // The one interesting arm, and the whole point of the rewrite: a cold
         // pane-hosted session auto-revives and we hand over the terminal. `wake`

@@ -1,25 +1,20 @@
-//! Moved-stubs with exact ported stderr (commands/send.ts:42-47, 524-528).
+//! Moved-stubs: the ported stderr pointers (commands/send.ts:524-528).
 //!
 //! (A5 M5: `qd ping` is now a REAL verb — its no-arg exit-3 validation moved to
 //! `verbs/ping.rs` alongside the classifier wiring; this file keeps only the
-//! send/relay moved-pointer stubs, which ARE the intended behavior.)
-
-/// `qd send` moved stub (commands/send.ts:41-47): the 5-line stderr pointer, exit 1. THE
-/// STUB IS THE BEHAVIOR (spec §3 row 7) — not an A4/A5 deferral.
-pub fn run_send_moved() -> i32 {
-    eprintln!("\"qd send\" has been split into explicit channels:\n");
-    eprintln!("  qd send:pty <session> <message>     Send via zmx PTY (types into terminal)");
-    eprintln!("  qd send:relay <session> <message>   Send via relay HTTP endpoint");
-    eprintln!("  qd send:http <session> <message>    Send via OpenCode HTTP API\n");
-    eprintln!("Pick the channel that matches how you want to communicate.");
-    1
-}
+//! relay moved-pointer stub, which IS the intended behavior.)
+//!
+//! The `qd send` moved stub that used to sit here — the "split into explicit
+//! channels" menu naming send:pty/send:relay/send:http — is GONE. `send` routes
+//! to `send_unified` (verbs/mod.rs), so the stub had no callers, and bare
+//! `qd send` with `--carrier`/`--wait` is now the surface those three verbs are
+//! being deprecated in favour of: dead code teaching the reverse of the truth.
 
 /// `qd relay` moved stub (commands/send.ts:523-528): stderr pointer, exit 1.
 pub fn run_relay_moved() -> i32 {
-    eprintln!("\"qd relay\" has moved to \"qd send:relay\".\n");
-    eprintln!("  qd send:relay <session> <message>          async (returns message ID)");
-    eprintln!("  qd send:relay <session> <message> --wait   block until reply\n");
+    eprintln!("\"qd relay\" has moved to \"qd send\".\n");
+    eprintln!("  qd send <session> <message>          async (returns message ID)");
+    eprintln!("  qd send <session> <message> --wait   block until reply\n");
     eprintln!("The relay channel is unchanged — just the command name.");
     1
 }

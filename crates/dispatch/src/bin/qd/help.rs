@@ -419,16 +419,41 @@ Options:
   -h, --help  display help for command
 "####;
 
-pub const SEND: &str = r####"Usage: qd send <target> <message>
+pub const SEND: &str = r####"Usage: qd send [options] <target> <message>
 
 Send a message to a session. qd resolves the target and selects its registered
 receive path automatically before making one delivery attempt.
 
 Options:
-  -h, --help  display help for command
+  --carrier <pty|relay>  Pin the delivery WIRE instead of letting qd select it
+  --wait                 Block until the session replies, and print the reply
+  --timeout <seconds>    Max wait for the reply, with --wait (default: 120)
+  --raw                  With --wait on the pane wire: print raw JSONL lines
+  --full                 With --wait on the pane wire: include all blocks
+                         (thinking, tool calls)
+  -h, --help             display help for command
 
 The selected path is never changed after an attempt starts. A target that is
 stopped, cold, ambiguous, self, or has no live receive path is refused.
+
+The two wires are not two spellings of one delivery, which is why --carrier
+exists at all:
+
+  --carrier pty    Types the message into the session's mux pane. It arrives as
+                   USER INPUT, so a message starting with / is a slash command
+                   and the session RUNS it. Needs a session hosted in a pane.
+  --carrier relay  Hands the message to the session's message-passing wire (the
+                   relay server, or a resident's own protocol). It arrives as a
+                   NOTIFICATION, which is never a command.
+
+Omit --carrier and the wire is chosen for you, exactly as it always has been: a
+recorded relay port wins, otherwise the pane.
+
+--wait is LANE-GATED, because only some lanes have a channel that hands the
+reply body back. On a lane without one it is refused (refused{wait-unsupported})
+and names what to use instead - never a silent no-op. Note that `qd wait
+<session>` is a different question: it blocks until the session goes busy->idle
+and reports that TRANSITION; it does not print the reply.
 
 Exit codes:
   0   delivered
@@ -437,6 +462,9 @@ Exit codes:
   12  refused{<class>} - a door refusal, printed as
       "qd send: refused{<class>}: <reason>". Classes include:
         address, host, ambiguous, unknown, self-send, no-live-receive-path
+        carrier - --carrier named a wire this lane does not have, or the
+          target is not running (a pinned wire is not a wake trigger)
+        wait-unsupported - --wait on a lane with no reply channel
         receive-path-undetermined - the discovery read (e.g. `ps`) that
           would have found a receive path was DENIED, so relay/mux state
           is unknown, NOT absent. Unlike a confirmed absence, the remedy
@@ -451,6 +479,11 @@ renders the affected fields as "unknown (<source> unavailable)" instead of "-".
 pub const SEND_PTY: &str = r####"Usage: qd send:pty [options] <session> <message>
 
 (Compatibility/debug control) Force a message through the session's PTY.
+
+DEPRECATED. Use `qd send <session> <message> --carrier pty` - it takes the
+same --wait / --raw / --full / --timeout. This verb still works and its
+stdout and exit codes are unchanged; it prints one deprecation line on
+stderr.
 
 Options:
   --timeout <seconds>  Max wait time (default: "120")
@@ -499,6 +532,10 @@ pub const SEND_RELAY: &str = r####"Usage: qd send:relay [options] <session> <mes
 
 (Compatibility/debug control) Force relay/daemon send routing.
 
+DEPRECATED. Use `qd send <session> <message> --carrier relay` - it takes the
+same --wait / --timeout. This verb still works and its stdout and exit codes
+are unchanged; it prints one deprecation line on stderr.
+
 Options:
   --timeout <seconds>  Max wait for reply (default: "120")
   --wait               Block and wait for the reply instead of returning
@@ -545,6 +582,12 @@ details.
 pub const SEND_HTTP: &str = r####"Usage: qd send:http [options] <session> <message>
 
 (Compatibility/debug control) Force the OpenCode HTTP path.
+
+DEPRECATED, and it has never delivered anything: engine sessions are never
+provider=opencode, so every invocation takes the "not an OpenCode session"
+branch and exits 1. It gains no wire - there is no --carrier http - because
+turning "always refuses" into "actually delivers" is a new destructive
+behaviour, not a deprecation. Use `qd send <session> <message>`.
 
 Options:
   --mode <mode>        Message envelope: report, execute, or raw (default:

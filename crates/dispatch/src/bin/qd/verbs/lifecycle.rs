@@ -1020,11 +1020,27 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         );
         return 1;
     };
-    // claude-code has exactly ONE lane, so this is "the claude lane" — and it is the
-    // only one with anything after the create. The bind phase, the relay-presence
-    // warning, the telemetry stamp and the `-p` priming send all belong to it and to
-    // nothing else; the other five render one line and return.
-    let claude_lane = lane.harness == quorum_qw::lane::Harness::ClaudeCode;
+    // THE CLAUDE PANE LANE — `claude-code/mux-pane` — and NOT the claude-code
+    // harness. The distinction is the whole point of this binding.
+    //
+    // It was spelled `lane.harness == ClaudeCode` while claude had exactly one lane,
+    // and that spelling stopped being true when ACP became a MODE rather than a
+    // harness: `claude-code/acp` answers `ClaudeCode` too. It is a headless
+    // bridge-hosted resident — no pane, no mux, no `claude` argv, no composer to
+    // type into — so every phase gated on this binding is one it must not enter.
+    // Each of them is the PANE launch's alone: the driver route below (a bare
+    // agent start of a RESIDENT is not a no-op turn and must not be refused as
+    // one), the QD_MUX preflight, `--via`, `--fork`, the trailing claudeArgs, and
+    // the four post-create phases at the bottom — bind, relay-presence warning,
+    // telemetry stamp, `-p` priming send. The ACP lane belongs with the other
+    // daemon-hosted creates, which render one line and return; that is exactly
+    // what it got while it was spelled `acp/claude-code`, and the rename must not
+    // have moved it.
+    //
+    // `CLAUDE_PANE` rather than an inline two-field test because the constant
+    // exists for this exact class of guard — see its doc for the sibling case it
+    // was minted to fix.
+    let claude_pane = lane == quorum_qw::lane::CLAUDE_PANE;
 
     // --- FTUE punch R19: does this start END INSIDE the session it makes? -----
     //
@@ -1054,17 +1070,20 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         lane.is_pane() || lane.is_app_server(),
     );
 
-    // --- WP-B-CS-1 (D2): driver auto-detect routing (claude lane only) ---------
+    // --- WP-B-CS-1 (D2): driver auto-detect routing (claude PANE lane only) ----
     // I/O mode follows who DRIVES (S-B-COMMAND-SURFACE-RULINGS). A HUMAN caller →
     // today's interactive native-TUI create path. An AGENT caller → refused below.
     // `--headless`/`--interactive` override the auto-detect. It runs ONLY for the
-    // claude lane and it runs HERE, after the routing decision, because that is
-    // where the old chain reached it: the five daemon/pane arms returned above it
-    // and never consulted the driver at all.
+    // claude PANE lane and it runs HERE, after the routing decision, because that
+    // is where the old chain reached it: the daemon/pane arms returned above it
+    // and never consulted the driver at all. `claude-code/acp` is one of those
+    // arms: a daemon-hosted resident is precisely what an agent may start bare,
+    // and `RefuseNoPrompt` — whose reason is that a headless `claude -p ""` is a
+    // degenerate no-op turn — describes nothing that lane does.
     //
     // `crate::driver` reads WHO IS DRIVING — a qd-binary fact, never a lane concern
     // — which is why it stays on this side of the call.
-    if claude_lane {
+    if claude_pane {
         match crate::driver::start_route(
             crate::driver::resolve_driver_real(
                 crate::driver::DriverOverride::from_flags(headless_flag, interactive_flag),
@@ -1110,14 +1129,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // been qd's half and only qd's half: printing the failure and choosing the exit
     // code"). It is a pure parse of one env var, no session touched.
     //
-    // CLAUDE LANE ONLY, and the placement is the reason: the old chain reached
+    // CLAUDE PANE LANE ONLY, and the placement is the reason: the old chain reached
     // `select_backend` exactly here, AFTER the driver route and BEFORE the `--via`
     // composition, so a bogus QD_MUX beat a bad `--via` to stderr. The pane lanes
     // deliberately do NOT get this preflight — `pi/mux-pane`'s `--session-id`
     // capability refusal has to land ahead of any backend resolution (the order its
     // arm pins), so their selector failure comes back through the lane instead,
     // carrying `QD_MUX_INVALID_EXIT` on `LaneError::StartFailed::exit_code`.
-    if claude_lane {
+    if claude_pane {
         if let Err(code) = common::select_backend(&env) {
             return code;
         }
@@ -1133,10 +1152,10 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // `--via` profile's credentials are env pairs that by contract never touch
     // argv, and the resolver (`dispatch::secrets`, backends.json) is qd's.
     //
-    // Claude lane only, because that is the only create that has ever consumed it:
-    // `--via` on a codex/pi/acp start has always been a no-op, and composing it
+    // Claude PANE lane only, because that is the only create that has ever consumed
+    // it: `--via` on a codex/pi/acp start has always been a no-op, and composing it
     // here would newly bake credentials into a resident's env.
-    let (backend_env, backend_env_unset) = if claude_lane {
+    let (backend_env, backend_env_unset) = if claude_pane {
         match compose_backend_env(&env, &home, via.as_deref()) {
             Ok(set) => set,
             Err(code) => return code, // the helper already printed the loud error.
@@ -1158,7 +1177,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     //
     // So the decision is "does this lane take one", and it has exactly one owner.
     let prompt_refused = quorum_qw::lanes::create_prompt_refusal(lane).is_some();
-    if prompt.as_deref().is_some_and(|s| !s.is_empty()) && prompt_refused && !claude_lane {
+    if prompt.as_deref().is_some_and(|s| !s.is_empty()) && prompt_refused && !claude_pane {
         // The wording is qd's — a lane has no user to talk to — and each line names
         // the lane's own reason plus the working re-entry. Unchanged, verbatim, from
         // the three wrappers this replaced.
@@ -1194,13 +1213,13 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         // does not exist. So it reaches the request only on the lane that has one.
         resume: fork_uuid
             .clone()
-            .filter(|_| claude_lane)
+            .filter(|_| claude_pane)
             .map(quorum_qw::contract::SessionId),
         // Same rule. `claudeArgs` is the claude launch's trailing argv; the codex
         // DAEMON arm has always been handed an EMPTY passthrough and the other four
         // cores have no passthrough field at all, so forwarding it here would newly
         // push a `--` tail into codex's app-server argv.
-        passthrough: if claude_lane {
+        passthrough: if claude_pane {
             claude_args.clone()
         } else {
             Vec::new()
@@ -1285,9 +1304,9 @@ pub fn run_new(m: &ArgMatches) -> i32 {
             // Pre-bind create/boot failures use the catch-all class
             // "start-failed" (the three RULED classes — unbound | ambiguous |
             // diverged — are the bind phase's, below); the recipe treats any
-            // other class as fail-to-operator. CLAUDE LANE ONLY, exactly as
+            // other class as fail-to-operator. CLAUDE PANE LANE ONLY, exactly as
             // before: no other create arm has ever emitted a --json object.
-            if json_out && claude_lane {
+            if json_out && claude_pane {
                 let obj = serde_json::json!({
                     "error": {
                         "class": "start-failed",
@@ -1309,9 +1328,14 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         eprintln!("{note}");
     }
 
-    if !claude_lane {
-        // The seven lanes with nothing after the create. One line each, byte-for-byte
-        // the line its wrapper printed, and exit 0.
+    if !claude_pane {
+        // The EIGHT lanes with nothing after the create — every lane but claude's
+        // pane. One line each, byte-for-byte the line its wrapper printed, and exit 0.
+        //
+        // Eight, not seven: `claude-code/acp` reaches here now. It always should
+        // have — its `(_, Mode::Acp)` arm below was written to serve both ACP
+        // lanes — but the harness-shaped guard this `if` used to carry sent it up
+        // the pane path instead and left that arm reachable only by opencode.
         //
         // EXHAUSTIVE, deliberately. This was a six-arm match with a `_ => {}`
         // catch-all, and the catch-all is what let `pi/extension` and
@@ -1365,8 +1389,10 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                 println!("Started detached codex session \"{name}\"");
                 println!("Open a terminal on it with \"qd attach {name}\".");
             }
-            // claude is excluded by the enclosing `if` — it has four phases after
-            // the create and prints its own line down there, not here.
+            // claude's PANE is excluded by the enclosing `if` — it has four phases
+            // after the create and prints its own line down there, not here. Its ACP
+            // sibling is NOT excluded: it renders through the `(_, Mode::Acp)` arm
+            // above, like every other daemon-hosted create.
             (quorum_qw::lane::Harness::ClaudeCode, quorum_qw::lane::Mode::Pane) => {}
             // Not lanes; `Lane::new` refuses each of these, so `for_create` cannot
             // have produced one. Named rather than wildcarded so that making any

@@ -18,6 +18,7 @@ use quorum_qw::contract::{
     SessionId,
 };
 
+use super::carrier;
 use super::common;
 use super::intent;
 
@@ -336,6 +337,22 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
             )
             .emit();
         }
+        // The carrier flags are ORIGIN-mode only, for the same reason `--expires`,
+        // `--host` and `--correlation-id` are: an envelope carries its own target,
+        // body, expiry and correlation id, and it carries no wire choice and no
+        // wait. Naming one here is a contradiction the door says out loud rather
+        // than accepting and dropping.
+        if let Some(flag) = carrier::inbound_conflict(m) {
+            return Refusal::refused(
+                "args",
+                format!(
+                    "{flag} is origin-mode only; an inbound envelope is admitted and \
+                     delivered through the target's own receive path, with no wire to pin \
+                     and nothing to block on"
+                ),
+            )
+            .emit();
+        }
         return run_inbound(&RealEnv, path);
     }
 
@@ -525,6 +542,25 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
     // liveness split below owns both, and the no-lane case rides it through
     // [`Unwakeable`] rather than through a second copy of the ledger.
     let lane = quorum_qw::lane_for(&current.provider, current.hosting.as_deref());
+
+    // THE WIRE, if the caller named one. `from_send_matches` answers `None`
+    // unless `--carrier` or `--wait` is present, and on `None` control falls
+    // straight through to the live/not-live split below — so the DEFAULT `qd
+    // send` keeps `LaneOps::deliver`, its write-then-deliver envelope, its claim
+    // lock and its disposition stamps byte-for-byte. These flags add a path;
+    // they do not re-tune the one that exists.
+    //
+    // Placed HERE, after the whole front door has run (address desugaring,
+    // `resolve_target`, the self-send fence, the id-collision refusal, the by-id
+    // refresh) and after the row's lane is in hand: a `qd send` flag must not
+    // move `qd send`'s door, and the `--wait` gate needs the lane to answer.
+    // Everything past this point that the carrier arm skips is skipped
+    // DELIBERATELY — a pinned wire runs the carrier's own ledger discipline
+    // (`send:pty`'s intent record, `send:relay`'s relay send events), which is
+    // the discipline the reply-capture machinery it reuses was built against.
+    if let Some(req) = carrier::from_send_matches(m) {
+        return carrier::run_from_unified(&current, lane, is_live(&current), query, message, &req);
+    }
 
     // qd–qf W3b: the LIVE vs NOT-live split, decided by [`is_live`] — the STATUS
     // ENUM alone, unchanged. A LIVE target takes the byte-identical W3a path: ask

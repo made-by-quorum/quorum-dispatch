@@ -28,9 +28,11 @@
 //! - **Every success and failure line**, including the `qd send:relay` pointers.
 //!   Six routes collapsed; eight lines did not, and must not — each names a
 //!   different drive channel and they are pinned as prose.
-//! - **The claude-lane preflights**: the id-collision pair, the must-be-cold gate,
-//!   the "no session ID" refusal and the F3 cwd reality-check. They were reachable
-//!   only from the claude arm and they stay scoped to it.
+//! - **The claude PANE lane's preflights**: the id-collision pair, the
+//!   must-be-cold gate, the "no session ID" refusal and the F3 cwd reality-check.
+//!   They were reachable only from the claude pane arm and they stay scoped to it
+//!   — `claude-code/acp` is a resident and takes the daemon path, as it did when
+//!   it was spelled `acp/claude-code`.
 //! - **The codex / pi PANE preconditions**, ahead of the lane, because their
 //!   position relative to dep resolution is user-visible (see the call).
 //! - The `ColdJsonl` fallback: a claude transcript with no registry row cannot be
@@ -54,7 +56,7 @@ use dispatch::resume::{resolve_resume_cwd, ResumeCwd};
 use dispatch::zmx_dir::{legacy_zmx_dirs, resolve_zmx_dir, XdgFamily};
 
 use quorum_qw::contract::{LaneError, LaneOps, SessionId, WakeOutcome, WakeState};
-use quorum_qw::lane::{Harness, Lane, Mode};
+use quorum_qw::lane::{Harness, Lane, Mode, CLAUDE_PANE};
 
 use super::common;
 use super::lifecycle;
@@ -78,7 +80,7 @@ fn codex_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
 /// drivable RIGHT NOW; resume is a success no-op (NO second adapter, ZERO row mutation).
 /// Mirrors `codex_already_running_line`; pinned by a unit test.
 fn acp_already_running_line(name: &str) -> String {
-    format!("session \"{name}\" is already alive; send to it with: qd send:relay {name} <text>")
+    format!("session \"{name}\" is already alive; send to it with: qd send {name} <text>")
 }
 
 /// Item 3 RESUME (acp) — the revived line. The resident adapter was re-spawned in
@@ -86,7 +88,7 @@ fn acp_already_running_line(name: &str) -> String {
 fn acp_revived_line(name: &str, pid: i64, endpoint: &str) -> String {
     format!(
         "resumed acp session \"{name}\" (adapter pid {pid}, {endpoint}); \
-         send to it with: qd send:relay {name} <text>"
+         send to it with: qd send {name} <text>"
     )
 }
 
@@ -215,17 +217,28 @@ pub fn run(m: &ArgMatches) -> i32 {
         }
     }
 
-    // --- The CLAUDE-lane preflights. They stay in qd, and they stay claude's. ---
+    // --- The CLAUDE PANE LANE's preflights. They stay in qd, and they stay that
+    // --- lane's. ---
     //
     // Every gate below was reachable only by a row that had fallen through all five
-    // provider branches above — which is to say a claude row (and, until this
+    // provider branches above — which is to say a claude PANE row (and, until this
     // rewire, a bare-opencode one; see the `lane_for` note). The daemon and TUI
     // revives deliberately ran AHEAD of them, because a daemon-hosted row is
     // revivable from any non-alive state including a tombstoned stop, and a codex /
     // pi pane's own refusals are what its user must hear first. Scoping the block to
-    // the claude lane keeps every one of those orders exactly as it was, and states
-    // the scope that used to be implied by five early returns.
-    if lane.harness == Harness::ClaudeCode {
+    // the claude pane lane keeps every one of those orders exactly as it was, and
+    // states the scope that used to be implied by five early returns.
+    //
+    // `CLAUDE_PANE`, NOT `harness == ClaudeCode`. `claude-code/acp` answers the
+    // harness test too, and every gate here would be wrong for it: it is a
+    // headless resident, so "already alive … use qd attach instead" points at a
+    // terminal it does not have, the must-be-cold gate contradicts the
+    // revivable-from-any-non-alive-state rule the daemon lanes are built on, and
+    // its `wake` already reports an already-running resident as the success no-op
+    // `resumed` renders. The ACP row reached none of this while it was spelled
+    // `acp/claude-code` and fell out at the `starts_with("acp/")` branch; the lane
+    // remodel must not have walked it in.
+    if lane == CLAUDE_PANE {
         // Pete feedback #6 — live-id-collision preflight over the RAW registry. The
         // deduped join collapses two same-id LIVE rows to one (hiding a genuine
         // duplicate-id collision) and can report the survivor Cold via dedup of a stale
@@ -799,24 +812,44 @@ mod tests {
         }
     }
 
-    /// Item 3 (acp) resume success lines name `qd send:relay` (the working agent
-    /// channel), NOT bare `qd send` / `send:pty` (no pane for a daemon-hosted session).
-    /// Mirrors `codex_resume_success_lines_point_at_send_relay`.
+    /// Item 3 (acp) resume success lines name `qd send`, NOT `send:pty` (no pane for
+    /// a daemon-hosted session) and NOT `qd send:relay`.
+    ///
+    /// They named `send:relay` until the lane remodel made that command REFUSE the
+    /// rows these lines are printed for. `send_relay.rs` takes its bare-destination
+    /// exit before the acp routing arm, and `classify_session` only short-circuits to
+    /// `NotApplicable` on `provider != "claude-code"` — which an acp row satisfied
+    /// while it was stamped `acp/claude-code` and no longer does, so it is classified
+    /// `Bare` and answered with "ask the human to run `qd wrap`". Verified live: a row
+    /// created by `qd start --acp` refuses `send:relay` and accepts `qd send`.
+    ///
+    /// `qd send` is also the surface these lines should have named regardless —
+    /// `send:relay` is the hidden compatibility/debug forcing verb (`cli.rs`), and
+    /// `qd send` is what routes on the lane. It is what `lifecycle.rs`'s sibling
+    /// daemon-hosted refusal says, and what `verbs/common.rs::daemon_redirect` says.
+    ///
+    /// The codex/pi pair still name `send:relay`: it WORKS for them (their providers
+    /// hit the `NotApplicable` arm), so respelling those is a separate change with its
+    /// own pinned lines, not fallout of this one.
     #[test]
-    fn acp_resume_success_lines_point_at_send_relay() {
+    fn acp_resume_success_lines_point_at_send() {
         let running = acp_already_running_line("wk");
         assert_eq!(
             running,
-            "session \"wk\" is already alive; send to it with: qd send:relay wk <text>"
+            "session \"wk\" is already alive; send to it with: qd send wk <text>"
         );
         let revived = acp_revived_line("wk", 4242, "ws://127.0.0.1:18951");
         assert_eq!(
             revived,
             "resumed acp session \"wk\" (adapter pid 4242, ws://127.0.0.1:18951); \
-             send to it with: qd send:relay wk <text>"
+             send to it with: qd send wk <text>"
         );
         for line in [&running, &revived] {
-            assert!(line.contains("qd send:relay wk"), "names send:relay: {line}");
+            assert!(line.contains("qd send wk"), "names send: {line}");
+            assert!(
+                !line.contains("send:relay"),
+                "send:relay is refused for an acp row: {line}"
+            );
             assert!(!line.contains("send:pty"), "no send:pty for a daemon: {line}");
             assert!(!line.contains("--wait"), "acp ignores --wait: {line}");
         }

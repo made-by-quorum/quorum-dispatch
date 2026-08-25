@@ -42,9 +42,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self as std_mpsc, RecvTimeoutError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::executor::block_on;
@@ -67,6 +67,16 @@ use super::BRIDGE_ENV_STRIP;
 
 /// Default SC-1 outbound-queue depth (waiting backlog, excluding the in-flight turn).
 const DEFAULT_QUEUE_CAPACITY: usize = 16;
+
+/// How long a blocked handshake waits for the connection thread's terminal [`DeadCause`]
+/// before falling back to the generic [`AcpError::Closed`].
+///
+/// The two events race by construction: the thread drops `cmd_rx` (waking the handshake's
+/// `rx.recv()` with a disconnect) as part of the SAME unwind that records the cause. The
+/// thread publishes the cause BEFORE anything is dropped, so this grace is only ever the
+/// few microseconds of scheduling between the two — it is a bound, not a delay, and it is
+/// only ever paid on a handshake that has already failed.
+const DEAD_CAUSE_GRACE: Duration = Duration::from_millis(2000);
 
 // ===========================================================================
 // sync host <-> connection thread messages
@@ -158,15 +168,50 @@ fn map_initialize(r: InitializeResponse) -> InitializeResult {
 // the connection thread
 // ===========================================================================
 
-/// Why the connection thread ended — drives the (W) confirmed-dead signal.
+/// Why the connection thread ended — drives the (W) confirmed-dead signal AND, since it is
+/// now RECORDED on the host (see [`run_connection`]), the operator-facing explanation for a
+/// handshake that died with the connection.
+#[derive(Clone)]
 enum DeadCause {
     /// A clean `Command::Shutdown` (the command loop returned Ok) — NOT dead.
     CleanShutdown,
     /// The bridge child process EXITED (the authoritative confirmed-dead signal — the async
-    /// analog of the old `child.try_wait()`).
-    ChildExited,
+    /// analog of the old `child.try_wait()`). Carries the rendered exit status: a program that
+    /// is not an ACP bridge at all exits promptly, and saying so is the whole diagnosis.
+    ChildExited(String),
     /// The spawn failed, or the crate connection errored (transport lost) — treated as dead.
     Error(String),
+}
+
+impl DeadCause {
+    /// The operator-facing sentence for a NON-clean end, or `None` for a clean shutdown
+    /// (which is not a failure and must never be reported as one).
+    fn message(&self) -> Option<&str> {
+        match self {
+            DeadCause::CleanShutdown => None,
+            DeadCause::ChildExited(why) | DeadCause::Error(why) => Some(why),
+        }
+    }
+}
+
+/// The recorded terminal [`DeadCause`], shared between the connection thread (which writes it
+/// exactly once) and the sync host (which reads it to explain a lost handshake).
+type DeadCauseSlot = Arc<Mutex<Option<DeadCause>>>;
+
+/// Did the bridge child already exit? Polls for a short bounded window, because the
+/// connection error and the child's reaping are concurrent: the failing write can be
+/// observed a beat before the exit status is. Only ever called on a connection that has
+/// ALREADY failed, so the wait costs nothing on any healthy path.
+fn reap_briefly(child: &mut async_process::Child) -> Option<std::process::ExitStatus> {
+    for _ in 0..40 {
+        if let Ok(Some(status)) = child.try_status() {
+            return Some(status);
+        }
+        // We own this thread (the connection thread runs one `block_on`), so a short
+        // blocking sleep here parks nothing else.
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    None
 }
 
 /// The connection thread body: spawn the bridge child, hand its byte streams to the crate's
@@ -183,8 +228,23 @@ fn run_connection(
     cmd_rx: UnboundedReceiver<Command>,
     bus_tx: std_mpsc::Sender<BusEvent>,
     dead: Arc<AtomicBool>,
+    cause_slot: DeadCauseSlot,
 ) {
     let bus_end = bus_tx.clone();
+    // RECORD-BEFORE-UNWIND. Every terminal cause goes through `record`, which publishes the
+    // `dead` flag and then the cause while the async block is still on the stack — i.e.
+    // BEFORE `cmd_rx` (and with it every pending handshake's reply channel) is dropped. A
+    // sync handshake blocked in `rx.recv()` wakes on exactly that drop, so a cause recorded
+    // after the block returned would lose the race with the error it exists to explain.
+    let record = move |c: DeadCause| -> DeadCause {
+        if c.message().is_some() {
+            dead.store(true, Ordering::SeqCst);
+            if let Ok(mut slot) = cause_slot.lock() {
+                *slot = Some(c.clone());
+            }
+        }
+        c
+    };
     let cause: DeadCause = block_on(async move {
         // Spawn the bridge child OURSELVES (as the old `AcpHost::spawn` did) so the nesting-guard
         // strip stays expressible (MF1) and stderr routes to the daemon log (MF3) — NOT the
@@ -202,15 +262,15 @@ fn run_connection(
         }
         let mut child = match cmd.spawn() {
             Ok(c) => c,
-            Err(e) => return DeadCause::Error(format!("spawn {program}: {e}")),
+            Err(e) => return record(DeadCause::Error(format!("spawn {program}: {e}"))),
         };
         let stdin = match child.stdin.take() {
             Some(s) => s,
-            None => return DeadCause::Error("bridge stdin not piped".to_string()),
+            None => return record(DeadCause::Error("bridge stdin not piped".to_string())),
         };
         let stdout = match child.stdout.take() {
             Some(s) => s,
-            None => return DeadCause::Error("bridge stdout not piped".to_string()),
+            None => return record(DeadCause::Error("bridge stdout not piped".to_string())),
         };
         // ByteStreams::new(outgoing = child stdin (AsyncWrite), incoming = child stdout (AsyncRead));
         // it does the ndjson line-framing internally.
@@ -273,30 +333,38 @@ fn run_connection(
                 drop(child_exit); // release the &mut child borrow before kill()
                 match conn_result {
                     Ok(()) => DeadCause::CleanShutdown,
-                    Err(e) => DeadCause::Error(e.to_string()),
+                    // A connection error is usually the SYMPTOM of a dead child (the first
+                    // write to a gone bridge fails as a broken pipe, and that write loses
+                    // the race with observing the exit). Ask the child before blaming the
+                    // transport: "bridge child exited (exit status: 0)" is a diagnosis a
+                    // human can act on, where a crate-internal broken-pipe dump is not.
+                    Err(e) => match reap_briefly(&mut child) {
+                        Some(st) => DeadCause::ChildExited(format!("bridge child exited ({st})")),
+                        None => DeadCause::Error(e.to_string()),
+                    },
                 }
             }
-            futures::future::Either::Right((_exit_status, conn_fut)) => {
+            futures::future::Either::Right((exit_status, conn_fut)) => {
                 drop(conn_fut); // tear the connection down
-                DeadCause::ChildExited
+                                // The status is the diagnosis when the "bridge" is not a bridge: a program
+                                // that simply runs and returns (say `/bin/echo`) lands here with a clean
+                                // exit code, which reads very differently from a crash or a signal.
+                DeadCause::ChildExited(match exit_status {
+                    Ok(st) => format!("bridge child exited ({st})"),
+                    Err(e) => format!("bridge child exited (status unavailable: {e})"),
+                })
             }
         };
         // Teardown: kill the child (async-process does not kill on drop). Harmless no-op if it
         // already exited.
         let _ = child.kill();
-        cause
+        record(cause)
     });
 
-    match cause {
-        DeadCause::CleanShutdown => {}
-        DeadCause::ChildExited => {
-            dead.store(true, Ordering::SeqCst);
-            let _ = bus_end.send(BusEvent::Closed("bridge child exited".to_string()));
-        }
-        DeadCause::Error(why) => {
-            dead.store(true, Ordering::SeqCst);
-            let _ = bus_end.send(BusEvent::Closed(why));
-        }
+    // `record` already published `dead` + the cause; all that is left is the bus post the
+    // sync host + the `serve` self-terminate guard observe.
+    if let Some(why) = cause.message() {
+        let _ = bus_end.send(BusEvent::Closed(why.to_string()));
     }
 }
 
@@ -410,6 +478,10 @@ struct HostInner {
     /// Set by the connection thread when the connection ends abnormally (transport lost / child
     /// gone) — the (W) confirmed-dead signal the `serve` self-terminate guard reads.
     dead: Arc<AtomicBool>,
+    /// WHY the connection ended abnormally, recorded by the connection thread alongside
+    /// `dead` (and always published just after it). This is what turns a handshake failure
+    /// from "acp connection closed" into "spawn claude-code-acp: No such file or directory".
+    dead_cause: DeadCauseSlot,
     /// The established ACP session id (`None` before `session/new`/`session/load`).
     session: Option<SessionId>,
     /// The SC-1a CONFIGURED outbound-queue bound, set at spawn and preserved across
@@ -453,16 +525,26 @@ impl AcpHost {
         let (cmd_tx, cmd_rx) = unbounded::<Command>();
         let (bus_tx, bus_rx) = std_mpsc::channel::<BusEvent>();
         let dead = Arc::new(AtomicBool::new(false));
+        let dead_cause: DeadCauseSlot = Arc::new(Mutex::new(None));
 
         let program = program.to_string();
         let args = args.to_vec();
         let cwd = cwd.to_path_buf();
         let bus_for_thread = bus_tx;
         let dead_for_thread = dead.clone();
+        let cause_for_thread = dead_cause.clone();
         let thread = std::thread::Builder::new()
             .name("acp-crate-conn".to_string())
             .spawn(move || {
-                run_connection(program, args, cwd, cmd_rx, bus_for_thread, dead_for_thread)
+                run_connection(
+                    program,
+                    args,
+                    cwd,
+                    cmd_rx,
+                    bus_for_thread,
+                    dead_for_thread,
+                    cause_for_thread,
+                )
             })
             .map_err(|e| AcpError::Transport(format!("connection thread: {e}")))?;
 
@@ -472,6 +554,7 @@ impl AcpHost {
                 bus_rx,
                 thread: Some(thread),
                 dead,
+                dead_cause,
                 session: None,
                 capacity,
                 queue: Some(OutboundQueue::new("pending-session", capacity)),
@@ -508,6 +591,42 @@ impl AcpHost {
         self.inner.borrow().dead.load(Ordering::SeqCst)
     }
 
+    /// WHY the bridge is confirmed dead, if it is — the connection thread's recorded terminal
+    /// cause (`spawn <program>: No such file or directory`, `bridge child exited (exit status:
+    /// 0)`, a transport error…). `None` while the connection is healthy, and `None` after a
+    /// CLEAN shutdown, which is not a failure. The `acp-daemon` boot reads this to say what
+    /// actually happened instead of "the connection closed".
+    pub fn bridge_dead_cause(&self) -> Option<String> {
+        let slot = self.inner.borrow().dead_cause.clone();
+        let cause = slot.lock().ok()?;
+        cause.as_ref()?.message().map(str::to_string)
+    }
+
+    /// The error a blocked handshake should report when its reply channel died: the recorded
+    /// terminal cause when there is one, else the generic [`AcpError::Closed`] (a connection
+    /// that really did just close). Waits up to [`DEAD_CAUSE_GRACE`] for the cause, because
+    /// the wake-up and the recording are the same unwind — see [`run_connection`].
+    fn handshake_closed_error(&self) -> AcpError {
+        let slot = self.inner.borrow().dead_cause.clone();
+        let deadline = Instant::now() + DEAD_CAUSE_GRACE;
+        loop {
+            if let Ok(cause) = slot.lock() {
+                if let Some(recorded) = cause.as_ref() {
+                    return match recorded.message() {
+                        Some(why) => AcpError::Transport(why.to_string()),
+                        // A clean shutdown raced the handshake: nothing failed, the host was
+                        // told to go away. That IS `Closed`.
+                        None => AcpError::Closed,
+                    };
+                }
+            }
+            if Instant::now() >= deadline {
+                return AcpError::Closed;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     /// `session/load` (resume): re-establish a prior session by id on this bridge. The bridge
     /// replays the session's history as `session/update`s (drained via [`Self::next_update`]).
     /// Proves the resume verb on the LIVE bridge (pillar 2 / gate b).
@@ -520,11 +639,11 @@ impl AcpHost {
                 cwd: cwd.to_string(),
                 reply: tx,
             })
-            .map_err(|_| AcpError::Closed)?;
+            .map_err(|_| self.handshake_closed_error())?;
         match rx.recv() {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return Err(AcpError::Protocol(e)),
-            Err(_) => return Err(AcpError::Closed),
+            Err(_) => return Err(self.handshake_closed_error()),
         }
         let mut inner = self.inner.borrow_mut();
         inner.session = Some(session_id.to_string());
@@ -610,11 +729,14 @@ impl AcpClient for AcpHost {
         let (tx, rx) = std_mpsc::channel();
         cmd_tx
             .unbounded_send(Command::Initialize(tx))
-            .map_err(|_| AcpError::Closed)?;
+            .map_err(|_| self.handshake_closed_error())?;
         match rx.recv() {
             Ok(Ok(init)) => Ok(init),
             Ok(Err(e)) => Err(AcpError::Protocol(e)),
-            Err(_) => Err(AcpError::Closed),
+            // The connection died under the handshake. THIS is where a missing/!ACP bridge
+            // used to become the indistinguishable "acp connection closed"; now it reports
+            // the connection thread's recorded cause.
+            Err(_) => Err(self.handshake_closed_error()),
         }
     }
 
@@ -626,11 +748,11 @@ impl AcpClient for AcpHost {
                 cwd: cwd.to_string(),
                 reply: tx,
             })
-            .map_err(|_| AcpError::Closed)?;
+            .map_err(|_| self.handshake_closed_error())?;
         let session = match rx.recv() {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return Err(AcpError::Protocol(e)),
-            Err(_) => return Err(AcpError::Closed),
+            Err(_) => return Err(self.handshake_closed_error()),
         };
         // The queue is rebuilt keyed by the real ACP session, at the CONFIGURED capacity (SC-1a).
         let mut inner = self.inner.borrow_mut();
@@ -758,6 +880,91 @@ impl AcpClient for AcpHost {
 impl AcpTurnObserver for AcpHost {
     fn observe(&self) -> AcpTurnObservation {
         self.inner.borrow().last_obs.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug this file's `dead_cause` plumbing exists to kill: the connection thread knew
+    /// EXACTLY why it died (`spawn <program>: No such file or directory`) and threw it away,
+    /// so `initialize` reported the one message that fits every failure equally badly.
+    ///
+    /// Spawning a program that cannot exist is hermetic — nothing is installed, nothing is
+    /// contacted, and the failure is the operating system's.
+    #[test]
+    fn a_missing_bridge_program_is_named_in_the_initialize_error() {
+        let host = AcpHost::spawn(
+            "definitely-not-a-real-binary-xyz",
+            &[],
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+        )
+        .expect("the host spawns; only the BRIDGE is missing");
+        let err = host
+            .initialize()
+            .expect_err("a missing bridge cannot handshake");
+        let text = err.to_string();
+        assert!(
+            text.contains("definitely-not-a-real-binary-xyz"),
+            "the error must NAME the program that could not be spawned: {text}"
+        );
+        assert!(
+            !matches!(err, AcpError::Closed),
+            "a failed spawn is not a closed connection: {text}"
+        );
+        assert_eq!(
+            host.bridge_dead_cause()
+                .as_deref()
+                .map(|c| c.contains("spawn")),
+            Some(true),
+            "the recorded cause is the spawn failure itself"
+        );
+    }
+
+    /// The OTHER half of the indistinguishability: a program that exists but is not an ACP
+    /// bridge. It used to produce a byte-identical message to the missing one; now it says
+    /// the child exited, and carries its exit status.
+    #[test]
+    fn a_program_that_is_not_a_bridge_reports_the_child_exit() {
+        let host = AcpHost::spawn("/bin/echo", &[], Path::new(env!("CARGO_MANIFEST_DIR")))
+            .expect("/bin/echo spawns fine — it just does not speak ACP");
+        let err = host
+            .initialize()
+            .expect_err("a program that exits cannot complete the handshake");
+        let text = err.to_string();
+        assert!(
+            text.contains("bridge child exited"),
+            "a bridge that ran and quit must say so: {text}"
+        );
+        assert!(
+            !matches!(err, AcpError::Closed),
+            "a child that exited under the handshake is not a clean close: {text}"
+        );
+    }
+
+    /// The two failures above must not be the SAME sentence — that identity was the whole
+    /// complaint (`--bridge-cmd nonexistent` and `--bridge-cmd /bin/echo` were byte-equal).
+    #[test]
+    fn the_two_bridge_failures_are_distinguishable() {
+        let missing = AcpHost::spawn(
+            "definitely-not-a-real-binary-xyz",
+            &[],
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+        )
+        .unwrap()
+        .initialize()
+        .expect_err("missing bridge")
+        .to_string();
+        let not_a_bridge = AcpHost::spawn("/bin/echo", &[], Path::new(env!("CARGO_MANIFEST_DIR")))
+            .unwrap()
+            .initialize()
+            .expect_err("not a bridge")
+            .to_string();
+        assert_ne!(
+            missing, not_a_bridge,
+            "a missing bridge and a present-but-wrong one are different diagnoses"
+        );
     }
 }
 

@@ -700,6 +700,50 @@ fn cmd_send() -> Command {
             "id",
             "ORIGIN mode: use this caller-supplied id as the envelope's correlation_id (frame passes its ledger event id here). Default: qd mints a ULID.",
         ))
+        // --- THE WIRE (carrier deprecation) --------------------------------
+        // `--carrier` is what lets `send:pty` / `send:relay` be DEPRECATED rather
+        // than deleted. They were never lane selectors — bare `qd send` already
+        // picks the lane, and for a claude pane row it picks the wire too — but a
+        // pane send arrives as TYPED USER INPUT (a leading `/` executes) and a
+        // relay send arrives as a channel NOTIFICATION that never does. Bare
+        // `send` had no way to say "the pane one". Now it does.
+        //
+        // ABSENT IS UNCHANGED: `verbs::carrier::from_send_matches` answers `None`
+        // unless `--carrier` or `--wait` is present, and `run_send_unified` runs
+        // its existing `LaneOps::deliver` path on that `None`. `http` is NOT an
+        // accepted value — see `verbs::carrier::deprecated_http`.
+        .arg(
+            long_val(
+                "carrier",
+                "pty|relay",
+                "Pin the delivery wire: `pty` types into the session's pane (arrives as user                  input, so a leading / executes); `relay` hands it to the session's                  message-passing wire (arrives as a notification, never a command). Omit to let                  qd select, which is unchanged.",
+            )
+            .value_parser(["pty", "relay"]),
+        )
+        // Lane-GATED: `Lane::captures_reply` answers whether there is a channel
+        // that hands the reply body back, and a lane without one is a refusal
+        // (`refused{wait-unsupported}`), never a silent no-op.
+        .arg(long_flag(
+            "wait",
+            "Block until the session replies and print the reply. Only on a lane with a reply              channel; elsewhere it is refused with what to use instead.",
+        ))
+        .arg(long_val(
+            "timeout",
+            "seconds",
+            "Max wait for the reply, with --wait (default: 120)",
+        ))
+        // The pane wire's two extraction modes, carried across from the verb
+        // being deprecated so no capability is lost with it. Meaningful only on
+        // the pane wire; `--carrier relay` with either is refused rather than
+        // ignored.
+        .arg(
+            long_flag("full", "With --wait on the pane wire: include all blocks (thinking, tool calls)")
+                .conflicts_with("raw"),
+        )
+        .arg(long_flag(
+            "raw",
+            "With --wait on the pane wire: print raw JSONL lines",
+        ))
         // A caller's message is opaque payload, including values such as
         // `--literal`; unified send has no transport options to reinterpret it.
         .arg(Arg::new("message").value_name("message").allow_hyphen_values(true))
@@ -1453,7 +1497,11 @@ mod tests {
 
     #[test]
     fn unified_help_is_transport_neutral_and_escape_hatches_are_labeled() {
-        assert!(help::SEND.contains("Usage: qd send <target> <message>"));
+        // `[options]` since the wire flags landed — `qd send` has options now,
+        // and a usage line that hides them is the drift this notices. What has
+        // NOT changed is the claim after it: the wire is still selected for you
+        // unless you say otherwise.
+        assert!(help::SEND.contains("Usage: qd send [options] <target> <message>"));
         assert!(help::SEND.contains("selects its registered\nreceive path automatically"));
         for carrier in ["send:pty", "send:relay", "send:http"] {
             assert!(
@@ -1469,6 +1517,96 @@ mod tests {
         let all = help::render_top(&build_cli(), true, false, &[]);
         assert!(all.contains("send [options] [session] [message]"));
         assert!(all.contains("(compatibility/debug) Force a PTY send"));
+    }
+
+    /// The three carrier verbs are DEPRECATED, and the primary help has to be
+    /// where a reader learns the replacement — without the primary help naming
+    /// the deprecated spellings back (the assertion above forbids that, and it
+    /// is right to: a menu that lists both teaches both).
+    ///
+    /// So each deprecated verb's OWN help carries the pointer, and `qd send`'s
+    /// help carries the capability. This pins both halves.
+    #[test]
+    fn the_deprecated_carriers_point_at_send_and_send_documents_the_wire() {
+        for (h, replacement) in [
+            (help::SEND_PTY, "qd send <session> <message> --carrier pty"),
+            (
+                help::SEND_RELAY,
+                "qd send <session> <message> --carrier relay",
+            ),
+            (help::SEND_HTTP, "qd send <session> <message>"),
+        ] {
+            assert!(h.contains("DEPRECATED"), "{h}");
+            assert!(h.contains(replacement), "must name the replacement: {h}");
+        }
+        // The pane wire's two extraction modes did not disappear with the verb
+        // that owned them.
+        for flag in [
+            "--carrier <pty|relay>",
+            "--wait",
+            "--timeout <seconds>",
+            "--raw",
+            "--full",
+        ] {
+            assert!(
+                help::SEND.contains(flag),
+                "qd send help must document {flag}"
+            );
+        }
+        // `--wait` is refused, not silently dropped, on a lane with no reply
+        // channel — and the help says which OTHER verb answers which OTHER
+        // question, because confusing the two is the whole hazard.
+        assert!(
+            help::SEND.contains("refused{wait-unsupported}"),
+            "{}",
+            help::SEND
+        );
+        assert!(
+            help::SEND.contains("it does not print the reply"),
+            "{}",
+            help::SEND
+        );
+    }
+
+    /// `--carrier` accepts exactly the two wires that exist. `http` is NOT one:
+    /// `send:http` has never delivered a message (engine sessions are never
+    /// provider=opencode), so giving it a wire would turn "always refuses" into
+    /// "actually delivers" under the banner of a deprecation.
+    #[test]
+    fn carrier_flag_accepts_the_two_real_wires_and_never_http() {
+        for wire in ["pty", "relay"] {
+            let m = parse(&["send", "--carrier", wire, "sess", "hi"]).unwrap();
+            let (_, sm) = m.subcommand().unwrap();
+            assert_eq!(
+                sm.get_one::<String>("carrier").map(String::as_str),
+                Some(wire)
+            );
+        }
+        assert!(parse(&["send", "--carrier", "http", "sess", "hi"]).is_err());
+        assert!(parse(&["send", "--carrier", "nonsense", "sess", "hi"]).is_err());
+    }
+
+    /// The wire flags are OPTIONS on `send`, and their absence is what keeps the
+    /// default path untouched — so absence must parse to absence, not to a
+    /// default that would arm the carrier arm.
+    #[test]
+    fn bare_send_still_parses_with_no_wire_flags_set() {
+        let m = parse(&["send", "sess", "hi"]).unwrap();
+        let (_, sm) = m.subcommand().unwrap();
+        assert_eq!(sm.get_one::<String>("carrier"), None);
+        assert!(!sm.get_flag("wait"));
+        assert!(!sm.get_flag("raw"));
+        assert!(!sm.get_flag("full"));
+        assert_eq!(sm.get_one::<String>("timeout"), None);
+    }
+
+    /// `--raw` and `--full` are two spellings of one extraction mode, so naming
+    /// both is a contradiction clap refuses rather than one silently winning.
+    #[test]
+    fn send_raw_and_full_are_mutually_exclusive() {
+        assert!(parse(&["send", "--wait", "--raw", "sess", "hi"]).is_ok());
+        assert!(parse(&["send", "--wait", "--full", "sess", "hi"]).is_ok());
+        assert!(parse(&["send", "--wait", "--raw", "--full", "sess", "hi"]).is_err());
     }
 
     #[test]

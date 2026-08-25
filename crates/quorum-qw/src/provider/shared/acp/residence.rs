@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::provider::acp::{AcpConnection, AcpHost, BRIDGE_BIN};
+use crate::provider::acp::{AcpConnection, AcpHost, BRIDGE_BIN, CLAUDE_AGENT_ACP_BIN};
 
 /// The hidden subcommand marker the adapter process is launched under (pre-clap in
 /// `bin/qd/main.rs`). Also the discriminator in the S6 cmdline-identity check.
@@ -185,7 +185,30 @@ pub fn cmdline_is_our_acp_daemon(cmdline: Option<&str>, endpoint: Option<&str>) 
 /// readiness — poll connect+`status` until the resident session is established or
 /// `timeout` elapses (the codex `connect_with_retry` analog). Returns the live
 /// connection on success so the caller can drive it immediately.
+///
+/// Callers that KNOW the adapter pid should prefer [`connect_ready_watching`], which
+/// stops the moment the adapter is gone instead of waiting out the whole budget.
 pub fn connect_ready(endpoint: &str, timeout: Duration) -> Result<AcpConnection, String> {
+    connect_ready_watching(endpoint, timeout, &|| false)
+}
+
+/// [`connect_ready`] that also WATCHES the adapter process. `adapter_exited` answers "has
+/// the adapter we spawned already terminated?" — when it says yes, readiness can never
+/// land, so polling stops immediately and the error SAYS the adapter died rather than
+/// reporting a timeout it never really waited for.
+///
+/// This is the difference between a create that burns the full 30s budget and then blames
+/// "connection refused", and one that fails in well under a second saying the adapter
+/// exited during startup — with the log path (added by the caller's error type) being the
+/// place the bridge's own refusal is written.
+///
+/// Answering `false` is always safe: it means "not known to be gone", which is exactly the
+/// old behaviour of waiting out the budget.
+pub fn connect_ready_watching(
+    endpoint: &str,
+    timeout: Duration,
+    adapter_exited: &dyn Fn() -> bool,
+) -> Result<AcpConnection, String> {
     let deadline = Instant::now() + timeout;
     let mut last_err = String::from("never connected");
     while Instant::now() < deadline {
@@ -199,11 +222,95 @@ pub fn connect_ready(endpoint: &str, timeout: Duration) -> Result<AcpConnection,
             },
             Err(e) => last_err = format!("connect: {e}"),
         }
+        // Check AFTER a failed attempt, never before: an adapter that became ready and
+        // then exited is still reported through the attempt above.
+        if adapter_exited() {
+            return Err(format!(
+                "acp adapter at {endpoint} exited during startup, before it was ready: {last_err}"
+            ));
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
     Err(format!(
         "acp adapter at {endpoint} not ready within {timeout:?}: {last_err}"
     ))
+}
+
+/// PRE-FLIGHT (the most common ACP failure, given a sentence a user can act on): is
+/// `bridge_cmd` a program this box can actually run?
+///
+/// The bridge is spawned on a background connection thread deep under
+/// [`AcpHost::spawn`], so a missing program used to surface as a bare ENOENT — or, worse,
+/// as the generic closed-connection error. Resolving it HERE, before anything is spawned,
+/// buys the one thing that layer cannot have: knowing WHICH bridge was asked for, and
+/// therefore how to get it.
+///
+/// `path_var` is the `PATH` to search (`None` ⇒ nothing on PATH resolves). A `bridge_cmd`
+/// containing `/` is a path and is checked as one — PATH is not consulted, exactly as
+/// `execvp` behaves.
+pub fn resolve_bridge_program(bridge_cmd: &str, path_var: Option<&str>) -> Result<PathBuf, String> {
+    let refusal = |why: String| -> String {
+        format!(
+            "acp-daemon: cannot start the acp bridge — {why} {}",
+            bridge_remedy(bridge_cmd)
+        )
+    };
+    if bridge_cmd.is_empty() {
+        return Err(refusal("no bridge program was named.".to_string()));
+    }
+    if bridge_cmd.contains('/') {
+        let path = PathBuf::from(bridge_cmd);
+        return match is_executable_file(&path) {
+            true => Ok(path),
+            false if path.exists() => Err(refusal(format!(
+                "{bridge_cmd:?} exists but is not an executable file."
+            ))),
+            false => Err(refusal(format!("{bridge_cmd:?} does not exist."))),
+        };
+    }
+    let found = path_var
+        .unwrap_or_default()
+        .split(':')
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| Path::new(dir).join(bridge_cmd))
+        .find(|candidate| is_executable_file(candidate));
+    found.ok_or_else(|| refusal(format!("{bridge_cmd:?} is not on PATH.")))
+}
+
+/// The remedy half of the pre-flight refusal, keyed off the bridge that was ACTUALLY
+/// asked for — the acp lanes do not share a bridge, and telling an opencode operator to
+/// npm-install a claude package would be a confident wrong answer.
+fn bridge_remedy(bridge_cmd: &str) -> String {
+    let base = Path::new(bridge_cmd)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| bridge_cmd.to_string());
+    match base.as_str() {
+        // The compiled default. npm reports this package as renamed, so naming ONLY it
+        // would send the operator to a deprecated install — and naming only the successor
+        // would hand them a binary this build does not spawn. Say both, and say which is
+        // which.
+        BRIDGE_BIN => format!(
+            "Install it with `npm i -g @zed-industries/claude-code-acp`. npm reports that \
+             package as renamed to @agentclientprotocol/claude-agent-acp; its \
+             `{CLAUDE_AGENT_ACP_BIN}` binary works here too, but only when selected \
+             explicitly with `--bridge-cmd {CLAUDE_AGENT_ACP_BIN}` — `{BRIDGE_BIN}` is what \
+             this build spawns by default."
+        ),
+        CLAUDE_AGENT_ACP_BIN => {
+            "Install it with `npm i -g @agentclientprotocol/claude-agent-acp`.".to_string()
+        }
+        "opencode" => "Install opencode (its `opencode acp` subcommand IS the bridge).".to_string(),
+        _ => "Install it, or pass `--bridge-cmd` a bridge program that exists.".to_string(),
+    }
+}
+
+/// Is `path` a file this box can exec? (regular-file + any x bit — the `execvp` test.)
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 /// S1 — the resident `qd acp-daemon` entry. Spawns + OWNS the bridge, establishes the ACP
@@ -232,6 +339,16 @@ pub fn run_adapter(args: &[String]) -> i32 {
             return 1;
         }
     };
+    // PRE-FLIGHT: a bridge program that does not exist is BY FAR the most common way
+    // this daemon fails, and it is the one failure we can name precisely and remedy in a
+    // sentence. Resolve it here, before any spawn: below this line the bridge is started
+    // on a background connection thread, where all we could ever report is an ENOENT.
+    if let Err(refusal) =
+        resolve_bridge_program(&opts.bridge_cmd, std::env::var("PATH").ok().as_deref())
+    {
+        eprintln!("{refusal}");
+        return 1;
+    }
     // Own the bridge (S1): spawn it, handshake, establish the resident session.
     let host = match AcpHost::spawn(&opts.bridge_cmd, &opts.bridge_args, &opts.cwd) {
         Ok(h) => h,
@@ -242,6 +359,18 @@ pub fn run_adapter(args: &[String]) -> i32 {
     };
     if let Err(e) = crate::provider::acp::AcpClient::initialize(&host) {
         eprintln!("acp-daemon: bridge initialize failed: {e}");
+        // The program EXISTS (pre-flight passed) but the connection died under the
+        // handshake — so it ran and did not speak ACP. Say which of those two it was;
+        // `bridge_dead_cause` is the connection thread's own recorded terminal cause, so
+        // this is the truth and not a guess.
+        if host.bridge_dead_cause().is_some() {
+            eprintln!(
+                "acp-daemon: {:?} exists but did not complete the acp handshake — it must \
+                 speak ACP (JSON-RPC) on stdin/stdout. Check its stderr above, and check \
+                 that --bridge-cmd names an acp bridge rather than the agent itself.",
+                opts.bridge_cmd
+            );
+        }
         return 1;
     }
     let cwd_str = opts.cwd.to_string_lossy().into_owned();
@@ -340,6 +469,116 @@ mod tests {
         // missing required
         assert!(parse_adapter_args(&["--cwd".into(), ".".into()]).is_err());
         assert!(parse_adapter_args(&["--listen".into(), "x".into()]).is_err());
+    }
+
+    /// PRE-FLIGHT, the missing-bridge case: the refusal must NAME the program that was not
+    /// found and say how to get it. A bare ENOENT from somewhere under the connection
+    /// thread is the failure this replaced, and it named nothing.
+    #[test]
+    fn a_missing_bridge_is_refused_by_name_with_a_remedy() {
+        let empty = tempfile::tempdir().unwrap();
+        let path_var = empty.path().to_string_lossy().into_owned();
+        let err = resolve_bridge_program(BRIDGE_BIN, Some(&path_var))
+            .expect_err("nothing is installed in an empty dir");
+        assert!(err.contains(BRIDGE_BIN), "must name the bridge: {err}");
+        assert!(
+            err.contains("not on PATH"),
+            "must say WHERE we looked: {err}"
+        );
+        assert!(
+            err.contains("@zed-industries/claude-code-acp"),
+            "must name the package that provides it: {err}"
+        );
+        // …and must NOT send the operator to the successor as though it were the default:
+        // the compiled default is still BRIDGE_BIN, and the successor is opt-in.
+        assert!(
+            err.contains(CLAUDE_AGENT_ACP_BIN) && err.contains("--bridge-cmd"),
+            "the renamed package is mentioned as an EXPLICIT selection: {err}"
+        );
+    }
+
+    /// The remedy is keyed off the bridge that was actually asked for. opencode's lane
+    /// spawns `opencode`, and telling that operator to npm-install a claude package would
+    /// be a confident wrong answer.
+    #[test]
+    fn the_remedy_follows_the_bridge_that_was_asked_for() {
+        let empty = tempfile::tempdir().unwrap();
+        let path_var = empty.path().to_string_lossy().into_owned();
+        let oc = resolve_bridge_program("opencode", Some(&path_var)).unwrap_err();
+        assert!(oc.contains("opencode acp"), "opencode's own remedy: {oc}");
+        assert!(
+            !oc.contains("npm i -g @zed-industries"),
+            "must not prescribe claude's package for opencode: {oc}"
+        );
+        let successor = resolve_bridge_program(CLAUDE_AGENT_ACP_BIN, Some(&path_var)).unwrap_err();
+        assert!(
+            successor.contains("@agentclientprotocol/claude-agent-acp"),
+            "the successor names its own package: {successor}"
+        );
+    }
+
+    /// A bridge that IS present must pass — the pre-flight exists to catch the missing
+    /// case, and a check that rejects a working install would be strictly worse than none.
+    #[test]
+    fn a_present_bridge_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("pretend-acp-bridge");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path_var = format!("/nonexistent-dir:{}", dir.path().display());
+        assert_eq!(
+            resolve_bridge_program("pretend-acp-bridge", Some(&path_var)).unwrap(),
+            bin,
+            "a program on PATH resolves to the first executable match"
+        );
+        // An absolute path bypasses PATH entirely (the execvp rule).
+        assert!(resolve_bridge_program(&bin.to_string_lossy(), None).is_ok());
+    }
+
+    /// A path-shaped `--bridge-cmd` is checked as a path, and the two ways it can be wrong
+    /// are different sentences: absent, versus present but not runnable.
+    #[test]
+    fn a_path_shaped_bridge_is_checked_as_a_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such-bridge");
+        let err = resolve_bridge_program(&missing.to_string_lossy(), None).unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+        let not_exec = dir.path().join("data.json");
+        std::fs::write(&not_exec, "{}").unwrap();
+        let err = resolve_bridge_program(&not_exec.to_string_lossy(), None).unwrap_err();
+        assert!(err.contains("not an executable file"), "{err}");
+    }
+
+    /// WATCHED readiness (item 3): a create whose adapter is already gone must not spend
+    /// the whole budget. The endpoint here is dead, so the ONLY thing that can end this
+    /// call early is the exit watch — and the error must say the adapter exited, not that
+    /// it timed out.
+    #[test]
+    fn readiness_stops_when_the_adapter_is_already_gone() {
+        let started = Instant::now();
+        let err =
+            match connect_ready_watching("ws://127.0.0.1:1", Duration::from_secs(30), &|| true) {
+                Ok(_) => panic!("nothing is listening on port 1"),
+                Err(e) => e,
+            };
+        assert!(
+            err.contains("exited during startup"),
+            "the adapter's death is the diagnosis, not a timeout: {err}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "must not burn the readiness budget on a dead adapter: {:?}",
+            started.elapsed()
+        );
+        // The unwatched form is unchanged: it waits out its budget and reports a timeout.
+        let err = match connect_ready("ws://127.0.0.1:1", Duration::from_millis(50)) {
+            Ok(_) => panic!("nothing is listening on port 1"),
+            Err(e) => e,
+        };
+        assert!(err.contains("not ready within"), "{err}");
     }
 
     #[test]

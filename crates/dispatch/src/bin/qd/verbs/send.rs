@@ -68,6 +68,10 @@ fn invoked_send(session_id: &str, name: Option<&str>) {
 /// `qd send:pty <session> <message>` — REAL (replaces the A4 stub). Port of the
 /// send:pty action (qa/hardening@3dd9f1e:src/commands/send.ts:100-336).
 pub fn run_send_pty(m: &ArgMatches) -> i32 {
+    // DEPRECATED. One stderr line, then the verb below runs exactly as it did
+    // yesterday — see `super::carrier::notice` for why nothing on stdout and no
+    // exit code may move (this verb is `qf call`'s delivery primitive).
+    super::carrier::deprecated_pty();
     let query = m.get_one::<String>("session").expect("required by clap");
     let message = m.get_one::<String>("message").expect("required by clap");
     let wait = m.get_flag("wait");
@@ -98,7 +102,7 @@ pub fn run_send_pty(m: &ArgMatches) -> i32 {
 /// its historic warning+exit-0 contract on a known-failed submission, and the only
 /// caller that ever wanted `strict=true` was the unified `qd send`, which now
 /// reaches the carrier through `LaneOps::deliver` instead of through this file.
-fn run_send_pty_resolved(
+pub(super) fn run_send_pty_resolved(
     session: &dispatch::model::Session,
     message: &str,
     wait: bool,
@@ -576,6 +580,10 @@ fn wait_anchor_loop(
 /// exclusion (A3 spec row 10 carries). Flags are parse-accepted (clap) but
 /// unused on this path.
 pub fn run_send_http(m: &ArgMatches) -> i32 {
+    // DEPRECATED, and NOT delegated — see `super::carrier::deprecated_http` for
+    // why a verb that has never delivered anything keeps its refusal instead of
+    // gaining a wire.
+    super::carrier::deprecated_http();
     let query = m.get_one::<String>("session").expect("required by clap");
     let _message = m.get_one::<String>("message").expect("required by clap");
 
@@ -600,7 +608,12 @@ pub fn run_send_http(m: &ArgMatches) -> i32 {
         .unwrap_or_else(|| session.session_id.clone());
     eprintln!("ERROR: Session '{name}' is not an OpenCode session.");
     eprintln!("send:http only works with OpenCode sessions.");
-    eprintln!("  • For Claude Code sessions, use: qd send:relay {query} \"message\"");
-    eprintln!("  • Or via PTY: qd send:pty {query} \"message\"");
+    // REPOINTED, and only these two lines. The first two are the pinned surface
+    // (`tests/resolve_beyond_cap.rs` and `tests/verbs_a4.rs` both read "not an
+    // OpenCode session"); these two were a menu of carrier verbs that are now
+    // deprecated, so a refusal that sends the reader to them is teaching the
+    // spelling being retired. The exit code and stdout are untouched.
+    eprintln!("  • For any other session, use: qd send {query} \"message\"");
+    eprintln!("  • To force the pane wire: qd send {query} \"message\" --carrier pty");
     1
 }

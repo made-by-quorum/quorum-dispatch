@@ -23,6 +23,22 @@ is a no-op turn; an agent start with `-p` is a one-off print run dispatch does
 not spawn). The agent lane below passes `--interactive` for claude-code and
 nothing else — if that refusal ever moves, this script is where it shows up.
 
+Two conditions are deliberately NOT reported as product failures, because they
+are facts about the MACHINE or the BUILD rather than about qd working:
+
+  * how this build spells the ACP lane. It is `--provider claude-code --acp`
+    now and was `--provider acp/claude-code` before; the older spelling still
+    parses, so `probe_acp_spelling` reads which one this binary advertises off
+    `qd start --help` and uses that. Hard-coding either turns a merely OLDER qd
+    into two flat FAILs that read like product bugs.
+  * whether the claude ACP lane's BRIDGE is installed. That lane needs a SECOND
+    program — `claude-code-acp`, the `@zed-industries/claude-code-acp` bin qd
+    spawns (`provider/claude/acp.rs::BRIDGE_BIN`) — and `qd setup` probes only
+    the four harnesses, so nothing else would notice it missing. Absent, the
+    lane is SKIPPED with a row saying so, rather than left to fail at create
+    with an opaque "acp adapter not ready". `--force-acp-claude` runs it anyway,
+    for a bridge that is installed somewhere PATH does not reach.
+
 Usage:
     python3 dispatch/scripts/fresh-install-smoke.py                # all detected providers
     python3 dispatch/scripts/fresh-install-smoke.py --providers codex,pi
@@ -30,7 +46,8 @@ Usage:
     python3 dispatch/scripts/fresh-install-smoke.py --setup-fix    # run `qd setup --fix` first
 
 Exit: 0 = every check passed, 1 = at least one FAIL, 2 = could not even start
-(no `qd` on PATH, unusable `qd setup --json`).
+(no `qd` on PATH, unusable `qd setup --json`, no harness to test). A SKIP never
+moves the exit code — a lane this machine cannot host is not a failure of qd.
 
 Every session it creates is named `<prefix>-*` (default prefix `qdsmoke`) and is
 stopped on the way out, including on Ctrl-C — `--keep` leaves them for
@@ -77,26 +94,47 @@ HARNESS_TO_PROVIDER = {
 # spoken to over ACP — so it is derived from the claude harness rather than
 # detected. Daemon-only; opt out with --no-acp-claude.
 #
-# Carried as a (provider, extra-flags) pair rather than a provider string,
-# because naming this lane now takes a FLAG: `--provider claude-code --acp`.
-# While ACP was a harness the id said both halves at once.
+# Carried as a `<program>+<mode>` label rather than a provider string, because
+# how you NAME this lane on the command line is build-dependent (see
+# `probe_acp_spelling`) while the lane itself is not. The label is this script's
+# own vocabulary; `provider_argv` turns it into whatever argv this qd takes.
 ACP_CLAUDE = "claude-code+acp"
 
+# The program qd spawns to reach claude over ACP (`provider/claude/acp.rs::
+# BRIDGE_BIN`). Not a harness — `qd setup --json` reports claude/codex/pi/
+# opencode and nothing about this — which is why the script probes for it.
+#
+# Its announced successor `claude-agent-acp` deliberately does NOT count here:
+# it is reachable only behind `qd acp-daemon --bridge-cmd`, and every
+# create/resume path still resolves BRIDGE_BIN. Probing for the one qd would
+# actually spawn is the point; accepting the other would be a false green.
+ACP_CLAUDE_BRIDGE = "claude-code-acp"
 
-def provider_argv(provider: str) -> list[str]:
+# How `qd start` accepts the ACP lane. Two spellings, both live: `--acp` is the
+# one current builds advertise, `acp/<program>` the pre-rename provider id that
+# still parses (deliberately kept, just no longer advertised).
+ACP_SPELLING_FLAG, ACP_SPELLING_LEGACY = "flag", "legacy"
+
+
+def provider_argv(provider: str, acp_spelling: str = ACP_SPELLING_FLAG) -> list[str]:
     """The `--provider …` argv naming a lane, from this script's label for it.
 
-    Every label but one is a bare provider id and expands to two words. The
-    derived claude-ACP entry is `claude-code+acp` and expands to three, because
-    naming that lane takes a program AND a topology flag — `--provider
-    claude-code --acp`. While ACP was modelled as a harness the provider id said
-    both halves at once, which is exactly the conflation the lane model undid.
+    Every label but the ACP ones is a bare provider id and expands to two words.
+    A `<program>+<mode>` label names a lane, and expands to whichever spelling
+    `acp_spelling` says this build takes — `--provider claude-code --acp` on a
+    build that registers the flag, `--provider acp/claude-code` on one that
+    predates it. Both reach the same lane; only the wording moved.
+
+    The spelling is a parameter rather than a constant precisely so that this
+    function stays a pure translation and the QUESTION of which one this binary
+    takes is asked once, in preflight, where its answer gets reported.
     """
     program, _, mode = provider.partition("+")
-    argv = ["--provider", program]
-    if mode:
-        argv.append(f"--{mode}")
-    return argv
+    if not mode:
+        return ["--provider", program]
+    if acp_spelling == ACP_SPELLING_LEGACY:
+        return ["--provider", f"{mode}/{program}"]
+    return ["--provider", program, f"--{mode}"]
 
 # The mux client's detach key, Ctrl+\ (`qrmux/src/client/mod.rs::DETACH_KEY`).
 DETACH_KEY = b"\x1c"
@@ -298,6 +336,13 @@ class Smoke:
         self.workdir = args.cwd
         # Filled by preflight — see `probe_start_detach`.
         self.detach_argv: list[str] = []
+        # Filled by preflight — see `probe_acp_spelling` and `probe_acp_bridge`.
+        self.acp_spelling: str = ACP_SPELLING_FLAG
+        self.acp_bridge: str | None = None
+        # Lanes this machine cannot host, dropped before they were ever started.
+        # Kept so `run` can tell "nothing to test" from "nothing DETECTED", which
+        # are different verdicts and different exit codes.
+        self.skipped_lanes: list[str] = []
 
     # -- helpers -------------------------------------------------------------
 
@@ -458,11 +503,18 @@ class Smoke:
             output=out,
         )
         self.probe_start_detach()
+        self.probe_acp_spelling()
+        self.probe_acp_bridge()
         return facts
 
     def providers_from(self, facts: dict) -> list[str]:
+        # An explicit --providers is an instruction, not a guess, so it is taken
+        # as given — except for the one lane that needs a program nobody probed
+        # for. Asking for a lane whose bridge is not installed still cannot pass,
+        # and a FAIL there would name qd for the machine's missing npm package.
         if self.args.providers:
-            return [p.strip() for p in self.args.providers.split(",") if p.strip()]
+            requested = [p.strip() for p in self.args.providers.split(",") if p.strip()]
+            return [p for p in requested if self.lane_is_hostable(p)]
         found = []
         for h in facts.get("harnesses", []):
             if not h.get("found"):
@@ -480,10 +532,29 @@ class Smoke:
                 f"{h.get('version') or 'version unknown'} at {h.get('path') or 'unknown path'}",
             )
         # claude's ACP lane rides the claude binary rather than a harness row of
-        # its own, so it is derived, never detected.
-        if "claude-code" in found and not self.args.no_acp_claude:
+        # its own, so it is derived, never detected. Two programs make that lane,
+        # though, and only one of them is a harness: the bridge is checked here
+        # (see `probe_acp_bridge`) so the lane is only derived when the machine
+        # can actually host it.
+        if "claude-code" in found and not self.args.no_acp_claude and self.lane_is_hostable(ACP_CLAUDE):
             found.append(ACP_CLAUDE)
         return found
+
+    def lane_is_hostable(self, provider: str) -> bool:
+        """Does this machine have everything this lane needs, beyond the harness?
+
+        True for every lane but one. The claude ACP lane is the exception because
+        it is the only one whose second program — the bridge — is invisible to
+        `qd setup`, so nothing else in this script would notice it missing and
+        the lane would fail at create for a reason that is not qd's.
+
+        `--force-acp-claude` overrides, for a bridge that IS installed but not
+        where PATH looks: the answer then is the run itself, not this guess.
+        """
+        if provider != ACP_CLAUDE or self.acp_bridge or self.args.force_acp_claude:
+            return True
+        self.skipped_lanes.append(provider)
+        return False
 
     def probe_start_detach(self):
         """Ask `qd start --help` how THIS build spells "do not take my terminal".
@@ -517,6 +588,96 @@ class Smoke:
             PASS if rc == 0 else FAIL, detail if rc == 0 else f"qd start --help exit {rc}",
         )
 
+    def probe_acp_spelling(self):
+        """Ask `qd start --help` how THIS build spells the ACP lane.
+
+        Same reasoning as `probe_start_detach`, for a rename rather than a
+        default: ACP used to be modelled as a HARNESS, so the provider id said
+        both the program and the transport (`--provider acp/claude-code`); it is
+        a LANE now, so the program is `claude-code` and the lane is `--acp`.
+
+        Both spellings reach the same lane on a current build — the old one is
+        deliberately kept parsing, just not advertised — while a qd from before
+        the rename knows only the old one and answers the new one with `error:
+        unknown option '--acp'`. Reading the spelling off `--help` is what keeps
+        ONE script working across the rename: hard-coding either turns a merely
+        out-of-date binary into two flat FAILs on start that read like a broken
+        product, which is the exact confusion this preflight exists to prevent.
+
+        A build advertising NEITHER is reported rather than silently guessed at,
+        as with the detach flag — but louder, because there is no safe fallback
+        here: the detach probe's third case can still start bare, whereas this
+        one has no wording left that is known to work.
+        """
+        rc, out, err, _to = self.qd_pipe("start", "--help", timeout=30)
+        text = out + err
+        # `--acp` and not `--acp-…`: the flag itself, not a longer one that
+        # happens to start the same way.
+        if re.search(r"--acp(?![-\w])", text):
+            self.acp_spelling, status = ACP_SPELLING_FLAG, PASS
+            detail = "`--provider claude-code --acp` (the lane has its own flag)"
+        elif "acp/claude-code" in text:
+            self.acp_spelling, status = ACP_SPELLING_LEGACY, PASS
+            detail = ("`--provider acp/claude-code` (pre-rename build: this qd has no "
+                      "--acp flag, so the lane is named the old way)")
+        else:
+            self.acp_spelling, status = ACP_SPELLING_FLAG, WARN
+            detail = ("neither `--acp` nor `acp/claude-code` is documented — this build may "
+                      "not have the lane at all; naming it `--acp` and letting start speak")
+        self.report.record(
+            "preflight", "", "start's ACP lane spelling",
+            status if rc == 0 else FAIL, detail if rc == 0 else f"qd start --help exit {rc}",
+        )
+
+    def probe_acp_bridge(self):
+        """Is the claude ACP lane's OTHER program installed?
+
+        The lane is claude reached over the Agent Client Protocol, and qd does
+        not speak that to the claude binary directly — it spawns a bridge
+        (`ACP_CLAUDE_BRIDGE`) and talks to that. `qd setup --json` reports the
+        four HARNESS programs and knows nothing about the bridge, so the lane can
+        be derived from a perfectly healthy claude harness and still have no way
+        to run.
+
+        Without this probe that ends as a 30s timeout and an opaque "acp adapter
+        not ready" FAIL — which reads as a product bug and is not one. Resolved
+        the way a shell would, so it finds the bridge wherever the user's npm
+        actually put it, and no further: a bridge outside PATH is what
+        `--force-acp-claude` is for.
+        """
+        if not self.acp_lane_requested():
+            return
+        self.acp_bridge = shutil.which(ACP_CLAUDE_BRIDGE)
+        if self.acp_bridge:
+            self.report.record(
+                "preflight", ACP_CLAUDE, "acp bridge installed", PASS,
+                f"{ACP_CLAUDE_BRIDGE} at {self.acp_bridge}",
+            )
+        elif self.args.force_acp_claude:
+            self.report.record(
+                "preflight", ACP_CLAUDE, "acp bridge installed", WARN,
+                f"no `{ACP_CLAUDE_BRIDGE}` on PATH — testing the lane anyway "
+                "(--force-acp-claude), so a create failure may be the missing bridge",
+            )
+        else:
+            self.report.record(
+                "preflight", ACP_CLAUDE, "acp bridge installed", SKIP,
+                f"no `{ACP_CLAUDE_BRIDGE}` on PATH — the lane exists, its bridge is not "
+                "installed: `npm i -g @zed-industries/claude-code-acp`, or "
+                "--force-acp-claude if it lives off PATH",
+            )
+
+    def acp_lane_requested(self) -> bool:
+        """Is the claude ACP lane in play at all for this run?
+
+        Asked so the bridge probe stays SILENT when the lane was already opted
+        out of: a row explaining a missing bridge for a lane nobody is testing is
+        noise, and a second reason to skip is not more information.
+        """
+        if self.args.providers:
+            return any(p.strip() == ACP_CLAUDE for p in self.args.providers.split(","))
+        return not self.args.no_acp_claude
+
     # -- human lane ----------------------------------------------------------
 
     def human_lane(self, provider: str):
@@ -533,7 +694,8 @@ class Smoke:
         # so that start and attach stay two separately-attributable checks — a
         # start that attached would fold any attach failure into its exit code.
         rc, out, to = self.qd_tty(
-            "start", name, *provider_argv(provider), "--cwd", self.workdir, *self.detach_argv,
+            "start", name, *provider_argv(provider, self.acp_spelling),
+            "--cwd", self.workdir, *self.detach_argv,
             timeout=self.args.start_timeout,
         )
         self.report.record(
@@ -662,7 +824,8 @@ class Smoke:
         # and --interactive would select a DIFFERENT topology there, so it is
         # passed for exactly one provider.
         extra = ["--interactive"] if provider == "claude-code" else []
-        argv = ["start", name, *provider_argv(provider), "--cwd", self.workdir, "--json", *extra]
+        argv = ["start", name, *provider_argv(provider, self.acp_spelling),
+                "--cwd", self.workdir, "--json", *extra]
         self.created.append(name)  # see the human lane: a failed start can still leave one live
         rc, out, err, to = self.qd_pipe(*argv, agent_marker=marker, timeout=self.args.start_timeout)
         # The EXIT CODE is the cross-lane contract (help::START: 0 ready, 10 created
@@ -772,6 +935,17 @@ class Smoke:
             return 2
         providers = self.providers_from(facts)
         if not providers:
+            # An empty provider list has two causes and they are not the same
+            # verdict. Nothing DETECTED means this install cannot be smoked at
+            # all (exit 2, "could not even start"). Everything asked for having
+            # been SKIPPED — a lane whose bridge is not installed — is a run with
+            # nothing to do, and a skip never fails a run.
+            if self.skipped_lanes:
+                print(f"\nNothing left to test: {', '.join(self.skipped_lanes)} skipped "
+                      "(see preflight). Not a failure — install what the lane needs, "
+                      "or pass --force-acp-claude.", flush=True)
+                self.summarize()
+                return 1 if self.report.failed() else 0
             print("\nNo agent harnesses detected — nothing to smoke. "
                   "Install one (claude, codex, pi, opencode) and re-run.", flush=True)
             self.summarize()
@@ -841,6 +1015,10 @@ def parse_args(argv=None):
                         "in-session agent carries (driver.rs: the marker beats the TTY)")
     p.add_argument("--no-acp-claude", action="store_true",
                    help="skip the derived claude-code/acp lane")
+    p.add_argument("--force-acp-claude", action="store_true",
+                   help="test the claude-code+acp lane even when its bridge "
+                        "(claude-code-acp) is not on PATH — for a bridge installed "
+                        "somewhere PATH does not reach")
     p.add_argument("--keep", action="store_true", help="do not stop sessions left behind by failures")
     p.add_argument("--json-report", metavar="PATH", help="also write the checks as JSON")
     p.add_argument("--verbose", "-v", action="store_true", help="print command output for passing checks too")

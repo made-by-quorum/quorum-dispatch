@@ -50,16 +50,21 @@ use crate::relay_server::RelayServer;
 /// `initialize` result (NOT inside capabilities). This is the ONLY thing a cold
 /// claude session is told about the relay before it has to use it.
 ///
-/// ── THE FIRST HALF IS FROZEN, THE SECOND HALF IS OURS (punch R9) ────────────
-/// Everything up to "…ping-pong two sessions forever." is server.ts:88 verbatim
-/// — the bun reference server's wording, decoded byte-for-byte from the frozen
-/// handshake fixture (666 chars). It explains how to ANSWER: the `<channel>`
-/// envelope, the `reply` tool, what happens when `reply` errors, and the
-/// loop-prevention rule. It is not edited; CC depends on that behavior contract
-/// and any drift in it is an interop break. (NOTE: the fixture metadata
-/// `critical_fields.instructions.length: 753` is INACCURATE — it matches neither
-/// the decoded string (666) nor the raw JSON-escaped form (684); the content is
-/// the contract and it matches exactly.)
+/// ── THE FIRST HALF CAME FROM BUN, THE SECOND HALF IS OURS (punch R9) ────────
+/// Everything up to "…ping-pong two sessions forever." came from server.ts:88
+/// verbatim — the bun reference server's wording, decoded byte-for-byte from
+/// the frozen handshake fixture (666 chars). It explains how to ANSWER: the
+/// `<channel>` envelope, the `reply` tool, what happens when `reply` errors,
+/// and the loop-prevention rule. Its BEHAVIOR contract is not edited; CC
+/// depends on that contract and any drift in it is an interop break. The two
+/// COMMAND NAMES in it were repointed — `qd send:relay [--wait]` → `qd send
+/// [--wait]` — when the split-channel send verbs were deprecated in favour of
+/// bare `qd send`. A sender still blocks in the same long poll that the `reply`
+/// tool resolves; this renames the door without moving it, and the old name
+/// would have taught every cold session a deprecated command. (NOTE: the
+/// fixture metadata `critical_fields.instructions.length: 753` is INACCURATE —
+/// it matches neither the decoded string (666) nor the raw JSON-escaped form
+/// (684); the content is the contract and it matches exactly.)
 ///
 /// R9 appends the missing half. The frozen text never says peers EXIST, so a
 /// session that had not been messaged first had no way to discover one or to
@@ -71,7 +76,7 @@ use crate::relay_server::RelayServer;
 /// macro rather than a `const`.
 ///
 /// ── WHAT THAT COST, AND HOW IT WAS SETTLED ──────────────────────────────────
-/// The string is 871 chars and no longer equal to the frozen fixture's
+/// The string is 859 chars and no longer equal to the frozen fixture's
 /// `instructions` value, nor to what `~/work/cc-relay/server.ts` emitted. Both
 /// live OUTSIDE this repo and could not be updated in lockstep, so R9 shipped by
 /// narrowing the checks that compared against them to prefix-equality — a real
@@ -90,12 +95,12 @@ use crate::relay_server::RelayServer;
 /// still read for protocol SHAPE where it exists; it no longer gets a vote on
 /// this string.
 pub const INSTRUCTIONS: &str = concat!(
-    "Messages from other sessions arrive as <channel source=\"relay\" from_session=\"...\" message_id=\"...\">. To respond, call the reply tool with your full response and the message_id. The tool delivers to a sender blocked in 'qd send:relay --wait', or otherwise posts your reply to the origin session as a new channel message marked [REPLY to <message_id>]. If the tool returns an error, your reply did NOT reach anyone — send a fresh message instead (qd send:relay <session>) and restate your substance. NEVER call the reply tool on a message whose text begins with \"[REPLY to\" — that is a delivered reply, not a request; replying to it can ping-pong two sessions forever. ",
+    "Messages from other sessions arrive as <channel source=\"relay\" from_session=\"...\" message_id=\"...\">. To respond, call the reply tool with your full response and the message_id. The tool delivers to a sender blocked in 'qd send --wait', or otherwise posts your reply to the origin session as a new channel message marked [REPLY to <message_id>]. If the tool returns an error, your reply did NOT reach anyone — send a fresh message instead (qd send <session>) and restate your substance. NEVER call the reply tool on a message whose text begins with \"[REPLY to\" — that is a delivered reply, not a request; replying to it can ping-pong two sessions forever. ",
     quorum_qw::how_to_reach_peers!()
 );
 
 /// The verbatim `reply` tool description (server.ts:96 / fixture line 96).
-const REPLY_TOOL_DESCRIPTION: &str = "Reply to a message from another Claude session. Delivers to a sender waiting in qd send:relay --wait, or posts the reply back to the origin session as a new channel message. Returns an error (with guidance) when neither delivery path works — the reply has NOT reached anyone in that case.";
+const REPLY_TOOL_DESCRIPTION: &str = "Reply to a message from another Claude session. Delivers to a sender waiting in qd send --wait, or posts the reply back to the origin session as a new channel message. Returns an error (with guidance) when neither delivery path works — the reply has NOT reached anyone in that case.";
 
 const SHUTDOWN_TOOL_DESCRIPTION: &str = "Finish a self-wrap prepared by `qd wrap <name>`. Writes pending-adopt state, prints the complete manual qrmux restart command to the operator's terminal, returns that command here as a fallback, and only then attempts to terminate this Claude Code process. Never restarts automatically.";
 
@@ -768,13 +773,14 @@ mod tests {
             instr.starts_with("Messages from other sessions"),
             "instructions prefix: {instr}"
         );
-        // The DECODED instructions string is 871 chars: the fixture's 666-char
-        // answer half, verbatim, plus the space and the 204-char origination half
+        // The DECODED instructions string is 859 chars: the answer half (the
+        // fixture's 666 chars, less the 12 the `send:relay` → `send` command
+        // rename gave back), plus the space and the 204-char origination half
         // punch R9 appended (see the constant's docs for why it grew past the
         // fixture). NOTE: the fixture's `critical_fields.instructions.length: 753`
         // metadata field was already INACCURATE before R9 — it matched neither the
         // decoded string (666) nor the raw JSON-escaped form (684).
-        assert_eq!(instr.chars().count(), 871, "instructions char length");
+        assert_eq!(instr.chars().count(), 859, "instructions char length");
         // instructions must NOT be nested in capabilities.
         assert!(result["capabilities"]["instructions"].is_null());
     }
@@ -1427,14 +1433,15 @@ mod tests {
 
     #[test]
     fn instructions_const_is_the_frozen_answer_half_plus_the_r9_origination_half() {
-        // 871 = the 666-char server.ts:88 answer half (the frozen fixture's
-        // decoded value; its metadata `length: 753` is inaccurate — see the note
-        // on the constant), one joining space, and the 204-char shared
-        // origination wording R9 added. The count is pinned so a reword has to be
-        // a DECISION rather than a diff nobody measured.
-        assert_eq!(INSTRUCTIONS.chars().count(), 871);
-        // The answer half, unedited: same opening, same closing rule, same
-        // `[REPLY to` marker CC keys its loop-prevention on.
+        // 859 = the answer half (server.ts:88's 666 chars minus the 12 the
+        // `send:relay` → `send` rename gave back; the fixture metadata's
+        // `length: 753` was already inaccurate — see the note on the constant),
+        // one joining space, and the 204-char shared origination wording R9
+        // added. The count is pinned so a reword has to be a DECISION rather
+        // than a diff nobody measured.
+        assert_eq!(INSTRUCTIONS.chars().count(), 859);
+        // The answer half's contract, unedited: same opening, same closing
+        // rule, same `[REPLY to` marker CC keys its loop-prevention on.
         assert!(INSTRUCTIONS.starts_with("Messages from other sessions arrive as <channel"));
         assert!(INSTRUCTIONS.contains("ping-pong two sessions forever."));
         assert!(INSTRUCTIONS.contains("[REPLY to"));

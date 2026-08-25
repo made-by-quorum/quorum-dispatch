@@ -92,6 +92,22 @@ pub trait DaemonSpawner {
     /// instance-addressed by the pgid OUR spawn created, never a name/pattern,
     /// L10). Used by the failure-cleanup path. The fake records the pid.
     fn kill(&self, pid: i64);
+
+    /// Has a daemon THIS spawner started already terminated? The readiness poll asks so it
+    /// can stop waiting on a daemon that is never going to answer.
+    ///
+    /// It is a spawner method because only the spawner can answer honestly: a detached
+    /// daemon is a direct child of this process, so once it exits it lingers as a ZOMBIE
+    /// until reaped — `kill(pid, 0)` (and every liveness probe built on it) still says
+    /// "alive". `waitpid(WNOHANG)` is the test that is not fooled, and it works only for
+    /// the parent.
+    ///
+    /// The default is `false` — "not known to have exited" — which reproduces the
+    /// pre-existing behaviour of waiting out the readiness budget. Test fakes hand back
+    /// canned pids for processes they never spawned, so they inherit it and are unaffected.
+    fn has_exited(&self, _pid: i64) -> bool {
+        false
+    }
 }
 
 /// The outcome of a daemon-hosted kill (always success — even the already-dead seal is
@@ -222,6 +238,20 @@ impl DaemonSpawner for RealDaemonSpawner {
         Ok(SpawnedDaemon {
             pid: child.id() as i64,
         })
+    }
+
+    fn has_exited(&self, pid: i64) -> bool {
+        if pid <= 1 || pid > i32::MAX as i64 {
+            return false;
+        }
+        let mut status: libc::c_int = 0;
+        // SAFETY: WNOHANG never blocks, and `pid` is a child of THIS process (we spawned
+        // it with `Command::spawn`). r == pid: it exited (and is now reaped, which is the
+        // same zombie-defusing `reap_zombie` does on the kill path). r == 0: still
+        // running. r < 0: ECHILD — not our child, so we cannot know, and `false` keeps
+        // the caller waiting rather than declaring a live daemon dead.
+        let r = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
+        r == pid as i32
     }
 
     fn kill(&self, pid: i64) {

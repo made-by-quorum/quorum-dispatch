@@ -129,8 +129,9 @@ fn attach_codex_without_endpoint_is_daemon_redirect() {
         "names the daemon hosting reason, got: {err}"
     );
     assert!(
-        err.contains("qd send:relay cx"),
-        "redirect points at qd send:relay, got: {err}"
+        err.contains("qd send cx"),
+        "redirect points at qd send (send:relay is the hidden debug verb, and is \
+         refused outright for an acp row), got: {err}"
     );
     assert!(
         err.contains("qd resume cx"),

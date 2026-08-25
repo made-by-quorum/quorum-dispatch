@@ -5,6 +5,7 @@
 
 mod adopt;
 mod bootstrap;
+mod carrier;
 mod common;
 mod attach;
 mod dispositions;
