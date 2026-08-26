@@ -557,8 +557,8 @@ fn cmd_start() -> Command {
             long_flag(
                 "acp",
                 "Run the ACP bridge lane (claude-code/acp, opencode/acp) — a headless \
-                 resident driven over the Agent Client Protocol; drive it with `qd send`, \
-                 not `qd attach`",
+                 resident driven over the Agent Client Protocol with `qd send`. Only \
+                 opencode/acp has a server `qd attach` can open a viewer onto",
             )
             .conflicts_with("interactive")
             .conflicts_with("extension")

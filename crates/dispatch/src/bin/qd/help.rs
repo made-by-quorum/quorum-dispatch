@@ -93,12 +93,34 @@ bare/managed classification (`management` in JSON; `Mode` in the human table).
 /// which can be generated because the accept-set is all it says. A generated
 /// lane list could name the nine and say nothing about any of them, and what
 /// they do is the entire content of this page.
+///
+/// # And it happened a SECOND time, to `opencode/acp`
+///
+/// The lane rows are what the page needed, and they still went stale — because
+/// two of them were WRITTEN as one. `opencode/acp` shared a row with
+/// `claude-code/acp` reading "nothing to attach, in ANY state … Refused (exit
+/// 1), and never revived", on the reasoning that ACP is headless by
+/// construction. That reasoning is about the MODE, and it is wrong about this
+/// lane: `opencode acp` is not a stdio bridge, it runs a full opencode HTTP
+/// server in-process, and `Lane::has_viewer` has answered `true` for
+/// `(Opencode, Acp)` since the viewer landed. `LaneImpl::attach_target` asks
+/// that predicate BEFORE the `is_daemon()` refusal, so the lane opens a
+/// `<session>.view` pane; `wake` has a real `(ClaudeCode | Opencode, Mode::Acp)`
+/// arm, so a cold one IS revived. `common::daemon_redirect`'s own doc had the
+/// refusing set right — `codex/daemon`, `pi/daemon`, `claude-code/acp` — while
+/// this page was still naming four.
+///
+/// The lesson is narrower than "keep the page fresh": a shared row asserts that
+/// two lanes answer the same, which is the one claim a per-lane table exists to
+/// stop anyone making by accident. Every lane gets its own row now, even when
+/// two would read alike.
 pub const ATTACH: &str = r####"Usage: qd attach [options] <session>
 
 Connect your terminal to a running agent session.
 
-Attach dispatches on the session's LANE, not on its provider, so one harness
-answers differently depending on how it was started:
+Attach dispatches on the session's LANE, not on its provider. Every harness IS
+attachable on its default lane — what varies is what you get, and the three
+lanes with nothing to hand over are all non-default ones:
 
   claude-code/mux-pane    the session's own TUI. Cold ⇒ revived, then attached
   pi/extension            the session's own pi TUI (pi's default lane). Cold ⇒
@@ -114,13 +136,21 @@ answers differently depending on how it was started:
                           (exit 1) — it has no rollout for a viewer to resume,
                           so send it a message first. Cold ⇒ the app server is
                           respawned, then the viewer opens
-  codex/daemon            a viewer, but only while the row still carries a live
+  opencode/acp            opencode's DEFAULT and only lane, and a viewer too:
+                          a second client on the opencode HTTP server that runs
+                          inside the ACP bridge, in a <session>.view pane. NO
+                          turn-zero refusal — a session that has taken no turn
+                          opens an empty, working viewer. Cold ⇒ the bridge is
+                          revived, then the viewer opens. Refused (exit 1) only
+                          for a session started before qd pinned opencode's
+                          port, whose bridge has no address to join; restart it
+  codex/daemon            a viewer, but only while the row still carries an
                           endpoint. Without one, refused (exit 1). Never revived
   pi/daemon               nothing to attach — refused (exit 1). Never revived
-  claude-code/acp         nothing to attach, in ANY state: an ACP bridge is
-  opencode/acp            headless by construction and has no terminal of its
-                          own. Refused (exit 1), and never revived — drive it
-                          with `qd send`, revive it with `qd resume`
+  claude-code/acp         nothing to attach, in ANY state: a claude ACP bridge
+                          is a stdio protocol adapter with no terminal and no
+                          server to join. Refused (exit 1), and never revived —
+                          drive it with `qd send`, revive it with `qd resume`
 
 A stopped session is refused (exit 1) whatever its lane: resume it first. So is
 an id shared by two live sessions — kill the duplicate first.
@@ -136,7 +166,7 @@ Options:
   -h, --help    display help for command
 
 --alt-screen and --inline are consumed by the REVIVE, so they are inert on a
-live attach, on every daemon lane, and on the codex viewer even when it opens a
+live attach, on every daemon lane, and on either viewer even when it opens a
 new pane. They bite only on a cold revive of claude-code/mux-pane,
 codex/mux-pane, pi/mux-pane or pi/extension.
 "####;
@@ -148,14 +178,32 @@ codex/mux-pane, pi/mux-pane or pi/extension.
 /// a pointer at the rest, and the pointer is `qd attach --help | cat` because a
 /// pipe is the signal that already resolves the driver to Agent.
 ///
-/// What it subtracts is the lane TAXONOMY. A person at a prompt has one
+/// What it subtracts is the per-harness table. A person at a prompt has one
 /// question — "will this give me a terminal, and if not, what do I type
-/// instead?" — so the three answers are grouped under the harness names they
-/// would recognise, and the three non-default lanes are left to the full page,
-/// named only by the flags that produce them. That grouping is a simplification
-/// the page ADMITS to ("started it with --daemon or --interactive? that changes
-/// the answer"), which is what keeps it short without making it the old lie
-/// again.
+/// instead?" — and for every harness on the lane a plain `qd start` makes, the
+/// answer to the first half is YES. So the page LEADS with that, and spends its
+/// remaining lines on the only case where the answer is no: the daemon lanes,
+/// which you reach by asking for them with `--daemon` or `--acp`.
+///
+/// # Why the harness-by-harness rows went away
+///
+/// They were a table of three answers keyed on harness name, and being keyed
+/// that way is what made them wrong: `opencode` sat under "nothing to attach
+/// to" for as long as its lane has had a viewer. Replacing it with a fourth row
+/// would have fixed the sentence and kept the shape that produced it — a shape
+/// whose whole premise, that the harness decides, [`ATTACH`]'s first line
+/// denies. The rule the page now states is TRUE of all four
+/// (`Harness::create_default_mode` → `claude-code/mux-pane`,
+/// `codex/app-server`, `pi/extension`, `opencode/acp`, every one attachable),
+/// and cannot rot per-harness because it is not written per-harness.
+///
+/// It keeps ONE softening, and deliberately: `codex/daemon` opens a viewer
+/// while its row still carries an endpoint. Omitting that would be the same
+/// over-flat claim in the other direction.
+///
+/// The four harness names survive as a list rather than as rows — which is also
+/// what `attach_human_view_names_every_startable_harness` requires, since it
+/// asks `Harness::ALL` whether this page names each one.
 ///
 /// A plain `const` where [`start_human`] is a `fn`, and deliberately: that one
 /// must be computed because it interpolates [`provider_list`]. Nothing on this
@@ -165,21 +213,19 @@ pub const ATTACH_HUMAN: &str = r####"Usage: qd attach [options] <session>
 
 Example: qd attach claude1
 
-Connect your terminal to a running session.
+Connect your terminal to a running session. Every harness can be attached to
+on the lane a plain `qd start` gives it — claude-code, codex, pi and opencode
+alike. What you get is that session's own terminal, or a viewer pane onto the
+server hosting it; either way, a cold session is revived first.
 
-What you get depends on how the session is hosted:
-  claude-code, pi   its own TUI. A cold session is revived first
-  codex             a viewer onto its app server, opened in a separate
-                    <session>.view pane — not the session's own terminal. Send
-                    it a message before attaching: a session that has not taken
-                    a turn yet has no rollout for a viewer to resume
-  opencode          nothing to attach to — its only lane is an ACP bridge,
-                    headless by construction. Drive it with `qd send`, revive
-                    it with `qd resume`
+The daemon lanes are the exception, and you only reach one by asking for it:
+`--daemon` (codex/daemon, pi/daemon) and `--acp` on claude-code. They are
+headless, with no terminal to hand over, so attach refuses — drive them with
+`qd send`, revive them with `qd resume`. (One softening: a live codex/daemon
+can still open a viewer.)
 
-Started it with --acp, --daemon or --interactive? That changes the answer —
-the full page lists every lane. A stopped session is refused whatever its
-lane: resume it first.
+A stopped session is refused whatever its lane: resume it first. The full page
+lists every lane and what each one answers.
 
 Options:
   --alt-screen  Fullscreen rendering, but only if this attach revives the
@@ -320,12 +366,16 @@ Options:
                          into. Redundant since the default moved, and kept so
                          existing scripts keep working and the lane can still be
                          named explicitly
-  --acp                  Run the ACP bridge lane — a headless resident driven
-                         over the Agent Client Protocol, with no terminal of its
-                         own: drive it with `qd send`, not `qd attach`. Spells
+  --acp                  Run the ACP bridge lane — a headless resident spoken to
+                         over the Agent Client Protocol and driven with
+                         `qd send` rather than by typing into a terminal. Spells
                          claude-code/acp (the same claude engine, reached through
                          the bridge instead of a pane) and opencode/acp (which is
                          opencode's ONLY lane, so there it names the default).
+                         `qd attach` answers differently for the two:
+                         claude-code/acp is a stdio adapter with nothing to
+                         attach, while opencode/acp runs an opencode server
+                         inside the bridge that attach opens a viewer onto.
                          Not available for codex or pi — no ACP adapter is wired
                          up for them in qd yet. Conflicts with --interactive,
                          --extension, --daemon and --app-server
