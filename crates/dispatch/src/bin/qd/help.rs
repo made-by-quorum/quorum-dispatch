@@ -349,9 +349,10 @@ Options:
                          does); this opts out and returns instead. Agent and
                          piped callers never attach in the first place, so the
                          flag is for the human who wants the old behaviour
-  --interactive          Force the interactive native-TUI launch (agent-marked
-                         callers must pass it: QD_SESSION_ID in the caller's env
-                         routes the auto-detect headless otherwise).
+  --interactive          Force the interactive native-TUI launch. On claude-code
+                         this is the DEFAULT for every caller — agent-marked and
+                         piped ones included — so passing it there is redundant
+                         and harmless; only --headless routes away from it.
                          With --provider codex or pi this selects a different
                          TOPOLOGY: that harness's plain TUI in an attachable
                          pane (`qd attach <name>`) — for codex instead of the

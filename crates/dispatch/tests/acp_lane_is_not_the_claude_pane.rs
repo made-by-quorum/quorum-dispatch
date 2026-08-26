@@ -12,13 +12,24 @@
 //! launch's path.
 //!
 //! The load-bearing consequence, and the one asserted below: the pane lane's
-//! driver route (`crate::driver::start_route`) refuses a bare agent/headless
-//! start with **"agent/headless start requires -p \<prompt\>"**, because a
-//! headless `claude -p ""` is a degenerate no-op turn. That sentence describes
+//! driver route (`crate::driver::start_route`) refuses a `--headless` start that
+//! carries no prompt with **"agent/headless start requires -p \<prompt\>"**,
+//! because the headless surface's whole payload was a `claude -p` turn and asking
+//! for it with no prompt names a degenerate no-op turn. That sentence describes
 //! nothing an ACP resident does — starting one bare is the ordinary thing an
 //! agent asks for — and `opencode/acp`, which has the IDENTICAL topology, was
 //! never refused. So the same request differed by harness where it should have
 //! differed by lane.
+//!
+//! # The control moved onto `--headless` (2026-08-26, ADR-0011 addendum)
+//!
+//! That refusal used to also catch a BARE agent start of the pane lane, and the
+//! control below was spelled as one. It is not any more: a detected agent caller
+//! (env marker or pipe) now takes the pane lane's ordinary create, the same one
+//! every other pane lane already gave it, and only an explicit `--headless` still
+//! reads the refusal. The control therefore passes `--headless` — the flag is now
+//! what summons the sentence, and summoning it is the control's entire job. The
+//! ACP probes stay BARE, because bare is the shape the regression was about.
 //!
 //! # Why the probe is shaped like this
 //!
@@ -37,17 +48,30 @@
 //! `assert_nothing_created` checks that rather than assuming it.
 //!
 //! `Command::output()` gives the child a NULL stdin, so `resolve_driver` answers
-//! `Driver::Agent` — the caller this whole regression is about. The pane control
-//! below proves that is really happening rather than assumed: if the child were
-//! somehow resolving `Driver::Human`, the control's expected refusal would not
-//! appear and the negative assertions would all pass vacuously.
+//! `Driver::Agent` — the caller this whole regression is about. That is no longer
+//! something the control can double-check for the ACP probes, because the driver
+//! no longer changes what a bare agent start of the PANE lane does; the control
+//! forces the driver with `--headless` instead and proves the route's existence.
+//! The ACP probes are still driven as agents, and the parity test is what keeps
+//! them from passing vacuously: two lanes cannot answer byte-identically by
+//! accident.
 //!
 //! # Mutation evidence
 //!
 //! Restore the old predicate — `let claude_pane = lane.harness ==
-//! Harness::ClaudeCode` in `lifecycle.rs::run_start` — and the two regression
-//! tests below RED while the pane control stays green, which is the split that
-//! says the file is measuring the lane and not the route's existence.
+//! Harness::ClaudeCode` in `lifecycle.rs::run_start` — and the PARITY test below
+//! REDs while the pane control stays green, which is the split that says the file
+//! is measuring the lane and not the route's existence: under the mutation the
+//! claude ACP start is walked up the pane launch's path and answers with that
+//! path's failure, while `opencode/acp` still answers the adapter spawn's.
+//!
+//! The no-prompt test's mutation sensitivity WEAKENED on 2026-08-26 (ADR-0011
+//! addendum) and this file states it rather than hiding it: since a detected
+//! agent's bare pane start creates instead of refusing, a mutated binary would
+//! walk the claude ACP start onto the pane path WITHOUT printing the refusal, so
+//! that test alone would stay green. It is kept because the refusal is what the
+//! bug actually printed and re-printing it must stay a failure; the parity test
+//! carries the mutation weight now.
 //!
 //! # The jail is rooted SHORT on purpose
 //!
@@ -65,7 +89,7 @@ fn qd_bin() -> &'static str {
     env!("CARGO_BIN_EXE_qd")
 }
 
-/// The pane lane's bare-agent refusal — the exact sentence the ACP lanes must
+/// The pane lane's no-prompt refusal — the exact sentence the ACP lanes must
 /// never read. Matched on its stable head rather than the whole paragraph, which
 /// carries re-entry advice that is free to be reworded.
 const PANE_NO_PROMPT_REFUSAL: &str = "agent/headless start requires -p <prompt>";
@@ -147,17 +171,22 @@ impl Drop for Jail {
     }
 }
 
-/// THE CONTROL, and it runs first for a reason: it proves the refusal this file
-/// is about is live in this build and that these probes really are resolving
-/// `Driver::Agent`. Without it every assertion below would pass on a binary that
-/// had simply deleted the route.
+/// THE CONTROL, and it is written first for a reason: it proves the refusal this
+/// file is about is live in this build, on this lane. Without it every assertion
+/// below would pass on a binary that had simply deleted the route.
+///
+/// `--headless` is what makes it a control now (see the module header). The flag
+/// forces `Driver::Agent` on its own, so this no longer doubles as proof that a
+/// NULL stdin detects one — but the ACP probes below need only reach the route,
+/// and this proves the route is still there and still answering with the sentence
+/// they are asserted never to read.
 #[test]
-fn a_bare_agent_start_of_the_claude_pane_is_still_refused_for_a_missing_prompt() {
+fn an_explicit_headless_start_of_the_claude_pane_is_still_refused_for_a_missing_prompt() {
     let jail = Jail::new("pane-control");
-    let (code, _out, err) = jail.start("claude-code", &[]);
+    let (code, _out, err) = jail.start("claude-code", &["--headless"]);
     assert!(
         err.contains(PANE_NO_PROMPT_REFUSAL),
-        "the claude PANE lane's bare-agent refusal must be unchanged; got: {err}"
+        "the claude PANE lane's --headless no-prompt refusal must be unchanged; got: {err}"
     );
     assert_eq!(code, 1, "the pane refusal exits 1; stderr was: {err}");
     jail.assert_nothing_created("a refused pane start");

@@ -27,8 +27,10 @@
 //! - **F2/C2 post-verify** (`lifecycle.ts:751-784`): after a no-failures reap, do
 //!   ONE presence scan for the session name across all dirs. A survivor means the
 //!   "success" would be a silent lie (e.g. a stale zmxName targeted the wrong
-//!   name) — exit 1 with an advisory. The hint uses `zmx ls`, NEVER `zmx kill`,
-//!   so we never direct the operator to kill an innocent same-named session.
+//!   name) — exit 1 with an advisory. The advisory names the socket dir and
+//!   NOTHING ELSE, so we never direct the operator to kill an innocent
+//!   same-named pane (and never at a backend-specific tool: the path fires under
+//!   the embedded qrmux default as well as the `QD_MUX=zmx` hatch).
 
 use quorum_core::effects::{Clock, Env};
 use quorum_core::exec::Exec;
@@ -895,18 +897,25 @@ pub fn reap_pane_session(d: &PaneReapDeps, session: &Session) -> PaneReapOutcome
         if still_there {
             let wrapper_still_alive =
                 target.wrapper_pid > 0 && crate::effects::is_pid_alive(target.wrapper_pid);
+            // FTUE punch R1 (zmx retirement) follow-through: these three strings
+            // are joined into `qd stop`'s `Could not reap: …` stderr, so they are
+            // USER-FACING and must not name the retired backend. None of them is
+            // zmx-only in the first place — fallback 3 sets `wrapper_pid` from the
+            // ENDED PANE'S tracked pid on the embedded backend too, and the
+            // `mux.kill` whose `code` this reports is whichever backend `QD_MUX`
+            // selected.
             failures.push(if wrapper_still_alive {
                 format!(
-                    "zmx wrapper \"{zmx_name}\" (pid {} still alive — leak)",
+                    "pane process for \"{zmx_name}\" (pid {} still alive — leak)",
                     target.wrapper_pid
                 )
             } else if target.zmx_dir_unconfirmed {
                 format!(
-                    "zmx wrapper \"{zmx_name}\" (pid {}, socket dir unknown — possible leak)",
+                    "pane process for \"{zmx_name}\" (pid {}, socket dir unknown — possible leak)",
                     target.wrapper_pid
                 )
             } else {
-                format!("zmx session \"{zmx_name}\" (zmx kill exit {code})")
+                format!("mux pane \"{zmx_name}\" (mux kill exit {code})")
             });
         }
     }

@@ -373,6 +373,161 @@ branch. If Pete later wants real acp/claude-code degrade-robustness, it is a
 scoped FUTURE effort behind clerk-4's gate (the lever), not a revert of this
 divergence.
 
+## Addendum (2026-08-26, qd-start-agent-default): a detected agent's `qd start` on the claude PANE lane CREATES
+
+`qd start <name>` on `claude-code/mux-pane` no longer refuses an auto-detected
+agent caller. A caller the surface detects as an agent — an agent env marker
+(`QD_SESSION_ID` / `CLAUDECODE`), or a pipe — now takes the interactive native-TUI
+create path, with or without `-p`, exactly as a human at a terminal does. An
+EXPLICIT `--headless` keeps both of the refusals it used to share with the
+auto-detect, byte-for-byte in their stable heads.
+
+**Why this is a flip and not a bug fix.** It was neither, when it was authored.
+WP-B-CS-1 (D2) routed `{Agent, has_prompt}` to a REAL second launch — a one-off
+`claude -p … --output-format stream-json` run — and `{Agent, no prompt}` to Fork
+B's refusal, because a headless `claude -p ""` is a degenerate no-op turn. The
+auto-detect was choosing between two LANES, and refusing the empty one was right.
+The P4DB drive-burn (§6) then removed the `-p` stream-json launch and replaced it
+with a teaching error. From that commit forward the claude pane lane had exactly
+ONE create path — Interactive — and the driver auto-detect was choosing only which
+of two ERRORS an agent read for asking to start a session. Every other pane lane
+in the fleet (`codex/mux-pane`, `pi/mux-pane`, `pi/extension`, and both ACP
+residents) already answered that same request by creating. So the divergence being
+removed here is between claude's pane lane and its own siblings.
+
+**Where the decision lives.** `bin/qd/driver.rs::start_route`, whose signature
+grew the caller's `DriverOverride`: `start_route(over, driver, has_prompt)`. That
+argument is the whole mechanism — `Driver::Agent` arrives two ways that used to be
+interchangeable (DETECTED, and DEMANDED via `--headless`) and the resolved driver
+alone cannot tell them apart. The call site in `verbs/lifecycle.rs::run_start`
+passes the same `DriverOverride::from_flags(headless_flag, interactive_flag)` value
+it already folds into `resolve_driver_real`, and stays gated behind `claude_pane`,
+so no other lane is touched. It is deliberately NOT implemented by setting
+`interactive_flag`: that flag also feeds `CreateTopology::Interactive`, which for
+codex/pi selects a different LANE (`Lane::for_create`).
+
+**What did NOT change: agents still never get a terminal.** `attaches_after_start`
+is still resolved with `DriverOverride::None` at the call site and still answers
+`false` for every `Driver::Agent`. An auto-detected agent now gets a created,
+tracked, attachable session and its exit code back; the mux pane stays where it
+was. That predicate carries MORE weight after this flip than before it — it is now
+the only thing between a bare `qd start` inside a Claude session and a pane that
+caller cannot leave — and its composed test
+(`agent_marked_interactive_start_does_not_attach`) is unchanged and still green.
+`-p` on the create path is likewise unchanged: it is delivered post-create by
+`deliver_prompt` under the 0/10/1 went-busy exit contract, not by a second launch.
+
+**Tests ADAPTED, not deleted** (the WP-B7 discipline: every pinned row that
+encoded the old behavior is rewritten to state the new one, with the reasoning in
+the doc comment):
+
+- `bin/qd/driver.rs` unit rows. `start_route_agent_with_prompt_is_headless` and
+  `start_route_agent_without_prompt_refuses` became
+  `start_route_explicit_headless_{with,without}_prompt_*` — the refusals are pinned
+  on the FLAG now. `agent_marker_at_tty_no_prompt_routes_to_refuse` became
+  `…_routes_to_the_create_path`, and asserts `Driver::Agent` explicitly so the flip
+  cannot be misread as the DETECT having gone soft. Net-new:
+  `start_route_detected_agent_creates_with_or_without_prompt` (the flip itself) and
+  `start_route_matrix` (all ten `{override × driver × prompt}` rows, including the
+  structurally-unreachable `(Interactive, Agent)` corner).
+- The **PTY-LANE PREMISE** carried by
+  `interactive_override_routes_to_interactive_even_with_agent_marker` is RETIRED,
+  and its doc comment says so rather than the assertions being forced. The premise
+  was that an agent-marked start without `--interactive` auto-routed to a route no
+  persistent fleet seat could ride, so every commissioned seat HAD to pass the
+  flag. It no longer has to. The test now pins what survives: the override remains
+  an honest escape hatch, so the prime recipe and every script that spells
+  `--interactive` keep landing on the create lane — through the override rather
+  than through the detect. Nothing in the fleet's recipes needs to change.
+- `tests/acp_lane_is_not_the_claude_pane.rs`. Its CONTROL — the probe whose job is
+  to prove the pane lane's refusal is live in the build under test, so the two ACP
+  assertions cannot pass vacuously — was a BARE pane start. Re-based on
+  `--headless`, which is what summons that sentence now. The file states honestly
+  that the no-prompt test's mutation sensitivity WEAKENED (a binary with the old
+  `lane.harness == ClaudeCode` predicate restored would walk the claude ACP start
+  onto the pane path without printing the refusal); the byte-identical PARITY test
+  carries the mutation weight now, and REDs under that same mutation.
+- `src/conformance/harness.rs`. The `Outcome::blocked` arm keyed on "does not spawn
+  one-off" is KEPT (defensive) with its comment narrowed: it fires only for an
+  explicit `--headless` now, since the harness's own piped caller takes the create.
+
+**Prose reconciled** (the refusal was stated as a RULE in five places):
+`driver.rs`'s `StartRoute` / `start_route` / `attaches_after_start` docs,
+`lifecycle.rs`'s route block and `claude_pane` binding comment, `help.rs`'s
+`--interactive` paragraph and `cli.rs`'s flag help (both stopped telling
+agent-marked callers they must pass it; both keep the codex/pi half, where the flag
+still names a different TOPOLOGY), and `scripts/fresh-install-smoke.py`'s module
+docstring + agent-lane comment (the script still passes `--interactive` for
+claude-code — redundant on that lane now, kept because it is what shipped recipes
+spell).
+
+**Known-stale, out of scope, named here so it is not lost.** Three documents
+outside `dispatch/` still teach the retired premise as a hard requirement:
+`frame/src/engine.rs` (the comment at the `--interactive` injection),
+`qc/corpus/skills/prime/SKILL.md` and its built `qc-plugin/skills/prime/SKILL.md`
+("`--interactive` is load-bearing, not a preference: an agent-marked context
+starting without it is refused"). The recipes they describe still WORK unchanged —
+`--interactive` is merely redundant on this lane now — so nothing is broken by
+leaving them; they are simply overstating. Reconciling them belongs to a qc-corpus
+pass, not to this one.
+
+**Revert.** Restore the driver-only signature (`start_route(driver, has_prompt)`)
+and its two agent arms. There is no env lever or flag guarding the flip — a
+context-derived default with an explicit escape hatch is the doctrine
+(S-B-COMMAND-SURFACE-RULINGS), and `--headless` IS the escape hatch.
+
+## Addendum (2026-08-26, qd-carrier-labels): `qd ls` and `qd info` stop naming zmx
+
+The two human-render surfaces that still printed the retired backend's name now
+name the PANE instead:
+
+| surface | was | is |
+|---|---|---|
+| `qd ls` wide table (`qd live`'s 12-column render) | `zmx` column header | `Pane` |
+| `qd info` text | `zmx:         <name> (attached)` | `Pane:        <name> (attached)` |
+| `qd info` text | `zmx dir:     <dir>` | `Pane dir:    <dir>` |
+
+**Why the label could not keep the name.** Both lines report the state of a MUX
+PANE, and both print under the embedded qrmux default as well as the `QD_MUX=zmx`
+escape hatch. Labelling them for one of the two backends was wrong even before
+FTUE punch R1 retired that backend from the help surface and the `resume` flags;
+R1 simply left these two behind. `Pane` is the term the rest of the surface
+already uses — `qd ls`'s Hosting column renders `mux-pane`, and every pane lane id
+is `*/mux-pane`.
+
+**What did NOT change.** The VALUES are untouched: the `qd ls` cells are still
+`attached` / `detached` / `-` with the same colorZmx colors (the helper is renamed
+`color_pane`, the TS reference kept in its doc), and `qd info` still renders the
+pane's own name, its attach state, `-` for a confirmed absence, and
+`unknown (mux list unavailable)` for a refused read. Label padding stays at the
+13-column gutter every other row uses, so nothing reflows. The `zmxName` /
+`zmxClients` JSON keys in `ls --json` and `info --json` are DELIBERATELY untouched:
+that is a machine-facing contract with consumers outside this repo, and renaming it
+is a breaking change that needs its own decision.
+
+**Goldens re-minted, and it is a TS-parity divergence.** `info-alpha.txt` was
+frozen hand-verified against TS `status.ts:629-634`, which spelled both labels for
+the backend. TWO goldens carry the info text and both were re-minted with
+`QD_REGEN_GOLDEN=1`: `info-alpha.txt` (the two label lines) and `info-codex.json`,
+which pins the codex row's human info text inside a JSON wrapper and carries the
+`Pane: -` row — a codex session has no pane, and `-` is the same confirmed-absence
+it always rendered. Each diff was verified to be EXACTLY the label lines — no
+value, order, padding or preview change. The
+`parity.rs` module header records the divergence at the golden itself, so a reader
+re-freezing it later does not "fix" the labels back. The wide `qd ls` table has no
+golden; its header is pinned by `wide_table_shows_stable_id_not_code`, which asserts
+on the `Id` column and is unaffected.
+
+**Still naming zmx, deliberately.** `qd info --json` / `qd ls --json` keys (above);
+`shell_init.rs`'s emitted `ZMX_DIR` export; `preflight.rs`'s "Failed to launch zmx
+— is it installed and on PATH?" (genuinely backend-specific and correct);
+`send:pty`'s refusal strings, `create.rs`'s attachability error, and
+`lifecycle.rs`'s `Session "X" is not in zmx.` — that last family is also pinned in
+prose by `GATE-C1.md` and belongs to a send/attach pass, not this one.
+
+**Revert.** Restore the four string literals (`"zmx"` header, `zmx:`/`zmx dir:`
+labels) and re-freeze the golden. Nothing else is load-bearing.
+
 ## Cross-references
 
 - LESSONS **L5** (boot-readiness EVENT) + **L9a** (HOME load-bearing for the jail) —

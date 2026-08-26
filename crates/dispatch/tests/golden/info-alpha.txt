@@ -3,8 +3,8 @@ Session ID:  live-aaaa-0001
 PID:         1001
 Status:      busy
 Provider:    claude-code
-zmx:         alpha-zmx (attached)
-zmx dir:     <ZMX>
+Pane:        alpha-zmx (attached)
+Pane dir:    <ZMX>
 Relay:       localhost:8901
 Turns:       2
 Tokens:      12.5k

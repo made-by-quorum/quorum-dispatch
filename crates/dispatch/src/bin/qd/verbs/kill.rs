@@ -14,8 +14,9 @@
 //!     victim (pid,start-time)-verified (punch item 8 — the grandchild gap),
 //!   - `ensure_tombstone` with the captured fallback (registry primitive),
 //!   - F1 env-file cleanup (best-effort),
-//!   - F2/C2 post-verify scan (a survivor → exit 1 advisory; the hint uses
-//!     `zmx ls`, NEVER `zmx kill` an unconfirmed target).
+//!   - F2/C2 post-verify scan (a survivor → exit 1 advisory; the advisory names
+//!     the socket dir and NOTHING ELSE — never a kill of an unconfirmed target,
+//!     and never a backend-specific tool, since this fires under both muxes).
 //!
 //! It was extracted because `LaneOps::kill` had nothing to delegate to while it
 //! was inlined here. What this verb kept is the part that is NOT a lane's: the
@@ -141,7 +142,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     // gets `claude-<id8>`. `reap_pane_session` consumes exactly those coordinates
     // (`resolve_zmx_target`'s `lookup_key` is `zmx_name.or(session_name)`), so
     // handing it the weaker row would silently demote fallback 1 to the ancestry
-    // fallback and stamp the success line `[zmx dir unconfirmed]`. On the one
+    // fallback and stamp the success line `[mux dir unconfirmed]`. On the one
     // DESTRUCTIVE verb that is not a trade worth making for a shorter function.
     //
     // It also keeps [`dispatch::kill::PidProvenance`] EXACTLY as it was, and that is
@@ -268,7 +269,7 @@ pub fn run(m: &ArgMatches) -> i32 {
     }
 
     if reap.nothing_to_kill {
-        eprintln!("Session is not in zmx and has no PID. Nothing to kill.");
+        eprintln!("Session is not in a mux pane and has no PID. Nothing to kill.");
         return 1;
     }
 
@@ -287,14 +288,17 @@ pub fn run(m: &ArgMatches) -> i32 {
 
     // Kill-verify (F2/C2, lifecycle.ts:751-784): the reap's post-verify scan found
     // the pane we targeted STILL PRESENT. A survivor means the "success" would be
-    // a silent lie — exit 1 with an advisory. The hint uses `zmx ls`, NEVER
-    // `zmx kill` (don't direct the operator to kill an innocent same-named
-    // session).
+    // a silent lie — exit 1 with an advisory. The advisory NAMES THE SOCKET DIR
+    // and stops there: it must never direct the operator at a kill of an innocent
+    // same-named pane, and it must not name a backend-specific tool either — this
+    // path fires under the embedded qrmux default as well as `QD_MUX=zmx`, and the
+    // old `ZMX_DIR=… zmx ls` hint was simply wrong advice under the default.
     if let Some(dir) = &reap.survivor_dir {
         let verify_name = reap.zmx_name.clone().unwrap_or_default();
         eprintln!(
-            "WARNING: zmx session \"{verify_name}\" still exists after kill (found in {dir}). \
-             Registry cleaned but zmx task was not reached. Verify with: ZMX_DIR={dir} zmx ls"
+            "WARNING: mux pane \"{verify_name}\" still exists after kill (found in {dir}). \
+             Registry cleaned but the pane was not reached. Inspect the socket dir {dir} \
+             to confirm before addressing that pane by hand."
         );
         return 1;
     }
@@ -332,25 +336,36 @@ pub fn run(m: &ArgMatches) -> i32 {
     }
 
     // W4 (ADD-15, Pete-verbatim format): ONE unambiguous success line naming all
-    // three identifier namespaces — registry name, zmx name, pid — `-` for absent
-    // fields. Replaces TS's namespace-ambiguous `Killed session "<label>".`
-    // (lifecycle.ts label = name || zmx || pid — the reader couldn't tell WHICH).
-    // ` [zmx dir unconfirmed]` keeps the zmxDirUnconfirmed honesty marker
+    // three identifier namespaces — registry name, mux pane name, pid — `-` for
+    // absent fields. Replaces TS's namespace-ambiguous `Killed session "<label>".`
+    // (lifecycle.ts label = name || pane || pid — the reader couldn't tell WHICH).
+    // ` [mux dir unconfirmed]` keeps the zmxDirUnconfirmed honesty marker
     // (lifecycle.ts:633-637 class): success is real (wrapper verified dead) but
     // the socket-dir claim stays honest. Failure paths above are byte-UNCHANGED.
+    //
+    // FTUE punch R1 (zmx retirement) follow-through: the middle field NAMES THE
+    // MUX PANE that was reaped (`ZmxReapTarget::zmx_name` — fallback 1's
+    // confirmed `pane.name`, fallback 2's ancestry-wrapper name, or fallback 3's
+    // ended-task name). It is NOT redundant with `reg_name` and the clause stays:
+    // an unnamed row's pane is `claude-<id8>`, a spacey/auto title is SANITISED by
+    // `derive_zmx_name`, and `-` here means the reap confirmed no pane at all.
+    // Only the retired backend's NAME leaves the line. `pane` is the term the
+    // rest of the surface already uses (`qd ls` Hosting = `mux-pane`, the
+    // `*/mux-pane` lane names in the help), and it is backend-neutral: this line
+    // prints for the embedded qrmux default as well as the `QD_MUX=zmx` hatch.
     let reg_name = session.name.clone().unwrap_or_else(|| "-".to_string());
-    let zmx_label = reap.zmx_name.clone().unwrap_or_else(|| "-".to_string());
+    let pane_label = reap.zmx_name.clone().unwrap_or_else(|| "-".to_string());
     let pid_label = if reap.pid > 0 {
         reap.pid.to_string()
     } else {
         "-".to_string()
     };
     let unconfirmed = if reap.zmx_name.is_some() && reap.zmx_dir_unconfirmed {
-        " [zmx dir unconfirmed]"
+        " [mux dir unconfirmed]"
     } else {
         ""
     };
-    println!("killed {reg_name} (zmx {zmx_label}, pid {pid_label}){unconfirmed}");
+    println!("killed {reg_name} (pane {pane_label}, pid {pid_label}){unconfirmed}");
     // Quiet by default: only a one-line summary when the sweep actually removed
     // stale dead-pid records (matches the verb's terse single-line output style).
     if cleaned > 0 {

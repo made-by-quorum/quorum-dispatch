@@ -17,11 +17,16 @@ between them (`bin/qd/driver.rs::resolve_driver`):
   agent  — a pipe (or `QD_SESSION_ID` in the env). `qd ls` auto-defaults to
            JSON, nothing ever attaches, and `qd send` is how work arrives.
 
-Per the ruling in `bin/qd/verbs/lifecycle.rs`, an agent-driven `qd start` on the
-CLAUDE-CODE lane is refused unless `--interactive` is passed (a bare agent start
-is a no-op turn; an agent start with `-p` is a one-off print run dispatch does
-not spawn). The agent lane below passes `--interactive` for claude-code and
-nothing else — if that refusal ever moves, this script is where it shows up.
+Per the routing in `bin/qd/driver.rs::start_route`, an agent-driven `qd start` on
+the CLAUDE-CODE lane takes the same interactive create a human gets. That has been
+true since 2026-08-26 (ADR-0011 addendum); before it, the same start was REFUSED
+unless `--interactive` was passed. Only an explicit `--headless` still refuses
+there — it names the one-off `claude -p` stream-json run dispatch does not spawn.
+The agent lane below passes `--interactive` for claude-code and nothing else:
+redundant on that lane now, kept because it is still the honest way to name the
+lane wanted and because every other provider would read it as a DIFFERENT
+topology. If the claude-code create ever moves again, this script is where it
+shows up.
 
 Two conditions are deliberately NOT reported as product failures, because they
 are facts about the MACHINE or the BUILD rather than about qd working:
@@ -817,12 +822,15 @@ class Smoke:
             output=out[:2000] + err,
         )
 
-        # lifecycle.rs: on the CLAUDE-CODE lane an agent-driven start is refused
-        # unless it names --interactive (a bare agent start is a no-op turn; an
-        # agent start with -p is a one-off print run dispatch will not spawn).
-        # Every other provider's default lane never consults the driver at all,
-        # and --interactive would select a DIFFERENT topology there, so it is
-        # passed for exactly one provider.
+        # driver.rs::start_route: on the CLAUDE-CODE lane an agent-driven start
+        # takes the interactive create, same as a human's — --interactive no longer
+        # buys anything there, and dropping it would smoke the same path. It is
+        # still passed, for exactly one provider, because that is what the shipped
+        # recipes spell and this script exists to smoke what users actually run.
+        # Every other provider's default lane never consults the driver at all, and
+        # --interactive would select a DIFFERENT topology there, so it stays off.
+        # (An explicit --headless WOULD still be refused on claude-code; this
+        # script never passes it.)
         extra = ["--interactive"] if provider == "claude-code" else []
         argv = ["start", name, *provider_argv(provider, self.acp_spelling),
                 "--cwd", self.workdir, "--json", *extra]

@@ -100,33 +100,90 @@ pub fn resolve_driver_real(over: DriverOverride, env: &dyn Env) -> Driver {
 
 /// The route `qd start` takes once its driver is resolved (WP-B-CS-1, D2). The
 /// pure decision the verb acts on — separated from the launch so the whole
-/// {driver × prompt} matrix is unit-testable without a real daemon/claude.
+/// {override × driver × prompt} matrix is unit-testable without a real
+/// daemon/claude.
+///
+/// Only the claude PANE lane (`claude-code/mux-pane`) consults this at all; every
+/// other lane returns above the route in `lifecycle.rs::run_start`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartRoute {
-    /// Human driver → today's interactive native-TUI create path, byte-unchanged.
-    /// (No prompt is required — the TUI is driven live.)
+    /// The interactive native-TUI create path — the ONLY route on this lane that
+    /// actually makes a session. Taken by a human, and (since 2026-08-26) by an
+    /// AUTO-DETECTED agent caller too: see [`start_route`] for why. A prompt is
+    /// optional either way — `-p` is delivered post-create by `deliver_prompt`
+    /// under the 0/10/1 went-busy exit contract, not by a different launch.
     Interactive,
-    /// Agent driver WITH a prompt → P4DB drive-burn: the one-off `claude -p`
-    /// stream-json launch this route once took is REMOVED. The route survives so the
-    /// {driver × prompt} matrix is unchanged, but `run_start` now answers it with a
-    /// routing-level teaching refusal (dispatch does not spawn one-off `-p`
-    /// stream-json runs).
+    /// EXPLICIT `--headless` WITH a prompt → P4DB drive-burn: the one-off `claude
+    /// -p … --output-format stream-json` launch this route once took is REMOVED.
+    /// The route survives as the answer `--headless` gets, and `run_start` answers
+    /// it with a routing-level teaching refusal (dispatch does not spawn one-off
+    /// `-p` stream-json runs). Nothing is spawned; exit 1.
     Headless,
-    /// Agent driver with NO prompt → Fork B teaching-error refusal: a headless
-    /// `claude -p ""` is a degenerate no-op turn, so a bare agent start with no
-    /// prompt is a usage error (agents that want work always pass `-p`).
+    /// EXPLICIT `--headless` with NO prompt → Fork B teaching-error refusal: the
+    /// headless surface's whole payload was a `claude -p` turn, so asking for it
+    /// without a prompt names a degenerate no-op turn. Nothing is spawned; exit 1.
+    /// Unreachable without the flag — a bare agent start creates now.
     RefuseNoPrompt,
 }
 
-/// Resolve the `qd start` route from the driver and whether a prompt was given
-/// (S-B-COMMAND-SURFACE-RULINGS + the D2/D3 SCOPE-RULING, Fork B). Human → the
-/// interactive create path (prompt optional). Agent → headless when a prompt is
-/// present, else [`StartRoute::RefuseNoPrompt`].
-pub fn start_route(driver: Driver, has_prompt: bool) -> StartRoute {
+/// Resolve the `qd start` route from the caller's explicit override, the resolved
+/// driver, and whether a prompt was given (S-B-COMMAND-SURFACE-RULINGS + the
+/// D2/D3 SCOPE-RULING, Fork B — as amended by ADR-0011's 2026-08-26 addendum).
+///
+/// # Why the OVERRIDE is an input and the driver alone is not
+///
+/// [`Driver::Agent`] arrives here two ways that used to be interchangeable and no
+/// longer are: **detected** (an agent env marker, or a pipe) and **demanded**
+/// (`--headless`). The resolved driver cannot tell them apart — that is the whole
+/// reason this function takes `over` as well.
+///
+/// # Why a DETECTED agent now creates
+///
+/// Both agent arms below are pure refusals: the P4DB drive-burn removed the
+/// one-off `claude -p` stream-json launch, so `Headless` spawns nothing and
+/// `RefuseNoPrompt` never did. Once that drive was gone the auto-detect was not
+/// choosing between two LANES any more — it was choosing which of two errors an
+/// agent read for asking to start a session, on the one lane in the fleet that
+/// answered that request with an error at all. Every other pane lane (codex's,
+/// pi's, both ACP residents) takes a bare agent start and creates. So the claude
+/// pane lane now does what its siblings do, and the refusals stay attached to the
+/// flag that actually asks for the burned surface.
+///
+/// This does NOT hand an agent a terminal. The post-create handoff is a separate
+/// decision — [`attaches_after_start`], resolved at the call site with
+/// [`DriverOverride::None`] precisely so no flag can force it — and it still
+/// answers `false` for every [`Driver::Agent`] caller. An auto-detected agent
+/// gets a created, tracked, attachable session and its exit code back; the mux
+/// pane stays where it was.
+///
+/// # The matrix
+///
+/// | `over` | `driver` | `has_prompt` | route |
+/// |---|---|---|---|
+/// | any | Human | either | [`StartRoute::Interactive`] |
+/// | [`DriverOverride::Headless`] | Agent | yes | [`StartRoute::Headless`] |
+/// | [`DriverOverride::Headless`] | Agent | no | [`StartRoute::RefuseNoPrompt`] |
+/// | [`DriverOverride::None`] | Agent | either | [`StartRoute::Interactive`] |
+///
+/// `(DriverOverride::Interactive, Driver::Agent)` is structurally unreachable —
+/// that override resolves to [`Driver::Human`] in [`resolve_driver`] — and falls
+/// into the same create arm a detected agent takes, which is where it would want
+/// to land anyway.
+pub fn start_route(over: DriverOverride, driver: Driver, has_prompt: bool) -> StartRoute {
     match driver {
         Driver::Human => StartRoute::Interactive,
-        Driver::Agent if has_prompt => StartRoute::Headless,
-        Driver::Agent => StartRoute::RefuseNoPrompt,
+        // DEMANDED: the caller typed `--headless`, so it is asking for the surface
+        // the drive-burn removed. Both answers are refusals, and the prompt only
+        // picks which one explains it.
+        Driver::Agent if over == DriverOverride::Headless => {
+            if has_prompt {
+                StartRoute::Headless
+            } else {
+                StartRoute::RefuseNoPrompt
+            }
+        }
+        // DETECTED: an env marker or a pipe. Create, like every other pane lane.
+        Driver::Agent => StartRoute::Interactive,
     }
 }
 
@@ -151,10 +208,14 @@ pub fn start_route(driver: Driver, has_prompt: bool) -> StartRoute {
 ///
 /// So the driver, which already answers "who is driving this invocation", is the
 /// input — and it is resolved with [`DriverOverride::None`] at the call site,
-/// NOT from `--interactive`. That is load-bearing: every commissioned agent seat
-/// starts with `qd start <name> --interactive` (the PTY-LANE PREMISE pinned by
-/// `interactive_override_routes_to_interactive_even_with_agent_marker` below),
-/// so letting that flag force an attach would attach *the whole fleet*.
+/// NOT from `--interactive`. That is load-bearing: the fleet's commissioning
+/// recipe still spells its seats `qd start <name> --interactive` (it no longer
+/// HAS to — see [`start_route`] — but it does, and every existing script keeps
+/// working), so letting that flag force an attach would attach *the whole fleet*.
+/// It is equally load-bearing the other way now that a bare agent start CREATES:
+/// this predicate is the only thing standing between an auto-detected agent and
+/// a mux pane it cannot leave, and it answers `false` for [`Driver::Agent`]
+/// unconditionally.
 ///
 /// `lane_attachable` is the fourth input because three of the nine lanes have no
 /// terminal at all (`codex/daemon`, `pi/daemon`, `acp/*`): for them the create is
@@ -331,61 +392,149 @@ mod tests {
     #[test]
     fn start_route_human_is_interactive_with_or_without_prompt() {
         // A human always takes the interactive create path; a prompt is optional
-        // (the TUI is driven live), never a refusal.
-        assert_eq!(start_route(Driver::Human, true), StartRoute::Interactive);
-        assert_eq!(start_route(Driver::Human, false), StartRoute::Interactive);
+        // (the TUI is driven live), never a refusal. The override is irrelevant on
+        // this row — a Human driver can only have come from `--interactive` or the
+        // auto-detect, and both create.
+        for over in [DriverOverride::None, DriverOverride::Interactive] {
+            assert_eq!(
+                start_route(over, Driver::Human, true),
+                StartRoute::Interactive
+            );
+            assert_eq!(
+                start_route(over, Driver::Human, false),
+                StartRoute::Interactive
+            );
+        }
     }
 
     #[test]
-    fn start_route_agent_with_prompt_is_headless() {
-        assert_eq!(start_route(Driver::Agent, true), StartRoute::Headless);
-    }
-
-    #[test]
-    fn start_route_agent_without_prompt_refuses() {
-        // Fork B: a bare agent/headless start with no -p is a usage error (a
-        // headless `claude -p ""` is a degenerate no-op turn).
+    fn start_route_explicit_headless_with_prompt_is_headless() {
+        // `--headless -p …` asks for the surface the P4DB drive-burn removed, so it
+        // gets the route whose only content is that refusal.
         assert_eq!(
-            start_route(Driver::Agent, false),
+            start_route(DriverOverride::Headless, Driver::Agent, true),
+            StartRoute::Headless
+        );
+    }
+
+    #[test]
+    fn start_route_explicit_headless_without_prompt_refuses() {
+        // Fork B, now scoped to the flag: `--headless` with no -p names a
+        // degenerate no-op turn (a headless `claude -p ""`).
+        assert_eq!(
+            start_route(DriverOverride::Headless, Driver::Agent, false),
             StartRoute::RefuseNoPrompt
         );
     }
 
-    /// END-TO-END (resolver → router): an agent env marker at a TTY with no prompt
-    /// routes to RefuseNoPrompt — the marker beats the TTY (Agent), then Fork B
-    /// refuses. FIX-SHAPED MUTATION: if `start_route`'s no-prompt arm regressed to
-    /// `Headless` (dropping Fork B) this flips to `Headless` and REDs.
+    /// THE FLIP (ADR-0011 addendum 2026-08-26). An agent caller the surface
+    /// DETECTED — env marker or pipe, no flag — creates, with or without a prompt.
+    ///
+    /// Both agent refusals became pure teaching errors when the drive-burn removed
+    /// the one-off `claude -p` stream-json launch, so the auto-detect was picking
+    /// which error an agent read for asking to start a session — on the one pane
+    /// lane in the fleet that answered that request with an error at all. FIX-SHAPED
+    /// MUTATION: reinstating the driver-only routing (`Driver::Agent if has_prompt`
+    /// ⇒ `Headless`, else `RefuseNoPrompt`) flips both rows here to refusals.
     #[test]
-    fn agent_marker_at_tty_no_prompt_routes_to_refuse() {
+    fn start_route_detected_agent_creates_with_or_without_prompt() {
+        assert_eq!(
+            start_route(DriverOverride::None, Driver::Agent, true),
+            StartRoute::Interactive
+        );
+        assert_eq!(
+            start_route(DriverOverride::None, Driver::Agent, false),
+            StartRoute::Interactive
+        );
+    }
+
+    /// END-TO-END (resolver → router): an agent env marker at a TTY with no prompt
+    /// routes to the CREATE path. The marker still beats the TTY (`Driver::Agent`,
+    /// asserted here so the flip is not read as the detect having gone soft) — it
+    /// is the ROUTE that changed, not the detection.
+    #[test]
+    fn agent_marker_at_tty_no_prompt_routes_to_the_create_path() {
         let driver = resolve_driver(DriverOverride::None, true, &agent_env("QD_SESSION_ID"));
-        assert_eq!(start_route(driver, false), StartRoute::RefuseNoPrompt);
+        assert_eq!(driver, Driver::Agent);
+        assert_eq!(
+            start_route(DriverOverride::None, driver, false),
+            StartRoute::Interactive
+        );
+        // …and the same context WITH the flag still reads both refusals, which is
+        // the half of the old premise that survives.
+        let demanded = resolve_driver(DriverOverride::Headless, true, &agent_env("QD_SESSION_ID"));
+        assert_eq!(
+            start_route(DriverOverride::Headless, demanded, false),
+            StartRoute::RefuseNoPrompt
+        );
+        assert_eq!(
+            start_route(DriverOverride::Headless, demanded, true),
+            StartRoute::Headless
+        );
     }
 
     /// END-TO-END: `--interactive` at a pipe with an agent marker present forces the
     /// interactive route (override beats both context signals) — a human escape
     /// hatch even from an agent-looking context.
     ///
-    /// PTY-LANE PREMISE (heir to frame's retired P4DB C3 source-canary; the
-    /// lifecycle collapse removed `frame commission` → `engine::start`, which
-    /// injected `--interactive` unconditionally): an agent-marked session
-    /// (QD_SESSION_ID/CLAUDECODE set) that starts WITHOUT `--interactive`
-    /// auto-routes to Headless — a route no persistent fleet seat can ride —
-    /// so every commissioned/relay/tracked agent start MUST pass
-    /// `--interactive` (the prime recipe does; frame's help documents it).
-    /// This composition (override → Human → Interactive) is the create lane
-    /// the whole fleet rides; if either half regresses, this REDs — and a
-    /// launch-time breakage of every primed agent is what it is reporting.
+    /// The PTY-LANE PREMISE this test used to carry is RETIRED (ADR-0011 addendum
+    /// 2026-08-26). It said an agent-marked session that started WITHOUT
+    /// `--interactive` auto-routed to `Headless` — a route no persistent fleet seat
+    /// could ride — so every commissioned/relay/tracked start HAD to pass the flag.
+    /// It no longer has to: a detected agent takes the same create path, asserted
+    /// in the converse half below. What is still true, and is what this test now
+    /// pins, is that the flag REMAINS an honest escape hatch — the prime recipe and
+    /// every script that spells `--interactive` keep landing on the create lane,
+    /// through the override rather than through the detect. If the override half
+    /// regresses, a launch-time breakage of every primed agent is what this reports.
     #[test]
     fn interactive_override_routes_to_interactive_even_with_agent_marker() {
         let driver = resolve_driver(DriverOverride::Interactive, false, &agent_env("CLAUDECODE"));
-        assert_eq!(start_route(driver, false), StartRoute::Interactive);
-        // The converse half of the premise, stated in the same place: the SAME
-        // agent-marked context WITHOUT the override routes away from the PTY
-        // lane (headless with a prompt, refused without) — dropping the flag
-        // from the recipe is never silently interactive.
+        assert_eq!(
+            start_route(DriverOverride::Interactive, driver, false),
+            StartRoute::Interactive
+        );
+        // The converse half, restated for what it now says: the SAME agent-marked
+        // context WITHOUT the override lands on the SAME route. Dropping the flag
+        // from a recipe is no longer a launch-time breakage — it is a no-op.
         let bare = resolve_driver(DriverOverride::None, false, &agent_env("CLAUDECODE"));
-        assert_eq!(start_route(bare, true), StartRoute::Headless);
-        assert_eq!(start_route(bare, false), StartRoute::RefuseNoPrompt);
+        assert_eq!(
+            start_route(DriverOverride::None, bare, true),
+            StartRoute::Interactive
+        );
+        assert_eq!(
+            start_route(DriverOverride::None, bare, false),
+            StartRoute::Interactive
+        );
+    }
+
+    /// The whole {override × driver × prompt} matrix in one place, including the
+    /// structurally-unreachable `(Interactive, Agent)` corner — pinned so a future
+    /// reader can see the arm it falls into rather than guessing.
+    #[test]
+    fn start_route_matrix() {
+        use DriverOverride::*;
+        let rows: &[(DriverOverride, Driver, bool, StartRoute)] = &[
+            (None, Driver::Human, true, StartRoute::Interactive),
+            (None, Driver::Human, false, StartRoute::Interactive),
+            (Interactive, Driver::Human, true, StartRoute::Interactive),
+            (Interactive, Driver::Human, false, StartRoute::Interactive),
+            (Headless, Driver::Agent, true, StartRoute::Headless),
+            (Headless, Driver::Agent, false, StartRoute::RefuseNoPrompt),
+            (None, Driver::Agent, true, StartRoute::Interactive),
+            (None, Driver::Agent, false, StartRoute::Interactive),
+            // Unreachable in production (`--interactive` ⇒ Driver::Human); it
+            // creates, which is where such a caller would want to land anyway.
+            (Interactive, Driver::Agent, true, StartRoute::Interactive),
+            (Interactive, Driver::Agent, false, StartRoute::Interactive),
+        ];
+        for (over, driver, has_prompt, want) in rows {
+            assert_eq!(
+                start_route(*over, *driver, *has_prompt),
+                *want,
+                "row ({over:?}, {driver:?}, has_prompt={has_prompt})"
+            );
+        }
     }
 
     // --- R19: attach-after-start (the post-create handoff decision) ---------
@@ -411,6 +560,10 @@ mod tests {
     /// `--interactive` override instead of [`DriverOverride::None`], every
     /// commissioned agent would be handed a mux pane it cannot leave. Compose the
     /// two halves here so the wiring, not just the predicate, is pinned.
+    ///
+    /// It matters MORE since the 2026-08-26 flip: a detected agent now reaches the
+    /// create instead of a refusal, so this predicate is the only thing left
+    /// between a bare `qd start` from inside a Claude session and that mux pane.
     #[test]
     fn agent_marked_interactive_start_does_not_attach() {
         let env = agent_env("QD_SESSION_ID");

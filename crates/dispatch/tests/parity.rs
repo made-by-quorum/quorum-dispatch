@@ -26,6 +26,17 @@
 //!   - Strays (`epsilon-stray`) are appended after the TS rows as
 //!     `status: "unmanaged"` objects (PROVISIONAL shape, render.rs).
 //!
+//! ## Sanctioned divergence: the `info-alpha.txt` carrier labels (2026-08-26)
+//!
+//! Two LABELS in `info-alpha.txt` no longer match the TS corpus they were frozen
+//! against: `zmx:` / `zmx dir:` are rendered `Pane:` / `Pane dir:` (status.ts:629-634
+//! spelled them for the backend). Only the labels moved — the VALUES, their order,
+//! the 13-column label padding and every other line are byte-unchanged, and the
+//! golden was re-minted for exactly those two lines. FTUE punch R1 retired zmx,
+//! and the line prints under the embedded qrmux default as well as the
+//! `QD_MUX=zmx` hatch, so the backend's name was the one thing the label could not
+//! keep saying. Recorded in ADR-0011.
+//!
 //! Re-freeze by running with `QD_REGEN_GOLDEN=1` (writes the files) and
 //! re-verifying by hand — expected at pass (b) when the fix-wave lands.
 

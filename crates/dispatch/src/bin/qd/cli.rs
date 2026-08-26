@@ -449,9 +449,17 @@ fn cmd_start() -> Command {
         ))
         // WP-B-CS-1 (D2): driver-mode overrides for the I/O-follows-who-drives
         // auto-detect. Absent ⇒ the context auto-detect runs (TTY + agent env
-        // markers); set ⇒ the override always wins. `--headless` forces the
-        // headless stream-json launch (agent surface); `--interactive` forces the
-        // native-TUI create path (human surface). Mutually exclusive at parse.
+        // markers); set ⇒ the override always wins. Mutually exclusive at parse.
+        //
+        // What each one still BUYS on `start` differs since the 2026-08-26 flip
+        // (ADR-0011 addendum, `driver.rs::start_route`): `--interactive` is now the
+        // claude-code create path for EVERY caller, so on that lane the flag is
+        // redundant — it stays load-bearing for codex/pi, where it names a lane.
+        // `--headless` is the only value that still changes what claude-code does,
+        // and what it does is refuse: the one-off `claude -p` stream-json launch it
+        // named was burned (P4DB), and the flag keeps its refusals so a caller that
+        // asked for that surface is told it is gone rather than quietly handed a
+        // different one.
         .arg(
             long_flag(
                 "headless",
@@ -469,9 +477,9 @@ fn cmd_start() -> Command {
         // of the control channel — the same pane, minus the socket.
         .arg(long_flag(
             "interactive",
-            "Force the interactive native-TUI launch (override the driver auto-detect). \
-             With --provider codex or pi, runs that harness's plain TUI in an attachable \
-             pane (no control channel)",
+            "Force the interactive native-TUI launch. Redundant on claude-code, where it \
+             is now the default for agent and piped callers too. With --provider codex or \
+             pi, runs that harness's plain TUI in an attachable pane (no control channel)",
         ))
         // pi/extension: pi's alone. Like --interactive it runs pi's own TUI in an
         // attachable pane; unlike --interactive the pane also carries a control

@@ -1028,9 +1028,12 @@ pub fn run_new(m: &ArgMatches) -> i32 {
     // harness: `claude-code/acp` answers `ClaudeCode` too. It is a headless
     // bridge-hosted resident — no pane, no mux, no `claude` argv, no composer to
     // type into — so every phase gated on this binding is one it must not enter.
-    // Each of them is the PANE launch's alone: the driver route below (a bare
-    // agent start of a RESIDENT is not a no-op turn and must not be refused as
-    // one), the QD_MUX preflight, `--via`, `--fork`, the trailing claudeArgs, and
+    // Each of them is the PANE launch's alone: the driver route below (whose
+    // surviving refusals answer an explicit `--headless`, a flag that names a
+    // launch shape a RESIDENT does not have — and which historically also caught
+    // a bare agent start, the regression `acp_lane_is_not_the_claude_pane.rs`
+    // was minted for), the QD_MUX preflight, `--via`, `--fork`, the trailing
+    // claudeArgs, and
     // the four post-create phases at the bottom — bind, relay-presence warning,
     // telemetry stamp, `-p` priming send. The ACP lane belongs with the other
     // daemon-hosted creates, which render one line and return; that is exactly
@@ -1070,54 +1073,70 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         lane.is_pane() || lane.is_app_server(),
     );
 
-    // --- WP-B-CS-1 (D2): driver auto-detect routing (claude PANE lane only) ----
-    // I/O mode follows who DRIVES (S-B-COMMAND-SURFACE-RULINGS). A HUMAN caller →
-    // today's interactive native-TUI create path. An AGENT caller → refused below.
-    // `--headless`/`--interactive` override the auto-detect. It runs ONLY for the
-    // claude PANE lane and it runs HERE, after the routing decision, because that
-    // is where the old chain reached it: the daemon/pane arms returned above it
-    // and never consulted the driver at all. `claude-code/acp` is one of those
+    // --- WP-B-CS-1 (D2): driver routing (claude PANE lane only) ---------------
+    // I/O mode follows who DRIVES (S-B-COMMAND-SURFACE-RULINGS). It runs ONLY for
+    // the claude PANE lane and it runs HERE, after the routing decision, because
+    // that is where the old chain reached it: the daemon/pane arms returned above
+    // it and never consulted the driver at all. `claude-code/acp` is one of those
     // arms: a daemon-hosted resident is precisely what an agent may start bare,
     // and `RefuseNoPrompt` — whose reason is that a headless `claude -p ""` is a
     // degenerate no-op turn — describes nothing that lane does.
     //
+    // What this block decides SHRANK on 2026-08-26 (ADR-0011 addendum). Both agent
+    // arms below are pure refusals — the P4DB drive-burn removed the one-off
+    // `claude -p` stream-json launch, so `Headless` spawns nothing and
+    // `RefuseNoPrompt` never did. That left the AUTO-DETECT choosing which of two
+    // errors an agent read for asking to start a session, on the one pane lane in
+    // the fleet that answered that request with an error at all. So a DETECTED
+    // agent (env marker or pipe) now falls through to the same create every other
+    // pane lane already gave it, and the two refusals stay bound to the flag that
+    // actually asks for the burned surface: `--headless`. Hence the override is
+    // passed to `start_route` as well as folded into the driver — the resolved
+    // `Driver::Agent` alone cannot tell "detected" from "demanded".
+    //
+    // An agent still never gets handed a mux pane: that is `attaches_after_start`
+    // above, resolved with `DriverOverride::None` and false for every agent.
+    //
     // `crate::driver` reads WHO IS DRIVING — a qd-binary fact, never a lane concern
     // — which is why it stays on this side of the call.
     if claude_pane {
+        let over = crate::driver::DriverOverride::from_flags(headless_flag, interactive_flag);
         match crate::driver::start_route(
-            crate::driver::resolve_driver_real(
-                crate::driver::DriverOverride::from_flags(headless_flag, interactive_flag),
-                &env,
-            ),
+            over,
+            crate::driver::resolve_driver_real(over, &env),
             prompt.is_some(),
         ) {
-            // Human → fall through to the create below (unchanged).
+            // Human, or an auto-detected agent → fall through to the create below.
+            // A `-p` given here is delivered POST-create by `deliver_prompt` under
+            // the 0/10/1 went-busy contract; it is not a second launch shape.
             crate::driver::StartRoute::Interactive => {}
-            // Fork B: a bare agent/headless start with no `-p` is a usage error (a
-            // headless `claude -p ""` is a degenerate no-op turn). Teach the working
-            // re-entry verbs.
+            // Fork B, now reachable only via an EXPLICIT `--headless`: the headless
+            // surface's whole payload was a `claude -p` turn, so asking for it with
+            // no `-p` names a degenerate no-op turn. Teach the shapes that work.
             crate::driver::StartRoute::RefuseNoPrompt => {
                 eprintln!(
-                    "qd start: agent/headless start requires -p <prompt> (a bare headless \
-                     start is a no-op turn). To re-enter an existing session use \
-                     \"qd resume <name>\" or \"qd attach <name>\"."
+                    "qd start: agent/headless start requires -p <prompt> (a bare --headless \
+                     start is a no-op turn). Drop --headless to create a tracked session, or \
+                     to re-enter an existing one use \"qd resume <name>\" or \
+                     \"qd attach <name>\"."
                 );
                 return 1;
             }
-            // Agent + prompt → P4DB drive-burn (§6): the vestigial `qd start`→headless
-            // lane spawned a one-off `claude -p … --output-format stream-json` run. That
-            // drive is REMOVED. Refuse at the routing level with a teaching error,
-            // consistent with A5PW's refuse-one-off-print philosophy (the E2 chokepoint
-            // at the top of this fn already refuses `-p`/`--print` in the trailing
-            // claudeArgs; this closes the remaining auto-detected agent-launch path).
-            // Nothing is spawned; nonzero exit.
+            // EXPLICIT `--headless` + prompt → P4DB drive-burn (§6): the vestigial
+            // `qd start`→headless lane spawned a one-off `claude -p … --output-format
+            // stream-json` run. That drive is REMOVED. Refuse at the routing level
+            // with a teaching error, consistent with A5PW's refuse-one-off-print
+            // philosophy (the E2 chokepoint at the top of this fn already refuses
+            // `-p`/`--print` in the trailing claudeArgs; this closes the remaining
+            // explicitly-requested agent-launch path). Nothing is spawned; nonzero exit.
             crate::driver::StartRoute::Headless => {
                 eprintln!(
-                    "qd start: dispatch does not spawn one-off `claude -p` stream-json runs. \
-                     For a one-off print run, invoke `claude -p \"<prompt>\"` directly. To start a \
-                     tracked, attachable session use an interactive start (`qd start <name> \
-                     --interactive`); to re-enter an existing session use `qd resume <name>` or \
-                     `qd attach <name>`."
+                    "qd start: dispatch does not spawn one-off `claude -p` stream-json runs, \
+                     which is what --headless asks for here. For a one-off print run, invoke \
+                     `claude -p \"<prompt>\"` directly. To start a tracked, attachable session \
+                     that receives this prompt, drop --headless (`qd start <name> \
+                     -p \"<prompt>\"`); to re-enter an existing session use `qd resume <name>` \
+                     or `qd attach <name>`."
                 );
                 return 1;
             }

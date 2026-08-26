@@ -1113,7 +1113,7 @@ fn render_table(sessions: &[Session]) -> String {
         "ID",
         "PID",
         "Status",
-        "zmx",
+        "Pane",
         "Relay",
         "Turns",
         "Tokens",
@@ -1188,8 +1188,12 @@ fn render_table(sessions: &[Session]) -> String {
             let status = s.status.as_str().to_string();
             let status_cell = Cell::new(status.clone(), color_status(s.status, &status));
 
-            // zmx: colorZmx (attached=cyan detached=yellow else dim).
-            let zmx_str = match &s.zmx_name {
+            // Pane: colorZmx (attached=cyan detached=yellow else dim). FTUE
+            // punch R1 (zmx retirement) follow-through — the column reports the
+            // mux PANE's attach state under either backend, so the header names
+            // the pane and not the retired one. The cell VALUES
+            // (attached/detached/-) and their colors are unchanged.
+            let pane_str = match &s.zmx_name {
                 Some(_) => {
                     if s.zmx_clients.unwrap_or(0) > 0 {
                         "attached".to_string()
@@ -1199,7 +1203,7 @@ fn render_table(sessions: &[Session]) -> String {
                 }
                 None => "-".to_string(),
             };
-            let zmx_cell = Cell::new(zmx_str.clone(), color_zmx(&zmx_str));
+            let pane_cell = Cell::new(pane_str.clone(), color_pane(&pane_str));
 
             // Relay: colorRelay (- → dim, else magenta).
             let relay_str = s
@@ -1225,7 +1229,7 @@ fn render_table(sessions: &[Session]) -> String {
                 Cell::plain_only(id),
                 Cell::plain_only(pid),
                 status_cell,
-                zmx_cell,
+                pane_cell,
                 relay_cell,
                 Cell::plain_only(s.turns.to_string()),
                 Cell::plain_only(format_tokens(s.tokens)),
@@ -1295,12 +1299,14 @@ fn color_status(st: SessionStatus, text: &str) -> String {
     }
 }
 
-/// colorZmx (utils.ts:159-165): attached=cyan detached=yellow else dim.
-fn color_zmx(z: &str) -> String {
-    match z {
-        "attached" => cyan(z),
-        "detached" => yellow(z),
-        _ => dim(z),
+/// colorZmx (utils.ts:159-165): attached=cyan detached=yellow else dim. The TS
+/// name is kept in the reference, the local one is not — the values it colors
+/// are a PANE's attach state under either mux backend.
+fn color_pane(p: &str) -> String {
+    match p {
+        "attached" => cyan(p),
+        "detached" => yellow(p),
+        _ => dim(p),
     }
 }
 
@@ -1779,6 +1785,27 @@ mod tests {
         assert!(row_for("claude-worker").starts_with("ab3 "), "{plain}");
         assert!(row_for("codex-worker").starts_with("ab4 "), "{plain}");
         assert!(row_for("no-code-row").starts_with("---"), "{plain}");
+    }
+
+    /// The wide table's carrier column is named for the PANE, not the retired
+    /// mux backend (ADR-0011, 2026-08-26). The CELLS are unchanged — this pins the
+    /// header alone, which is the whole of what moved. FIX-SHAPED MUTATION:
+    /// restoring the `"zmx"` header REDs both halves.
+    #[test]
+    fn wide_table_carrier_column_names_the_pane_not_zmx() {
+        let out = render_table(&fixtures());
+        let header = strip_ansi(out.lines().next().unwrap());
+        assert!(header.contains("Pane"), "Pane header present: {header:?}");
+        assert!(
+            !header.to_lowercase().contains("zmx"),
+            "zmx is retired from the header: {header:?}"
+        );
+        // The cells the column reports are untouched.
+        let plain: String = out.lines().map(strip_ansi).collect::<Vec<_>>().join("\n");
+        assert!(
+            plain.contains("detached") || plain.contains("attached") || plain.contains(" - "),
+            "carrier cells still render their own vocabulary: {plain}"
+        );
     }
 
     #[test]

@@ -94,11 +94,13 @@ fn boot_readiness_via_cli(
 }
 
 /// As [`boot_readiness_via_cli`], with additional `qd start` arguments
-/// (`extra_args`) appended after `--provider <id>`. Exists for lanes whose
-/// `qd start` refuses a bare headless start (`claude-code` requires `-p
-/// <prompt>` — "a bare headless start is a no-op turn"): the assertion shape
-/// (`live:true` + a real pid via a fresh `qd info --json`) stays identical to
-/// every other lane; only the start invocation grows.
+/// (`extra_args`) appended after `--provider <id>`. It was minted for lanes whose
+/// `qd start` refused a bare start from this harness's piped, agent-detected
+/// caller (`claude-code` required `-p <prompt>` — "a bare headless start is a
+/// no-op turn"); since the 2026-08-26 flip (ADR-0011 addendum) that lane creates
+/// bare like every other, so the seam is a plain per-lane argv escape hatch now.
+/// The assertion shape (`live:true` + a real pid via a fresh `qd info --json`)
+/// stays identical to every other lane; only the start invocation grows.
 fn boot_readiness_via_cli_with_args(
     runner: &Runner,
     session_name: &str,
@@ -147,16 +149,23 @@ fn boot_readiness_via_cli_with_args(
         // claude-code (bare) with `-p`: `qd start` refuses a one-off `-p`
         // stream-json invocation outright ("dispatch does not spawn one-off
         // `claude -p` stream-json runs..."), stating the correct shape
-        // (`--interactive`, or bypass `qd` entirely for a one-off). Same
+        // (drop `--headless`, or bypass `qd` entirely for a one-off). Same
         // family as the version-pin gate — named, re-entry stated, nothing
         // spawned, NO completion call reached the model (confirmed: RAM
         // unaffected, no residual process). Structurally `Blocked`, never
         // `Fail` — a `Fail` implies the cell executed and its claim did not
         // hold; this cell never executed at all.
+        //
+        // NARROWED 2026-08-26 (ADR-0011 addendum): this only fires for an
+        // EXPLICIT `--headless` now. The piped, agent-detected start this harness
+        // makes used to route here on its own; it takes the ordinary interactive
+        // create instead, so a cell reaching this arm has had `--headless` put in
+        // its `extra_args` by hand. KEPT defensively — a gate that starts firing
+        // again must still read as Blocked, never as a claim that failed.
         if stderr.contains("does not spawn one-off") {
             return Outcome::blocked(
                 stderr.trim().to_string(),
-                "invoke qd start with the CLI shape the gate names (--interactive for a tracked session, or bypass qd for a true one-off) — the -p/--model flags used here do not fit qd start's one-off refusal".to_string(),
+                "invoke qd start with the CLI shape the gate names (drop --headless for a tracked session, or bypass qd for a true one-off) — the -p/--model flags used here do not fit qd start's one-off refusal".to_string(),
             );
         }
         let _ = qd(path_prefix).args(["stop", session_name]).output();

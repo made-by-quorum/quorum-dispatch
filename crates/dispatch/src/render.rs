@@ -545,9 +545,9 @@ pub fn info_text_with_fold(session: &Session, now_ms: i64, fold: Option<&Snapsho
 /// As [`info_text_with_fold`], but told WHICH discovery reads failed during the
 /// gather that produced `session`.
 ///
-/// `qd info` renders a missing `zmx`/`Relay` as `-`, which reads as "this
+/// `qd info` renders a missing `Pane`/`Relay` as `-`, which reads as "this
 /// session has none". When the read that would have found one was refused, that
-/// is a claim `qd` never established — `zmx: -` and `Relay: -` are exactly the
+/// is a claim `qd` never established — `Pane: -` and `Relay: -` are exactly the
 /// ambiguity that makes a denied `ps` look like a session with no carrier. With
 /// a degraded health those two lines render `unknown (ps unavailable)` instead.
 ///
@@ -612,8 +612,13 @@ pub fn info_text_full(
     // it), but a future non-claude row now renders its real value.
     push(&mut out, format!("Provider:    {}", session.provider));
 
-    // zmx line (status.ts:629-631).
-    let zmx_line = match &session.zmx_name {
+    // Pane line (status.ts:629-631, whose label was `zmx`). FTUE punch R1
+    // (zmx retirement) follow-through: the VALUE is the mux pane's name and its
+    // attach state, and this line prints under the embedded qrmux default as
+    // well as the `QD_MUX=zmx` hatch — so the label names the pane, not the
+    // backend. A NAMED divergence from the TS corpus (ADR-0011); the
+    // `info-alpha.txt` golden was re-minted for it.
+    let pane_line = match &session.zmx_name {
         Some(name) => {
             let attached = session.zmx_clients.unwrap_or(0) > 0;
             format!(
@@ -625,11 +630,12 @@ pub fn info_text_full(
         // A refused mux list did not observe an absence — do not render one.
         None => DiscoveryHealth::unknown_label(&health.mux_list).unwrap_or_else(|| "-".to_string()),
     };
-    push(&mut out, format!("zmx:         {zmx_line}"));
+    push(&mut out, format!("Pane:        {pane_line}"));
 
-    // zmx dir — only when socketDir present (status.ts:632-634).
+    // Pane dir — the mux SOCKET dir, only when socketDir present
+    // (status.ts:632-634, whose label was `zmx dir`).
     if let Some(dir) = &session.socket_dir {
-        push(&mut out, format!("zmx dir:     {dir}"));
+        push(&mut out, format!("Pane dir:    {dir}"));
     }
 
     // Relay (status.ts:635).
@@ -1120,13 +1126,13 @@ mod tests {
         assert!(text.contains("PID:         4242\n"));
         assert!(text.contains("Status:      busy\n"));
         assert!(text.contains("Provider:    claude-code\n"));
-        assert!(text.contains("zmx:         -\n"));
+        assert!(text.contains("Pane:        -\n"));
         assert!(text.contains("Relay:       -\n"));
         assert!(text.contains("Turns:       3\n"));
         assert!(text.contains("Tokens:      1.5k\n"));
         assert!(text.contains("CWD:         -\n"));
-        // No socketDir → no "zmx dir" line.
-        assert!(!text.contains("zmx dir:"));
+        // No socketDir → no "Pane dir" line.
+        assert!(!text.contains("Pane dir:"));
     }
 
     // --- info_text degraded-discovery rendering ---
@@ -1191,7 +1197,7 @@ mod tests {
         };
         let text = info_text_full(&s, 0, None, &health);
         assert!(
-            text.contains("zmx:         unknown (mux list unavailable)\n"),
+            text.contains("Pane:        unknown (mux list unavailable)\n"),
             "{text}"
         );
     }
@@ -1209,7 +1215,7 @@ mod tests {
         let text = info_text_full(&s, 0, None, &denied_health());
         assert!(text.contains("Relay:       localhost:4312\n"), "{text}");
         assert!(
-            text.contains("zmx:         -\n"),
+            text.contains("Pane:        -\n"),
             "a successful read that found nothing still renders as absent: {text}"
         );
     }
@@ -1233,8 +1239,8 @@ mod tests {
             timestamp: None,
         }]);
         let text = info_text(&s, 1_717_530_001_000);
-        assert!(text.contains("zmx:         zw (attached)\n"));
-        assert!(text.contains("zmx dir:     /tmp/zmx-501\n"));
+        assert!(text.contains("Pane:        zw (attached)\n"));
+        assert!(text.contains("Pane dir:    /tmp/zmx-501\n"));
         assert!(text.contains("Relay:       localhost:8901\n"));
         assert!(text.contains("Git branch:  feature\n"));
         assert!(text.contains("Version:     1.2.3\n"));

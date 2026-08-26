@@ -41,6 +41,12 @@
 //! ALSO pin the load-bearing facts as exact strings: `Provider: codex`, the
 //! transcript/jsonl line = the rollout path, and that the ws ENDPOINT / port
 //! NEVER appear on the human info surface (codex-p2-spec sections 7.4, 9.4).
+//!
+//! RE-MINTED 2026-08-26 for the carrier-label divergence (ADR-0011): the info
+//! text's `zmx:` label is now `Pane:`, so this golden's one carrier row reads
+//! `Pane:        -`. The `-` is unchanged — a codex row has no pane — and only
+//! that label moved. See `parity.rs`'s header for the full reasoning; a later
+//! re-freeze must not "fix" it back.
 
 mod common;
 
