@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """harness-mesh.py — the mesh test, driven ONLY through qd's process interface.
 
-This is a second take on `harness-mesh-live.py`. It asks the same question —
-can an agent sitting inside a harness drive `qd` itself? — under two rules the
-older script does not keep:
+This asks the question — can an agent sitting inside a harness drive `qd` 
+itself? — to start and message other sessions.
 
   1. THE ONLY INTERFACE IS THE `qd` (and `qw`) PROCESS. Sessions are created,
      addressed, observed and torn down by running the binary and reading its
      stdout/stderr and exit code. Nothing in this file opens a path under
      `~/.quorum`, a provider transcript, or any other file qd happens to write.
-     If a fact is not reachable through a verb, this script does not know it.
-  2. NO PROMPT ENGINEERING. The hub prompt names the binary, names the sessions
-     it should create, and stops. It does not render argv for the agent, does
-     not explain lanes, does not pre-chew exit codes. What the agent does with
-     `qd` is the measurement; teaching it the answer would erase the result.
+     If a fact is not reachable through a verb, this script will not use it.
+  2. MINIMAL PROMPT ENGINEERING. The hub prompt names the binary, names the sessions
+     it should create, says to send each of them a message and what to ask for
+     back, and stops. It does not render argv for the agent, does not explain
+     lanes or carriers, does not pre-chew exit codes. What the agent does with
+     `qd` is the measurement; teaching it the answer would mean business logic lives
+     within this script rather than qd's self hosted documentation.
 
 Both rules cost coverage, and that is accepted: a step that cannot be seen
 through a verb is reported as unobservable, not worked around, and an agent
@@ -32,13 +33,36 @@ set when you only want one or two.
 Because several hubs report at once, every progress line is stamped with the
 hub it belongs to, and the per-hub result lands in one summary block at the end.
 
-STEP 1 (this revision) — bring up each hub and have IT start its spokes:
+WHAT ONE HUB'S TURN IS — bring the hub up, have IT start its spokes, and have
+it exchange a message with each of them:
 
     qd setup --json      which harnesses this machine actually has
     qd start <hub> -p …  one hub session per harness, prompted with spoke names
     qd ls --prefix …     watch the spokes appear, as qd sees them
-    qd messages <hub>    what was addressed to the hub, per qd
+    qd messages <every>  monitor the hub's log AND every spoke's, on a poll
     qd stop <session>    the sweep
+
+The exchange is the point of the second half: starting a session proves qd can
+CREATE, and says nothing about whether the thing it created can be ADDRESSED.
+So the hub is asked to `qd send` each spoke a message asking for one back, and
+the pass condition is that `qd messages` shows both legs — the hub's ask going
+out and the spoke's answer coming in. A session that starts and then cannot be
+reached is a failure here, where under the old step it was a pass.
+
+THE MESSAGES ARE THE LOG. Every message the monitor finds prints TWICE, once
+under the session that sent it and once under the session it was addressed to:
+
+    pi-hub           >> pi-claude        delivered  Please use the qd command-…
+    pi-claude        << pi-hub           delivered  Please use the qd command-…
+
+so the `who` column stays what it is on every other line — the session the line
+is about — and a message reads as two lines that meet in the middle. Every
+session's log is swept, not just the hub's, because `qd messages` reports a
+message to a session on EITHER end: a message between two spokes is on neither
+of the hub's ends, and a monitor that only asked the hub would never see it.
+Reading both ends is also what lets the run tell an envelope that never moved
+from one that moved without its attribution — an end whose own log cannot show
+its own message is reported as its own finding, not as a silence.
 
 Usage:
     dispatch/scripts/harness-mesh.py --dry-run      # print every plan, start nothing
@@ -97,14 +121,30 @@ REPO_QD = os.path.join(
 _T0 = time.time()          # script start, for the wall-clock total in `summarize`
 _PRINT_LOCK = threading.Lock()
 
-# The four marks, and the SGR code each is painted in when the terminal can
-# take it. `··` a step this script is about to take, `OK` a thing that happened
-# as asked, `!!` a thing that did not, and the blank mark for the detail lines
-# hanging off whichever of those came last — those are dimmed whole, because
-# they are subordinate to the row above rather than events in their own right.
+# The marks, and the SGR code each is painted in when the terminal can take it.
+# `··` a step this script is about to take, `OK` a thing that happened as asked,
+# `!!` a thing that did not, and the blank mark for the detail lines hanging off
+# whichever of those came last — those are dimmed whole, because they are
+# subordinate to the row above rather than events in their own right.
 STEP, OK, BAD, NOTE = "··", "OK", "!!", "  "
-MARK_SGR = {STEP: "36", OK: "32", BAD: "31"}    # cyan, green, red
+
+# The message marks: `>>` a message leaving the session named on the line, `<<`
+# that same message arriving at the one it was addressed to. Every message
+# prints both, so it reads as two lines that meet in the middle and the traffic
+# can be followed down the `who` column — rather than being reconstructed from
+# one end's report of it. One colour for the pair, because the glyph already
+# carries the direction and what the colour is for is telling message traffic
+# apart from the steps and results around it.
+SENT, RECV = ">>", "<<"
+MARK_SGR = {STEP: "36", OK: "32", BAD: "31",    # cyan, green, red
+            SENT: "35", RECV: "35"}             # magenta
 DIM, RESET = "\033[2m", "\033[0m"
+
+# How wide the `who` column is: wide enough for the longest label a hub's turn
+# can produce (`{hub}-{spoke}`, e.g. `opencode-claude`). A label that overflows
+# it pushes its own mark rightward and breaks the column alignment, which is the
+# thing that makes four hubs reporting at once readable at all.
+WHO_W = 16
 
 # Whether to paint at all. Set once by `resolve_color` before any hub starts, so
 # no lock is needed around the read.
@@ -131,10 +171,10 @@ def resolve_color(choice: str) -> bool:
 
 
 def emit(who: str, mark: str, msg: str):
-    line = f"{who:<12} {mark} {msg}"
+    line = f"{who:<{WHO_W}} {mark} {msg}"
     if _COLOR:
         sgr = MARK_SGR.get(mark)
-        line = (f"{who:<12} \033[{sgr}m{mark}\033[0m {msg}" if sgr
+        line = (f"{who:<{WHO_W}} \033[{sgr}m{mark}\033[0m {msg}" if sgr
                 else f"{DIM}{line}{RESET}")
     with _PRINT_LOCK:
         print(line, flush=True)
@@ -236,13 +276,97 @@ class Qd:
         return rows, ""
 
 
+# --- reading a `qd messages` row --------------------------------------------
+#
+# `qd messages <session> --json` emits one envelope per line carrying both of
+# its ends (`sender`, `target`), the `direction` that selected it, the folded
+# delivery `state`, and the `body`. These three functions are the whole of what
+# this script knows how to do with such a row; nothing else here parses one.
+
+
+def session_addresses(row: dict) -> set[str]:
+    """Every spelling of one session that qd itself published, lowercased.
+
+    Read out of the session's own `qd ls` row rather than composed here, so the
+    set is whatever qd says it is. `qdIdPrefix` is deliberately LEFT OUT: it is
+    two characters, and matching an envelope end on two characters would let a
+    collision credit the wrong session — the same reason qd's own read verb
+    runs no id-prefix tier over `sender`.
+    """
+    return {str(row[key]).lower() for key in ("name", "qdId", "sessionId")
+            if row.get(key)}
+
+
+def target_of(row: dict) -> str:
+    """The envelope's target AS THE SENDER TYPED IT, minus any `@host`.
+
+    R9.4 keeps the raw string, so what comes back is the hub's own spelling and
+    not a resolved id. Only the host qualifier is dropped: it addresses a
+    machine rather than a session, and every session in this run is local.
+    """
+    return str(row.get("target") or "").lower().split("@", 1)[0]
+
+
+def sender_of(row: dict) -> str:
+    """The envelope's sender id, lowercased, or "" when qd recorded none.
+
+    An id qd stamped itself rather than an address anyone typed, so it is
+    compared exactly and with no prefix tier: two characters of a `sender` would
+    let a collision credit another session's authorship, the one error an
+    attribution column must not make.
+    """
+    return str(row.get("sender") or "").lower()
+
+
+def end_member(value: str, members: dict) -> str | None:
+    """Which session of this hub's cast an envelope end names — None if none.
+
+    An outsider's address resolves to nothing here, and is left to print as qd
+    recorded it. Guessing a member for an end that does not match one would put
+    a name on traffic this run did not author.
+    """
+    if not value:
+        return None
+    for name, member in members.items():
+        if value in member["addrs"]:
+            return name
+    return None
+
+
+def ordered_messages(seen: dict) -> list[dict]:
+    """The message union in message order: `authored_at`, then the id.
+
+    The order qd's own report uses, for the reason it uses it: `authored_at` is
+    the origin timeline, and the correlation id is a ULID, so two messages
+    written in the same millisecond still land in mint order and not an
+    arbitrary one.
+    """
+    return sorted(seen.values(),
+                  key=lambda r: (r.get("authored_at") or 0,
+                                 str(r.get("correlation_id") or "")))
+
+
+def body_line(row: dict, width: int = 72) -> str:
+    """One message body on one line, for a progress note."""
+    body = " ".join(str(row.get("body") or "").split())
+    return body if len(body) <= width else body[:width - 1] + "…"
+
+
 # --- the prompt -------------------------------------------------------------
 #
-# The whole prompt. It names the binary, names the sessions, and asks for them
-# to exist. It does NOT render the `qd start` argv, name a lane or a provider
-# flag, or explain what an exit code means: how to make a session on a given
-# harness with `qd` is precisely the thing under test, and an agent that has to
-# read `qd start --help` to find out is doing exactly what a person would.
+# The whole prompt. It names the binary, names the sessions, and asks for two
+# things to happen: for the sessions to exist, and for a message to make the
+# round trip. It does NOT render the `qd start` or `qd send` argv, name a lane,
+# a provider flag or a carrier, or explain what an exit code means: how to make
+# and address a session with `qd` is precisely the thing under test, and an
+# agent that has to read `qd start --help` to find out is doing exactly what a
+# person would.
+#
+# The one thing the second ask does dictate is the TEXT of the reply — each
+# spoke is to send back its own name. That is the observable, not a hint: the
+# `sender` column attributes a reply only when the replying session carried a
+# `QD_SESSION_ID`, and a body that names its author stays attributable when it
+# did not. Nothing about how to send is given away by asking what to say.
 #
 # The trailing newline is absent because the string ends at the last line, not
 # because it was stripped: `qd start -p` has a known off-by-one that reports a
@@ -255,21 +379,31 @@ test is the binary at this absolute path, and it is the only one you should use:
 
     {qd}
 
-Your job is to start one qd session per harness in this list, using qd:
+Your own session is named:
+
+    {hub}
+
+You have two jobs, in this order.
+
+First: start one qd session per harness in this list, using qd.
 
 {spokes}
 
 Give each session the working directory {cwd}.
 
+Second: send a message with qd to each session you started, asking it to send
+a message back to your own session, using qd, whose text is its own session
+name — the name it is listed under above.
+
 Do not stop any session, do not write any file, and do not summarize anything —
-the harness reads the result from qd itself. When every start has returned,
+the harness reads the result from qd itself. When every send has returned,
 print DONE."""
 
 
-def render_prompt(qd_path: str, cwd: str, spokes: list[dict]) -> str:
+def render_prompt(qd_path: str, hub: str, cwd: str, spokes: list[dict]) -> str:
     width = max(len(s["name"]) for s in spokes)
     lines = [f"    {s['name']:<{width}}   — harness: {s['harness']}" for s in spokes]
-    return HUB_PROMPT.format(qd=qd_path, cwd=cwd, spokes="\n".join(lines))
+    return HUB_PROMPT.format(qd=qd_path, hub=hub, cwd=cwd, spokes="\n".join(lines))
 
 
 # --- discovery, once for the whole run --------------------------------------
@@ -327,6 +461,14 @@ class Mesh:
         self.created: list[str] = []
         self.failures: list[str] = []
         self.started: dict[str, dict] = {}
+        # The hub's own `qd ls` row, kept from the liveness check: the monitor
+        # matches envelope ends against it exactly as it does a spoke's.
+        self.hub_row: dict | None = None
+        # The two legs of each exchange, keyed by spoke name and holding the
+        # `qd messages` row that closed them: the hub's ask on its way out, and
+        # the spoke's answer on its way back.
+        self.asked: dict[str, dict] = {}
+        self.answered: dict[str, dict] = {}
         # Wall clock for THIS hub's turn, teardown excluded — the sweep is
         # bookkeeping, not part of what is being measured, and including it
         # would make a hub look slower for having created more sessions.
@@ -374,6 +516,7 @@ class Mesh:
             self.log.bad(f"the hub is not in `qd ls --prefix {self.tag}` at all")
             self.failures.append("hub absent from qd ls")
             return False
+        self.hub_row = row
         self.log.ok(f"qd ls sees the hub: status={row.get('status')} lane={row.get('lane')}")
         return True
 
@@ -413,25 +556,304 @@ class Mesh:
                 self.log.bad(f"spoke never appeared: {harness} ({name})")
                 self.failures.append(f"no spoke on {harness}")
 
-    def hub_messages(self):
-        """What qd says was addressed to the hub.
+    # -- the message monitor -------------------------------------------------
 
-        The per-session read verb, used here for what it can actually answer:
-        every envelope sent TO the hub through `qd send`. It cannot show what
-        the hub SENT (the log records the origin HOST, with no sender-session
-        field) and it cannot show relay replies. Those are unobservable through
-        the process interface, and this script says so rather than reaching
-        past qd for them.
+    def cast(self) -> dict:
+        """Every session in this hub's turn, with the label its lines carry.
+
+        The `who` column is `{hub}-{role}`: `pi-hub` for the hub itself, and
+        `pi-claude` for the claude spoke of pi's turn. The hub prefix is not
+        decoration — four hubs report into one stream at once, and `claude`
+        alone would name a different session in each of them.
+
+        `addrs` is the address set an envelope end is matched against, taken
+        from the session's own `qd ls` row and nowhere else.
         """
-        self.log.step(f"qd messages {self.hub_name} --json")
-        rows, why = self.qd.jsonl("messages", self.hub_name, "--json")
-        if rows is None:
-            self.log.bad(f"qd messages: {why}")
+        rows = {self.hub_name: (self.hub_row or {"name": self.hub_name}, "hub")}
+        for spoke in self.spokes:
+            if spoke["name"] in self.started:
+                rows[spoke["name"]] = (self.started[spoke["name"]], spoke["harness"])
+        return {name: {"label": f"{self.hub_harness}-{role}",
+                       "addrs": session_addresses(row)}
+                for name, (row, role) in rows.items()}
+
+    def read_logs(self, members: dict) -> dict:
+        """`qd messages` for every session in the cast, in one sweep.
+
+        The hub's log is not the run's traffic. A message is reported to a
+        session on either END of it, so anything two spokes say to each other
+        is on neither of the hub's ends and would go unseen by a monitor that
+        only ever asked the hub. Reading every member's log leaves the monitor
+        blind to nothing qd wrote.
+
+        A verb that fails is a failed tick, not an empty log: `None` is kept
+        distinct from `[]` so a read error is never folded into "no messages".
+        """
+        logs = {}
+        for name in members:
+            rows, why = self.qd.jsonl("messages", name, "--json")
+            if rows is None:
+                self.log.note(f"qd messages {name} failed this tick: {why}")
+            logs[name] = rows
+        return logs
+
+    def emit_new(self, logs: dict, members: dict, seen: dict, printed: set):
+        """Print the messages a sweep turned up that have not been printed yet.
+
+        TWO LINES PER MESSAGE: one under its sender, one under its recipient.
+        Which is which is the mark, so the `who` column stays what it is
+        everywhere else in this script — the session the line is about.
+
+        The pair is keyed by correlation id AND state, so a message first seen
+        `pending` and later `delivered` prints again. Those are two facts about
+        it, and collapsing them would leave the log asserting a delivery state
+        that has since changed.
+
+        A message read from two logs is still one message: the union is keyed
+        by correlation id, and `direction` is deliberately not consulted for
+        it, because `direction` is relative to whichever session was asked for
+        the log. The ends are not — they mean the same thing in every log they
+        appear in, which is what makes one union possible at all.
+        """
+        for rows in logs.values():
+            for row in rows or []:
+                cid = str(row.get("correlation_id") or "")
+                if cid:
+                    seen[cid] = row
+        for row in ordered_messages(seen):
+            key = (row.get("correlation_id"), row.get("state"))
+            if key in printed:
+                continue
+            printed.add(key)
+            src = end_member(sender_of(row), members)
+            dst = end_member(target_of(row), members)
+            # An end outside the cast prints as qd recorded it and is never
+            # resolved into a member it might not be: the raw target for an
+            # address this run does not know, and `(no sender)` for the null
+            # the store writes when the sending caller carried no session id.
+            src_label = (members[src]["label"] if src
+                         else (row.get("sender") or "(no sender)"))
+            dst_label = (members[dst]["label"] if dst
+                         else (row.get("target") or "(no target)"))
+            state = str(row.get("state") or "?")
+            body = body_line(row, 48)
+            emit(src_label, SENT, f"{dst_label:<{WHO_W}} {state:<9} {body}")
+            emit(dst_label, RECV, f"{src_label:<{WHO_W}} {state:<9} {body}")
+
+    def one_sided(self, logs: dict) -> bool:
+        """True — and said out loud — when this build cannot report a sent side.
+
+        `direction` arrived with the `sender` field the whole monitor rests on.
+        A build without it reports only the addressed side, so half of every
+        exchange is missing from the store and no amount of polling will turn
+        it up. Better said in the first seconds than discovered one empty sweep
+        at a time across the whole budget.
+        """
+        for rows in logs.values():
+            if rows:
+                if "direction" in rows[0]:
+                    return False
+                self.log.bad("this qd build's `messages` rows carry no `direction`: it "
+                             "predates two-sided reporting, so the sent half of every "
+                             "exchange is unreadable — rebuild qd")
+                self.failures.append("qd messages is one-sided")
+                return True
+        return False
+
+    def roundtrip(self):
+        """Watch the run's messages go by, and say whether each spoke answered.
+
+        The monitor sweeps every session's log on a poll, prints what is new,
+        and closes each spoke's two legs as they appear. It is polled rather
+        than read once because the hub is still working while this runs — a hub
+        that has started its spokes has not necessarily written to them yet.
+        Nothing said before the monitor starts is lost: each sweep reads the
+        whole log, so an early message is reported late rather than not at all.
+
+        Note what is NOT accepted as an answer: a delivered ask. `qd send`
+        exiting 0 says an envelope reached a receive path, which is the claim
+        the transport can make and not the one the mesh is about. Only a second
+        message, authored by the spoke, shows that something on the far end
+        read the first one and could work the tool.
+        """
+        want = {s["name"]: s["harness"] for s in self.spokes if s["name"] in self.started}
+        if not want:
+            self.log.bad("no spoke ever started — there is nothing to exchange with")
+            self.failures.append("no spoke to message")
             return
-        self.log.ok(f"{len(rows)} message(s) addressed to the hub")
-        for r in rows:
-            body = str(r.get("body") or "").replace("\n", " ")
-            self.log.note(f"{r.get('state') or r.get('disposition') or '?'}: {body[:100]}")
+        never = [s["harness"] for s in self.spokes if s["name"] not in self.started]
+        if never:
+            self.log.note(f"exchanging with {len(want)} of {len(self.spokes)} spoke(s) — "
+                          f"never started: {', '.join(never)}")
+
+        # One more `qd ls` before the monitor starts. The row the watch cached
+        # is from the instant a spoke FIRST appeared, and a session's ids can
+        # still be filling in at that moment — and those ids are exactly what
+        # every envelope end below is matched on.
+        current, why = self.qd.json("ls", "--prefix", self.tag, "--all", "--json")
+        if current is None:
+            self.log.note(f"qd ls before the monitor failed ({why}); matching on the "
+                          "ids the watch saw")
+        for row in current or []:
+            name = str(row.get("name") or "")
+            if name in self.started:
+                self.started[name] = row
+
+        members = self.cast()
+        seen: dict[str, dict] = {}       # correlation id -> the message, latest read
+        printed: set = set()             # (correlation id, state) already on the log
+        deadline = time.time() + self.args.message_budget
+        self.log.step(f"monitoring `qd messages` across {len(members)} session(s) until "
+                      f"{len(want)} round trip(s) close, or "
+                      f"{self.args.message_budget:.0f}s pass")
+        while True:
+            logs = self.read_logs(members)
+            if self.one_sided(logs):
+                return
+            self.emit_new(logs, members, seen, printed)
+            self.collect(seen, members, want)
+            if len(self.asked) == len(want) and len(self.answered) == len(want):
+                break
+            if time.time() >= deadline:
+                break
+            time.sleep(self.args.poll)
+
+        self.report_gaps(seen, members, want)
+        self.cross_check(members, seen, printed)
+
+    def collect(self, seen: dict, members: dict, want: dict):
+        """Close each spoke's two legs from the messages read so far.
+
+        The legs are matched on the ENDS, never on `direction`: the ask is the
+        message the hub sent to the spoke, the answer is the one the spoke sent
+        back to the hub. `direction` is relative to whichever session was asked
+        for the log, and the monitor reads several of them; the ends mean the
+        same thing whoever reported them.
+
+        The answer has one fallback the ask does not: a message addressed to
+        the hub that carries no `sender` but whose body names the spoke. The
+        prompt asked each spoke to send back its own name precisely so that an
+        unattributed reply is still readable, and which of the two closed the
+        leg is printed, because "matched on the body" means qd recorded no
+        sender for it.
+
+        A message already claimed by one leg is never offered to another: a
+        message belongs to one exchange, and a substring collision between two
+        session names must not be able to close a leg twice.
+        """
+        rows = ordered_messages(seen)
+        hub_addrs = members[self.hub_name]["addrs"]
+        claimed = {r.get("correlation_id")
+                   for r in (*self.asked.values(), *self.answered.values())}
+        for name, harness in want.items():
+            addrs = members[name]["addrs"]
+            fresh = [r for r in rows if r.get("correlation_id") not in claimed]
+            if name not in self.asked:
+                row = next((r for r in fresh if sender_of(r) in hub_addrs
+                            and target_of(r) in addrs), None)
+                if row:
+                    self.asked[name] = row
+                    claimed.add(row.get("correlation_id"))
+                    self.log.ok(f"the ask to {harness} is in the log: {row.get('state')}")
+                    fresh = [r for r in fresh if r is not row]
+            if name not in self.answered:
+                by_sender = next((r for r in fresh if sender_of(r) in addrs
+                                  and target_of(r) in hub_addrs), None)
+                by_body = next((r for r in fresh if not sender_of(r)
+                                and target_of(r) in hub_addrs
+                                and name.lower() in str(r.get("body") or "").lower()), None)
+                row = by_sender or by_body
+                if row:
+                    self.answered[name] = row
+                    claimed.add(row.get("correlation_id"))
+                    how = "sender" if by_sender else "body only, no sender recorded"
+                    self.log.ok(f"{harness} answered: {row.get('state')} ({how})")
+
+    def report_gaps(self, seen: dict, members: dict, want: dict):
+        """What never closed and — where the log can say — why not.
+
+        A leg can fail two ways that look identical in a count and are not:
+        nothing was sent, or something was sent that no log can attribute. The
+        second is a message sitting in the store with a null `sender`, and
+        saying so points at the attribution rather than at the session.
+        """
+        rows = ordered_messages(seen)
+        for name, harness in want.items():
+            addrs = members[name]["addrs"]
+            if name not in self.asked:
+                orphan = next((r for r in rows if target_of(r) in addrs
+                               and not sender_of(r)), None)
+                if orphan:
+                    self.log.bad(f"a message to {harness} ({name}) is in the log but "
+                                 "carries no `sender`, so nothing attributes it to the "
+                                 "hub — the ask cannot be confirmed")
+                    self.failures.append(f"ask to {harness} unattributed")
+                else:
+                    self.log.bad(f"the hub never asked {harness} ({name}): no message "
+                                 "from the hub is addressed to it")
+                    self.failures.append(f"no send to {harness}")
+            if name not in self.answered:
+                self.log.bad(f"nothing came back from {harness} ({name}): no message "
+                             "from it is addressed to the hub")
+                self.failures.append(f"no reply from {harness}")
+
+    def cross_check(self, members: dict, seen: dict, printed: set):
+        """One last sweep, then every message checked against its own two ends.
+
+        `qd messages` reports a message to a session on EITHER end, so a
+        message between two cast members has to be in both of their logs. Where
+        it is not, the envelope moved but its attribution did not — a different
+        result from a message that never moved, and worth naming rather than
+        folding into a silence.
+
+        The sweep is re-read rather than reused, because the loop's last read
+        of one member happened at a slightly different instant from its read of
+        another, and a message written between the two would look absent from
+        an end that in fact has it. Whatever the sweep turns up that the
+        monitor never printed is printed now, so the log ends complete.
+        """
+        logs = self.read_logs(members)
+        self.emit_new(logs, members, seen, printed)
+        where: dict[str, set] = {}
+        for name, rows in logs.items():
+            for row in rows or []:
+                where.setdefault(str(row.get("correlation_id") or ""), set()).add(name)
+        checked = found = 0
+        for row in ordered_messages(seen):
+            cid = str(row.get("correlation_id") or "")
+            short = cid[:8] or "?"
+            ends = where.get(cid, set())
+            src = end_member(sender_of(row), members)
+            dst = end_member(target_of(row), members)
+            checked += 1
+            if not sender_of(row):
+                # Unattributed at the source. The body may still name its
+                # author — that is what the prompt asked each spoke to send —
+                # so the finding can name a session even when the store cannot.
+                author = next((members[n]["label"] for n in members
+                               if n.lower() in str(row.get("body") or "").lower()), None)
+                whose = f"{author}'s message" if author else f"the message {short}"
+                self.log.bad(f"{whose} to {members[dst]['label'] if dst else '?'} carries "
+                             "no `sender`: it is on nobody's sent side, and no log can "
+                             "say which session wrote it")
+                self.failures.append(f"{author or short} sends unattributed")
+                found += 1
+                continue
+            if src and src not in ends:
+                self.log.bad(f"{members[src]['label']} sent {short}, but its own log "
+                             "does not report it")
+                self.failures.append(f"{members[src]['label']} cannot see its send")
+                found += 1
+            if dst and dst not in ends:
+                self.log.bad(f"{short} is addressed to {members[dst]['label']}, but that "
+                             "session's log does not report it")
+                self.failures.append(f"{members[dst]['label']} cannot see the message")
+                found += 1
+        # Said even when nothing is wrong. A check that only ever speaks up to
+        # complain leaves a clean run unable to show it ran at all, and "no
+        # findings" and "never looked" have to be different lines.
+        if not found:
+            self.log.ok(f"both ends agree on every message: {checked} checked")
 
     # -- teardown ------------------------------------------------------------
 
@@ -449,7 +871,7 @@ class Mesh:
     # -- drive ---------------------------------------------------------------
 
     def plan_text(self) -> str:
-        prompt = render_prompt(self.qd.path, self.cwd, self.spokes)
+        prompt = render_prompt(self.qd.path, self.hub_name, self.cwd, self.spokes)
         argv = [self.qd.path, *self.hub_argv("<prompt>")]
         return ("\n--- hub: " + self.hub_harness + " " + "-" * (54 - len(self.hub_harness))
                 + "\n" + " ".join(shlex.quote(a) for a in argv)
@@ -460,10 +882,10 @@ class Mesh:
         began = time.time()
         try:
             os.makedirs(self.cwd, exist_ok=True)
-            self.start_hub(render_prompt(self.qd.path, self.cwd, self.spokes))
+            self.start_hub(render_prompt(self.qd.path, self.hub_name, self.cwd, self.spokes))
             if self.hub_is_live():
                 self.watch_for_spokes()
-                self.hub_messages()
+                self.roundtrip()
         except Exception as exc:                      # noqa: BLE001 — see docstring
             self.log.bad(f"hub run raised {type(exc).__name__}: {exc}")
             self.failures.append(f"{type(exc).__name__}: {exc}")
@@ -499,6 +921,10 @@ def parse_args(argv=None):
     p.add_argument("--start-timeout", type=float, default=300.0, help="timeout for `qd start` (s)")
     p.add_argument("--spoke-budget", type=float, default=300.0,
                    help="how long to watch for a hub's spokes (s)")
+    p.add_argument("--message-budget", type=float, default=300.0,
+                   help="how long to watch for each spoke's ask and answer (s). Its own "
+                        "budget, not a share of --spoke-budget: the exchange only starts "
+                        "once the spokes exist, so the two are spent one after the other")
     p.add_argument("--poll", type=float, default=5.0, help="seconds between `qd ls` polls")
     p.add_argument("--color", choices=("auto", "always", "never"), default="auto",
                    help="colour the OK/!!/·· marks (default: auto — a terminal only, "
@@ -539,13 +965,19 @@ def summarize(meshes: list[Mesh], log: Log) -> int:
     log.step("results, one row per hub")
     worst = 0
     for m in meshes:
-        row = f"{m.hub_harness + '-hub':<12} {len(m.started)}/{len(m.spokes)} spoke(s)"
+        # Round trips are counted against the spokes ASKED FOR, not the ones
+        # that came up: a hub that started two of three and exchanged with both
+        # is 2/3 here, because the third spoke's silence is the failure and
+        # scoring it out of two would hide it.
+        row = (f"{m.hub_harness + '-hub':<12} "
+               f"{len(m.started)}/{len(m.spokes)} spoke(s), "
+               f"{len(m.answered)}/{len(m.spokes)} round trip(s)")
         took = f"in {m.elapsed:.1f}s"
         if m.failures:
             worst = max(worst, 1)
             log.bad(f"{row} {took} — " + "; ".join(m.failures))
         else:
-            log.ok(f"{row} started {took}")
+            log.ok(f"{row} {took}")
     log.step(f"total script run {time.time() - _T0:.1f}s (wall clock)")
     return worst
 
