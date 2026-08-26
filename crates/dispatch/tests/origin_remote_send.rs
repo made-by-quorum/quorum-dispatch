@@ -11,7 +11,7 @@
 //!     (pending = absence, facts-only). Exit 0, prints the correlation_id.
 //! The target host's apply-driver later presents the never-attempted envelope; its
 //! door delivers + stamps; dispositions ride back full-mesh. The live end-to-end
-//! `delivered` leg is the post-deploy brano acceptance; here we pin the wiring:
+//! `delivered` leg is the post-deploy devbox acceptance; here we pin the wiring:
 //! append-without-delivery, the refusal family, cross-store admission at the target
 //! door, and origin-replay idempotency (R15).
 
@@ -146,7 +146,7 @@ fn origin_remote_appends_without_delivery() {
     let j = jail(tmp.path());
     j.seed_mirror_one("els", "cut-els", "uuid-els-1");
 
-    let (code, stdout, stderr) = j.origin_send("brano", "cut-els@els", "hello remote");
+    let (code, stdout, stderr) = j.origin_send("devbox", "cut-els@els", "hello remote");
     assert_eq!(code, 0, "origin-remote send exits 0 (stderr: {stderr})");
     let cid = stdout.trim().to_string();
     assert!(!cid.is_empty(), "prints the correlation_id on stdout");
@@ -175,7 +175,7 @@ fn unknown_at_remote_is_refused_unknown_and_appends_nothing() {
     let j = jail(tmp.path());
     j.seed_mirror_one("els", "cut-els", "uuid-els-1");
 
-    let (code, _out, err) = j.origin_send("brano", "ghost@els", "x");
+    let (code, _out, err) = j.origin_send("devbox", "ghost@els", "x");
     assert_eq!(code, 12, "unknown@remote ⇒ exit 12 (stderr: {err})");
     assert!(err.contains("unknown"), "names the unknown class: {err}");
     assert!(j.rows(&j.log_path()).is_empty(), "a refusal appends NO envelope");
@@ -185,8 +185,8 @@ fn unknown_at_remote_is_refused_unknown_and_appends_nothing() {
 fn absent_mirror_is_refused_no_fleet_state() {
     let tmp = tempfile::tempdir().unwrap();
     let j = jail(tmp.path());
-    // No remote/qrmoh mirror seeded.
-    let (code, _out, err) = j.origin_send("brano", "whoever@qrmoh", "x");
+    // No remote/obsbox mirror seeded.
+    let (code, _out, err) = j.origin_send("devbox", "whoever@obsbox", "x");
     assert_eq!(code, 12, "absent mirror ⇒ exit 12 (stderr: {err})");
     assert!(err.contains("no fleet state"), "names no-fleet-state: {err}");
     assert!(j.rows(&j.log_path()).is_empty());
@@ -203,7 +203,7 @@ fn ambiguous_at_remote_is_refused_ambiguous() {
             r#"{{"v":1,"host":"els","witnessed_at":{w},"sessions":[{{"name":"dup","sessionId":"a"}},{{"name":"dup","sessionId":"b"}}]}}"#
         ),
     );
-    let (code, _out, err) = j.origin_send("brano", "dup@els", "x");
+    let (code, _out, err) = j.origin_send("devbox", "dup@els", "x");
     assert_eq!(code, 12, "ambiguous@remote ⇒ exit 12 (stderr: {err})");
     assert!(err.contains("ambiguous") || err.contains("more than one"), "names ambiguity: {err}");
     assert!(j.rows(&j.log_path()).is_empty());
@@ -214,7 +214,7 @@ fn torn_mirror_is_refused_torn_mirror() {
     let tmp = tempfile::tempdir().unwrap();
     let j = jail(tmp.path());
     j.seed_mirror_raw("els", "{ this is not valid json");
-    let (code, _out, err) = j.origin_send("brano", "cut-els@els", "x");
+    let (code, _out, err) = j.origin_send("devbox", "cut-els@els", "x");
     assert_eq!(code, 12, "torn mirror ⇒ exit 12 (stderr: {err})");
     assert!(err.contains("unreadable") || err.contains("torn"), "names torn-mirror: {err}");
 }
@@ -228,9 +228,9 @@ fn origin_remote_envelope_is_admitted_by_the_target_inbound_door() {
     let a = jail(tmp_a.path());
     let b = jail(tmp_b.path());
 
-    // Store A (self=brano) originates a send to cut-els@els.
+    // Store A (self=devbox) originates a send to cut-els@els.
     a.seed_mirror_one("els", "cut-els", "uuid-els-1");
-    let (code, out, err) = a.origin_send("brano", "cut-els@els", "roundtrip body");
+    let (code, out, err) = a.origin_send("devbox", "cut-els@els", "roundtrip body");
     assert_eq!(code, 0, "A originates (stderr: {err})");
     let cid = out.trim().to_string();
     let envelope = a.rows(&a.log_path()).remove(0); // the raw envelope JSON
@@ -268,7 +268,7 @@ fn origin_remote_replay_same_id_body_does_not_double_append() {
     j.seed_mirror_one("els", "cut-els", "uuid-els-1");
 
     // First send appends one envelope; capture its cid.
-    let (c1, out1, _e1) = j.origin_send("brano", "cut-els@els", "same body");
+    let (c1, out1, _e1) = j.origin_send("devbox", "cut-els@els", "same body");
     assert_eq!(c1, 0);
     let cid = out1.trim().to_string();
     assert_eq!(j.rows(&j.log_path()).len(), 1);
@@ -276,7 +276,7 @@ fn origin_remote_replay_same_id_body_does_not_double_append() {
     // Re-send the SAME address + body: qd mints a NEW cid (content is not identity),
     // so this legitimately appends a SECOND distinct envelope — assert it is a new
     // cid, not a duplicate of the first.
-    let (c2, out2, _e2) = j.origin_send("brano", "cut-els@els", "same body");
+    let (c2, out2, _e2) = j.origin_send("devbox", "cut-els@els", "same body");
     assert_eq!(c2, 0);
     let cid2 = out2.trim().to_string();
     assert_ne!(cid, cid2, "a fresh send mints a fresh id (same body twice = two messages)");
@@ -287,7 +287,7 @@ fn origin_remote_replay_same_id_body_does_not_double_append() {
     let out = Command::new(qd_bin())
         .args(["send", "--correlation-id", &cid, "cut-els@els", "same body"])
         .env("HOME", &j.home)
-        .env("QD_HOST", "brano")
+        .env("QD_HOST", "devbox")
         .env("QD_TEST_NO_BARE_PROCS", "1")
         .env("ZMX_DIR", &j.zmx)
         .env_remove("QD_HOME")

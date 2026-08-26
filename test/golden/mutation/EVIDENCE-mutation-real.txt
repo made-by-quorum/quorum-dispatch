@@ -1,5 +1,5 @@
 # EVIDENCE — mutation vs REAL corpus + R2 stub-seam negative controls (0b Part 2 / DELTA-STRENGTH)
-# pin 8c59ec4, zmx 0.6.0, stub 1.8.1. Run on brano against committed REAL fixtures + LIVE
+# pin 8c59ec4, zmx 0.6.0, stub 1.8.1. Run on devbox against committed REAL fixtures + LIVE
 # seam/divergent captures (mutation/{r2-seams,divergent}/). Gate: zero false negatives.
 # HARDENED: the suite REPLAYS the live captures; it NEVER synthesizes a seam-on/
 # divergent trace from the golden (a tautology) — a missing live capture FAILS LOUDLY.

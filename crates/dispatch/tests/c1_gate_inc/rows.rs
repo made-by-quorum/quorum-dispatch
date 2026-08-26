@@ -204,9 +204,9 @@ fn g_e() {
 
     detail.push_str(&format!("zmx binary: {}\n", zmx.display()));
 
-    // --- PROVENANCE (FIX C): record which zmx + its version + the vendored pin
-    //     reference (vendor/zmx/zmx-0.6.0.tar.gz sha256). This proves WHICH zmx
-    //     certified the hatch and ties it to the in-tree vendored pin. ----------
+    // --- PROVENANCE (FIX C): record which zmx + its version. This proves WHICH
+    //     zmx certified the hatch. (The in-tree vendored mirror this block used
+    //     to hash was retired; the resolved binary is the provenance now.) -----
     let zmx_version = Command::new(&zmx)
         .arg("version")
         .output()
@@ -217,18 +217,10 @@ fn g_e() {
             format!("{s}{t}").trim().to_string()
         })
         .unwrap_or_else(|| "<zmx version failed>".to_string());
-    let vendored_tarball = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/zmx/zmx-0.6.0.tar.gz");
-    let vendored_sha = std::fs::read(&vendored_tarball)
-        .ok()
-        .map(|b| sha256_hex(&b))
-        .unwrap_or_else(|| "<vendored tarball not found>".to_string());
     detail.push_str(&format!(
-        "PROVENANCE: which zmx={}\n  zmx version: {}\n  vendored pin: {} sha256={}\n",
+        "PROVENANCE: which zmx={}\n  zmx version: {}\n",
         zmx.display(),
-        zmx_version.replace('\n', " | "),
-        vendored_tarball.display(),
-        vendored_sha
+        zmx_version.replace('\n', " | ")
     ));
 
     let jail = Jail::establish("ge");
@@ -351,7 +343,7 @@ fn g_e() {
     // non-goal (zmx is not re-certified).
     let chain_ok = c_new == 0 && listed && c_kill == 0 && positive_control_ok;
     let verdict = if chain_ok {
-        "G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under QD_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded qrmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version + vendored-pin sha256)"
+        "G-E VERDICT: PASS — escape-hatch chain (new→ls→kill) through the REAL zmx binary under QD_MUX=zmx, jailed ZMX_DIR; POSITIVE CONTROL: real zmx process + jailed ZMX_DIR socket drove the live chain AND the embedded qrmux daemon was provably absent in-lane (no socket, no bound daemon at the engine-resolved embedded dir); PROVENANCE recorded (which zmx + version)"
     } else {
         "G-E VERDICT: FAIL"
     };
@@ -1039,7 +1031,7 @@ fn g_burst() {
 }
 
 // ===========================================================================
-// G-SEAM(a) — NEW (GATE-B2). Loaded-brano lane: N reattach-during-stream cycles,
+// G-SEAM(a) — NEW (GATE-B2). Loaded-devbox lane: N reattach-during-stream cycles,
 // final-pre-detach-line-present assert, parallel load generator; record run
 // counts; RSS sampled with GATE-B2 calibration caveat.
 // ===========================================================================
@@ -1058,7 +1050,7 @@ fn g_seam_a() {
     let sess = mux_create(&jail, &dir, name, cmd);
     forge_registry_row(&jail, name, sess.pid as u32);
 
-    // Parallel load generator (loaded-brano lane): CPU-burn background processes.
+    // Parallel load generator (loaded-devbox lane): CPU-burn background processes.
     let mut load: Vec<std::process::Child> = Vec::new();
     for _ in 0..2 {
         if let Ok(c) = Command::new("/bin/sh")
@@ -1132,7 +1124,7 @@ fn g_seam_a() {
         "CYCLES: {cycles_ok}/{cycles} passed (run count)\n"
     ));
     detail.push_str(
-        "PARALLEL LOAD: 2 CPU-burn generators ran during the cycles (loaded-brano lane)\n",
+        "PARALLEL LOAD: 2 CPU-burn generators ran during the cycles (loaded-devbox lane)\n",
     );
 
     // Teardown load gen.

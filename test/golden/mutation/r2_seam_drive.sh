@@ -2,11 +2,11 @@
 # test/golden/mutation/r2_seam_drive.sh
 # R2 seam-control live driver (Step 4 rider R2).
 #
-# PROVENANCE: this is the LIVE driver run in-VM (Lima sbtest, Linux aarch64) at
+# PROVENANCE: this is the LIVE driver run in-VM (Lima linuxvm, Linux aarch64) at
 # pin 0d0fa9e to PRODUCE the committed captures under mutation/{r2-seams,divergent}/.
 # It re-runs the recorded scenario(s) with the stub seam env / divergent target
 # set, capturing the REAL recorder output (NOT a hand-edit). The path
-# $HOME/sbrust-work is the VM staging dir; on brano the captures are replayed by
+# $HOME/sbrust-work is the VM staging dir; on devbox the captures are replayed by
 # run_mutation_real.sh, which does NOT need this driver (the captures are committed).
 # Kept for reproducibility/audit. Bash 3.2 floor.
 set -u

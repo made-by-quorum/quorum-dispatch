@@ -29,8 +29,8 @@ use crate::provider::shared::acp::AcpProvider;
 /// `qd acp-daemon --bridge-cmd` lever, see `acp_residence.rs`) while this compiled default keeps
 /// resolving `claude-code-acp` for every production create/resume path (which pass `bridge_cmd:
 /// None`, so `parse_adapter_args` falls back here). The eventual LIVE CUTOVER is a single,
-/// self-contained edit — repointing this const at [`CLAUDE_AGENT_ACP_BIN`] — held for super18's
-/// Pete-awake gate after the deferred live gates (MF1/MF4) pass; it is NOT this atomic's to flip.
+/// self-contained edit — repointing this const at [`CLAUDE_AGENT_ACP_BIN`] — held for a
+/// follow-on gate after the deferred live gates (MF1/MF4) pass; it is NOT this atomic's to flip.
 pub const BRIDGE_BIN: &str = "claude-code-acp";
 
 /// The `claude-agent-acp` bridge launch command — the `@agentclientprotocol/claude-agent-acp`
@@ -41,7 +41,7 @@ pub const BRIDGE_BIN: &str = "claude-code-acp";
 /// `client.rs` — `env_remove(BRIDGE_ENV_STRIP)` + `.stderr(inherit)` — drives it, agent-agnostic).
 /// No production path engages it (create/resume hardcode `bridge_cmd: None` → [`BRIDGE_BIN`]); it
 /// is exercised only by explicit selection (tests + the deferred Pete-awake live-runs). Flipping
-/// the live default = repointing [`BRIDGE_BIN`] here (super18's separate gate — NOT tonight).
+/// the live default = repointing [`BRIDGE_BIN`] here (a separate follow-on gate — NOT tonight).
 pub const CLAUDE_AGENT_ACP_BIN: &str = "claude-agent-acp";
 
 /// The registered acp/claude-code provider — Pete's LIVE default. `bridge_cmd = None` ⇒ the

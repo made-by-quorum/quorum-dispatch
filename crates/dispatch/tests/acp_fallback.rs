@@ -1,6 +1,6 @@
 //! scoped-ACP-CC pillar 3 — the transport-loss disposition integration lane.
 //!
-//! Child D (opencode D1 — clerk-4's Arm-B ratification, bond note 01KX01BY7G):
+//! Child D (opencode D1 — the Arm-B ratification):
 //! `acp/claude-code` is a NAMED DIVERGENCE — transport loss REFUSES and
 //! surfaces, with identity preserved in the qd-owned tombstone store
 //! (`dispatch::tombstone`). This lane drives the REAL `AcpProvider` (resolved

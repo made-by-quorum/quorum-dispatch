@@ -1,6 +1,6 @@
 # Re-stamp DORMANCY-REPLAY evidence (R1 precedent rider, orc-2 ruling 2026-06-05)
 # The 2 MOST-STUB-SENSITIVE rows replayed under the COMMITTED v1.5.1 stub with
-# ALL STUB_* seams UNSET, in fresh jails (in-VM, Lima sbtest, pin 0d0fa9e). The
+# ALL STUB_* seams UNSET, in fresh jails (in-VM, Lima linuxvm, pin 0d0fa9e). The
 # normalized outputs MUST byte-match the recorded goldens (sha compare) — proving
 # the v1.5.0->v1.5.1 edit is provably DORMANT (env-gated + default-byte-identical),
 # which is the precondition for re-stamp-WITHOUT-re-record. BOTH byte-match ->

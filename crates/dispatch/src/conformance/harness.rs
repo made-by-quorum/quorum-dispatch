@@ -24,7 +24,7 @@
 //! subprocess-driving function that has never actually been run is unverified
 //! code, not evidence (see the org's "never report an unrun result as
 //! observed" discipline). Implemented and live-probed, serialized one daemon
-//! at a time per conf-build-coord-2/mc-5's protocol (2026-07-14):
+//! at a time per build-review-2/mc-5's protocol (2026-07-14):
 //! `d1.boot-readiness` on all five lanes — `pi/daemon` (cred-free),
 //! `codex/daemon` (version-pin-gated on this box — resolves `Blocked`, zero RAM
 //! footprint), `claude-code/acp` (needs the bridge dir on `PATH`, see
@@ -77,7 +77,7 @@ fn qd(path_prefix: Option<&str>) -> Command {
 /// resident as really up") is domain-general, not lane-specific.
 ///
 /// Corrected after the pi single-cell live probe (2026-07-14, RAM-watched per
-/// conf-build-coord-2/mc-5's greenlight): the pi rubric's internal harness
+/// build-review-2/mc-5's greenlight): the pi rubric's internal harness
 /// (`provider/pi/conformance.rs`) reads the registry row FILE directly, which
 /// carries an `endpoint` field — the public `qd info` CLI surface (text AND
 /// `--json`) does NOT expose that field at all. Asserting on it would have
@@ -748,8 +748,8 @@ impl Drop for Jail {
 /// stable, long-unchanged start/stop/info mechanics and passed cleanly
 /// against the deployed binary — no discrepancy there. But
 /// `d6.cold-target-send-fails-loud-with-terminal`'s specific
-/// `emit_door_failure` path is newer than what's deployed (`/home/
-/// u/.quorum/bin/qd`, dated 2026-07-09 — 5 days stale
+/// `emit_door_failure` path is newer than what's deployed
+/// (`/home/u/.quorum/bin/qd`, dated 2026-07-09 — 5 days stale
 /// relative to this worktree): the SAME fixture, byte-identical, produced
 /// completely different (and correct) behavior once pointed at the
 /// worktree's own freshly-built binary instead. The deployed binary was
@@ -1367,7 +1367,7 @@ fn cancel_maps_to_truthful_terminal_via_host(runner: &Runner) -> Outcome {
 /// not a lingering zombie 'live' lie). Cred-free, deterministic, no live
 /// gate.
 ///
-/// **APPLICABILITY RULING (conf-build-coord-3, 2026-07-15):** the battery's
+/// **APPLICABILITY RULING (build-review-3, 2026-07-15):** the battery's
 /// registry doc text for this cell ("when a required child process is
 /// killed out from under a daemon, the daemon self-terminates") matches
 /// `wire::serve`'s guard exactly, but `grep`ping this crate found `fn serve`
@@ -3240,7 +3240,7 @@ fn count_pi_assistant_messages(dir: &std::path::Path) -> usize {
 /// (pi's daemon DOES internally know which reply answers which turn) is
 /// real, so `NaPermitted` would be the WRONG disposition (that's for a
 /// missing capability, not a missing proof-strength field) — ruled by
-/// conf-build-coord-3, 2026-07-15. Instead this is proven at the strength
+/// build-review-3, 2026-07-15. Instead this is proven at the strength
 /// pi's protocol actually supports: **exactly one turn is ever in flight
 /// during this drive** (asserted, `debug_assert`-backed below, never just
 /// implicit) — so a busy→idle transition plus exactly one NEW assistant
@@ -3559,7 +3559,7 @@ fn pi_transcript_tee(runner: &Runner) -> Outcome {
 /// (mc-5-cleared, single daemon). Starts a pi daemon, kills its `pi` CHILD out
 /// from under it (NOT the daemon), and reads `qd info` liveness. The cell's
 /// property is that the daemon "self-terminates RATHER THAN lingering falsely
-/// live." Live-probed by hand 2026-07-15 (conf-build-coord-3 ruling): the pi
+/// live." Live-probed by hand 2026-07-15 (build-review-3 ruling): the pi
 /// daemon does NEITHER — `serve_pi` (residence.rs:552) has no child-death guard
 /// (it swallows `get_state` errors, `backstop_poll` "leaves the belief
 /// untouched"), and `qd info`'s `live` is computed from the DAEMON pid plus a
@@ -4348,7 +4348,7 @@ pub mod pi {
 
     /// `d6.self-terminate-on-wedged-child` on the `pi` lane — a REAL live probe
     /// that reports its TRUE outcome (a FAIL: pi lingers falsely-live when its
-    /// child dies). Reclassified Required 2026-07-15 (conf-build-coord-3) after
+    /// child dies). Reclassified Required 2026-07-15 (build-review-3) after
     /// the prior NaPermitted reason ("no wire::serve-equivalent loop") was found
     /// false — `serve_pi` exists and has no child-death guard. See
     /// [`pi_self_terminate_probe`] for the full mechanism + evidence.
@@ -4927,8 +4927,8 @@ pub mod claude_code {
     /// token question entirely: D1 needs no completion at all, matching
     /// every other lane's boot-readiness cell.
     ///
-    /// Ruled 2026-07-14 (conf-build-coord-2 on call
-    /// `01KXGW9E0M28F4FB9KKNRR5TNW`, after the earlier bypass-via-`claude -p`
+    /// Ruled 2026-07-14 (build-review-2, after the earlier
+    /// bypass-via-`claude -p`
     /// attempt was correctly rejected as measuring Anthropic's API rather
     /// than qd's claude-code lane): bypassing `qd` is a cell that LIES
     /// (green on the wrong evidence) and is never acceptable, even to save a
@@ -5309,7 +5309,7 @@ pub mod claude_code {
     }
 
     /// `d1.resume-same-session-id` on the bare `claude-code` lane.
-    /// **Rewritten 2026-07-15** (conf-build-coord-3 ruling, after the
+    /// **Rewritten 2026-07-15** (build-review-3 ruling, after the
     /// acceptance-candidate review): the ORIGINAL version of this driver
     /// commissioned a ZERO-COMPLETION warm leaf and tried to resume it
     /// directly — exactly the shape live-probed 2026-07-14 to refuse
@@ -5464,7 +5464,7 @@ pub mod claude_code {
 
     /// `d6.bridge-death-detection-no-false-positive` on the bare
     /// `claude-code` lane: `NotApplicable`, 2026-07-15 correction
-    /// (conf-build-coord-3, confirming grep on record — no `AcpHost`/
+    /// (build-review-3, confirming grep on record — no `AcpHost`/
     /// `acp_client` usage anywhere in this lane's send/commission path, no
     /// bridge child process to detect death of).
     pub fn bridge_death_detection(_runner: &Runner, _session_name: &str) -> Outcome {
@@ -5481,7 +5481,7 @@ pub mod claude_code {
     }
 
     /// `d2.turn-phase-sequence-strict-order` on the bare `claude-code`
-    /// lane: `NotApplicable`, 2026-07-15 correction (conf-build-coord-3,
+    /// lane: `NotApplicable`, 2026-07-15 correction (build-review-3,
     /// confirming grep on record — traced `qd send:relay`'s dispatch in
     /// `send_relay.rs::run`: it branches to `run_codex_send`/`run_acp_send`/
     /// `run_pi_send` for those three providers specifically, each using
@@ -5502,7 +5502,7 @@ pub mod claude_code {
 
     /// `d3.queue-overflow-honors-configured-capacity` on the bare
     /// `claude-code` lane: `NotApplicable`, 2026-07-15 correction
-    /// (conf-build-coord-3, confirming grep on record — grepped every `fn
+    /// (build-review-3, confirming grep on record — grepped every `fn
     /// run_*` in `send_relay.rs`: no `run_claude_send` exists at all, so
     /// this lane never calls `Provider::inject` and never touches
     /// `AcpHost`/`OutboundQueue`).
@@ -6080,7 +6080,7 @@ pub fn run_cell(lane: Lane, cell: &CellId, runner: &Runner, session_name: &str) 
             Some(claude_code::resume_same_session_id(runner, session_name))
         }
         // AcpClaudeCode/Opencode's d1.resume-same-session-id, wired
-        // 2026-07-15 (conf-build-coord-3 ruling, the last cell of the
+        // 2026-07-15 (build-review-3 ruling, the last cell of the
         // 19x5 matrix): `resume_same_session_id_via_cli` now sends a real
         // turn before stopping+resuming (same fix as pi/claude-code-bare).
         // Manually verified BEFORE writing the fix that `qd send:relay`
@@ -7346,7 +7346,7 @@ pub mod c2 {
             runner.fail(
                 commands,
                 observed,
-                "cross-size reattach did NOT preserve wide content — the SC-1 truncation FINGERPRINT: the wide line rendered (START present) and both reattaches succeeded, yet END was DROPPED past col 40 on the SHRINK reattach and/or the full line was not restored on GROW. qrmux's Grid::resize truncates rather than reflowing on a width change (grid.rs:741-774), so content past the new width is dropped on reattach. Expected RED on today's defect-present tree (B-1; else discriminated vs C-4's D7 mutant per F-1). The underlying qrmux reflow defect is brano/C-4's remit, out of C-2 scope",
+                "cross-size reattach did NOT preserve wide content — the SC-1 truncation FINGERPRINT: the wide line rendered (START present) and both reattaches succeeded, yet END was DROPPED past col 40 on the SHRINK reattach and/or the full line was not restored on GROW. qrmux's Grid::resize truncates rather than reflowing on a width change (grid.rs:741-774), so content past the new width is dropped on reattach. Expected RED on today's defect-present tree (B-1; else discriminated vs C-4's D7 mutant per F-1). The underlying qrmux reflow defect is devbox/C-4's remit, out of C-2 scope",
             )
         }
     }

@@ -11,7 +11,7 @@
 //! Every lane's `RunEntry` lands in the SAME `AuthorityJournal` (one ordinal
 //! domain — F-3/N-1), but each lane gets its OWN commissioned run: this
 //! mirrors the serialized, one-daemon-at-a-time live protocol
-//! (conf-build-coord-2/mc-5, 2026-07-14) — commission → start → execute →
+//! (2026-07-14) — commission → start → execute →
 //! teardown → complete, THEN the next lane's run begins — never two lanes'
 //! runs overlapping in wall-clock.
 //!
@@ -198,7 +198,7 @@ fn c1_pipeline_five_lanes_sequential_grid() {
     // d1.resume-same-session-id: codex resolves NotApplicable (proven,
     // zero-token — see registry.rs's NaPermitted declaration), so it still
     // gets it here. pi was ALSO NaPermitted here until 2026-07-15, when
-    // conf-build-coord-3 reclassified it to Required after
+    // it was reclassified to Required after
     // d5.resume-jsonl-continuity-and-recall's pi driver disproved the old
     // NaPermitted reason (qd resume genuinely works and preserves the
     // session id) — pi's resume cell now needs a real prior turn to revive
@@ -207,7 +207,7 @@ fn c1_pipeline_five_lanes_sequential_grid() {
     // alongside d5's cell rather than proven in this zero-token grid.
     // AcpClaudeCode/Opencode/ClaudeCode's drivers are deliberately UNWIRED
     // (see harness::run_cell's comment) — reclassified as a token cell
-    // 2026-07-14 (conf-build-coord-3 ruling) after `qd resume` genuinely
+    // 2026-07-14 (conformance ruling) after `qd resume` genuinely
     // refused a zero-completion boot ("no resumable transcript"); folded
     // into the D2/D5 token-drawing tranche instead of proven here.
     let resume_cell = CellId("d1.resume-same-session-id".to_string());
@@ -299,7 +299,7 @@ fn c1_pipeline_claude_code_lane_only() {
     let battery = conformance_battery();
     let manifest_digest = battery.manifest_digest();
     // d1.resume-same-session-id deliberately excluded: reclassified as a
-    // token cell 2026-07-14 (conf-build-coord-3 ruling) — see
+    // token cell 2026-07-14 (conformance ruling) — see
     // harness::run_cell's comment and c1_pipeline_five_lanes_sequential_grid
     // above.
     let cells = [
@@ -1099,7 +1099,7 @@ fn c1_pipeline_wedged_child_two_lanes() {
 /// out from under it lingers FALSELY-LIVE (`live:true, status:idle`). This test
 /// starts a real pi daemon, kills its child, and asserts the HONEST current
 /// outcome — a FAIL — locking in the finding. Reclassified Required 2026-07-15
-/// (conf-build-coord-3) after the prior NaPermitted reason was found false.
+/// (conformance ruling) after the prior NaPermitted reason was found false.
 /// If this ever starts returning Pass, the underlying qd pi-liveness product
 /// defect (escalated separately, out of C-1 scope) was fixed, and this cell's
 /// expectation must be revisited. Needs a real pi daemon (QD_C1_LIVE); pi is

@@ -886,36 +886,36 @@ fn run_qd_host(dir: &Path, qd_host: &str, args: &[&str]) -> (i32, String, String
     )
 }
 
-/// `qd send alpha@brano hi` where local_host ("thisbox") != "brano" and there
-/// is no `remote/brano/` ⇒ the single-machine host-qualified refusal:
+/// `qd send alpha@devbox hi` where local_host ("thisbox") != "devbox" and there
+/// is no `remote/devbox/` ⇒ the single-machine host-qualified refusal:
 /// refused{no-fleet-state} exit 12. Bare/local is unaffected (proven elsewhere).
 #[test]
 fn send_name_at_foreign_host_is_refused_no_fleet_state_exit_12() {
     let temp = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "alpha@brano", "hi"]);
+    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "alpha@devbox", "hi"]);
     assert_eq!(code, 12, "host-qualified for a host with no fleet state → exit 12 (stderr: {err})");
     assert!(
         err.starts_with("qd send: refused{no-fleet-state}:"),
         "expected the single-machine no-fleet-state refusal, got: {err}"
     );
     assert!(
-        err.contains("brano") && err.contains("no fleet state"),
+        err.contains("devbox") && err.contains("no fleet state"),
         "the refusal names the host + the absent-fleet-state reason, got: {err}"
     );
 }
 
-/// `qd send --host brano alpha hi` (the flag form of the sugar) reaches the SAME
+/// `qd send --host devbox alpha hi` (the flag form of the sugar) reaches the SAME
 /// refused{no-fleet-state} — the sugar and the flag desugar to one path.
 #[test]
 fn send_host_flag_foreign_is_refused_no_fleet_state_exit_12() {
     let temp = tempfile::tempdir().unwrap();
-    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "brano", "alpha", "hi"]);
+    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "devbox", "alpha", "hi"]);
     assert_eq!(code, 12, "--host foreign → exit 12 (stderr: {err})");
     assert!(
         err.starts_with("qd send: refused{no-fleet-state}:"),
         "--host desugars to the same host-qualified path, got: {err}"
     );
-    assert!(err.contains("brano"), "names the host, got: {err}");
+    assert!(err.contains("devbox"), "names the host, got: {err}");
 }
 
 /// `name@local` where local == local_host ("thisbox") is treated as THIS host
@@ -948,21 +948,21 @@ fn send_name_at_local_host_resolves_locally_like_bare() {
 #[test]
 fn send_host_flag_and_address_host_disagree_is_refused_host_exit_12() {
     let temp = tempfile::tempdir().unwrap();
-    // @brano vs --host zonk ⇒ disagreement.
-    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "zonk", "alpha@brano", "hi"]);
+    // @devbox vs --host zonk ⇒ disagreement.
+    let (code, _out, err) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "zonk", "alpha@devbox", "hi"]);
     assert_eq!(code, 12, "disagreeing host qualifiers → refused{{host}} exit 12 (stderr: {err})");
     assert!(
         err.starts_with("qd send: refused{host}:"),
         "expected the sync refused{{host}} for disagreement, got: {err}"
     );
     assert!(
-        err.contains("brano") && err.contains("zonk"),
+        err.contains("devbox") && err.contains("zonk"),
         "the refusal names BOTH qualifiers, got: {err}"
     );
 
-    // AGREEING qualifiers (--host brano == @brano) pass the reconciliation gate and
+    // AGREEING qualifiers (--host devbox == @devbox) pass the reconciliation gate and
     // reach the host-qualified path → refused{no-fleet-state}, NOT refused{host}.
-    let (code_ok, _out_ok, err_ok) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "brano", "alpha@brano", "hi"]);
+    let (code_ok, _out_ok, err_ok) = run_qd_host(temp.path(), "thisbox", &["send", "--host", "devbox", "alpha@devbox", "hi"]);
     assert_eq!(code_ok, 12, "agreeing qualifiers still host-qualified → exit 12 (stderr: {err_ok})");
     assert!(
         err_ok.starts_with("qd send: refused{no-fleet-state}:"),

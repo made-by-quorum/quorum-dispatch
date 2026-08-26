@@ -26,17 +26,17 @@ ffwd2a: timed-out racer result = Err("observed lock: timed out acquiring exclusi
 ---- RAW[ffwd2a] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpeRRamH/marks.jsonl ----
 bytes=109 ends_with_newline=true
 
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-to"}
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-to"}
 
----- RAW[ffwd2a] observed-claims/: ["qrmoh~claude~sid-to"]
+---- RAW[ffwd2a] observed-claims/: ["obsbox~claude~sid-to"]
 ffwd2a: record after lock released = Ok(true)
 ok
 test probe1_many_threads_same_key_exactly_one_line ... ---- RAW[probe1] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpnzwLRs/marks.jsonl ----
 bytes=110 ends_with_newline=true
 
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-thr"}
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-thr"}
 
----- RAW[probe1] observed-claims/: ["qrmoh~claude~sid-thr"]
+---- RAW[probe1] observed-claims/: ["obsbox~claude~sid-thr"]
 probe1: wins=1 noops=15 errs=0 results=[Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(false), Ok(true)]
 ok
 test probe2_ffwd2b_sigkill_in_section_holder_recovers ... probe2/ffwd2b: holder is IN-SECTION (sentinel present); no line appended yet
@@ -44,27 +44,27 @@ probe2/ffwd2b: holder killed, status = ExitStatus(unix_wait_status(9))
 ---- RAW[probe2/ffwd2b] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmp0dpOVc/marks.jsonl ----
 bytes=111 ends_with_newline=true
 
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-kill"}
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-kill"}
 
----- RAW[probe2/ffwd2b] observed-claims/: ["qrmoh~claude~sid-kill"]
+---- RAW[probe2/ffwd2b] observed-claims/: ["obsbox~claude~sid-kill"]
 probe2/ffwd2b: recovery record after holder death = Ok(true)
 ok
-test probe3_torn_trailing_line_same_key ... probe3: injected torn tail (no newline): "{\"ts\":\"2026-07-15T00:00:00.000Z\",\"event\":\"observed\",\"host\":\"qrmoh\",\"harness\":\"claude\",\"sessionId\":\""
+test probe3_torn_trailing_line_same_key ... probe3: injected torn tail (no newline): "{\"ts\":\"2026-07-15T00:00:00.000Z\",\"event\":\"observed\",\"host\":\"obsbox\",\"harness\":\"claude\",\"sessionId\":\""
 ---- RAW[probe3] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpV4QVHc/marks.jsonl ----
 bytes=210 ends_with_newline=true
-{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-torn"}
+{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-torn"}
 
----- RAW[probe3] observed-claims/: ["qrmoh~claude~sid-torn"]
+---- RAW[probe3] observed-claims/: ["obsbox~claude~sid-torn"]
 probe3: record result = Ok(true)
 probe3: readable_lines=1 marker_exists=true
 ok
 test probe3b_torn_trailing_line_corrupts_unrelated_append ... ---- RAW[probe3b] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmp1w4a3u/marks.jsonl ----
 bytes=208 ends_with_newline=true
-{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-K2"}
+{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-K2"}
 
----- RAW[probe3b] observed-claims/: ["qrmoh~claude~sid-K2"]
+---- RAW[probe3b] observed-claims/: ["obsbox~claude~sid-K2"]
 probe3b: record K2 result = Ok(true)
 probe3b: K2 readable_lines=1 marker_exists=true
 ok
@@ -73,59 +73,59 @@ ok
 test probe4a_rotation_surviving_marker_blocks_reobservation ... probe4a: removed marks.jsonl; marker survives = true
 ---- RAW[probe4a] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpzIukJU/marks.jsonl ----
 (no marks.jsonl: No such file or directory (os error 2))
----- RAW[probe4a] observed-claims/: ["qrmoh~claude~sid-rot"]
+---- RAW[probe4a] observed-claims/: ["obsbox~claude~sid-rot"]
 probe4a: re-observe after stream-loss-with-surviving-marker = Ok(false)
 probe4a: readable_lines_after_reobserve = 0
 ok
 test probe4b_rotation_clearing_markers_reobserves ... ---- RAW[probe4b] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpC0CLYM/marks.jsonl ----
 bytes=111 ends_with_newline=true
 
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-rot2"}
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-rot2"}
 
----- RAW[probe4b] observed-claims/: ["qrmoh~claude~sid-rot2"]
+---- RAW[probe4b] observed-claims/: ["obsbox~claude~sid-rot2"]
 probe4b: re-observe after PROPER rotation = Ok(true)
 ok
 test probe5_composition_seam_duplicate_lines_first_wins ... ---- RAW[probe5] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmp98XQWm/marks.jsonl ----
 bytes=242 ends_with_newline=true
-{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-comp","cwd":"/a"}
-{"ts":"2026-07-15T00:00:01.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-comp","cwd":"/b"}
+{"ts":"2026-07-15T00:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-comp","cwd":"/a"}
+{"ts":"2026-07-15T00:00:01.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-comp","cwd":"/b"}
 
----- RAW[probe5] observed-claims/: ["qrmoh~claude~sid-comp"]
+---- RAW[probe5] observed-claims/: ["obsbox~claude~sid-comp"]
 probe5: record over a 2-line history = Ok(false)
 ok
 test probe6_multiprocess_racers_one_physical_line ... ---- RAW[probe6] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpOcbiOI/marks.jsonl ----
 bytes=109 ends_with_newline=true
 
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-mp"}
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-mp"}
 
----- RAW[probe6] observed-claims/: ["qrmoh~claude~sid-mp"]
+---- RAW[probe6] observed-claims/: ["obsbox~claude~sid-mp"]
 probe6: 24 racer outputs = ["RESULT ok=false", "RESULT ok=true", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false", "RESULT ok=false"]
 probe6: wins=1 noops=23
 ok
-test probe7_planted_marker_early_noop_never_early_append ... probe7: planted marker with NO line: /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpP452EE/observed-claims/qrmoh~claude~sid-plant
+test probe7_planted_marker_early_noop_never_early_append ... probe7: planted marker with NO line: /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpP452EE/observed-claims/obsbox~claude~sid-plant
 ---- RAW[probe7] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpP452EE/marks.jsonl ----
 (no marks.jsonl: No such file or directory (os error 2))
----- RAW[probe7] observed-claims/: ["qrmoh~claude~sid-plant"]
+---- RAW[probe7] observed-claims/: ["obsbox~claude~sid-plant"]
 probe7: record with planted marker = Ok(false)
 probe7: readable_lines = 0
 ok
 test probe8_torn_mark_injected_between_scan_and_append ... ---- RAW[probe8] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmpAuCirj/marks.jsonl ----
 bytes=448 ends_with_newline=true
 {"ts":"t","sessionId":"s","payload":"MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-mark"}
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-mark"}
 
----- RAW[probe8] observed-claims/: ["qrmoh~claude~sid-mark"]
+---- RAW[probe8] observed-claims/: ["obsbox~claude~sid-mark"]
 probe8: record with torn-mark injected mid-section = Ok(true)
 probe8: readable=1 marker_exists=true
 ok
 test probe9_leading_newline_blank_safety_and_scan_idempotent ... ---- RAW[probe9] marks.jsonl @ /var/folders/lc/yr66lhjs1x900_39vv92wj1m0000gn/T/.tmp0oGvhO/marks.jsonl ----
 bytes=218 ends_with_newline=true
 
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-b1"}
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-b1"}
 
-{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"qrmoh","harness":"claude","sessionId":"sid-b2"}
+{"ts":"2025-07-15T10:00:00.000Z","event":"observed","host":"obsbox","harness":"claude","sessionId":"sid-b2"}
 
----- RAW[probe9] observed-claims/: ["qrmoh~claude~sid-b2", "qrmoh~claude~sid-b1"]
+---- RAW[probe9] observed-claims/: ["obsbox~claude~sid-b2", "obsbox~claude~sid-b1"]
 ok
 
 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.34s

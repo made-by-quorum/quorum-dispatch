@@ -520,7 +520,7 @@ fn reject_unsafe_name(name: &str) -> Option<String> {
     None
 }
 
-/// S2-at-new PIN RECONCILIATION (spec §2.1; orc-4 ruled ADOPT 2026-06-05).
+/// S2-at-new PIN RECONCILIATION (spec §2.1; orc ruled ADOPT 2026-06-05).
 ///
 /// TS at pin validates EVERY `qd new` name against the S2 whitelist BEFORE any
 /// FS/env op (lifecycle.ts:857-861), exiting 1 with `ERROR: <validateSessionName
@@ -544,7 +544,7 @@ fn s2_validate_new_name(name: &str) -> Option<String> {
 /// of operations and the claim-release discipline.
 pub fn run_new(deps: &NewDeps, params: &NewParams) -> Result<NewOutcome, NewError> {
     // --- Step 0a: S2-at-new whitelist (spec §2.1, lifecycle.ts:857-861) ------
-    // PIN RECONCILIATION (orc-4 ruled ADOPT): S2 runs FIRST, before ANY FS/env
+    // PIN RECONCILIATION (orc ruled ADOPT): S2 runs FIRST, before ANY FS/env
     // op, exactly as TS. Names like `a'b` / `a b` that booted under the looser
     // gate below now exit 1 here with the ported `ERROR: <msg>` wording. Single
     // call site of [`s2_validate_new_name`] (the placement is auditable).
@@ -2473,7 +2473,7 @@ Commands:
         assert_eq!(e.to_string(), "Failed to create session: err text");
     }
 
-    // --- G-A1b: S2-at-new name-class MATRIX (spec §7 G-A1b; orc-4 rider #3) ---
+    // --- G-A1b: S2-at-new name-class MATRIX (spec §7 G-A1b; orc rider #3) ---
     // Three name classes, each asserting the exact exit code AND the exact stderr
     // wording (the Display string the verb prints). Before/after for the
     // reconciliation-delta class (b) is recorded in the per-row comments.
@@ -2511,7 +2511,7 @@ Commands:
     #[test]
     fn g_a1b_class_b_formerly_accepted_now_rejected() {
         // CLASS (b) the RECONCILIATION DELTA: names that BOOTED before S2-at-new
-        // and now exit 1. This is the behavior change orc-4 ruled IN as
+        // and now exit 1. This is the behavior change orc ruled IN as
         // pin-reconciliation (it matches TS at pin, which always validated here).
         //
         //   BEFORE (no S2-at-new): `a'b` and `a b` passed reject_unsafe_name (no

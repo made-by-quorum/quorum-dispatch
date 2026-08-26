@@ -692,8 +692,8 @@ mod tests {
             correlation_id: id.to_string(),
             authored_at: authored,
             expires_at: expires,
-            target: "alpha@brano".to_string(),
-            origin: "brano".to_string(),
+            target: "alpha@devbox".to_string(),
+            origin: "devbox".to_string(),
             sender: Some("ab3kx9mq".to_string()),
             body: "hello".to_string(),
         }
@@ -1228,7 +1228,7 @@ mod tests {
         // R14.2: origin/authored_at come ONLY from the joined envelope now.
         assert_eq!(
             d.origin.as_deref(),
-            Some("brano"),
+            Some("devbox"),
             "from the joined envelope"
         );
         assert_eq!(d.authored_at, Some(10), "from the joined envelope");
@@ -1238,7 +1238,7 @@ mod tests {
         // R11.1: last_event null iff no events. origin/authored_at still come from
         // the envelope (p has an envelope in scope).
         assert_eq!(p.last_event, None);
-        assert_eq!(p.origin.as_deref(), Some("brano"), "envelope in scope");
+        assert_eq!(p.origin.as_deref(), Some("devbox"), "envelope in scope");
         assert_eq!(p.attempts, 0);
 
         // only=Some filters to that id (project_one semantics).
@@ -1264,7 +1264,7 @@ mod tests {
         assert_eq!(expired[0].state, SummaryState::Expired);
         assert_eq!(expired[0].last_event, None);
         // origin/authored_at still from the envelope (in scope), even when expired.
-        assert_eq!(expired[0].origin.as_deref(), Some("brano"));
+        assert_eq!(expired[0].origin.as_deref(), Some("devbox"));
     }
 
     #[test]
@@ -1745,8 +1745,8 @@ mod tests {
     #[test]
     fn local_host_qd_host_override_wins() {
         let mut e = MapEnv::default();
-        e.vars.insert("QD_HOST".to_string(), "brano".to_string());
-        assert_eq!(local_host(&e), "brano");
+        e.vars.insert("QD_HOST".to_string(), "devbox".to_string());
+        assert_eq!(local_host(&e), "devbox");
     }
 
     #[test]

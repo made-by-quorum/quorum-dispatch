@@ -927,7 +927,7 @@ fn msg_bytes(n: usize) -> Vec<u8> {
 // The merged two-write discipline operates ABOVE the transport: a single large
 // `zmx send` overflows the ~4096B canonical tty input queue before claude's reader
 // drains it and is DROPPED WHOLESALE — composer EMPTY, delta 0, did-not-go-busy
-// (test/golden/dryrun/a4-r6-probe-evidence.md; 12KB+16KB on brano, TS ~4KB). The
+// (test/golden/dryrun/a4-r6-probe-evidence.md; 12KB+16KB on devbox, TS ~4KB). The
 // content-verified CR correctly fires nothing (nothing reached the composer). The
 // FIX (parity port of 8c59ec4:src/commands/submit.ts) chunks the text into ≤1024B
 // code-point-safe pieces ~150ms apart so the reader drains between writes.
@@ -938,7 +938,7 @@ fn msg_bytes(n: usize) -> Vec<u8> {
 // dependent; the INVARIANT proven here is the ≤1024B chunk size.
 // ===========================================================================
 
-const JUMBO_BYTES: usize = 16 * 1024; // 16KB — the live EMPTY-DROPPED size on brano.
+const JUMBO_BYTES: usize = 16 * 1024; // 16KB — the live EMPTY-DROPPED size on devbox.
 
 /// Chunk opts for the gate: default 1024B chunk, but an 80ms inter-chunk settle
 /// (> the fakerepl's 50ms GAP, so each chunk closes as its OWN burst) — faster than

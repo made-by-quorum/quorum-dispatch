@@ -300,8 +300,8 @@ struct RealStore {
     exec: dispatch::exec::RealExec,
     /// One-per-process guard for the ADR 0010 fallback notice.
     notice: std::sync::atomic::AtomicBool,
-    /// One-per-process guard for the env-forced-locked GET diagnostic (orc-2
-    /// ruling relay-1780639217973-4). Separate flag from `notice` so the two
+    /// One-per-process guard for the env-forced-locked GET diagnostic (operator
+    /// ruling). Separate flag from `notice` so the two
     /// divergence lines never share a guard.
     locked_diag: std::sync::atomic::AtomicBool,
 }

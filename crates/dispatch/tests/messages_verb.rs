@@ -177,7 +177,7 @@ fn log_row_from(
     let target = serde_json::to_string(target).unwrap();
     let body = serde_json::to_string(body).unwrap();
     format!(
-        r#"{{"v":1,"correlation_id":"{id}","authored_at":{authored},"expires_at":{expires},"target":{target},"origin":"brano","sender":{sender},"body":{body}}}"#
+        r#"{{"v":1,"correlation_id":"{id}","authored_at":{authored},"expires_at":{expires},"target":{target},"origin":"devbox","sender":{sender},"body":{body}}}"#
     )
 }
 
@@ -279,7 +279,7 @@ fn row_carries_the_envelope_fields_joined_to_the_folded_disposition() {
     assert_eq!(r["authored_at"], AUTHORED);
     assert_eq!(r["expires_at"], FAR_FUTURE);
     assert_eq!(r["target"], "alpha");
-    assert_eq!(r["origin"], "brano", "origin is the origin HOST, from the envelope");
+    assert_eq!(r["origin"], "devbox", "origin is the origin HOST, from the envelope");
     assert_eq!(r["body"], "the prose, verbatim");
     // From the FOLD over the events.
     assert_eq!(r["state"], "delivered");

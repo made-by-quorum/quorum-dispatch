@@ -1022,8 +1022,8 @@ fn cmd_setup() -> Command {
 }
 
 fn cmd_bootstrap() -> Command {
-    // The relay env seam is an OPERATOR surface with visibility parity (orc-3
-    // ruling relay-1780662680745-11 condition c): documented together here, in
+    // The relay env seam is an OPERATOR surface with visibility parity (operator
+    // ruling, condition c): documented together here, in
     // `bootstrap --help`, and in the bootstrap.rs source.
     // (QRM_RELAY_DRIVER_INSTALL is GONE with the external bun driver, 2026-06-09
     // ruling: the relay is native — bootstrap registers `qd relay:serve` in

@@ -1,5 +1,5 @@
 //! C-RED — the tier-a adversarial-JSONL red-team battery for the pi adapter
-//! (WS-A.2, frame 01KWB61JKMAPK9ZWJZ7ZN7CKRW). Mirrors the [`super::conformance`]
+//! (WS-A.2). Mirrors the [`super::conformance`]
 //! library form: the probe battery LIVES here (so its pure helpers are
 //! unit-tested) and a thin gated `tests/pi_redteam.rs` wrapper runs it, drives the
 //! stub-pi/live-pi layers, and SERIALIZES the round evidence bundle.
@@ -173,7 +173,7 @@ impl RedReport {
 
 /// The permissive/unwrap_or_default sites surveyed at source on b9b810d — pinned
 /// so the acceptance oracle sees the reds came from a probed-and-found-hardened
-/// surface, not shallow probing (pi-lead-2 reinforcement #2).
+/// surface, not shallow probing (pi-lead reinforcement #2).
 pub fn hardened_surface_survey() -> Vec<String> {
     [
         "rpc.rs:182 classify — v.as_object()? → None on non-object; response via from_value(..).unwrap_or_default()",
@@ -1470,7 +1470,7 @@ mod tests {
         let breaks = report.breaks();
         assert!(
             breaks.is_empty(),
-            "C-RED fixture battery found break(s) — route to pi-lead-2, do NOT paper over:\n{}",
+            "C-RED fixture battery found break(s) — route to pi-lead, do NOT paper over:\n{}",
             breaks
                 .iter()
                 .map(|b| format!("  [{}] {} :: {}", b.class, b.probe, b.observed))

@@ -14,7 +14,7 @@
 //!   * **G-COLDSTART-N (e) W-2 ROWS** — (i) the KillSession reply-flush race:
 //!     the `SessionKilled` reply frame ARRIVES intact (now held by the §4.1
 //!     bounded in-flight WAIT that replaced the deleted fixed 150ms grace —
-//!     orc ruling relay-1780796003401-33), asserted not assumed; (ii) the
+//!     orc ruling), asserted not assumed; (ii) the
 //!     ended-window refusal: a NEW connect issuing a session-addressed verb
 //!     while teardown is underway gets the named session-ended error (never a
 //!     hang, never a success). Row (ii) holds the window open DETERMINISTICALLY
@@ -361,7 +361,7 @@ fn g_coldstart_claim_timeout_no_phantom_then_reaped() -> Result<(), Box<dyn Erro
 /// W-2 row (i): the KillSession reply-flush race. KillSession empties the
 /// manager in the SAME handler that still owes its `SessionKilled` reply; the
 /// §4.1 lost-reply fix's BOUNDED IN-FLIGHT WAIT (which replaced the deleted fixed
-/// 150ms grace — orc ruling relay-1780796003401-33) holds the lifecycle exit
+/// 150ms grace — orc ruling) holds the lifecycle exit
 /// until that reply (and the SessionEnded flush) reach the socket, instead of
 /// gambling a fixed sleep. ASSERTED: the `SessionKilled` frame ARRIVES intact
 /// (not assumed). The deterministic differential evidence for the wait closing
@@ -413,24 +413,24 @@ fn w2_grace_kill_reply_flush_arrives_intact() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// W-2 row (ii) — REWRITE v2 (exit-reorder addendum; orc-17 F1 ruling
-/// relay-1780802523592-41). The ended-window named refusal, observed on a
+/// W-2 row (ii) — REWRITE v2 (exit-reorder addendum; orc F1 ruling).
+/// The ended-window named refusal, observed on a
 /// PRE-ACCEPTED held connection, plus the fresh-connect ENOENT clean-absent half.
 ///
 /// RETIRE-WITH-REASON (rider a — names BOTH retirements + CITES all three
 /// rulings so the amendment trail survives):
-///   - RETIREMENT 1 (orc-14 relay-1780796003401-33): the ORIGINAL test asserted
+///   - RETIREMENT 1 (orc): the ORIGINAL test asserted
 ///     the OBSERVABILITY of a window whose WIDTH was the deleted fixed 150ms
 ///     grace — an externally-polled fresh-connect race. The §4.1 lost-reply fix
 ///     replaced that grace with a bounded in-flight WAIT, collapsing the window
 ///     to ~microseconds when nothing is in flight; that 150ms width-assert died
 ///     with the grace it was coupled to.
-///   - RETIREMENT 2 (orc-16 reorder relay-1780801873547-39 + orc-17 F1 yes
-///     relay-1780802523592-41): the exit-reorder unlinks the socket FIRST (step
+///   - RETIREMENT 2 (orc reorder + orc F1 yes): the exit-reorder
+///     unlinks the socket FIRST (step
 ///     3), so a FRESH connect during teardown gets ENOENT — the named refusal is
 ///     now IMPOSSIBLE-BY-CONSTRUCTION to observe on a fresh connect. The
 ///     "fresh-connect observes the named refusal" observable is therefore
-///     retired too; orc-17 ruled the named refusal moves to a PRE-ACCEPTED
+///     retired too; orc ruled the named refusal moves to a PRE-ACCEPTED
 ///     connection (accepted + Hello-complete BEFORE teardown; pre-accepted
 ///     connections drain INSIDE the bounded wait), and fresh connects become the
 ///     ENOENT clean-absent half.

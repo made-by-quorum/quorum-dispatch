@@ -122,9 +122,9 @@ Message sent to qdrg-79329178063075315738-soak]
     name=qdrg-79329178063075315738-soak relayPort=None
   channels dir state (/tmp/claude-501/qdrg-runs/79329178063075315738/home/.claude/channels):
     total 0
-    drwxr-xr-x   3 eric  wheel   96 Jun  4 23:39 .
-    drwxr-xr-x  13 eric  wheel  416 Jun  4 23:42 ..
-    lrwxr-xr-x   1 eric  wheel   25 Jun  4 23:39 relay -> /home/u/work/cc-relay
+    drwxr-xr-x   3 u  wheel   96 Jun  4 23:39 .
+    drwxr-xr-x  13 u  wheel  416 Jun  4 23:42 ..
+    lrwxr-xr-x   1 u  wheel   21 Jun  4 23:39 relay -> /home/u/work/cc-relay
   trying send:relay (absence is a FINDING not a failure):
     send:relay rc=1 out=[Session "qdrg-79329178063075315738-soak" has no relay.]
   dev-channels banner in scrollback?

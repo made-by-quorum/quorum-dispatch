@@ -174,7 +174,7 @@ pub(crate) fn gather_providers(
     //   - pi: its own sessions root (`$PI_CODING_AGENT_SESSION_DIR` else
     //     `$HOME/.pi/agent/sessions`, resolved off `fx.env` ONLY). An absent or
     //     empty store yields ZERO rows (`scan_transcripts` returns empty on a
-    //     missing root), never an error — the brano-today live case.
+    //     missing root), never an error — the devbox-today live case.
     //   - codex: its cold store is a sqlite index + rollout tree (NOT a
     //     `scan_transcripts` surface), so its cold discovery stays in
     //     `gather_codex` (result-identical, per the A2 discretion).

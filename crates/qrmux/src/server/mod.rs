@@ -468,7 +468,7 @@ pub async fn run_server_ctrl(
                                 "unclaimed after {}ms — exiting",
                                 claim_timeout.as_millis()
                             );
-                            // Exit-reorder (addendum, orc-16): the in-flight
+                            // Exit-reorder (addendum, orc): the in-flight
                             // wait MOVED out of this task into the shared
                             // post-accept-loop shutdown path. The claim-timeout
                             // arm now SIGNALS immediately; the post-loop path
@@ -503,7 +503,7 @@ pub async fn run_server_ctrl(
                     // (post-`ended` verbs fail fast through the same guarded path,
                     // bounded). Deterministic, never a hang.
                     ended.store(true, Ordering::Release);
-                    // Exit-reorder (addendum, orc-16): the bounded in-flight WAIT
+                    // Exit-reorder (addendum, orc): the bounded in-flight WAIT
                     // (which replaced the deleted fixed 150ms grace) MOVED out of
                     // this task into the shared post-accept-loop shutdown path. We
                     // SIGNAL immediately here; the post-loop path closes the
@@ -653,7 +653,7 @@ pub async fn run_server_ctrl(
         }
     }
 
-    // ===== Exit-reorder (addendum, orc-16 relay-1780801873547-39): the SHARED
+    // ===== Exit-reorder (addendum, orc): the SHARED
     // post-accept-loop shutdown path, run for ALL exit reasons (exit-on-end,
     // claim-timeout, SIGTERM/SIGINT). Order is NORMATIVE:
     //
@@ -725,7 +725,7 @@ pub async fn run_server_ctrl(
 }
 
 /// RAII guard that removes the socket file â [RT-F3 fold, exit-reorder spec
-/// addendum; orc-16 relay-1780801873547-39]. The shutdown reorder unlinks the
+/// addendum; orc]. The shutdown reorder unlinks the
 /// socket EARLY (before the bounded in-flight wait) so new arrivals get ENOENT =
 /// clean-absent and a same-name relaunch can legitimately bind a FRESH
 /// `<name>.sock` at the same path WHILE the old daemon is still draining. If the

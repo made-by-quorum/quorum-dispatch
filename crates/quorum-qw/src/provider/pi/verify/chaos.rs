@@ -18,7 +18,7 @@
 //!   4. pgid-teardown grandchild-orphan (+ the non-vacuity escapee characterization)
 //!
 //! **At-source mechanism deviations from the codex-mirror preregistration**
-//! (approved by pi-lead-3 pre-run as faithfulness corrections, NOT a bar change —
+//! (approved by pi-lead pre-run as faithfulness corrections, NOT a bar change —
 //! documented here + emitted in the round evidence):
 //!   - **Class 1**: `qd info --json` DELIBERATELY OMITS `endpoint`
 //!     (`registry.rs:125-134`, `#[serde(skip…)]`, §9.4 "endpoint stays OUT of the
@@ -397,7 +397,7 @@ fn read_pid_set(path: &str) -> HashSet<i64> {
 }
 
 /// Layer (b) RAW snapshot: the LIVE fleet.service pid set, read at call time (NEVER
-/// hardcoded — super19's daemon pid already moved 1956851→1956858 on reparent).
+/// hardcoded — the daemon pid already moved 1956851→1956858 on reparent).
 /// Written to evidence; the ASSERTION runs on the DURABLE-filtered subset below.
 pub fn fleet_snapshot() -> HashSet<i64> {
     read_pid_set(FLEET_CGROUP_PROCS)
@@ -1314,7 +1314,7 @@ fn class4_pgid_teardown(
             guard.record_spawn(pgid_of(pid).unwrap_or(pid));
             capture_proc_cgroup(pid, dir, "class4a-resident");
 
-            // ROUND ≥2 — GRANDCHILD-IN-GROUP non-vacuity (pi-lead-3 BINDING). cred-free
+            // ROUND ≥2 — GRANDCHILD-IN-GROUP non-vacuity (pi-lead BINDING). cred-free
             // tier-a pi spawns NO &-detached grandchildren, so to make the
             // "grandchild-orphan" class non-vacuous we INJECT an &-detached member INTO
             // the resident's pgid (process_group(resident_pid)) — a descendant that

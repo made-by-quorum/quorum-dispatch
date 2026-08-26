@@ -13,7 +13,7 @@
 //!
 //! Each probe writes an evidence file (adversarial input → observed degradation)
 //! into a per-run bundle (`$CCONF_EVIDENCE_DIR/redteam` or a CARGO_TARGET_TMPDIR
-//! default), so the oracle (codex-lead, mechanical exhaustion) reads outcomes at
+//! default), so the oracle (mechanical exhaustion) reads outcomes at
 //! source. These probes PUSH PAST the inline `rollout::tests` / `rpc::tests` to
 //! hunt NEW break classes.
 
@@ -352,7 +352,7 @@ fn red_derive_status_adversarial_turn_ids() {
 
 #[test]
 fn red_derive_status_foreign_complete_balances_by_design() {
-    // KNOWN/ACCEPTED LIMITATION (RULED by codex-lead-2, NOT a break-class): a FOREIGN
+    // KNOWN/ACCEPTED LIMITATION (RULED, NOT a break-class): a FOREIGN
     // task_complete (an id matching no open turn) closes the OLDEST open turn
     // (best-effort balance, rollout.rs:240-259 docstring) → a genuinely-open turn A
     // is reported IDLE when a stray complete for an unrelated id arrives. A tampered
@@ -372,7 +372,7 @@ fn red_derive_status_foreign_complete_balances_by_design() {
         &red_bundle(),
         "derive-foreign-complete-BY-DESIGN.txt",
         "started(REAL-OPEN-A) + complete(FOREIGN-ID-Z) -> Idle (best-effort balance, rollout.rs:240-259).\n\
-         KNOWN/ACCEPTED LIMITATION, RULED by codex-lead-2 (NOT a break-class): a tampered \
+         KNOWN/ACCEPTED LIMITATION, RULED (NOT a break-class): a tampered \
          local rollout can misreport status. Out of threat model (tampering needs local write \
          under CODEX_HOME); close-oldest is deliberate co-attach id-misalignment handling and \
          exact-id-only would break the legitimate co-attach case. Stays by-design.\n",

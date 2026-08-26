@@ -198,7 +198,7 @@ splits into a **record-presence FLOOR** ("the bytes are present as a record") an
 | **claude-relay** | `message-seen` | **FLOOR** (record-presence) | a recipient-side transcript observer (`relay_server/mod.rs run_received_observer`, emit `:994`) emits `message-seen` when the relay `message_id` lands as a `<channel … message_id="…">` **wrapper attribute** in the recipient's own transcript | `seen-failed{recipient-gone}` at the recipient's session-close bookend for a tracked-but-unpulled id (`relay_server/mod.rs:1125`); latency is **never** a failure (an un-pulled but alive message stays PENDING) |
 | **ACP** (`claude-code/acp`, `opencode/acp` — spelled `acp/claude-code` / `opencode` before 2026-08-24) | `message-seen` | **STRONG** on clean turn; **FLOOR** on landing-check | see §3.1 — post-inject StopReason is turn-outcome; delivery = a **landing check** against `~/.claude/projects`, content-keyed on `content_sha256` (`wait.rs:545-565`, emit `:619`) | **NO terminal** on not-landed/ambiguous — the send stays recoverable (§3.1). **ACP never mints `seen-failed`** |
 | **pi** | `message-seen` | **FLOOR** (record-presence) | a content-keyed rollout observer emits `message-seen` when the sent `content_sha256` appears as a user-turn record in the pi rollout (`wait.rs` `emit_pi_seen_for_landed`), driven from BOTH the wait seam and the SEND seam's bounded landing check (`send_relay.rs` `pi_confirm_landing`, §3.2); the dead-only structured floor sub-lane emits via `emit_daemon_seen` | door failure → `send-failed` (§1.2); otherwise stays PENDING. **pi LIVE conformance is DEFERRED** (§6) |
-| **codex** | — | — | **DEFERRED — codex dies on brano** (`qd start --provider codex` unsupported; sessions die instantly). No conformance; do not rely on codex receipts | door failure → `send-failed`; otherwise PENDING |
+| **codex** | — | — | **DEFERRED — codex dies on devbox** (`qd start --provider codex` unsupported; sessions die instantly). No conformance; do not rely on codex receipts | door failure → `send-failed`; otherwise PENDING |
 
 **Floor vs strong, labeled:** relay `message-seen`, pi `message-seen`, and the ACP
 landing-check are the **record-presence FLOOR** ("the bytes are present as a record").
@@ -228,7 +228,7 @@ observation of the recipient's own record, not an inference.
     `wait.rs:649`). The send stays recoverable.
 - **ACP NEVER mints `seen-failed`.** The `No → seen-failed` arm rests on a write-ordering
   guarantee ("the bridge writes the user record before the terminal response") that is
-  **unprovable on brano** (the claude-code-acp bridge is absent). At R6 the `No` arm is
+  **unprovable on devbox** (the claude-code-acp bridge is absent). At R6 the `No` arm is
   **DEGRADED to recoverable** (`wait.rs:576-579`, `:638-649`). So the ACP terminal set is
   exactly: **`message-seen` (landed) | NO terminal (not-landed/ambiguous → recoverable)**.
   There is **no `Payload::SeenFailed` construction anywhere in `wait.rs`** — the only
@@ -380,7 +380,7 @@ not assume they exist:
   (`recover.rs:240-243`).
 - **The relay receive-path fix** (mux-less inbound wake, `01KX7NV75W`) — HELD, out of
   scope. §7 documents only the honest *reading*, not a fix.
-- **codex conformance** — deferred (dies on brano).
+- **codex conformance** — deferred (dies on devbox).
 - **pi LIVE conformance** — deferred.
 - **ACP `No → seen-failed` re-enable** — deferred (needs the ACP bridge on a box to pin
   write-ordering, §3.1).

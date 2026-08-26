@@ -97,8 +97,8 @@ const LOCKED_KEYCHAIN_SIGNATURE: &str = "User interaction is not allowed";
 const FALLBACK_NOTICE: &str =
     "qd config: keychain locked (headless?) — falling back to file backend (~/.quorum/dispatch/config.toml).";
 
-/// The one-per-process env-forced-locked GET diagnostic (orc-2 ruling
-/// relay-1780639217973-4, "middle path c"; A5 spec §3.2). Under env-forced
+/// The one-per-process env-forced-locked GET diagnostic (operator ruling,
+/// "middle path c"; A5 spec §3.2). Under env-forced
 /// `QD_SECRET_BACKEND=keychain`, a GET that hits the locked signature keeps the
 /// TS-parity stdout/exit (`<key>: not set.`, exit 0 — presence-probing scripts
 /// stay unbroken) but emits THIS single attributable stderr line so the operator
@@ -149,8 +149,8 @@ pub struct SecretDeps<'a> {
     /// One-per-PROCESS guard for the fallback notice (A5 §3.2: notice printed
     /// ONCE per process even though `backend_info` does per-key gets).
     pub fallback_notice_emitted: &'a AtomicBool,
-    /// One-per-PROCESS guard for the env-forced-locked GET diagnostic (orc-2
-    /// ruling relay-1780639217973-4; A5 §3.2). SEPARATE from
+    /// One-per-PROCESS guard for the env-forced-locked GET diagnostic (operator
+    /// ruling; A5 §3.2). SEPARATE from
     /// `fallback_notice_emitted` so the two divergence lines never share a flag:
     /// the env-forced-locked path emits ONE attributable line even though
     /// `secret_backend_info` does a per-key get for every known key (without a
@@ -681,8 +681,8 @@ fn emit_fallback_notice_once(deps: &SecretDeps) {
     }
 }
 
-/// Emit the one-per-process env-forced-locked GET diagnostic to stderr (orc-2
-/// ruling relay-1780639217973-4; A5 §3.2). Same swap-flag pattern as
+/// Emit the one-per-process env-forced-locked GET diagnostic to stderr (operator
+/// ruling; A5 §3.2). Same swap-flag pattern as
 /// [`emit_fallback_notice_once`], its OWN flag so a `backend_info` sweep prints
 /// the line ONCE, not once per known key.
 fn emit_locked_diag_once(deps: &SecretDeps) {
@@ -727,7 +727,7 @@ pub fn get_secret(name: &str, deps: &SecretDeps) -> Option<String> {
                 // stay unbroken; the caller maps None to that line), BUT we emit
                 // ONE attributable stderr diagnostic so the operator who pinned
                 // the backend is not left conflating ABSENT with INACCESSIBLE
-                // (orc-2 ruling relay-1780639217973-4 "middle path c"; ADD-9a —
+                // (operator ruling, "middle path c"; ADD-9a —
                 // a TS diagnostic deficiency we do not reproduce). Once per
                 // process (own flag) so a `backend_info` sweep prints one line.
                 if is_keychain_env_forced(deps) {
@@ -933,7 +933,7 @@ pub struct ResolvedSecret {
     /// (`QD_SECRET_BACKEND=keychain`) keychain was LOCKED — i.e. the null is
     /// INACCESSIBLE, not ABSENT. Lets callers (survey, M5) distinguish "no key
     /// configured" from "a key may exist but the locked keychain hid it" and
-    /// report accordingly (orc-2 ruling relay-1780639217973-4: "a richer resolve
+    /// report accordingly (operator ruling: "a richer resolve
     /// API so survey can distinguish absent/locked"). `false` in every other
     /// outcome, including the non-env-forced fallback (there the value is read
     /// from the file, so it is not inaccessible).
@@ -986,8 +986,8 @@ pub fn resolve_secret(name: &str, env_var_name: &str, deps: &SecretDeps) -> Reso
                     // Env-forced + locked: no fallback. The null is INACCESSIBLE,
                     // not ABSENT — flag it (`locked: true`) so callers (survey,
                     // M5) can distinguish, and emit the same one-per-process
-                    // attributable diagnostic the GET path emits (orc-2 ruling
-                    // relay-1780639217973-4).
+                    // attributable diagnostic the GET path emits (the
+                    // operator ruling).
                     emit_locked_diag_once(deps);
                     return ResolvedSecret {
                         value: None,
@@ -1778,8 +1778,8 @@ mod tests {
     }
 
     // ========================================================================
-    // NEW: env-forced-locked GET diagnostic (orc-2 ruling
-    // relay-1780639217973-4 "middle path c"; A5 §3.2).
+    // NEW: env-forced-locked GET diagnostic (operator ruling,
+    // "middle path c"; A5 §3.2).
     //
     // The diagnostic is a single stderr line gated by the once-per-process
     // `locked_diag` flag (the sole `eprintln!` site). These rows assert the
@@ -1803,7 +1803,7 @@ mod tests {
     #[test]
     fn diag_line_is_verbatim() {
         // Pins the EXACT ruling text so a reword reds here (the line is an
-        // operator-facing contract from orc-2 relay-1780639217973-4).
+        // operator-facing contract from the operator ruling).
         assert_eq!(
             ENV_FORCED_LOCKED_DIAG,
             "warning: keychain is locked — a key may exist but is inaccessible (QD_SECRET_BACKEND=keychain is env-forced; unlock or unset to use fallback)."

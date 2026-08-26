@@ -14,5 +14,5 @@ cycle 10: final-pre-detach idx=Some(296), present-post-reattach=true
 cycle 11: final-pre-detach idx=Some(324), present-post-reattach=true
 daemon RSS=Some(7424) KB (GATE-B2 CALIBRATION CAVEAT: macOS RSS resident-growth-only-meaningful; absolute value is NOT a hard gate — recorded for trend only)
 CYCLES: 12/12 passed (run count)
-PARALLEL LOAD: 2 CPU-burn generators ran during the cycles (loaded-brano lane)
+PARALLEL LOAD: 2 CPU-burn generators ran during the cycles (loaded-devbox lane)
 

@@ -5,7 +5,7 @@
 # to run against production paths and must refuse kill/gc on bare names. These
 # tests point the jail at production-looking state and assert the refusal fires
 # (non-zero + a refusal message). If any of these PASS silently, the harness
-# could be visible to the org's real qd on brano — a phase failure.
+# could be visible to the org's real qd on devbox — a phase failure.
 #
 # Bash 3.2 / POSIX floor. Run directly.
 set -u
@@ -138,9 +138,11 @@ allows "pid/registered-raw-kill" jail_raw_kill 999998
 # Registering under a bad name must be refused.
 refuses "pid/register-bad-name" jail_register_pid 12345 "bare-name"
 
-# --- 5. Lima destructive gate: must fail closed on brano -------------------
-# On brano (the production machine) this must ALWAYS refuse, regardless of env.
-QD_RUST_DESTRUCTIVE_OK=1 refuses "lima/brano-fail-closed" jail_require_destructive_ok
+# --- 5. Lima destructive gate: must fail closed off the sandbox ------------
+# The gate is a POSITIVE match on the disposable Lima sandbox host, so anywhere
+# else (dev machine, CI, any unrecognized host) it must ALWAYS refuse,
+# regardless of env.
+QD_RUST_DESTRUCTIVE_OK=1 refuses "lima/non-sandbox-fail-closed" jail_require_destructive_ok
 
 # --- 6. kill_session refuses a bare name even when jail established ---------
 refuses "killsession/bare-name" jail_kill_session "work"

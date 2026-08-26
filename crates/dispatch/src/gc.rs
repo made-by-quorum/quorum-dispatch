@@ -696,8 +696,8 @@ mod tests {
 
     #[test]
     fn inbox_record_legacy_parses_and_is_ttl_judged() {
-        // A REAL legacy file (no to_session/acked_at_ms/ttl_ms) must parse.
-        let legacy = r#"{"text":"Reply with exactly: RELAY_OK","from_session":"1f17","message_id":"relay-1781113031221-4266362474","received_at":"2026-06-10T17:37:11.221Z"}"#;
+        // A byte-faithful legacy file (no to_session/acked_at_ms/ttl_ms) must parse.
+        let legacy = r#"{"text":"Reply with exactly: RELAY_OK","from_session":"aaaa","message_id":"relay-1781000000000-1","received_at":"2026-06-09T10:13:20.000Z"}"#;
         let rec: InboxRecord = serde_json::from_str(legacy).expect("legacy file must parse");
         assert_eq!(rec.to_session, None); // unaddressable → not presence-protected
         assert_eq!(rec.acked_at_ms, None); // PENDING → judged on full TTL

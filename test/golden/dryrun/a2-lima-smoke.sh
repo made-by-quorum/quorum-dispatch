@@ -1,5 +1,5 @@
 #!/bin/bash
-# a2-lima-smoke.sh — Row 8 Linux live smoke (Lima sbtest, aarch64).
+# a2-lima-smoke.sh — Row 8 Linux live smoke (Lima linuxvm, aarch64).
 #
 # Exercises the FULL create path + real zmx + boot waiter with a FAKE claude
 # (zero auth/cost): a tiny sh that writes a valid registry row into

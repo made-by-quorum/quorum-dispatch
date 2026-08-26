@@ -1,5 +1,5 @@
 R2 SEAM-CONTROL LIVE CAPTURES (rider R2 negative controls)
-pin=0d0fa9ed4800efb1309eca2311345c48af2c4932 zmx=0.6.0 host=Linux aarch64 (Lima sbtest)
+pin=0d0fa9ed4800efb1309eca2311345c48af2c4932 zmx=0.6.0 host=Linux aarch64 (Lima linuxvm)
 stub=stub-claude-1.5.1 (dormant R2 seams; STUB_* env active only here)
 driver=mutation/r2_seam_drive.sh (re-runs the recorded scenario with the seam env set)
 captured=2026-06-05

@@ -445,7 +445,7 @@ pub fn conformance_battery() -> Battery {
             "a truncated/partial delivery-log record is detected as malformed and never read back as a complete terminal — no silent acceptance of a partial write as success",
         ),
         // D6 — advertised-surface honesty sweep (doc-drift is a known live failure
-        // class). Both discrimination arms live in one cell (per conf-build-coord-4):
+        // class). Both discrimination arms live in one cell (per build-review-4):
         // honestly-disclosed-unsupported flags PASS, advertised-as-functional-but-
         // always-erroring flags FAIL.
         cell(
@@ -527,7 +527,7 @@ pub fn conformance_battery() -> Battery {
         // mechanism in its own wire protocol today (a genuine protocol
         // difference, not a coverage gap — stranger-acceptable n-a).
         //
-        // CORRECTION (conf-build-coord-3, 2026-07-15): pi was ALSO marked
+        // CORRECTION (build-review-3, 2026-07-15): pi was ALSO marked
         // NaPermitted here with the same reason ("no analogous resume/
         // session-load primitive measured by any existing seed") — that
         // reason is now factually false. `qd resume <name> --no-attach`
@@ -555,7 +555,7 @@ pub fn conformance_battery() -> Battery {
         // ACP-family delivery-log mechanisms; pi and codex do not route
         // through the same delivery-log store per any existing seed.
         //
-        // CORRECTION (conf-build-coord-3, 2026-07-15, confirming grep on
+        // CORRECTION (build-review-3, 2026-07-15, confirming grep on
         // record): claude-code-bare ALSO NaPermitted here — traced
         // `qd send:relay`'s dispatch (`src/bin/qd/verbs/send_relay.rs::run`):
         // it branches to `run_codex_send`/`run_acp_send`/`run_pi_send` for
@@ -605,7 +605,7 @@ pub fn conformance_battery() -> Battery {
         // (`AcpHost`'s in-flight bookkeeping); pi/codex have no measured
         // analogous queue primitive.
         //
-        // CORRECTION (conf-build-coord-3, 2026-07-15, confirming grep on
+        // CORRECTION (build-review-3, 2026-07-15, confirming grep on
         // record): claude-code-bare ALSO NaPermitted — grepped every `fn
         // run_*` in `send_relay.rs`: no `run_claude_send` exists at all, so
         // claude-code-bare never calls `Provider::inject` and never touches
@@ -660,7 +660,7 @@ pub fn conformance_battery() -> Battery {
         // so there is no meaningful mechanism to drive (harness.rs run_cell
         // correspondingly has no ClaudeCode arm for this cell; the driver is
         // deliberately absent, not merely unwritten). Reclassified NaPermitted
-        // for ClaudeCode, 2026-07-15 (conf-build-coord-3, run-proof-oracle
+        // for ClaudeCode, 2026-07-15 (build-review-3, run-proof-oracle
         // cross-seam finding), same class as the self-terminate-on-wedged-child
         // and bridge-death corrections below — a Required-but-permanently-
         // unwireable cell would ship an honest gap as a silent narrowing, so
@@ -680,7 +680,7 @@ pub fn conformance_battery() -> Battery {
         // bridge-death-detection are ACP session/cancel + bridge-child
         // primitives with no pi/codex analog per any existing seed.
 
-        // self-terminate-on-wedged-child. REVISED 2026-07-15 (conf-build-coord-3
+        // self-terminate-on-wedged-child. REVISED 2026-07-15 (build-review-3
         // ruling, after the run-proof/pre-land oracles found the prior blanket
         // reason false). The old reason ("no wire::serve-equivalent loop —
         // grepped `fn serve` only in acp/wire.rs") rested on a NAIVE grep that
@@ -726,7 +726,7 @@ pub fn conformance_battery() -> Battery {
             _ => put(lane, "d6.self-terminate-on-wedged-child", Required),
         }
 
-        // CORRECTION (conf-build-coord-3, 2026-07-15, confirming grep on
+        // CORRECTION (build-review-3, 2026-07-15, confirming grep on
         // record): claude-code-bare ALSO NaPermitted for both — no
         // `AcpHost`, no `acp_client` usage anywhere in claude-code-bare's
         // send/commission path (same absence already grounding

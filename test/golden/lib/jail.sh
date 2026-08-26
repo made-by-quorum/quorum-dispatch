@@ -7,7 +7,7 @@
 # kill guard, PID whitelist, production-path refusal.
 #
 # ABSOLUTE RULE (spec §3.6): the org's REAL TypeScript qd runs on this same
-# machine (brano). This harness MUST be invisible to it. Every qd/zmx process we
+# machine (devbox). This harness MUST be invisible to it. Every qd/zmx process we
 # touch lives inside a per-run hermetic jail. The harness FAILS CLOSED: if the
 # jail is not fully established, nothing runs.
 #
@@ -142,7 +142,7 @@ jail_establish() {
     # HOME is LOAD-BEARING: the TS qd derives its registry (~/.claude/sessions),
     # relay dir (~/.claude/relay), and projects from homedir(), NOT from QD_HOME.
     # Without overriding HOME the harness would READ AND MODIFY the org's real
-    # session registry on brano — exactly the invisibility violation rule 9 bans.
+    # session registry on devbox — exactly the invisibility violation rule 9 bans.
     # (Empirically confirmed 2026-06-04: `qd ls --json` returned real org sessions
     # until HOME was jailed.) QD_HOME is kept too in case the Rust port honors it.
     export HOME="$JAIL_ROOT/home"
@@ -164,7 +164,7 @@ jail_establish() {
     # Clear the four env vars the binary-under-test reads but the jail does NOT
     # itself need to set (redteam-retro finding #2 — latent hermeticity hole). The
     # jail formerly neither set nor unset these, so a value inherited from the real
-    # brano shell would reach qd inside the jail and escape isolation — e.g. an
+    # devbox shell would reach qd inside the jail and escape isolation — e.g. an
     # inherited QD_SPAWN_AGENTS_DIR makes `--agent` resolve agent defs from a REAL,
     # out-of-jail dir (create.rs resolve_agents_dir), and an inherited CLAUDE_BIN
     # substitutes a real out-of-jail binary (launch.rs claude_bin). We FAIL CLOSED
@@ -509,7 +509,7 @@ jail_assert_resolves_in_jail() {
 #
 # STANDING CONSTRAINT (orc-3): destructive `qd reconcile` on macOS is OFF
 # PERMANENTLY — the destructive live row lives ONLY in the Lima lane (G-X1), where
-# this belt ALSO runs (defense in depth). On brano this belt protects future
+# this belt ALSO runs (defense in depth). On devbox this belt protects future
 # phases from re-adding a macOS live sweep.
 #
 # Args: $1 = the qd-under-test verb invocation that supports --dry-run, default
@@ -708,8 +708,13 @@ jail_teardown() {
 # jail_require_destructive_ok — mirror of safety.sh require_destructive_ok.
 #
 # A destructive op may run ONLY if ALL THREE hold (POSITIVE "I am the disposable
-# Lima sandbox"): (a) sentinel /etc/qd-rust-lima, (b) hostname!=brano,
-# (c) QD_RUST_DESTRUCTIVE_OK=1. On brano this ALWAYS fails closed.
+# Lima sandbox"): (a) sentinel /etc/qd-rust-lima, (b) hostname MATCHES the
+# sandbox host (`*devhost*` or any `*lima*` host — the Lima VM reports
+# `lima-<vm>`), (c) QD_RUST_DESTRUCTIVE_OK=1.
+#
+# (b) is a POSITIVE match, not a denylist of one production box: an
+# UNRECOGNIZED hostname REFUSES. Anywhere that is not the disposable sandbox --
+# a dev laptop, CI, a new machine -- this ALWAYS fails closed.
 jail_require_destructive_ok() {
     local ok=1 reasons=""
     if [ ! -f /etc/qd-rust-lima ]; then
@@ -719,9 +724,11 @@ jail_require_destructive_ok() {
     local hn
     hn="$(hostname 2>/dev/null || printf '')"
     case "$hn" in
-        *brano*)
+        # POSITIVE: the disposable Lima sandbox. Anything else refuses.
+        *devhost*|*lima*) ;;
+        *)
             ok=0
-            reasons="${reasons}  (b) hostname '${hn}' contains 'brano' — production machine\n"
+            reasons="${reasons}  (b) hostname '${hn}' is not the disposable Lima sandbox (expected '*devhost*' or '*lima*')\n"
             ;;
     esac
     if [ "${QD_RUST_DESTRUCTIVE_OK:-}" != "1" ]; then
@@ -730,7 +737,7 @@ jail_require_destructive_ok() {
     fi
     if [ "$ok" -ne 1 ]; then
         printf '[jail] REFUSED: destructive op cannot run here (fail-closed).\n' >&2
-        printf '[jail] Requires ALL of: (a) /etc/qd-rust-lima, (b) hostname!=brano, (c) QD_RUST_DESTRUCTIVE_OK=1\n' >&2
+        printf '[jail] Requires ALL of: (a) /etc/qd-rust-lima, (b) hostname matches the Lima sandbox (*devhost*/*lima*), (c) QD_RUST_DESTRUCTIVE_OK=1\n' >&2
         printf '[jail] Unmet:\n' >&2
         printf '%b' "$reasons" >&2
         return 1

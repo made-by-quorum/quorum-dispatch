@@ -687,7 +687,7 @@ fn daemon_transcript_path_has_no_cwd_component() {
         "daemon path must not contain a cwd component: {s}"
     );
     assert!(
-        !s.contains("Users-eric"),
+        !s.contains("home-u"),
         "daemon path must not contain a cwd slug: {s}"
     );
     // It IS date+id keyed.
@@ -1157,7 +1157,7 @@ fn codex_transcript_path_has_no_cwd_component() {
         "codex path must not contain a cwd component: {s}"
     );
     assert!(
-        !s.contains("Users-eric"),
+        !s.contains("home-u"),
         "codex path must not contain a cwd slug: {s}"
     );
     // It IS the date+uuid rollout file.

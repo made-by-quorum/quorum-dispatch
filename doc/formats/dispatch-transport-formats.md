@@ -3,7 +3,7 @@
 Status: **draft 3** (R14 normalization: `created_at`, fully-normalized event
 rows, `refused` replaces `accepted`, the discriminated-union event schema — on
 top of the R8/R8a/R8b event model + R9/R10/R11 naming and summary fold),
-2026-08-08. Author: build lead (session on brano), from
+2026-08-08. Author: build lead (session on devbox), from
 `ws/quorum/qd-qf/TRANSITION.md` §§1–3 + `provider-contract.md` §4 + Annex A.
 Design authority: session `qdqf-why` (succeeded `qfd-qbt`; rulings in
 `ws/quorum/qd-qf/RULINGS.md`).
@@ -440,7 +440,7 @@ records as JSONL (one object per line). When piping them into DuckDB, read with
 format='newline_delimited')`). Do **NOT** use bare
 `read_json_auto('/dev/stdin')`: on a pipe it cannot sample to infer the schema
 and collapses the whole stream into a single `json` column (a
-`Binder Error: … column not found`). Verified on brano (duckdb 1.5.x). This is
+`Binder Error: … column not found`). Verified on devbox (duckdb 1.5.x). This is
 the join the up-projection runs to correlate the disposition rows back to the
 ledger by `correlation_id`, so the consumer form is load-bearing.
 

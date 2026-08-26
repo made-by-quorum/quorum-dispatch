@@ -7,12 +7,12 @@
 # Linux raw with the recorded token values, on a native Linux uid-501 host, produce
 # the refreshed committed golden — and does that golden replay green via verify.sh.
 #
-# Host: Lima `sbtest`, Linux aarch64, native uid=501 (== recorded Linux test uid).
+# Host: Lima `linuxvm`, Linux aarch64, native uid=501 (== recorded Linux test uid).
 # The macOS worktree is virtiofs-mounted RO into the VM at the same absolute path,
 # so the IN-VM tools see the exact refreshed worktree artifacts. Captured in-VM
 # 2026-06-05T12:55:00Z.
 #
-=== rider 4: in-VM re-derivation + replay-verify (Lima sbtest, Linux aarch64, uid 501) ===
+=== rider 4: in-VM re-derivation + replay-verify (Lima linuxvm, Linux aarch64, uid 501) ===
 token values: JAIL_ROOT=/run/user/501/qdrg-runs/205321178063567617624  runid=205321178063567617624  uid=501
 normalizer_sha (in-VM) = 39bbd74a2fbc0424d7f96b32fedfc6cbc0ae4fde8e7b23c10f787b5a2b507457
 re-derive(committed raw, NEW normalizer) == refreshed committed golden : BYTE-MATCH

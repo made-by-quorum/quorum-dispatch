@@ -1,6 +1,6 @@
 # WS-C M5 G-SOAK — HONEST-RESULT NOTE (read before the merge ruling)
 
-Date: 2026-06-06, host brano.local (macOS 26.5, arm64, Darwin 25.5.0), RELEASE build.
+Date: 2026-06-06, host devbox.local (macOS 26.5, arm64, Darwin 25.5.0), RELEASE build.
 
 ## Finding: the absolute 10ms p95 bound sits AT the measurement-noise boundary
 ## for the SPLIT arm at the full 60s window under the spec-minimum load.

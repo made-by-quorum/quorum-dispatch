@@ -856,10 +856,10 @@ fn clive_l3_interrupt_openrouter() {
     ev_text(&dir, "turn-completed.txt", &body);
 
     // ESCALATION SEAM: if the interrupt RPC itself errors, that is a real wiring
-    // gap — fail loudly so the run is bubbled to codex-lead-4 (NOT fixed here).
+    // gap — fail loudly so the run is bubbled to the codex owner (NOT fixed here).
     interrupt_ok.expect(
         "L3 turn_interrupt RPC returned an error — a REAL adapter wiring gap; \
-         ESCALATE to codex-lead-4 (do NOT fix production)",
+         ESCALATE to the codex owner (do NOT fix production)",
     );
     assert!(
         terminated,

@@ -8,7 +8,7 @@
 //!     (foreign, evaluated via the RF-6 start_ms arm) is NOT closed: the verb writes
 //!     NO terminal. This is THE fence proof.
 //!  2. `dead_writer_orphan_*` — a real orphaned initiation (writer pid DEAD) is
-//!     resolved through the R6 recovery-terminus lattice (seam ruling 01KX8MDPDX):
+//!     resolved through the R6 recovery-terminus lattice (seam ruling):
 //!     `turn-anchored{recovered}` when the transcript matches; (c) the DISCLOSED
 //!     `pending-abandoned{recovery-no-candidate, recovered:true, attribution}` when a
 //!     NON-matching record sits past the anchor (searched, exhausted best-effort); and
@@ -312,7 +312,7 @@ fn live_writer_send_is_refused() {
 // transcript and asserted `pending-abandoned{recovery-no-candidate}`. But "no
 // transcript resolvable" is the offset-ABSENT resolve-FAILURE arm of build_window —
 // a SourceUnavailable scenario (undeterminable), NOT the NoRecord case. Under the H
-// fix (seam ruling 01KX88WKGP) recovery must NOT foreclose an undeterminable send:
+// fix (seam ruling) recovery must NOT foreclose an undeterminable send:
 // it emits no terminal and leaves it dead-dangling-recoverable for a later run. The
 // genuine "no candidate → abandoned" (NoRecord) case moves to the dedicated readable
 // control below. (H-VERDICT documents this flip loudly.)
@@ -821,7 +821,7 @@ fn relay_send_is_not_swept() {
 // =========================================================================
 #[test]
 fn partial_write_that_landed_is_recovered_not_false_failed() {
-    // The ruled behavior (seam ruling 01KX88WKGP): the pty partial-write door mints NO
+    // The ruled behavior (seam ruling): the pty partial-write door mints NO
     // terminal, so an ack-timeout-but-actually-landed send stays dead-dangling instead
     // of being permanently false-failed with pending-abandoned{partial-write}. The
     // recover verb then resolves it against the transcript ground truth. Here the

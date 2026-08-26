@@ -5,7 +5,7 @@
 # is pin-checked + HASH-PAIRED (proof normalized/rawA/rawB sha256 must match real
 # staging files) + the whole staging secret-scanned, BEFORE placement. The Linux
 # side is the W4.2 in-VM re-record (copy-back tar-stream); the macOS side carries
-# the already-committed W4.1/W3.7 re-record (pin 8c59ec4). Re-run on brano (host)
+# the already-committed W4.1/W3.7 re-record (pin 8c59ec4). Re-run on devbox (host)
 # against the staged files. Captured: 2026-06-05T18:17:12Z
 #
 === zmx-dir-resolution ===

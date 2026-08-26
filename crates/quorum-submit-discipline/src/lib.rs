@@ -168,7 +168,7 @@ pub fn verify_accepted_then_cr(deps: &dyn SubmitDeps, opts: SubmitOptions) -> Su
 
 // ===========================================================================
 // R4 FIX — two-write delivery + content-verified-CR on the IDLE path
-// (ADR 0009; orc-2 RULED fix-in-phase, ruling relay-1780631655040-9 item 2).
+// (ADR 0009; orc RULED fix-in-phase, ruling item 2).
 //
 // LIVE EVIDENCE (test/golden/dryrun/a4-live-evidence.md §FINDING +
 // a4-paste-bytes.txt; soak-ledger R4 row): on REAL claude 2.1.163, a ≥~4KB single
@@ -216,8 +216,8 @@ pub const TWO_WRITE_SETTLE_MS: u64 = 200;
 //      submit). This is UPSTREAM of the submit discipline. LIVE on the Rust
 //      send:pty idle path: 8KB DELIVERED, 12KB and 16KB EMPTY-DROPPED (delta 0,
 //      did-not-go-busy WARNING, marker absent from the composer —
-//      test/golden/dryrun/a4-r6-probe-evidence.md, ordered relay-1780637708238-13).
-//      The observed boundary (8KB clean / ≥12KB dropped on brano; TS observed ~4KB)
+//      test/golden/dryrun/a4-r6-probe-evidence.md, orchestrator-ordered).
+//      The observed boundary (8KB clean / ≥12KB dropped on devbox; TS observed ~4KB)
 //      is MACHINE/LOAD-DEPENDENT — it is EVIDENCE, never a constant in code. The
 //      INVARIANT is the chunk size. FIX: chunk_text + send_text_chunked below — split
 //      the text into ≤chunk_bytes (default 1024B) code-point-safe chunks, send each
@@ -561,7 +561,7 @@ pub enum DeliverOutcome {
 /// lifecycle.ts:279-290 — pure logic in submit.ts, this adapter binds it to a
 /// live session). The real binding is [`RealDeliverDeps`].
 ///
-/// R4 (ADR 0009, LEAD EXTENSION of the orc-2 ruling): `send_message` now delivers
+/// R4 (ADR 0009, LEAD EXTENSION of the orc ruling): `send_message` now delivers
 /// the R4 TWO-WRITE shape (text, settle, separate CR) — the create path's priming
 /// prompts (an external caller's spawn) are the LIKELIEST ≥4KB case and share the exact
 /// single-write loss mechanism the ruling names on the idle send:pty path. Each

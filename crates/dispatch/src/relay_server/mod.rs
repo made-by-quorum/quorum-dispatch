@@ -199,7 +199,7 @@ impl RelayServer {
         // WS-B / B1 (3): the throttled inbox-TTL pass is OPT-IN. A live relay that
         // self-bounds its inbox is the steady state, but auto-sweeping on deploy
         // would be an UNGATED destructive sweep of the ~2019-file production backlog
-        // — and acp-super2's standing directive is "NO destructive sweep without a
+        // — and the supervisor's standing directive is "NO destructive sweep without a
         // reviewed dry-run". So the pass is DARK unless `QD_RELAY_INBOX_SWEEP=1`; the
         // coordinator/supervisor flips it on AFTER the dry-run is reviewed + the
         // oracle passes. Read once at spawn (the relay is a real long-running

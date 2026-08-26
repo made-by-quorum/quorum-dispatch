@@ -175,7 +175,7 @@ fn g_isol() {
     // B PROVEN ALIVE BY OPERATION (not just pid): bravo's daemon still serves
     // send:pty AND a history read.
     //
-    // g_isol Fix A (clerk ruling 01KXEF952F, under Pete's grant): under M-series
+    // g_isol Fix A (clerk ruling, under Pete's grant): under M-series
     // polite delivery, a send:pty into a NON-COMPOSER carrier (bravo is a bare
     // `cat` — no `❯` prompt glyph) correctly VERIFY-BLOCKS: the fire declines to
     // blind-type (`composer_is_plain` = None → honest verify-block, never a blind

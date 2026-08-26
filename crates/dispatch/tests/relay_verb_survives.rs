@@ -2,7 +2,7 @@
 //! COMMAND-SURFACE.md) MUST survive the qd→dispatch rename. It is dispatched
 //! pre-clap by a string-literal match in the bin entrypoint, so a refactor —
 //! or a careless rename — could silently drop it and take relay down with it
-//! (org memory 01KVB4NATAF1RCCK4JA5S8PBSX). These assertions pin the dispatch
+//! (a regression we have already paid for once). These assertions pin the dispatch
 //! arms to the bin source. Runtime behavior (a real `dispatch relay:serve` binding
 //! a port + speaking MCP) is exercised by the `relay_server_*` suites, which
 //! spawn `CARGO_BIN_EXE_qd relay:serve` against a hermetic HOME.

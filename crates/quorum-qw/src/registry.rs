@@ -36,7 +36,7 @@
 //! to deserialize — Rust would drop the row entirely and the session goes silently
 //! invisible to `ls`/`resolve`. That is STRICTER than the TS dynamic read, which
 //! renders the row (with the raw value in place), and against the repo
-//! permissive-parse rule in spirit (A4 pass-(b) F3, orc-3-ruled, owner A1).
+//! permissive-parse rule in spirit (A4 pass-(b) F3, orc-ruled, owner A1).
 //!
 //! The fix is [`RegistryEntry::from_value`]: parse each field independently from a
 //! `serde_json::Value` object; a wrong-typed field DEGRADES to its default

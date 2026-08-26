@@ -118,7 +118,7 @@ fn jail(dir: &Path) -> Jail {
 /// `Envelope::to_jsonl_line` write on a real origin send.
 fn log_row(id: &str, authored: i64, expires: i64) -> String {
     format!(
-        r#"{{"v":1,"correlation_id":"{id}","authored_at":{authored},"expires_at":{expires},"target":"alpha@brano","origin":"brano","body":"hello over the pipe"}}"#
+        r#"{{"v":1,"correlation_id":"{id}","authored_at":{authored},"expires_at":{expires},"target":"alpha@devbox","origin":"devbox","body":"hello over the pipe"}}"#
     )
 }
 
@@ -234,7 +234,7 @@ fn duckdb_over_pipe(home: &Path, disp_args: &[&str], sql: &str) -> String {
 }
 
 /// Skip-gate: is the DuckDB CLI present? Absent ⇒ the round-trip test prints a
-/// loud skip and returns green (a CI host without DuckDB must not red). On brano
+/// loud skip and returns green (a CI host without DuckDB must not red). On devbox
 /// it IS present, so the join runs for real.
 fn duckdb_present() -> bool {
     Path::new(DUCKDB).exists()
@@ -263,7 +263,7 @@ fn parse_event_rows(body: &str) -> Vec<serde_json::Value> {
 /// `expires_at` (2026-06) is already in the PAST at any run date ≥ 2026-08 —
 /// the summary still reads `delivered` because a delivered event EXISTING is
 /// the only absorbing state (R10 precedence: delivered > expired).
-const GOLDEN_DELIVERED_SUMMARY: &str = r#"{"v":1,"correlation_id":"01ABC","state":"delivered","attempts":2,"last_event":"delivered","last_attempt_at":1781241500200,"first_delivered_at":1781241500500,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"brano"}"#;
+const GOLDEN_DELIVERED_SUMMARY: &str = r#"{"v":1,"correlation_id":"01ABC","state":"delivered","attempts":2,"last_event":"delivered","last_attempt_at":1781241500200,"first_delivered_at":1781241500500,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"devbox"}"#;
 
 /// The reference `delivery-failed` EVENT line (byte-exact — the leaf crate's
 /// `delivery_failed_event_golden_line` golden), seeded verbatim as an
@@ -276,7 +276,7 @@ fn roundtrip_log_to_events_to_summary_to_duckdb_join() {
     if !duckdb_present() {
         eprintln!(
             "SKIP roundtrip_...duckdb_join: DuckDB CLI absent at {DUCKDB} — \
-             the JSONL-over-pipe join cannot run on this host (present on brano). \
+             the JSONL-over-pipe join cannot run on this host (present on devbox). \
              The non-DuckDB links of the chain are still asserted by \
              roundtrip_chain_links_without_duckdb."
         );
@@ -294,7 +294,7 @@ fn roundtrip_log_to_events_to_summary_to_duckdb_join() {
 
     // WRITE HALF (seeded, byte-exact — see the module doc for why not a live
     // send): the DELIVERED envelope + its fail→retry→succeed EVENT funnel
-    // (witnessed by "mira", origin "brano" — matching the golden summary), a
+    // (witnessed by "mira", origin "devbox" — matching the golden summary), a
     // PENDING envelope with far-future expiry and NO events, and the reference
     // orphan delivery-failed event (01DEF) verbatim.
     write_lines(
@@ -307,10 +307,10 @@ fn roundtrip_log_to_events_to_summary_to_duckdb_join() {
     write_lines(
         &root.join("dispositions.jsonl"),
         &[
-            &ev_row(delivered_id, "attempted", 1_781_241_500_100, "mira", "brano", authored),
-            &ev_failed_row(delivered_id, 1_781_241_500_150, "mira", "brano", authored, "delivery"),
-            &ev_row(delivered_id, "attempted", 1_781_241_500_200, "mira", "brano", authored),
-            &ev_row(delivered_id, "delivered", 1_781_241_500_500, "mira", "brano", authored),
+            &ev_row(delivered_id, "attempted", 1_781_241_500_100, "mira", "devbox", authored),
+            &ev_failed_row(delivered_id, 1_781_241_500_150, "mira", "devbox", authored, "delivery"),
+            &ev_row(delivered_id, "attempted", 1_781_241_500_200, "mira", "devbox", authored),
+            &ev_row(delivered_id, "delivered", 1_781_241_500_500, "mira", "devbox", authored),
             GOLDEN_FAILED_EVENT,
         ],
     );
@@ -381,7 +381,7 @@ fn roundtrip_log_to_events_to_summary_to_duckdb_join() {
         "first_delivered_at carried through: {delivered_json}"
     );
     // R14.2: origin comes from the JOINED envelope (the seeded log row).
-    assert_eq!(delivered_rows[0]["origin"], "brano", "{delivered_json}");
+    assert_eq!(delivered_rows[0]["origin"], "devbox", "{delivered_json}");
 
     // The zero-events pending summary: last_event/last_attempt_at/
     // first_delivered_at surface as SQL NULLs (stable DuckDB columns). `origin`
@@ -410,7 +410,7 @@ fn roundtrip_log_to_events_to_summary_to_duckdb_join() {
         );
     }
     assert_eq!(
-        pending_rows[0]["origin"], "brano",
+        pending_rows[0]["origin"], "devbox",
         "origin from the joined envelope (in scope), not null: {pending_json}"
     );
 
@@ -610,8 +610,8 @@ fn roundtrip_chain_links_without_duckdb() {
     write_lines(
         &root.join("dispositions.jsonl"),
         &[
-            &ev_row(id, "attempted", 1_700_000_000_400, "brano", "brano", authored),
-            &ev_row(id, "delivered", 1_700_000_000_500, "brano", "brano", authored),
+            &ev_row(id, "attempted", 1_700_000_000_400, "devbox", "devbox", authored),
+            &ev_row(id, "delivered", 1_700_000_000_500, "devbox", "devbox", authored),
         ],
     );
 
@@ -623,7 +623,7 @@ fn roundtrip_chain_links_without_duckdb() {
     assert_eq!(rec["state"], "delivered", "log ∪ events folds to delivered");
     assert_eq!(rec["first_delivered_at"], 1_700_000_000_500i64, "delivered created_at carried");
     // R14.2: origin comes from the joined envelope (the seeded log row).
-    assert_eq!(rec["origin"], "brano", "origin from the joined envelope");
+    assert_eq!(rec["origin"], "devbox", "origin from the joined envelope");
     assert_eq!(rec["last_event"], "delivered");
 }
 

@@ -402,7 +402,7 @@ mod tests {
     fn cwd_slug_replaces_all_slashes() {
         assert_eq!(
             cwd_to_project_path("/home/u/work/qd-rust"),
-            "-Users-eric-work-qd-rust"
+            "-home-u-work-qd-rust"
         );
     }
 

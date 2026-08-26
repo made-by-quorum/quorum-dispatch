@@ -1,9 +1,9 @@
 # Verify-replay evidence (Linux tick proof) — IN-VM fresh-jail end-to-end green
-# pin 0d0fa9e, zmx 0.6.0, Linux aarch64 (Lima sbtest), recorded+verified 2026-06-05
+# pin 0d0fa9e, zmx 0.6.0, Linux aarch64 (Lima linuxvm), recorded+verified 2026-06-05
 #
-# WHY in-VM (not brano): the Linux zmx-dir-resolution rows exercise the
+# WHY in-VM (not devbox): the Linux zmx-dir-resolution rows exercise the
 # XDG_RUNTIME_DIR tier (/run/user/<uid>, a Linux systemd construct ABSENT on macOS
-# — brano has no /run/user) and the TMPDIR-collapse OUTCOME. These can only be
+# — devbox has no /run/user) and the TMPDIR-collapse OUTCOME. These can only be
 # AUTHENTICALLY replayed on Linux, so verify runs in-VM and this output is the
 # captured tick evidence (per Step-3 brief: "if a row can only replay in-VM, run
 # verify in-VM and capture the output as evidence").

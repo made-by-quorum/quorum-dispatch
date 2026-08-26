@@ -16,7 +16,7 @@
 //!   #11 liveness/health · #12 maturity/stability. NONE touches a model turn — so
 //!   item-7 tier-a needs only the pinned pi (via `QD_PI_BIN`), NO OAuth.
 //!
-//! **LIVE-RUN-EVIDENCE guard (super16 standing requirement).** A green pass count
+//! **LIVE-RUN-EVIDENCE guard (standing requirement).** A green pass count
 //! proves nothing if the run early-returned. So every [`ItemResult`] carries the
 //! EXACT `commands` it ran + the `observed` state the verdict rests on (a row's
 //! JSON, a pid's liveness, a cmdline) — and the wrapper writes the whole report to
@@ -168,7 +168,7 @@ pub fn start_argv<'a>(name: &'a str, cwd: &'a str) -> Vec<&'a str> {
     vec!["start", name, "--provider", "pi", "--cwd", cwd]
 }
 
-/// CRED-FREE path-shape check (the mh-coord-3 must-confirm, tier-a portion): does
+/// CRED-FREE path-shape check (the review must-confirm, tier-a portion): does
 /// [`encode_cwd_dir`] match pi's documented PA5 dir shape `--<encoded-cwd>--`, with
 /// every `/ \ :` mapped to `-` (no collapse)? The REAL-on-disk-dir confirm (against
 /// an actual pi-created dir) is TIER-B (needs a turn / assistant-gated lazy-write)
@@ -195,7 +195,7 @@ pub fn encode_cwd_dir_shape_ok() -> (bool, String) {
         format!("--{mapped}--")
     }
     let cases = [
-        "/home/pete/x",
+        "/home/u/x",
         "/work/quorum-pi",
         "C:\\proj\\a",
         "/a//b", // double sep → double dash (no collapse — the C:\ lesson)
@@ -410,7 +410,7 @@ pub fn run_tier_a(runner: &QdRunner, d_ts_path: Option<&Path>) -> ConformanceRep
         observed: m_obs,
     });
 
-    // --- cred-free encode_cwd_dir shape assertion (mh-coord-3 must-confirm, tier-a part).
+    // --- cred-free encode_cwd_dir shape assertion (review must-confirm, tier-a part).
     let (shape_ok, shape_obs) = encode_cwd_dir_shape_ok();
     // Folded under #2's addressing/path-resolution concern as a distinct evidence row.
     items.push(ItemResult {

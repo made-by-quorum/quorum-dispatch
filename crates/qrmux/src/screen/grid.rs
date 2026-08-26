@@ -1770,7 +1770,7 @@ mod tests {
     /// the oldest. Teeth: R7(b) in tests/b3_replay.rs feeds an off-by-one
     /// (11-kept) sequence to the same checker and requires failure.
     ///
-    /// Construction chain (orc-2 R4 rider): `Session::new(history)` →
+    /// Construction chain (orc R4 rider): `Session::new(history)` →
     /// `Screen::new(cols, rows, history)` → `Grid::new(cols, rows,
     /// scrollback_limit)`: this test injects `cap` through the SAME constructor +
     /// `scroll_up` path the daemon uses — not a test double. (See session.rs:84

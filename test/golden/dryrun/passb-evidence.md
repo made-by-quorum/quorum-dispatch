@@ -105,9 +105,9 @@ ALL THREE PASS through verify.sh incl. the stub-provenance belt.
 stub-backed rows:** fresh-jail replay under committed 1.7.0, record.sh-identical
 normalize, sha-compare vs committed golden (passb-restamp-replay.sh →
 passb-restamp-evidence.txt): attach-detach-reattach, build-claude-cmd, history,
-zmx-dir-resolution(.macos), ALL BYTE-MATCH on brano; zmx-dir-resolution(.linux)
-BYTE-MATCH in-VM (Lima sbtest, jail rooted /run/user/501, pin-verified clone
-transferred from the brano prep clone — git-local hardlinks cannot cross
+zmx-dir-resolution(.macos), ALL BYTE-MATCH on devbox; zmx-dir-resolution(.linux)
+BYTE-MATCH in-VM (Lima linuxvm, jail rooted /run/user/501, pin-verified clone
+transferred from the devbox prep clone — git-local hardlinks cannot cross
 virtiofs; rev-parse re-verified in-VM). Stamps updated (stub_sha256 +
 stub_version + restamped= line citing the ruling) in all 12 RECORDED-FROM/
 MATCH-PROOF files. Confirmation: verify.sh PASS on all 4 macOS rows + the

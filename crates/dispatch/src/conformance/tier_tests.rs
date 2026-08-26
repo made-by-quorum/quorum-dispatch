@@ -1297,7 +1297,7 @@ fn an_attribution_by_the_runs_executor_is_unauthorized_and_ignored() {
 // ===========================================================================
 
 fn designation_steps(
-    brano_runs: usize,
+    devbox_runs: usize,
     withdraw: Option<(&'static str, DesignationBasisKind)>,
 ) -> Vec<Step> {
     let mut steps = vec![
@@ -1310,21 +1310,21 @@ fn designation_steps(
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
     ];
-    for i in 0..brano_runs {
-        let name: &'static str = Box::leak(format!("brano-run-{i}").into_boxed_str());
+    for i in 0..devbox_runs {
+        let name: &'static str = Box::leak(format!("devbox-run-{i}").into_boxed_str());
         let mut spec = RunSpec::evidence(name);
-        spec.box_id = "brano".into();
+        spec.box_id = "devbox".into();
         steps.push(Step::Run(spec));
     }
     if let Some((seat, kind)) = withdraw {
         steps.push(Step::Withdraw {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat,
             kind,
         });
@@ -1335,23 +1335,23 @@ fn designation_steps(
 
 #[test]
 fn mid_transition_at_w_minus_1_keeps_the_old_active_box() {
-    // Two eligible brano runs (< W=3) → pending stands, active box unchanged.
+    // Two eligible devbox runs (< W=3) → pending stands, active box unchanged.
     let c = Builder::new().run(designation_steps(2, None));
     let comp = compute(&c, Lane::Pi);
     assert_eq!(comp.active_box.as_deref(), Some("lima"));
-    assert_eq!(comp.pending_box.as_deref(), Some("brano"));
+    assert_eq!(comp.pending_box.as_deref(), Some("devbox"));
     assert_eq!(comp.promotion_ordinal, None);
     assert_eq!(comp.accumulation, 2);
 }
 
 #[test]
 fn mid_transition_at_w_derives_the_promotion_flip() {
-    // Three eligible brano runs (= W) → promotion derives, brano becomes active.
+    // Three eligible devbox runs (= W) → promotion derives, devbox becomes active.
     let c = Builder::new().run(designation_steps(3, None));
     let comp = assert_reproduces(&c, Lane::Pi);
     assert_eq!(
         comp.active_box.as_deref(),
-        Some("brano"),
+        Some("devbox"),
         "promotion should flip active box"
     );
     assert_eq!(comp.pending_box, None);
@@ -1360,7 +1360,7 @@ fn mid_transition_at_w_derives_the_promotion_flip() {
 
 #[test]
 fn a_quiet_window_withdrawal_is_valid() {
-    // Pending brano, no started-not-terminal brano run at the withdrawal → valid.
+    // Pending devbox, no started-not-terminal devbox run at the withdrawal → valid.
     // Withdrawal basis is outcome-independent (box unreachable). After withdrawal
     // the pending is retired; Pi (active lima, zero lima runs) is a named
     // experimental, NOT invalid — proving the withdrawal was accepted.
@@ -1408,9 +1408,9 @@ fn an_outcome_dependent_withdrawal_is_invalid() {
 
 #[test]
 fn a_quiet_window_violating_withdrawal_is_invalid() {
-    // A started-not-terminal brano evidence run at the withdrawal ordinal (R6-2).
-    let mut open = RunSpec::evidence("brano-open");
-    open.box_id = "brano".into();
+    // A started-not-terminal devbox evidence run at the withdrawal ordinal (R6-2).
+    let mut open = RunSpec::evidence("devbox-open");
+    open.box_id = "devbox".into();
     open.terminal = Term::Open;
     let steps = vec![
         Step::ActivateContext,
@@ -1422,14 +1422,14 @@ fn a_quiet_window_violating_withdrawal_is_invalid() {
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
         Step::Run(open),
         Step::Withdraw {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::DurablyUnreachable,
         },
@@ -1441,7 +1441,7 @@ fn a_quiet_window_violating_withdrawal_is_invalid() {
 
 #[test]
 fn a_post_promotion_withdrawal_is_invalid() {
-    // Three brano runs promote; a withdrawal after the derived promotion ordinal.
+    // Three devbox runs promote; a withdrawal after the derived promotion ordinal.
     let c = Builder::new().run(designation_steps(
         3,
         Some((
@@ -1458,7 +1458,7 @@ fn a_pending_with_no_active_designation_is_invalid() {
         Step::ActivateContext,
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
@@ -1663,29 +1663,6 @@ fn an_exercise_run_never_enters_the_window() {
     let comp = assert_reproduces(&c, Lane::Pi);
     assert_eq!(comp.verdict, TierVerdict::Ga);
     assert!(!comp.window.iter().any(|r| r.0 == "run-exercise"));
-}
-
-/// Opt-in generator (run with `--ignored`) that writes a reference rendering of
-/// the T4 public tier document to the repo, so a stranger/oracle can inspect the
-/// concrete artifact shape. Rendered from the canonical positive fixture corpus
-/// (the live document regenerates from the real evidence corpus once the battery
-/// has accumulated eligible runs — post-C-5).
-#[test]
-#[ignore]
-fn generate_reference_tier_document() {
-    let corpus = positive_corpus();
-    let banner = "<!--\nREFERENCE RENDERING — NOT LIVE TIERS. This document is rendered by\n`tier_doc::render_tier_document` from the C-3 canonical *reproduction fixture*\ncorpus (a synthetic `commit-r9` corpus, not the real conformance evidence). It\nexists so a reader can inspect the T4 document's shape and see the tier scheme's\noutput end-to-end. The LIVE public tier document is regenerated from the real\nrecorded evidence corpus once the battery has accumulated eligible runs on each\nlane's designated evidence box (post-C-5). Do not cite these tiers as qd's actual\nconformance state.\n-->\n\n";
-    let doc = format!(
-        "{banner}{}",
-        super::tier_doc::render_tier_document(&corpus, COMMIT, &P)
-    );
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../doc/conformance/reference-tier-document.md"
-    );
-    std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
-    std::fs::write(path, doc).unwrap();
-    eprintln!("wrote {path}");
 }
 
 // ===========================================================================
@@ -2573,19 +2550,19 @@ fn an_empty_reason_blocked_on_a_non_evidence_window_run_is_rejected() {
 
 #[test]
 fn a_quiet_withdrawal_before_the_wth_run_retires_the_pending() {
-    // Pending brano; brano-1 and brano-2 complete; a quiet, outcome-independent
-    // withdrawal is issued (brano-3 not yet commissioned → quiet); THEN brano-3
-    // completes. Eager promotion (the old bug) would derive at brano-3's terminal
+    // Pending devbox; devbox-1 and devbox-2 complete; a quiet, outcome-independent
+    // withdrawal is issued (devbox-3 not yet commissioned → quiet); THEN devbox-3
+    // completes. Eager promotion (the old bug) would derive at devbox-3's terminal
     // and reject the earlier withdrawal as "no outstanding pending." The fix: a
     // withdrawal in (boundary, promotion] preempts the promotion → the pending is
     // legitimately retired → the corpus is VALID (Pi = experimental on lima, its
     // active box, which has no runs), NOT invalid.
-    let mut brano1 = RunSpec::evidence("brano-1");
-    brano1.box_id = "brano".into();
-    let mut brano2 = RunSpec::evidence("brano-2");
-    brano2.box_id = "brano".into();
-    let mut brano3 = RunSpec::evidence("brano-3");
-    brano3.box_id = "brano".into();
+    let mut devbox1 = RunSpec::evidence("devbox-1");
+    devbox1.box_id = "devbox".into();
+    let mut devbox2 = RunSpec::evidence("devbox-2");
+    devbox2.box_id = "devbox".into();
+    let mut devbox3 = RunSpec::evidence("devbox-3");
+    devbox3.box_id = "devbox".into();
     let c = Builder::new().run(vec![
         Step::ActivateContext,
         Step::Designate {
@@ -2596,19 +2573,19 @@ fn a_quiet_withdrawal_before_the_wth_run_retires_the_pending() {
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
-        Step::Run(brano1),
-        Step::Run(brano2),
+        Step::Run(devbox1),
+        Step::Run(devbox2),
         Step::Withdraw {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::DurablyUnreachable,
         },
-        Step::Run(brano3),
+        Step::Run(devbox3),
         Step::Snapshot(SNAP_TIME),
     ]);
     let comp = assert_reproduces(&c, Lane::Pi);
@@ -2627,7 +2604,7 @@ fn a_quiet_withdrawal_before_the_wth_run_retires_the_pending() {
         comp.promotion_ordinal, None,
         "no promotion — the withdrawal preempted it"
     );
-    // NEGATIVE CONTROL: without the preempt check, eager promotion fires at brano-3
+    // NEGATIVE CONTROL: without the preempt check, eager promotion fires at devbox-3
     // and the withdrawal is rejected → the corpus computes INVALID_EVIDENCE, so the
     // Experimental assertion fails.
 }
@@ -2730,13 +2707,13 @@ fn neg_withdrawal_naming_an_unrelated_box_is_rejected() {
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
         Step::Withdraw {
             lane: Lane::Pi,
-            box_id: "unrelated-box", // ≠ the outstanding pending "brano"
+            box_id: "unrelated-box", // ≠ the outstanding pending "devbox"
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::DurablyUnreachable,
         },
@@ -2749,7 +2726,7 @@ fn neg_withdrawal_naming_an_unrelated_box_is_rejected() {
 
 #[test]
 fn a_withdrawal_naming_the_pending_box_retires_it_cleanly() {
-    // HONEST TWIN: the same withdrawal correctly naming the pending box ("brano")
+    // HONEST TWIN: the same withdrawal correctly naming the pending box ("devbox")
     // retires it with no over-rejection.
     let c = Builder::new().run(vec![
         Step::ActivateContext,
@@ -2761,13 +2738,13 @@ fn a_withdrawal_naming_the_pending_box_retires_it_cleanly() {
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
         Step::Withdraw {
             lane: Lane::Pi,
-            box_id: "brano", // correctly names the pending
+            box_id: "devbox", // correctly names the pending
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::DurablyUnreachable,
         },
@@ -2853,7 +2830,7 @@ fn neg_pending_replacement_with_no_valid_basis_kind_is_rejected() {
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
@@ -2862,7 +2839,7 @@ fn neg_pending_replacement_with_no_valid_basis_kind_is_rejected() {
     null_basis_kind(
         &mut c,
         "pending-replacement",
-        "pick brano — its window aced the runs; раss-heavy; p a s s e d best", // all 3 bypasses
+        "pick devbox — its window aced the runs; раss-heavy; p a s s e d best", // all 3 bypasses
     );
     assert_invalid(
         &c,
@@ -2886,7 +2863,7 @@ fn each_valid_basis_kind_validates_on_its_arm() {
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::RunnabilityReduced,
         },
@@ -2895,7 +2872,7 @@ fn each_valid_basis_kind_validates_on_its_arm() {
     let comp = assert_reproduces(&c, Lane::Pi);
     assert_eq!(
         comp.pending_box.as_deref(),
-        Some("brano"),
+        Some("devbox"),
         "valid pending stands: {:?}",
         comp.verdict
     );
@@ -2911,13 +2888,13 @@ fn each_valid_basis_kind_validates_on_its_arm() {
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
         Step::Withdraw {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::Decommissioned,
         },
@@ -2945,13 +2922,13 @@ fn a_withdrawal_citing_a_toward_kind_is_rejected_cross_arm() {
         },
         Step::Pending {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability,
         },
         Step::Withdraw {
             lane: Lane::Pi,
-            box_id: "brano",
+            box_id: "devbox",
             seat: "designation-seat (dddd4444)",
             kind: DesignationBasisKind::GreaterRunnability, // inadmissible for withdrawal
         },

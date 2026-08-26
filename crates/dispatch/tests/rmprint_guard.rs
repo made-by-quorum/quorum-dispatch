@@ -437,9 +437,13 @@ fn real_claude_bin() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let default = PathBuf::from("/home/u/.local/bin/claude");
-    if default.is_file() {
-        return Some(default);
+    // The usual per-user install location, resolved from the caller's own HOME
+    // (no operator-specific path is baked in).
+    if let Some(home) = std::env::var_os("HOME") {
+        let default = PathBuf::from(home).join(".local/bin/claude");
+        if default.is_file() {
+            return Some(default);
+        }
     }
     // PATH lookup.
     if let Ok(out) = Command::new("which").arg("claude").output() {

@@ -3,7 +3,7 @@
 #
 # RED-TEAM M1: the secret-scan gate was a property of "record.sh ran", which the
 # Lima copy-back path bypassed. This makes admission a property of "a fixture file
-# enters the git tree": EVERY route into fixtures/<corpus>/ (record.sh on brano,
+# enters the git tree": EVERY route into fixtures/<corpus>/ (record.sh on devbox,
 # Lima limactl-cp copy-back, a manual re-stage) MUST go through fixture_admit, or
 # the file does not get placed. record.sh routes through it; Step 3's copy-back
 # does too.

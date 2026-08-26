@@ -34,14 +34,38 @@ use std::process::Command;
 /// settle on for a repo this size.
 const SHA_DISPLAY_LEN: usize = 12;
 
+/// The repo root, resolved WITHOUT hard-coding how deep this crate sits inside
+/// it. `dispatch/` is built from two tree shapes: nested in the monorepo
+/// (`<root>/dispatch/crates/dispatch`) and as its own published repository
+/// (`<root>/crates/dispatch`). A fixed `../../..` is right in exactly one of
+/// them and silently overshoots the root in the other, so probe a candidate
+/// ladder of depths — the same shape as `resolve_install_script`'s exe-relative
+/// ladder in `src/bin/qd/verbs/bootstrap.rs` — and take the first candidate
+/// carrying a root marker: a `.git` entry (a directory in a normal clone, a
+/// FILE in a worktree — `exists()` accepts both) or the checked-in `.build-sha`
+/// this script reads.
+///
+/// NEAREST-first, because the nearest enclosing checkout is the one this crate
+/// belongs to — which is also exactly what `from_git`'s toplevel guard demands.
+/// With no marker at any depth (a vendored copy, a `cargo install --git` cache
+/// carrying neither file) fall back to the deepest candidate: `from_git` and
+/// `from_file` then simply find nothing and the sha degrades to `unknown`,
+/// which is this script's contract — it never fails the build.
+fn repo_root(manifest: &Path) -> PathBuf {
+    const LADDER: [&str; 2] = ["../..", "../../.."];
+    let root = LADDER
+        .iter()
+        .map(|up| manifest.join(up))
+        .find(|c| c.join(".git").exists() || c.join(".build-sha").is_file())
+        .unwrap_or_else(|| manifest.join(LADDER[LADDER.len() - 1]));
+    // `canonicalize` so the rerun-if paths printed below are the ones cargo
+    // will actually stat.
+    root.canonicalize().unwrap_or_else(|_| root.clone())
+}
+
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    // dispatch/crates/dispatch -> repo root. `canonicalize` so the rerun-if
-    // paths printed below are the ones cargo will actually stat.
-    let root = manifest
-        .join("../../..")
-        .canonicalize()
-        .unwrap_or_else(|_| manifest.clone());
+    let root = repo_root(&manifest);
 
     let sha = from_env()
         .or_else(|| from_git(&root))

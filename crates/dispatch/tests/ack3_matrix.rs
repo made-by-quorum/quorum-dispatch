@@ -685,7 +685,7 @@ fn m2_pty_write_error_event_streams() {
         "M2 engine: send-initiated present, chunks-delivered absent — seq {:?}",
         engine_seq(&recs, &sid)
     );
-    // R5 seam ruling 01KX88WKGP: the pty partial-write door mints NO terminal. A
+    // R5 seam ruling: the pty partial-write door mints NO terminal. A
     // chunk `mux.send` Err can be an ack-timeout that fired after the daemon's write
     // landed, so a door terminal would false-fail an ack-timeout-but-landed send and
     // foreclose recovery. The send stays dead-dangling and is closed by

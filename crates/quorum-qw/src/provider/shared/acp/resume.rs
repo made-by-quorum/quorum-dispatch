@@ -35,7 +35,7 @@ use crate::create_daemon::{CmdlineProbe, DaemonKillOutcome, DaemonSpawner};
 use crate::effects::is_pid_alive;
 use crate::registry::{ensure_tombstone, RegistryEntry};
 
-/// scoped-ACP-CC kill (F3 / super6 rider-4 kill-no-leak): the ACP analog of
+/// scoped-ACP-CC kill (F3 / rider-4 kill-no-leak): the ACP analog of
 /// [`kill_codex`](crate::provider::codex::resume::kill_codex). GROUP-reaps the resident `qd acp-daemon` adapter pid — which is the
 /// pgid OUR spawn created with `process_group(0)`, so the SIGTERM→grace→SIGKILL group
 /// ladder reaps the adapter AND its `claude-code-acp` bridge child TOGETHER (the proven
@@ -123,7 +123,7 @@ pub fn acp_resume_is_alive(
 /// (cc4) implementation because it is INHERENTLY SELF-HEALING — the OS releases the lock
 /// automatically when the holding fd closes, INCLUDING on holder process death. So a
 /// crashed claim-holder NEVER bricks future resumes (a stale lock that wedges resume
-/// forever would be WORSE than the race — super7 binding); the next legitimate resume
+/// forever would be WORSE than the race — a standing binding); the next legitimate resume
 /// simply re-acquires. The claim is ATOMIC (exactly one concurrent caller gets `Some`,
 /// the rest get `None` and refuse cleanly), NOT a racy check-then-spawn.
 ///

@@ -1,5 +1,5 @@
 #!/bin/bash
-# a4-lima-smoke.sh — A4 M5 Lima Linux first-boot (run INSIDE the sbtest VM).
+# a4-lima-smoke.sh — A4 M5 Lima Linux first-boot (run INSIDE the linuxvm VM).
 #
 # real-claude-on-Linux is EXCLUDED (named): the VM has NO Claude credentials
 # (~/.claude/.credentials.json absent; .claude.json has userID but no

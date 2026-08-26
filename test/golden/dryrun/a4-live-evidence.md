@@ -2,9 +2,9 @@
 
 **Operator:** sbr-pa4 M5 LIVE. **Date:** 2026-06-04 (into 06-05 EDT).
 **Branch:** `phase/a4-submit` @ tip `9b61883` (worktree `~/work/wt-a4-lead`,
-M4a/M4b-merged + orc-2 rulings riders). **Host:** brano.local, arm64/Darwin.
+M4a/M4b-merged + orc-2 rulings riders). **Host:** devbox.local, arm64/Darwin.
 **zmx:** 0.6.0 (`/opt/homebrew/bin/zmx`). **claude (macOS jail):** 2.1.163.
-**Lima sbtest:** aarch64/Linux, claude 2.1.162, zmx 0.6.0.
+**Lima linuxvm:** aarch64/Linux, claude 2.1.162, zmx 0.6.0.
 
 This is a SMOKE/SOAK artifact, NOT a gate oracle (a4-spec §6). The authoritative
 paste-discipline / went-busy oracle is the fakerepl Level-1 gate
@@ -143,7 +143,7 @@ confirms the sidecar/relayPort is absent until that driver lands.
 
 ## LIMA Linux first-boot
 
-Driver: `a4-lima-smoke.sh`, run IN the `sbtest` VM (aarch64/Linux, claude 2.1.162,
+Driver: `a4-lima-smoke.sh`, run IN the `linuxvm` VM (aarch64/Linux, claude 2.1.162,
 zmx 0.6.0). qd built in-VM (`CARGO_TARGET_DIR=/tmp/qd-vm-target`, rust 1.95.0,
 exit 0, 21MB aarch64 binary).
 
@@ -218,7 +218,7 @@ verbs themselves are wired and unit/integration-covered.
 **Branch:** `phase/a4-submit` @ tip `8d6b45f` (the R4 idle-path two-write fix IS in —
 verified `git log -1` before booting). **Worktree:** an isolated agent worktree
 (`.claude/worktrees/agent-ab1242104580d00ca`), Bash run from there only (ADD-10).
-**Host:** brano, arm64/Darwin. **claude (macOS jail):** 2.1.163. **zmx:** 0.6.0.
+**Host:** devbox, arm64/Darwin. **claude (macOS jail):** 2.1.163. **zmx:** 0.6.0.
 **Sanction:** orc-2 ruling relay-1780631655040-9 item 3 — ONE boot, dual purpose,
 ledgered R5. **Boots spent: 1** (the single sanctioned boot; 0 pre-boot failures).
 

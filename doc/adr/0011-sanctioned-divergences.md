@@ -42,7 +42,7 @@ realism. REALISM is owned by SEPARATE instruments (orc ruling adopted into §S R
 | Instrument | Owns | Why separate from this oracle |
 |------------|------|-------------------------------|
 | **A4 real-Claude ×20 smoke** | submit discipline / `--wait` against a REAL Claude REPL, ×20 | Real paste-burst + boot timing; the stub is deterministic by design, so it cannot surface real-timing flakes. |
-| **A7 cross-machine acceptance** | full QDQA battery (QDQA_SRC-swapped) + cross-machine spawn on real hardware | Real zmx/Claude on a second machine; this oracle runs on brano + Lima only. |
+| **A7 cross-machine acceptance** | full QDQA battery (QDQA_SRC-swapped) + cross-machine spawn on real hardware | Real zmx/Claude on a second machine; this oracle runs on devbox + Lima only. |
 | **C2 dogfood** | the org running on the Rust qd for real work | Emergent real-world behavior no fixture can pre-script. |
 
 Rationale (orc): byte/semantic parity against a symmetric counterpart is the cheap,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scenario: zmx-dir resolution — LINUX tiers (TMPDIR-collapse + XDG_RUNTIME_DIR).
 # semantic (resolution-OUTCOME) class, ADD-9a reclass (ADR-0004 DIV-9a-2 + the
-# Bug-D XDG tier). Linux-ONLY by construction: recorded on Lima `sbtest` (aarch64),
+# Bug-D XDG tier). Linux-ONLY by construction: recorded on Lima `linuxvm` (aarch64),
 # NEVER on macOS — the XDG_RUNTIME_DIR tier is a Linux systemd construct
 # (/run/user/<uid>) that has no macOS analogue, and the TMPDIR-collapse OUTCOME is
 # the Linux-leaning Claude-spawns-Claude compounding path. See coverage-matrix.md

@@ -133,7 +133,7 @@ struct Config {
     /// byte reaches the composer, a `drop` report event is recorded, and no turn
     /// starts. This MODELS THE CLASS (the live ~4096B canonical-tty-queue overflow:
     /// test/golden/dryrun/a4-r6-probe-evidence.md), NOT a specific machine boundary
-    /// — the live drop boundary (8KB clean / ≥12KB dropped on brano; TS ~4KB) is
+    /// — the live drop boundary (8KB clean / ≥12KB dropped on devbox; TS ~4KB) is
     /// MACHINE/LOAD-DEPENDENT. 4096 is a representative model default for the
     /// negative-control pairing; the INVARIANT the gate proves is the ≤1024B chunk
     /// size, which passes UNDER any realistic queue bound. `None` (unset) → no drop.

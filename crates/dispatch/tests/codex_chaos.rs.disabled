@@ -282,7 +282,7 @@ fn chaos_crash_rebind_no_stale_endpoint_latch() {
     //   - The abrupt `kill -9 -- -<pgid>` (a TRUE crash: pure SIGKILL, no SIGTERM
     //     grace window). The `--` STOPS option parsing so the leading-dash numeric
     //     `-<pgid>` is an operand (process group), not misparsed option flags —
-    //     codex-lead-3 verified this reaps the group. The v1 bug was the MISSING `--`
+    //     the codex owner verified this reaps the group. The v1 bug was the MISSING `--`
     //     (`kill -9 -<pgid>` → exit 0 but the process survives, the misparse).
     //   - reap() follows as the proven belt: the production `-pgid` group-kill
     //     (RealDaemonSpawner.kill) guarantees the daemon is down even if the external

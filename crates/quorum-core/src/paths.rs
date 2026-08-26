@@ -298,7 +298,7 @@ mod tests {
     fn is_valid_hostname_accepts_real_host_ids() {
         // A real host id is a single opaque segment.
         for ok in [
-            "local", "peerbox", "brano", "host-1", "HOST_2", "a.b.c", "01ABCXYZ",
+            "local", "peerbox", "devbox", "host-1", "HOST_2", "a.b.c", "01ABCXYZ",
         ] {
             assert!(is_valid_hostname(ok), "{ok:?} is a valid bare hostname");
         }

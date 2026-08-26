@@ -274,7 +274,7 @@ mod tests {
     use crate::exec::ScriptedExec;
 
     // The REAL zmx 0.6.0 `--help` output, frozen as a fixture — FULL capture.
-    // Provenance: `zmx --help` on brano against /opt/homebrew/bin/zmx (pin
+    // Provenance: `zmx --help` on devbox against /opt/homebrew/bin/zmx (pin
     // 0.6.0, `zmx version` -> "zmx\t0.6.0"), re-captured 2026-06-05 at A2
     // pass-(b) closure (finding F-A2b-1): the original 2026-06-04 capture had
     // frozen only the first ~20 lines (header + Commands block) and encoded

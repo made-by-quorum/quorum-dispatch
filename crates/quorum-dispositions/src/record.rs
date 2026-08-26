@@ -556,14 +556,14 @@ mod tests {
             correlation_id: "01ABC".to_string(),
             authored_at: 1_781_241_500_000,
             expires_at: 1_781_284_700_000,
-            target: "alpha@brano".to_string(),
-            origin: "brano".to_string(),
+            target: "alpha@devbox".to_string(),
+            origin: "devbox".to_string(),
             sender: Some("ab3kx9mq".to_string()),
             body: "hello world".to_string(),
         };
         assert_eq!(
             e.to_jsonl_line(),
-            r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","sender":"ab3kx9mq","body":"hello world"}"#
+            r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@devbox","origin":"devbox","sender":"ab3kx9mq","body":"hello world"}"#
         );
     }
 
@@ -577,14 +577,14 @@ mod tests {
             correlation_id: "01ABC".to_string(),
             authored_at: 1_781_241_500_000,
             expires_at: 1_781_284_700_000,
-            target: "alpha@brano".to_string(),
-            origin: "brano".to_string(),
+            target: "alpha@devbox".to_string(),
+            origin: "devbox".to_string(),
             sender: None,
             body: "hello world".to_string(),
         };
         assert_eq!(
             e.to_jsonl_line(),
-            r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","sender":null,"body":"hello world"}"#
+            r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@devbox","origin":"devbox","sender":null,"body":"hello world"}"#
         );
     }
 
@@ -661,11 +661,11 @@ mod tests {
             first_delivered_at: Some(1_781_241_500_500),
             expires_at: Some(1_781_284_700_000),
             authored_at: Some(1_781_241_499_000),
-            origin: Some("brano".to_string()),
+            origin: Some("devbox".to_string()),
         };
         assert_eq!(
             s.to_jsonl_line(),
-            r#"{"v":1,"correlation_id":"01ABC","state":"delivered","attempts":2,"last_event":"delivered","last_attempt_at":1781241500200,"first_delivered_at":1781241500500,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"brano"}"#
+            r#"{"v":1,"correlation_id":"01ABC","state":"delivered","attempts":2,"last_event":"delivered","last_attempt_at":1781241500200,"first_delivered_at":1781241500500,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"devbox"}"#
         );
     }
 
@@ -707,11 +707,11 @@ mod tests {
             first_delivered_at: None,
             expires_at: Some(1_781_284_700_000),
             authored_at: Some(1_781_241_499_000),
-            origin: Some("brano".to_string()),
+            origin: Some("devbox".to_string()),
         };
         assert_eq!(
             s.to_jsonl_line(),
-            r#"{"v":1,"correlation_id":"01GHI","state":"pending","attempts":0,"last_event":null,"last_attempt_at":null,"first_delivered_at":null,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"brano"}"#
+            r#"{"v":1,"correlation_id":"01GHI","state":"pending","attempts":0,"last_event":null,"last_attempt_at":null,"first_delivered_at":null,"expires_at":1781284700000,"authored_at":1781241499000,"origin":"devbox"}"#
         );
     }
 

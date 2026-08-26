@@ -116,7 +116,7 @@ count(reclasses) == count(named-divergence lines below) == 2.)
 
 NOTE (NOT a reclass — matrix annotation): the **Bug-D `XDG_RUNTIME_DIR` tier** row
 inherits the same resolution-outcome reframing, but it is **Linux-only** (Step 3 on
-Lima `sbtest`, aarch64) — its recording + final class assignment land in Step 3,
+Lima `linuxvm`, aarch64) — its recording + final class assignment land in Step 3,
 not Step 2, so it is NOT counted among the two macOS reclasses above.
 
 NOTE (NOT a reclass — matrix annotation): **`buildClaudeCmd` CLAUDE_FLAGS source.**

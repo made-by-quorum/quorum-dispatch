@@ -1,7 +1,7 @@
 
 === A4 R7 LIVE CONFIRM (12KB + 16KB send:pty idle on the FIXED binary) ===
   date: 2026-06-05 07:24:31 EDT
-  worktree: /home/u/work/wt-a4-lead  | tip: 37881b1 Merge pull request #13 from private-org/fix/a4-chunked-delivery
+  worktree: /home/u/work/wt-a4-lead  | tip: 37881b1 Merge pull request #13 from made-by-quorum/fix/a4-chunked-delivery
   binary: /home/u/work/wt-a4-lead/target/debug/qd (0.1.0)
 === REAL-HOME BELT before: 734 ===
   credentials seeded: yes

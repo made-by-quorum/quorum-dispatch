@@ -1,6 +1,6 @@
 //! READ-ONLY best-effort store reader over OpenCode's monolithic
 //! `opencode.db` (lsview A3; built from R1's scanner contract,
-//! `findings/R1-opencode-store.md`, authored against the real brano store,
+//! `findings/R1-opencode-store.md`, authored against the real devbox store,
 //! OpenCode 1.15.5).
 //!
 //! **A BEST-EFFORT READER, NEVER A CONTRACT (L8, the codex `index.rs`

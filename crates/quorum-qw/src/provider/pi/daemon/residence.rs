@@ -47,7 +47,7 @@ use crate::provider::pi::stdio::PiStdio;
 /// `bin/qd/main.rs`, the `acp-daemon` precedent at main.rs:67). Also the
 /// discriminator in the S6 cmdline-identity check.
 ///
-/// WIRE-IN (gated, flagged to mh-coord-3): `bin/qd/main.rs` needs
+/// WIRE-IN (gated, flagged for review): `bin/qd/main.rs` needs
 /// `Some("pi-daemon") => return dispatch::provider::pi::daemon::residence::run_pi_adapter(&rest[1..])`
 /// added pre-clap — a merge-seam site beyond the ProviderFx 10 + provider_for arm
 /// + verb guard.

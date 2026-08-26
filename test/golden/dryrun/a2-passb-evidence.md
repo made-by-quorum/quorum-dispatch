@@ -32,7 +32,7 @@ Verbatim run log appended at the bottom of this file.
 ## Linux rows (TMPDIR-collapse + Bug-D XDG_RUNTIME_DIR tiers) — covered at this exact SHA
 
 NOT re-run here (memory WARN-2; redundant Lima cargo). A1 pass-(b) replayed
-`zmx_dir_resolution_linux.sh` in-VM (Lima sbtest, aarch64) against a Rust qd
+`zmx_dir_resolution_linux.sh` in-VM (Lima linuxvm, aarch64) against a Rust qd
 built IN-VM from main @ 7c8482d — the same SHA this closure pins — TODAY
 10:13-10:17 EDT, verify.sh PASS with stub provenance OK against
 RECORDED-FROM.linux. That one scenario carries BOTH Linux-only matrix rows.
@@ -53,7 +53,7 @@ The M1 journal note "pass (b) re-records [the zmx-help fixture] against the
 pin" was executed as a CHECK, and the check found drift:
 
 - `crates/qd/src/preflight.rs` `ZMX_060_HELP` claims to be "The REAL zmx 0.6.0
-  `--help` output". Live capture (brano, 2026-06-05, all of `--help`/`-h`/
+  `--help` output". Live capture (devbox, 2026-06-05, all of `--help`/`-h`/
   `help` identical): **110 lines** — the fixture froze only the first ~20
   (header + Commands block); the live output continues with Attach/History/
   Run/Send/Print/Write/Wait prose sections + an Environment-variables block

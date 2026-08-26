@@ -602,7 +602,7 @@ fn acp_prompt_landed(
 /// (Completed/MaxTokens) → `message-seen` (the completed turn consumed the prompt).
 /// A FAILURE StopReason is POST-delivery, so it is LANDING-CHECKED against the ACP
 /// session's `~/.claude/projects` record (rider-3): landed → `message-seen`. R6
-/// DEGRADE (write-ordering unprovable on brano — bridge absent): NOT-landed and
+/// DEGRADE (write-ordering unprovable on devbox — bridge absent): NOT-landed and
 /// ambiguous BOTH → NO terminal (the send stays RECOVERABLE, disclosed as a C6
 /// pending-forever residual) — never a foreclosing hard fail on an unprovable
 /// not-landed. So this path emits ONLY `message-seen` (never `seen-failed`).
@@ -1720,7 +1720,7 @@ mod tests {
             );
 
             // READABLE-BUT-ABSENT (transcript readable, a DECOY user record — the
-            // prompt is absent). R6 DEGRADE (write-ordering unprovable on brano):
+            // prompt is absent). R6 DEGRADE (write-ordering unprovable on devbox):
             // this is NOT hard-failed (it could be an unflushed landing) → NO
             // terminal, RECOVERABLE. NEVER a foreclosing seen-failed.
             let not_landed = drive_acp_failure(

@@ -3,7 +3,7 @@
 # fixture_admit call in PLATFORM-AWARE mode (FA_PLATFORMS="macos linux"): each
 # platform set (RECORDED-FROM.<p> + MATCH-PROOF.<p>) is pin-checked + HASH-PAIRED
 # (the proof normalized/rawA/rawB sha256 must match real staging files) + the
-# whole staging secret-scanned, before placement. Re-run on brano against the
+# whole staging secret-scanned, before placement. Re-run on devbox against the
 # committed files; pin 0d0fa9e. Captured: 2026-06-05T05:40:30Z
 #
 [admit]   platform macos: hash-pairing OK (normalized=resolution.txt, rawA+rawB matched)

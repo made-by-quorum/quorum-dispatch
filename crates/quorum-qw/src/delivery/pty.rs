@@ -1093,8 +1093,8 @@ pub fn send_mux_pty(
         }
         SendPtyAction::SendVerify => {
             // IDLE send — R4 TWO-WRITE delivery (text, ~200ms settle, separate "\r")
-            // + acceptance-keyed CONTENT-VERIFIED verify-then-CR (ADR 0009; orc-2
-            // RULED fix-in-phase, ruling relay-1780631655040-9 item 2). REPLACES the
+            // + acceptance-keyed CONTENT-VERIFIED verify-then-CR (ADR 0009; orc
+            // RULED fix-in-phase, ruling item 2). REPLACES the
             // single `message + "\r"` write (send.ts:204), which on REAL claude
             // 2.1.163 is paste-burst-absorbed at ≥~4KB and the remediation CR does
             // NOT recover it live (test/golden/dryrun/a4-live-evidence.md §FINDING +

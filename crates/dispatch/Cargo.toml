@@ -1,5 +1,5 @@
 [package]
-# Deployed-artifact identity (⟨PETE:#2⟩, gate-2 correction): the package is
+# Deployed-artifact identity (⟨OWNER:#2⟩, gate-2 correction): the package is
 # `quorum-dispatch` so `cargo install --git <repo> --locked quorum-dispatch`
 # resolves; the BINARY stays `qd` (auto-discovered from src/bin/qd/). The
 # internal LIB symbol stays `dispatch` (see [lib]) — the dispatch crate/subsystem

@@ -10,7 +10,7 @@
 # Captures here are throwaway evidence of scenario-drives-qd, full stop.
 #
 # Runs entirely inside the jail (HOME/QD_HOME/ZMX_DIR/... sandboxed). The org's
-# real qd on brano is invisible to this run.
+# real qd on devbox is invisible to this run.
 #
 # Usage: run_dryrun.sh [scenario-name ...]   (default: the dry-run-safe set)
 # Bash 3.2 floor.
@@ -47,7 +47,7 @@ else
 fi
 
 # Always tear down the active jail on exit/interrupt so a detached jailed daemon
-# (a prefixed claude/zmx a scenario started) is never left running on brano. This
+# (a prefixed claude/zmx a scenario started) is never left running on devbox. This
 # is the cleanup-on-interrupt guarantee that keeps us invisible to the org's qd.
 trap 'jail_teardown 2>/dev/null || true' EXIT INT TERM
 

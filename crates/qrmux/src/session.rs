@@ -424,7 +424,7 @@ impl NegControl {
     }
 }
 
-/// Env-gated retention hook for the G5 leak-guard NEGATIVE CONTROL (orc-2
+/// Env-gated retention hook for the G5 leak-guard NEGATIVE CONTROL (orc
 /// rider R1 on the 10MB-floor recalibration, 2026-06-04): when the server env
 /// has `QRMUX_TEST_LEAK=retain`, every PTY chunk is ALSO copied into a buffer
 /// that is never freed — genuine per-byte retention. The recalibrated leak

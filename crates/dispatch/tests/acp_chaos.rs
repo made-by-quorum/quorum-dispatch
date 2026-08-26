@@ -27,7 +27,7 @@
 //!       not pid-liveness).
 //!   F3a wedge-AT-connect (5s connect guard; ceiling 10s) + paired UNGUARDED-CONTROL arm.
 //!   F3b wedge-AFTER-connect / request-hang (30s request guard; ceiling 60s) + paired
-//!       UNGUARDED-CONTROL arm; run at {1 hung + 2 live siblings} (mh-coord-14 ruled).
+//!       UNGUARDED-CONTROL arm; run at {1 hung + 2 live siblings}.
 //!   F4  pgid-teardown → 0 orphans in the pgid-reachable set + escape-boundary
 //!       CHARACTERIZATION.
 //!
@@ -97,7 +97,7 @@ const PROD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// opencode live smoke uses 60s (`acp_opencode_live.rs:236`).
 const READINESS_BUDGET: Duration = Duration::from_secs(60);
 
-/// F3b daemon-count (mh-coord-14 RULED): 1 genuine post-connect hang + 2 live siblings.
+/// F3b daemon-count (RULED): 1 genuine post-connect hang + 2 live siblings.
 /// The rider-1 structural finding (impossible-by-construction resource-exhaustion)
 /// licenses the {1 hung + 1 sibling} minimum; 2 siblings is a robust cross-contamination
 /// signal at zero extra hang-time (siblings are healthy, respond fast).
@@ -768,7 +768,7 @@ fn f3a_wedge_at_connect_fails_fast() {
 // UNGUARDED-CONTROL arm. Connection ESTABLISHES, then the request hangs (SIGSTOP the
 // daemon AFTER the session is up + the driving connection is open) → the per-connection
 // 30s DEFAULT_REQUEST_TIMEOUT fails the request FAST within the 60s ceiling. Run at
-// {1 hung + 2 live siblings} (mh-coord-14 ruled; the rider-1 structural finding —
+// {1 hung + 2 live siblings} (ruled; the rider-1 structural finding —
 // impossible-by-construction resource exhaustion — licenses reduced concurrency).
 // ===========================================================================
 
@@ -793,7 +793,7 @@ fn f5_f3b_wedge_after_connect_request_hang_fails_fast() {
     ev_text(
         &b,
         "f3b-resource-finding.txt",
-        "RIDER-1 STRUCTURAL FINDING (established at source; mh-coord-14 accepted; fresh oracle re-derives):\n\
+        "RIDER-1 STRUCTURAL FINDING (established at source; fresh oracle re-derives):\n\
          Concurrent post-connect request-hangs contend NO shared bounded dispatch resource —\n\
          * PROCESS-ISOLATED: each daemon is its own `qd acp-daemon` process (own AcpHost, own\n\
            `acp-crate-conn` thread [client.rs spawn_with_capacity], own bridge child, own serve loop).\n\

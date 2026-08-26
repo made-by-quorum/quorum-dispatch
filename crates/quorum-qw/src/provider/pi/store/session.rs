@@ -160,7 +160,7 @@ pub fn parse_filename(name: &str) -> Option<PiSessionName> {
 /// Encode a cwd into pi's session sub-dir name (session-manager.js:221-226):
 /// `--${cwd.replace(/^[/\\]/,"").replace(/[/\\:]/g,"-")}--`. The leading
 /// separator is stripped, then every `/ \ :` becomes `-`, wrapped in `-- --`.
-/// e.g. `/home/pete/x` → `--home-pete-x--`.
+/// e.g. `/home/u/x` → `--home-u-x--`.
 pub fn encode_cwd_dir(cwd: &str) -> String {
     // Strip a single leading '/' or '\\'.
     let body = cwd
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn cwd_dir_encoding_matches_pi() {
-        assert_eq!(encode_cwd_dir("/home/pete/x"), "--home-pete-x--");
+        assert_eq!(encode_cwd_dir("/home/u/x"), "--home-u-x--");
         // Windows-ish: `:` AND `\` each map to a dash (pi's regex replaces every
         // [/\\:] independently, no collapsing), so the adjacent `C:\` → `C--`.
         assert_eq!(encode_cwd_dir("C:\\proj\\a"), "--C--proj-a--");

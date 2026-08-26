@@ -73,7 +73,7 @@ export SHELL=/bin/bash
 JAIL_BASHRC="$HOME/.bashrc"
 
 # Mute the host-wide localhost relay port-scan so the relay health FYI is
-# deterministic on a shared host (brano runs a real relay on 8900-9000).
+# deterministic on a shared host (devbox runs a real relay on 8900-9000).
 export QRM_RELAY_DISABLE_SCAN=1
 
 # --- in-jail stubs: `claude` (the MCP registrar) + `zmx` (capable) ---------

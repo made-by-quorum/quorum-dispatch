@@ -958,10 +958,10 @@ mod tests {
         // hides this (collapses to one row); the preflight must surface BOTH so
         // resume refuses loudly instead of silently picking a survivor.
         let alive = vec![
-            live_row("orc-13-uuid", "qd-rust-orc-13", 100),
-            live_row("orc-13-uuid", "qd-rust-orc-13", 200),
+            live_row("dup-uuid", "qd-rust-dup", 100),
+            live_row("dup-uuid", "qd-rust-dup", 200),
         ];
-        match detect_live_id_collision("orc-13-uuid", &alive) {
+        match detect_live_id_collision("dup-uuid", &alive) {
             LiveIdCollision::Collision(rows) => {
                 assert_eq!(rows.len(), 2, "both colliding rows surfaced");
                 let pids: Vec<i64> = rows.iter().map(|r| r.pid).collect();

@@ -1,7 +1,7 @@
 
 === A4 R6 LIVE PROBE (mode=sendpty) ===
   date: 2026-06-05 01:42:52 EDT
-  worktree: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac  | tip: c7ff21e Merge pull request #12 from private-org/phase/b3-replay
+  worktree: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac  | tip: c7ff21e Merge pull request #12 from made-by-quorum/phase/b3-replay
   binary: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac/target/debug/qd (0.1.0)
 === REAL-HOME BELT before: 731 ===
   credentials seeded: yes
@@ -161,7 +161,7 @@ EMPTY-DROPPED)
 
 === A4 R6 LIVE PROBE (mode=create) ===
   date: 2026-06-05 01:44:40 EDT
-  worktree: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac  | tip: c7ff21e Merge pull request #12 from private-org/phase/b3-replay
+  worktree: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac  | tip: c7ff21e Merge pull request #12 from made-by-quorum/phase/b3-replay
   binary: /home/u/work/qd-rust/.claude/worktrees/agent-a31427c91d46a58ac/target/debug/qd (0.1.0)
 === REAL-HOME BELT before: 731 ===
   credentials seeded: yes

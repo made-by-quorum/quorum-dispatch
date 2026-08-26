@@ -102,7 +102,7 @@ pub fn build_curl_config(api_key: &str) -> String {
         "header = \"Authorization: Bearer {escaped_key}\"\n"
     ));
     cfg.push_str("header = \"Content-Type: application/json\"\n");
-    cfg.push_str("header = \"HTTP-Referer: https://github.com/private-org/switchboard\"\n");
+    cfg.push_str("header = \"HTTP-Referer: https://github.com/made-by-quorum/quorum-dispatch\"\n");
     cfg.push_str("header = \"X-Title: qd survey\"\n");
     cfg
 }
@@ -546,7 +546,7 @@ mod tests {
         let cfg = build_curl_config("sk-or-SUPERSECRET-KEY-123");
         assert!(cfg.contains("Authorization: Bearer sk-or-SUPERSECRET-KEY-123"));
         assert!(cfg.contains("X-Title: qd survey"));
-        assert!(cfg.contains("HTTP-Referer: https://github.com/private-org/switchboard"));
+        assert!(cfg.contains("HTTP-Referer: https://github.com/made-by-quorum/quorum-dispatch"));
     }
 
     #[test]

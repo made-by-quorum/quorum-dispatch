@@ -2,7 +2,7 @@
 
 **QA agent:** sbr-pa2-qa (M4). **Date:** 2026-06-04.
 **Branch:** `phase/a2-zmx-adapter` @ tip `1504ccb` (fetched + reset in worktree).
-**Host:** brano.local, arm64/Darwin. **zmx:** 0.6.0 (`/opt/homebrew/bin/zmx`,
+**Host:** devbox.local, arm64/Darwin. **zmx:** 0.6.0 (`/opt/homebrew/bin/zmx`,
 `socket_dir` self-reports `/tmp/claude-501/zmx-501`). **claude:** 2.1.163.
 
 This file is the gate artifact. Written as the gate runs, not retrospectively.
@@ -19,7 +19,7 @@ $ bash test/golden/selftest/test_jail_refusal.sh
 
 Rows include: unestablished/assert refused, corrupt/home-real-home refused,
 corrupt/{qdhome,zmxdir}-prod-path refused, guard/bare-name refused,
-pid/unregistered-raw-kill refused, lima/brano-fail-closed refused,
+pid/unregistered-raw-kill refused, lima/non-sandbox-fail-closed refused,
 killsession/bare-name refused. **PASS** — belt is armed.
 
 Real-home baseline: `~/.claude/sessions` has 723 rows at gate start. The
@@ -306,17 +306,17 @@ The race test is non-vacuous. (Row 10a zero-keystroke mutation re-attested in Ro
 
 ---
 
-## Row 8 — Linux live smoke (Lima `sbtest`, aarch64/vz)
+## Row 8 — Linux live smoke (Lima `linuxvm`, aarch64/vz)
 
 Driver: `test/golden/dryrun/a2-lima-smoke.sh`. VM: aarch64 / Linux / hostname
-`lima-sbtest`, rust 1.95.0, zmx 0.6.0 at `/usr/local/bin/zmx`. qd built IN-VM
+`lima-linuxvm`, rust 1.95.0, zmx 0.6.0 at `/usr/local/bin/zmx`. qd built IN-VM
 (`CARGO_TARGET_DIR=/tmp/qd-vm-target`; the worktree mount is read-only so target
 went VM-local). FAKE claude via `CLAUDE_BIN` (writes a valid registry row then
 `sleep 600`) — exercises the FULL create path + real zmx + boot waiter at ZERO
 claude auth/cost.
 
 ```
-=== ENV === aarch64 / Linux / lima-sbtest
+=== ENV === aarch64 / Linux / lima-linuxvm
 CREATE: qd new → exit=0, "Started detached session"
 zmx list: one task (name=...-lima pid=199561)
 PID file (jailed home): {"...","status":"idle",...} ← EventBootWaiter polled it

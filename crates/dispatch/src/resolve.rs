@@ -683,11 +683,11 @@ mod tests {
         // pid-aware predicate drops the dead-pid row so the name resolves to the one
         // truly-alive session.
         let mut alive = base("alive-uuid", SessionStatus::Idle);
-        alive.name = Some("orc-13".into());
+        alive.name = Some("worker-13".into());
         alive.qd_id = Some("ab3kx9mq".into());
         alive.pid = Some(100);
         let mut stale = base("stale-uuid", SessionStatus::Idle);
-        stale.name = Some("orc-13".into());
+        stale.name = Some("worker-13".into());
         stale.qd_id = Some("ab3kx9mq".into()); // duplicate row, same stable id
         stale.pid = Some(200); // status still Idle, but its process is DEAD
         let sessions = vec![stale, alive];
@@ -697,7 +697,7 @@ mod tests {
 
         // NAME tier resolves to the live one (not Many).
         assert_eq!(
-            one_id(&resolve_session_with_liveness("orc-13", &sessions, live)),
+            one_id(&resolve_session_with_liveness("worker-13", &sessions, live)),
             "alive-uuid"
         );
         // Full STABLE-ID tier resolves to the live one too (not Many).
@@ -708,7 +708,7 @@ mod tests {
 
         // CONTROL: the status-only default still sees BOTH as live → Many (proving
         // the test bites only because of the pid-aware predicate).
-        match resolve_session("orc-13", &sessions) {
+        match resolve_session("worker-13", &sessions) {
             Resolution::Many(v) => assert_eq!(v.len(), 2),
             other => panic!("status-only must stay Many, got {other:?}"),
         }

@@ -1,10 +1,10 @@
-//! C-RED — tier-a adversarial-JSONL red-team RUNNER (frame 01KWB61JKMAPK9ZWJZ7ZN7CKRW).
+//! C-RED — tier-a adversarial-JSONL red-team RUNNER.
 //! Mirrors `tests/pi_verb_roundtrip_live.rs`: the battery LIVES in
 //! `dispatch::provider::pi::redteam`; this wrapper RUNS it, drives the stub-pi (S)
 //! and live-pi (L) layers, and SERIALIZES the round evidence bundle (confirm-it-RAN).
 //!
 //! A ROUND = one full fresh batch across ALL classes (F + S + L); CLEAN = no new
-//! break-class anywhere; STOP = 3 consecutive clean rounds (pi-lead-2 mechanical
+//! break-class anywhere; STOP = 3 consecutive clean rounds (the mechanical
 //! exhaustion oracle rules at source from the bundle). Run:
 //!   env -u QD_HOME -u QD_SESSION_ID -u SB_SESSION_ID -u QD_BOOT_AWAIT_RELAY \
 //!       -u CLAUDE_CODE_SESSION_ID \
@@ -48,14 +48,36 @@ fn stub_pi() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stub-pi/stub-pi.sh")
 }
 
+/// The cargo workspace root, found by walking UP from `CARGO_MANIFEST_DIR` to the
+/// first ancestor that looks like a repo/workspace root (a `[workspace]` Cargo.toml,
+/// else a `.git` entry). Probing beats a hard-coded `../../..`: the crate sits at a
+/// DIFFERENT depth depending on whether this tree is vendored under a larger
+/// workspace or is itself the repo root, and both layouts must resolve.
+fn workspace_root() -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let is_ws_manifest = |dir: &Path| {
+        std::fs::read_to_string(dir.join("Cargo.toml"))
+            .map(|s| s.lines().any(|l| l.trim() == "[workspace]"))
+            .unwrap_or(false)
+    };
+    // First rung: the nearest enclosing workspace manifest.
+    if let Some(d) = manifest.ancestors().find(|d| is_ws_manifest(d)) {
+        return d.to_path_buf();
+    }
+    // Second rung: the enclosing git checkout.
+    if let Some(d) = manifest.ancestors().find(|d| d.join(".git").exists()) {
+        return d.to_path_buf();
+    }
+    // Last rung: the historical fixed depth (crates/<crate> under the root).
+    manifest.join("../..")
+}
+
 /// The round evidence dir: `<target>/cred-evidence/cred/round{N}/`. Overridable via
 /// QD_RED_EVIDENCE_DIR; default resolves the workspace target from the manifest.
 fn evidence_dir() -> PathBuf {
-    let base = std::env::var("QD_RED_EVIDENCE_DIR").map(PathBuf::from).unwrap_or_else(|_| {
-        // CARGO_MANIFEST_DIR = <ws>/dispatch/crates/dispatch; the workspace target is
-        // <ws>/target (the workspace root is ~/work/quorum-pi, not dispatch/).
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/cred-evidence/cred")
-    });
+    let base = std::env::var("QD_RED_EVIDENCE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| workspace_root().join("target/cred-evidence/cred"));
     base.join(format!("round{}", round()))
 }
 
@@ -331,10 +353,10 @@ fn pi_c_red_round() {
     }
 
     // The F layer must be clean offline; in a live run the WHOLE surface must be
-    // clean for the round to count. A break here routes to pi-lead-2 (do not paper over).
+    // clean for the round to count. A break here routes to the pi owner (do not paper over).
     assert!(
         report.breaks().is_empty(),
-        "C-RED round{} found {} break-class(es) — bubble pi-lead-2, do NOT fix production unilaterally",
+        "C-RED round{} found {} break-class(es) — bubble to the pi owner, do NOT fix production unilaterally",
         round(),
         report.breaks().len()
     );

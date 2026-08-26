@@ -24,7 +24,7 @@ use std::path::Path;
 /// The workspace repository (Cargo.toml `repository` field). Used to build the
 /// `cargo install --git <repo>` argv. Kept as a const here AND read from the
 /// real manifest by the bin layer so the two never drift.
-pub const REPO_URL: &str = "https://github.com/private-org/qd-rust";
+pub const REPO_URL: &str = "https://github.com/made-by-quorum/quorum-dispatch";
 
 /// The Homebrew formula name (A7 lands the real formula; until then the
 /// `brew upgrade` path is argv-level only). Pete-ruled `quorum-dispatch` for

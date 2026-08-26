@@ -600,10 +600,10 @@ fn add_completed_exercise_run(corpus: &mut Corpus, run: &str) {
 
 // ---- DESIGNATION flip (d4 augmentation, coord-required) --------------------
 
-/// A designation-flip corpus: `lima` designated + `brano` pending + `n` brano
-/// Evidence-Completed runs. At n==W the promotion derives at the Wth brano run's
-/// terminal-completion ordinal. Returns (corpus, brano-run-ids in order).
-fn flip_corpus(n_brano: usize) -> (Corpus, Vec<String>) {
+/// A designation-flip corpus: `lima` designated + `devbox` pending + `n` devbox
+/// Evidence-Completed runs. At n==W the promotion derives at the Wth devbox run's
+/// terminal-completion ordinal. Returns (corpus, devbox-run-ids in order).
+fn flip_corpus(n_devbox: usize) -> (Corpus, Vec<String>) {
     let battery = base_battery();
     let mut journal = AuthorityJournal::new();
     journal.activate_context(ContextActivationKind::Manifest(battery.manifest_digest()));
@@ -623,7 +623,7 @@ fn flip_corpus(n_brano: usize) -> (Corpus, Vec<String>) {
     journal.designate(DesignationEvent {
         kind: DesignationKind::PendingReplacement,
         lane: Lane::Pi,
-        box_id: BoxId("brano".into()),
+        box_id: BoxId("devbox".into()),
         basis_kind: Some(DesignationBasisKind::GreaterRunnability),
         policy_basis: "greater runnability".into(),
         rationale: "pending replacement".into(),
@@ -631,14 +631,14 @@ fn flip_corpus(n_brano: usize) -> (Corpus, Vec<String>) {
         timestamp: "2026-07-13T06:00:00Z".into(),
     });
     let mut index = Vec::new();
-    let mut brano_runs = Vec::new();
-    for i in 0..n_brano {
-        let run = format!("brano-run-{i}");
+    let mut devbox_runs = Vec::new();
+    for i in 0..n_devbox {
+        let run = format!("devbox-run-{i}");
         let tuple = journal
             .commission_run(
                 RunId(run.clone()),
                 LaneScope::one(Lane::Pi),
-                BoxId("brano".into()),
+                BoxId("devbox".into()),
                 COMMIT,
                 battery.manifest_digest(),
                 battery.aggregation_version.clone(),
@@ -676,7 +676,7 @@ fn flip_corpus(n_brano: usize) -> (Corpus, Vec<String>) {
             )
             .unwrap();
         index.push(IndexedArtifact { digest, artifact });
-        brano_runs.push(run);
+        devbox_runs.push(run);
     }
     let head = ArtifactIndex {
         artifacts: index.clone(),
@@ -693,7 +693,7 @@ fn flip_corpus(n_brano: usize) -> (Corpus, Vec<String>) {
             commits,
             roles: RoleRegistry::default(),
         },
-        brano_runs,
+        devbox_runs,
     )
 }
 
@@ -702,14 +702,14 @@ fn d4_promotion_derives_at_the_wth_run_terminal_ordinal_exactly() {
     // AUGMENTATION (coord-required): the existing tier_tests flip test asserts
     // promotion_ordinal.is_some(); the spec demands the promotion derive AT the
     // Wth eligible run's terminal-completion ordinal EXACTLY. Pin it, + 2-reader.
-    let (c, brano) = flip_corpus(3);
+    let (c, devbox) = flip_corpus(3);
     let comp = compute_tier(&c, Lane::Pi, COMMIT, &TierParams::gated());
     assert_eq!(
         comp.active_box.as_deref(),
-        Some("brano"),
-        "at W the promotion flips the active box to brano"
+        Some("devbox"),
+        "at W the promotion flips the active box to devbox"
     );
-    let wth = &brano[2];
+    let wth = &devbox[2];
     let jv = serde_json::to_value(&c.journal).unwrap();
     let wth_terminal_ord = jv["entries"]
         .as_array()
@@ -721,7 +721,7 @@ fn d4_promotion_derives_at_the_wth_run_terminal_ordinal_exactly() {
         .and_then(|e| e["ordinal"].as_u64());
     assert!(
         wth_terminal_ord.is_some(),
-        "the Wth brano run has a terminal-completion event"
+        "the Wth devbox run has a terminal-completion event"
     );
     assert_eq!(
         comp.promotion_ordinal, wth_terminal_ord,
@@ -874,10 +874,10 @@ fn wrap_corpus(journal: AuthorityJournal, index: Vec<IndexedArtifact>, battery: 
 
 #[test]
 fn d1_runs_land_on_the_correct_side_of_the_pending_boundary() {
-    // A lima (active-box) run BEFORE the pending event, then 2 brano (pending-box)
+    // A lima (active-box) run BEFORE the pending event, then 2 devbox (pending-box)
     // runs AFTER: each lands on the correct side by journal ORDINAL. Below W the
     // active box stays lima and the accumulation counts EXACTLY the post-pending
-    // brano runs — the pre-pending lima run does not inflate the pending count.
+    // devbox runs — the pre-pending lima run does not inflate the pending count.
     let battery = base_battery();
     let mut journal = AuthorityJournal::new();
     journal.activate_context(ContextActivationKind::Manifest(battery.manifest_digest()));
@@ -895,11 +895,11 @@ fn d1_runs_land_on_the_correct_side_of_the_pending_boundary() {
     designate(
         &mut journal,
         DesignationKind::PendingReplacement,
-        "brano",
+        "devbox",
         "2026-07-13T06:00:00Z",
     );
-    push_completed_run(&mut journal, &mut index, &battery, "brano-0", "brano", 1); // after pending
-    push_completed_run(&mut journal, &mut index, &battery, "brano-1", "brano", 2);
+    push_completed_run(&mut journal, &mut index, &battery, "devbox-0", "devbox", 1); // after pending
+    push_completed_run(&mut journal, &mut index, &battery, "devbox-1", "devbox", 2);
     let head = ArtifactIndex {
         artifacts: index.clone(),
     }
@@ -914,10 +914,10 @@ fn d1_runs_land_on_the_correct_side_of_the_pending_boundary() {
     );
     assert_eq!(
         comp.pending_box.as_deref(),
-        Some("brano"),
-        "brano is the pending box"
+        Some("devbox"),
+        "devbox is the pending box"
     );
-    assert_eq!(comp.accumulation, 2, "exactly the 2 post-pending brano runs accumulate; the pre-pending lima run is on the old side");
+    assert_eq!(comp.accumulation, 2, "exactly the 2 post-pending devbox runs accumulate; the pre-pending lima run is on the old side");
 }
 
 #[test]
@@ -943,7 +943,7 @@ fn d2_stale_designation_reference_rejected() {
     designate(
         &mut journal,
         DesignationKind::PendingReplacement,
-        "brano",
+        "devbox",
         "2026-07-13T06:00:00Z",
     );
     designate(
@@ -960,8 +960,8 @@ fn d2_stale_designation_reference_rejected() {
     .head_digest();
     journal.publish_snapshot(head, SNAP);
     let c = wrap_corpus(journal, index, battery);
-    // Positive-control: NAME the intended check (per the (d) why-holder ruling
-    // 01KXM9ZT1K4MHMGXD5A6HD9EF1) — a second outstanding PendingReplacement is
+    // Positive-control: NAME the intended check (per the (d) why-holder
+    // ruling) — a second outstanding PendingReplacement is
     // rejected by the designation-replay v6, not merely "some InvalidEvidence".
     assert_invalid(&c, "second PendingReplacement");
 }
@@ -978,7 +978,7 @@ fn d6_promotion_under_an_earlier_manifest_replays_legal_under_its_epoch() {
     let mut battery_b = base_battery();
     battery_b.aggregation_version = AggregationVersion("agg-v2".into());
     let mut journal = AuthorityJournal::new();
-    // Epoch A: activate A, designate under A, run 3 brano runs (manifest A).
+    // Epoch A: activate A, designate under A, run 3 devbox runs (manifest A).
     journal.activate_context(ContextActivationKind::Manifest(battery_a.manifest_digest()));
     journal.activate_context(ContextActivationKind::AggregationVersion(
         battery_a.aggregation_version.clone(),
@@ -992,7 +992,7 @@ fn d6_promotion_under_an_earlier_manifest_replays_legal_under_its_epoch() {
     designate(
         &mut journal,
         DesignationKind::PendingReplacement,
-        "brano",
+        "devbox",
         "2026-07-13T06:00:00Z",
     );
     let mut index = Vec::new();
@@ -1001,8 +1001,8 @@ fn d6_promotion_under_an_earlier_manifest_replays_legal_under_its_epoch() {
             &mut journal,
             &mut index,
             &battery_a,
-            &format!("brano-{i}"),
-            "brano",
+            &format!("devbox-{i}"),
+            "devbox",
             i as u64,
         );
     }

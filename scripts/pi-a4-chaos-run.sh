@@ -3,11 +3,11 @@
 # pi-a4-chaos-run.sh — layer (c) of the A4 chaos containment (A4-ISOLATION-PLAN.md).
 #
 # ⚠ PHASE 2 ONLY. This launches the LIVE pi C-CHAOS round, which spawns real pi
-# residents and issues real group-SIGKILLs. It must run ONLY after pi-coord-3 relays
-# the explicit chaos-run GATE. Phase-1 PREP does NOT invoke this (it only dry-checks
-# that systemd-run is available); see the A4 exec charge.
+# residents and issues real group-SIGKILLs. It must run ONLY after the chaos
+# coordinator relays the explicit chaos-run GATE. Phase-1 PREP does NOT invoke this
+# (it only dry-checks that systemd-run is available); see the A4 exec charge.
 #
-# WHAT LAYER (c) BUYS: pi-coord-3 + its executors run in cgroup
+# WHAT LAYER (c) BUYS: the chaos coordinator + its executors run in cgroup
 # system.slice/fleet.service alongside the durable supervisor + live coordinators.
 # safe_group_kill(pgid) = kill(-pgid) is GLOBAL by pgid, not cgroup-scoped. Running
 # the chaos TEST-RUN in a SEPARATE transient scope OUTSIDE fleet.service means the
@@ -18,7 +18,7 @@
 # artifact proving the scope reached the RESIDENTS, not just the launcher.
 #
 # THE BUILD STAYS IN THE NORMAL SERIALIZED SLOT (build-lock.sh, coordinated with the
-# box-coord); only the TEST-RUN goes in the transient scope.
+# build coordinator); only the TEST-RUN goes in the transient scope.
 #
 # USAGE: pi-a4-chaos-run.sh <round-N> [evidence-root]
 #   e.g. pi-a4-chaos-run.sh 1 "$PWD/target/cred-evidence/cchaos/round1"
@@ -31,9 +31,21 @@ set -euo pipefail
 
 ROUND="${1:?usage: pi-a4-chaos-run.sh <round-N> [evidence-root]}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"            # dispatch/ crate root's parent (repo)
-CRATE_DIR="$REPO/dispatch/crates/dispatch"
-EVIDENCE_ROOT="${2:-$CRATE_DIR/../../target/cred-evidence/cchaos/round${ROUND}}"
+DISPATCH="$(cd "$HERE/.." && pwd)"           # the dispatch/ tree (this script lives in dispatch/scripts/)
+# The cargo WORKSPACE ROOT is not at a fixed depth: it is `dispatch/` itself when
+# dispatch/ is the repo root, and dispatch/'s parent in the monorepo. Probe upward
+# for the `[workspace]` marker rather than hopping a hard-coded `..`.
+REPO="$DISPATCH"
+while [ ! -f "$REPO/Cargo.toml" ] || ! grep -q '^\[workspace\]' "$REPO/Cargo.toml"; do
+  parent="$(dirname "$REPO")"
+  if [ "$parent" = "$REPO" ]; then
+    echo "FATAL: no Cargo.toml with a [workspace] table at or above $DISPATCH" >&2
+    exit 2
+  fi
+  REPO="$parent"
+done
+CRATE_DIR="$DISPATCH/crates/dispatch"
+EVIDENCE_ROOT="${2:-$DISPATCH/target/cred-evidence/cchaos/round${ROUND}}"
 UNIT="pi-a4-chaos-r${ROUND}"
 QD_PI_BIN="${QD_PI_BIN:-$HOME/.npm-pi-global/bin/pi}"
 XRD="${XDG_RUNTIME_DIR_SCOPE:-/tmp/xrd-a4}"

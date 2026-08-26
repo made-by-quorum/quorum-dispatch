@@ -5,7 +5,7 @@
 **Branch:** `probe/a4-r6-live-agent` (isolated agent worktree
 `.claude/worktrees/agent-a31427c91d46a58ac`, Bash run from there only — ADD-10).
 **Tip:** `c7ff21e` (origin/main, the merged A4 two-write delivery — verified
-`git log -1` before booting). **Host:** brano, arm64/Darwin. **claude (macOS
+`git log -1` before booting). **Host:** devbox, arm64/Darwin. **claude (macOS
 jail):** 2.1.163. **zmx:** 0.6.0. **qd binary:** built from this worktree via
 `scripts/build-lock.sh` (0.1.0, debug).
 
@@ -189,7 +189,7 @@ multibyte sequence across chunks).
 `git fetch origin && git reset --hard origin/main`; Bash run from there only —
 ADD-10). **Tip:** `37881b1` — **PR #13 chunked delivery merged** (verified
 `git log -1` before booting; the chunking fix is commit `60fe8a7`). **Host:**
-brano, arm64/Darwin. **claude (macOS jail):** 2.1.165. **qd binary:** built from
+devbox, arm64/Darwin. **claude (macOS jail):** 2.1.165. **qd binary:** built from
 this worktree via `scripts/build-lock.sh cargo build -p quorum-dispatch` (0.1.0, debug).
 
 Raw per-row bytes: `a4-r7-bytes.txt`. Driver: `a4-r7-probe.sh` (ported EXACTLY

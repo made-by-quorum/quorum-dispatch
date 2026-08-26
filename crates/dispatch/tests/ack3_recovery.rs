@@ -610,7 +610,7 @@ fn r_rec_truncated_recovers_mismatch() {
 }
 
 // ===========================================================================
-// R-REC-empty-window (R6 (b), seam ruling 01KX8MDPDX): EAT_INPUT=1 → the recipient
+// R-REC-empty-window (R6 (b), seam ruling): EAT_INPUT=1 → the recipient
 // wrote NO user record past the send's offset → an EMPTY window. An empty window is
 // UNDETERMINED (still growable — the recipient hasn't demonstrably progressed past
 // the send), so recovery mints NO terminal: it must NOT false-abandon (the pre-R6

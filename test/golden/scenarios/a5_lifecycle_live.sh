@@ -515,7 +515,7 @@ else
 fi
 
 # G-L6c: SWEEP-BELT NEGATIVE CONTROL (orc-3 ruling — the belt MUST demonstrably
-# BITE on a non-qdrg planned target). On brano the reconcile --dry-run plan reaches
+# BITE on a non-qdrg planned target). On devbox the reconcile --dry-run plan reaches
 # the literal /tmp tier and surfaces NON-qdrg host orphans (e.g. ended org tasks),
 # so jail_sweep_belt_ok MUST refuse (return non-zero). To make the control robust
 # even if the host /tmp tier happens to be empty of reapable orphans, we ALSO forge
@@ -541,9 +541,10 @@ fi
 
 # Real-reconcile row: OFF on macOS PERMANENTLY (orc-3 standing constraint). It runs
 # ONLY in the Lima lane (G-X1), gated by ALL of: (1) jail_require_destructive_ok —
-# the Lima sentinel /etc/qd-rust-lima + hostname!=brano + QD_RUST_DESTRUCTIVE_OK=1,
-# which FAILS CLOSED on brano/macOS; (2) the sweep belt; (3) the explicit opt-in.
-# On brano this branch is unreachable (the Lima gate alone refuses).
+# the Lima sentinel /etc/qd-rust-lima + a hostname that POSITIVELY matches the
+# disposable Lima sandbox + QD_RUST_DESTRUCTIVE_OK=1, which FAILS CLOSED on any
+# non-sandbox host (incl. macOS); (2) the sweep belt; (3) the explicit opt-in.
+# Off the sandbox this branch is unreachable (the Lima gate alone refuses).
 if jail_require_destructive_ok 2>/dev/null \
    && [ "${A5_L6_DESTRUCTIVE_OK:-0}" = "1" ] \
    && jail_sweep_belt_ok reconcile; then

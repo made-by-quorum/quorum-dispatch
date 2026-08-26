@@ -15,11 +15,30 @@
 
 use serde_json::Value;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-const CLAUDE_BIN: &str = "/home/u/.local/bin/claude";
-const LIVE_CREDS: &str = "/home/u/.claude/.credentials.json";
+/// The real `claude` binary, resolved from the operator's own environment (no
+/// machine-specific path is baked in). Override with `QD_FORKFID_CLAUDE_BIN`.
+fn claude_bin() -> PathBuf {
+    match std::env::var_os("QD_FORKFID_CLAUDE_BIN") {
+        Some(p) => PathBuf::from(p),
+        None => live_home().join(".local/bin/claude"),
+    }
+}
+
+/// The operator's live OAuth credentials — read-only, copied into the sandbox.
+/// Override with `QD_FORKFID_CREDS`.
+fn live_creds() -> PathBuf {
+    match std::env::var_os("QD_FORKFID_CREDS") {
+        Some(p) => PathBuf::from(p),
+        None => live_home().join(".claude/.credentials.json"),
+    }
+}
+
+fn live_home() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+}
 
 /// One isolated sandbox: synthetic HOME + CLAUDE_CONFIG_DIR, OAuth credential
 /// copied in, a trusted work cwd. Mirrors `lib.sh` qb_create. Destroyed on drop.
@@ -31,7 +50,7 @@ struct Sandbox {
 
 impl Sandbox {
     fn create() -> Option<Self> {
-        if !Path::new(CLAUDE_BIN).exists() || !Path::new(LIVE_CREDS).exists() {
+        if !claude_bin().exists() || !live_creds().exists() {
             return None;
         }
         let root = std::env::temp_dir().join(format!("qd-forkfid-{}", std::process::id()));
@@ -41,7 +60,7 @@ impl Sandbox {
         std::fs::create_dir_all(&config).ok()?;
         std::fs::create_dir_all(&work).ok()?;
         std::fs::create_dir_all(root.join("home")).ok()?;
-        std::fs::copy(LIVE_CREDS, config.join(".credentials.json")).ok()?;
+        std::fs::copy(live_creds(), config.join(".credentials.json")).ok()?;
         // Trusted-cwd + onboarding seed so headless -p never blocks on a dialog.
         let cfg = serde_json::json!({
             "hasCompletedOnboarding": true,
@@ -71,7 +90,7 @@ impl Sandbox {
 
     /// Like [`claude`] but tolerates a non-zero exit (the in-flight resume probe).
     fn claude_raw(&self, args: &[&str]) -> std::process::Output {
-        Command::new(CLAUDE_BIN)
+        Command::new(claude_bin())
             .args(args)
             .current_dir(&self.work)
             .env_clear()
@@ -139,7 +158,7 @@ impl Sandbox {
     fn spawn_grouped(&self, label: &str, args: &[&str]) -> (std::process::Child, i32) {
         let out = std::fs::File::create(self.root.join(format!("{label}.out"))).unwrap();
         let err = std::fs::File::create(self.root.join(format!("{label}.err"))).unwrap();
-        let child = Command::new(CLAUDE_BIN)
+        let child = Command::new(claude_bin())
             .args(args)
             .current_dir(&self.work)
             .env_clear()

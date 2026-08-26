@@ -203,7 +203,12 @@ impl Drop for McpChild {
 /// rot where the fixture moves and the interop rows stop running).
 fn load_fixture(test_name: &str) -> Option<Value> {
     let path = std::env::var("QD_MCP_FIXTURE").unwrap_or_else(|_| {
-        "/home/u/work/ws/switchboard/rust/exec/ccrelay-mcp-handshake-fixture.json".to_string()
+        // Resolved under the operator's own HOME rather than a baked-in absolute
+        // path — same location on the QA host, no machine identity in the source.
+        format!(
+            "{}/work/ws/switchboard/rust/exec/ccrelay-mcp-handshake-fixture.json",
+            std::env::var("HOME").unwrap_or_default()
+        )
     });
     let path = Path::new(&path);
     if !path.exists() {

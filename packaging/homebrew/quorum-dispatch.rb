@@ -1,7 +1,7 @@
 # Homebrew formula for the Rust qd engine.
 #
 # A7 packaging deliverable (plan §A7). Reality, stated plainly:
-#   - The repo (private-org/qd-rust) is PRIVATE: a public `url` cannot resolve
+#   - The repo (made-by-quorum/quorum-dispatch) is PRIVATE: a public `url` cannot resolve
 #     without auth. Until the D-phase cutover publishes a release asset, install
 #     from a LOCAL source tarball:
 #       cd <repo> && git archive --prefix=qd-rust/ -o /tmp/qd-rust-local.tar.gz HEAD
@@ -21,16 +21,16 @@
 #     installs, though it was once read as one — see ADR-0020). The formula
 #     builds `qd` AND its internal sibling `qw` in one cargo invocation.
 #
-# NOTE: deployed-artifact identity (⟨PETE:#2⟩, gate-2 correction) — package
-# `quorum-dispatch`, formula `quorum-dispatch` (Pete-ruled for coherence with the
+# NOTE: deployed-artifact identity (⟨OWNER:#2⟩, gate-2 correction) — package
+# `quorum-dispatch`, formula `quorum-dispatch` (owner-ruled for coherence with the
 # crate), binary/command `qd` (unchanged). The internal lib crate stays
 # `dispatch` (preserved subsystem); the `-p quorum-dispatch` package selector
 # resolves because the package is named `quorum-dispatch`. Homebrew derives the
 # class name from the file name `quorum-dispatch.rb` → `QuorumDispatch`.
 class QuorumDispatch < Formula
   desc "Session engine for orchestrating Claude Code sessions (Rust port)"
-  homepage "https://github.com/private-org/qd-rust"
-  url ENV.fetch("QD_FORMULA_LOCAL", "https://github.com/private-org/qd-rust/archive/refs/tags/phase-a7.tar.gz")
+  homepage "https://github.com/made-by-quorum/quorum-dispatch"
+  url ENV.fetch("QD_FORMULA_LOCAL", "https://github.com/made-by-quorum/quorum-dispatch/archive/refs/tags/phase-a7.tar.gz")
   version "0.0.0-a7"
   sha256 ENV["QD_FORMULA_LOCAL"] ? :no_check : "PLACEHOLDER_UNTIL_RELEASE_ASSET_PUBLISHED"
   license :cannot_represent
@@ -79,7 +79,7 @@ class QuorumDispatch < Formula
   # what makes it safe to put in front of someone this way.
   #
   # NOTE FOR WHOEVER LANDS R17: the formula Homebrew actually installs from is
-  # the TAP's copy (private-org/homebrew-tap, Formula/quorum-dispatch.rb), not
+  # the TAP's copy (made-by-quorum/homebrew-tap, Formula/quorum-dispatch.rb), not
   # this file — which is why R1's mux-caveats deletion landed here and kept
   # printing `QD_MUX=zmx` on real machines for months. Both copies carry this
   # caveats block now. Keep the two in step, or R17 should collapse them into

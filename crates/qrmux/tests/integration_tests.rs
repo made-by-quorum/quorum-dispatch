@@ -54,7 +54,7 @@ fn wait_for_text(
     let start = Instant::now();
     // Progress series: capture length per poll. On timeout the error carries
     // it so the artifact alone discriminates "runner slow but advancing" from
-    // "pipeline frozen at N chars" (orc-2 directive, G3 macOS-CI disposition).
+    // "pipeline frozen at N chars" (orc directive, G3 macOS-CI disposition).
     let mut progress: Vec<(u64, usize)> = Vec::new();
     loop {
         let cap = capture_session(socket, session, 150)?;
@@ -316,7 +316,7 @@ fn g3_winch_storm() -> Result<(), Box<dyn Error>> {
     // deterministic final-marker loss on the GH macOS runner — capture frozen
     // at full volume (~112,678 chars, progress series flat 0s→120s) with
     // g3-line-08000 absent from BOTH history and screen, while the ATTACHED
-    // stream saw it and stty/barrier passed. Does not reproduce on brano
+    // stream saw it and stty/barrier passed. Does not reproduce on devbox
     // (incl. with the runner's 73-char prompt width simulated — probe
     // 8000/8000) or on ubuntu-latest. Gated on the workflow-set env var AND
     // target_os so it can never silently skip elsewhere: macOS coverage
@@ -966,7 +966,7 @@ fn negative_control_breaker_bites() -> Result<(), Box<dyn Error>> {
 }
 
 // ============================================================================
-// Leak-guard negative control (orc-2 rider R1 on the 10MB-floor recalibration)
+// Leak-guard negative control (orc rider R1 on the 10MB-floor recalibration)
 // ============================================================================
 
 /// Process memory footprint in KB — COMPRESSION-IMMUNE (flake-rootcause pass).

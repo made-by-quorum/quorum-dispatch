@@ -1216,7 +1216,7 @@ mod tests {
     fn observed_line_key_order_and_cwd_omission() {
         let line = build_observed_line(
             "2026-07-15T10:00:00.000Z",
-            "qrmoh",
+            "obsbox",
             "claude",
             "sid-uuid-1",
             Some("/work/proj"),
@@ -1259,7 +1259,7 @@ mod tests {
         // so the fold's `kind != "create"` branch skips it (inert). Pinned so the
         // reader-tolerance property is explicit, alongside a real create that DOES
         // fold — proving the observed line neither contributes nor blocks.
-        let observed = build_observed_line("t", "qrmoh", "claude", "sid-obs", Some("/w"));
+        let observed = build_observed_line("t", "obsbox", "claude", "sid-obs", Some("/w"));
         let create = build_create_line(
             "t",
             &CreateEvent {
@@ -1291,7 +1291,7 @@ mod tests {
             record_observed_in(
                 dir.path(),
                 &clock,
-                "qrmoh",
+                "obsbox",
                 "claude",
                 "sid-1",
                 Some("/w"),
@@ -1303,7 +1303,7 @@ mod tests {
         assert!(dir
             .path()
             .join("observed-claims")
-            .join("qrmoh~claude~sid-1")
+            .join("obsbox~claude~sid-1")
             .exists());
 
         // A thousand re-sightings append ZERO further lines (all fast-path no-ops).
@@ -1312,7 +1312,7 @@ mod tests {
                 record_observed_in(
                     dir.path(),
                     &clock,
-                    "qrmoh",
+                    "obsbox",
                     "claude",
                     "sid-1",
                     Some("/w"),
@@ -1321,7 +1321,7 @@ mod tests {
                 Ok(false)
             );
         }
-        assert_eq!(count_observed(&marks, "qrmoh", "claude", "sid-1"), 1);
+        assert_eq!(count_observed(&marks, "obsbox", "claude", "sid-1"), 1);
     }
 
     // --- record_observed_in: distinct keys each record; host is IN the key ---
@@ -1379,23 +1379,23 @@ mod tests {
             before_append: None,
             fail_append: true,
         };
-        let err = record_observed_in(dir.path(), &clock, "qrmoh", "claude", "sid-2", None, &fail);
+        let err = record_observed_in(dir.path(), &clock, "obsbox", "claude", "sid-2", None, &fail);
         assert!(err.is_err(), "forced append failure surfaces as Err");
-        assert_eq!(count_observed(&marks, "qrmoh", "claude", "sid-2"), 0);
+        assert_eq!(count_observed(&marks, "obsbox", "claude", "sid-2"), 0);
         // No poisoning marker was left behind.
         assert!(!dir
             .path()
             .join("observed-claims")
-            .join("qrmoh~claude~sid-2")
+            .join("obsbox~claude~sid-2")
             .exists());
 
         // A later NORMAL call still records the identity (recoverable together).
         let ok = RecordHooks::default();
         assert_eq!(
-            record_observed_in(dir.path(), &clock, "qrmoh", "claude", "sid-2", None, &ok),
+            record_observed_in(dir.path(), &clock, "obsbox", "claude", "sid-2", None, &ok),
             Ok(true)
         );
-        assert_eq!(count_observed(&marks, "qrmoh", "claude", "sid-2"), 1);
+        assert_eq!(count_observed(&marks, "obsbox", "claude", "sid-2"), 1);
     }
 
     // --- deliverable #4: record_observed writes NO registry row ---
@@ -1408,7 +1408,7 @@ mod tests {
         record_observed_in(
             dir.path(),
             &clock,
-            "qrmoh",
+            "obsbox",
             "claude",
             "sid-3",
             Some("/w"),
@@ -1452,7 +1452,7 @@ mod tests {
         assert!(dir
             .path()
             .join("observed-claims")
-            .join("qrmoh~claude~sid-3")
+            .join("obsbox~claude~sid-3")
             .exists());
     }
 
@@ -1480,12 +1480,12 @@ mod tests {
             .insert("HOME".into(), home.path().to_string_lossy().into_owned());
         let clock = FixedClock(1_752_573_600_000);
 
-        record_observed(&env, &clock, "qrmoh", "claude", "sid-pub", Some("/w")).unwrap();
+        record_observed(&env, &clock, "obsbox", "claude", "sid-pub", Some("/w")).unwrap();
         let marks = home.path().join(".quorum/dispatch/state/marks.jsonl");
-        assert_eq!(count_observed(&marks, "qrmoh", "claude", "sid-pub"), 1);
+        assert_eq!(count_observed(&marks, "obsbox", "claude", "sid-pub"), 1);
         // Idempotent on the public path too.
-        record_observed(&env, &clock, "qrmoh", "claude", "sid-pub", Some("/w")).unwrap();
-        assert_eq!(count_observed(&marks, "qrmoh", "claude", "sid-pub"), 1);
+        record_observed(&env, &clock, "obsbox", "claude", "sid-pub", Some("/w")).unwrap();
+        assert_eq!(count_observed(&marks, "obsbox", "claude", "sid-pub"), 1);
     }
 
     // --- encode_observed_key is injective across field boundaries ---
@@ -1568,7 +1568,7 @@ mod tests {
                 before_append: Some(Box::new(hook)),
                 fail_append: false,
             };
-            let r = record_observed_in(&dir_a, &clock, "qrmoh", "claude", "sid-det", None, &hooks);
+            let r = record_observed_in(&dir_a, &clock, "obsbox", "claude", "sid-det", None, &hooks);
             res_tx_a.send(("A", r)).unwrap();
         });
 
@@ -1579,7 +1579,7 @@ mod tests {
 
         // (i) CHECK-THEN-*ACT* WINDOW: A passed the check but has NOT appended.
         assert_eq!(
-            count_observed(&marks, "qrmoh", "claude", "sid-det"),
+            count_observed(&marks, "obsbox", "claude", "sid-det"),
             0,
             "A must be pre-append while pinned in-section"
         );
@@ -1614,7 +1614,7 @@ mod tests {
         let b = thread::spawn(move || {
             let clock = FixedClock(20);
             let hooks = RecordHooks::default();
-            let r = record_observed_in(&dir_b, &clock, "qrmoh", "claude", "sid-det", None, &hooks);
+            let r = record_observed_in(&dir_b, &clock, "obsbox", "claude", "sid-det", None, &hooks);
             res_tx_b.send(("B", r)).unwrap();
         });
 
@@ -1634,7 +1634,7 @@ mod tests {
 
         // Exactly one physical line; A won, B detected "already recorded".
         assert_eq!(
-            count_observed(&marks, "qrmoh", "claude", "sid-det"),
+            count_observed(&marks, "obsbox", "claude", "sid-det"),
             1,
             "exactly one observed line for the key"
         );
@@ -1722,7 +1722,7 @@ mod tests {
             record_observed_in(
                 dir.path(),
                 &clock,
-                "qrmoh",
+                "obsbox",
                 "claude",
                 "sid-vol",
                 Some("/w"),
@@ -1735,7 +1735,7 @@ mod tests {
                 record_observed_in(
                     dir.path(),
                     &clock,
-                    "qrmoh",
+                    "obsbox",
                     "claude",
                     "sid-vol",
                     Some("/w"),
@@ -1744,25 +1744,25 @@ mod tests {
                 Ok(false)
             );
         }
-        assert_eq!(count_observed(&marks, "qrmoh", "claude", "sid-vol"), 1);
+        assert_eq!(count_observed(&marks, "obsbox", "claude", "sid-vol"), 1);
 
         // DISTINCT keys ⇒ one line each, no cross-key suppression.
         for i in 0..50 {
             let sid = format!("sid-{i}");
             assert_eq!(
-                record_observed_in(dir.path(), &clock, "qrmoh", "claude", &sid, None, &h),
+                record_observed_in(dir.path(), &clock, "obsbox", "claude", &sid, None, &h),
                 Ok(true),
                 "distinct key {sid} is its own first sighting"
             );
             assert_eq!(
-                record_observed_in(dir.path(), &clock, "qrmoh", "claude", &sid, None, &h),
+                record_observed_in(dir.path(), &clock, "obsbox", "claude", &sid, None, &h),
                 Ok(false),
                 "immediate re-sight of {sid} no-ops"
             );
-            assert_eq!(count_observed(&marks, "qrmoh", "claude", &sid), 1);
+            assert_eq!(count_observed(&marks, "obsbox", "claude", &sid), 1);
         }
         // The original volume key is untouched by the distinct-key traffic.
-        assert_eq!(count_observed(&marks, "qrmoh", "claude", "sid-vol"), 1);
+        assert_eq!(count_observed(&marks, "obsbox", "claude", "sid-vol"), 1);
     }
 
     /// No registry row — the identity-fact-only property. `record_observed_in`
@@ -1780,7 +1780,7 @@ mod tests {
         record_observed_in(
             &state_dir,
             &clock,
-            "qrmoh",
+            "obsbox",
             "claude",
             "sid-reg",
             Some("/w"),
@@ -1829,7 +1829,7 @@ mod tests {
         assert!(state_dir.join("marks.jsonl").exists());
         assert!(state_dir
             .join("observed-claims")
-            .join("qrmoh~claude~sid-reg")
+            .join("obsbox~claude~sid-reg")
             .exists());
     }
 }

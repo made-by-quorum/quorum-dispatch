@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scenario: TERMIOS raw-mode report (W4.2, P10, LINUX side). STUB-BACKED. PLATFORM-SPLIT.
 # 0b DELTA-STRENGTH W4.2: the Linux sibling of the W3.7 termios row, recorded in-VM
-# (Lima `sbtest`, aarch64). NEW recording — NOT a re-record of an existing fixture.
+# (Lima `linuxvm`, aarch64). NEW recording — NOT a re-record of an existing fixture.
 #
 # WHAT: boot a stub session, submit the `STTY` prompt (the 1.8.0 prompt-gated termios
 # reporter, stub_claude.py), capture the STTY-REPORT line — the termios config of the

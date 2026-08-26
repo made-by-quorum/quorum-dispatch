@@ -890,7 +890,7 @@ pub fn start_daemon_in_jail_with_stderr(
     }
     let env_vars = &env_vars[..];
 
-    // Orphan pre-sweep (orc-2 item-3b): a SIGKILL'd test binary can leave a
+    // Orphan pre-sweep (orc item-3b): a SIGKILL'd test binary can leave a
     // daemon no guard or teardown ever reaps (DaemonGuard/Drop don't run on
     // SIGKILL). Reap any daemon running OUR binary whose parent is init
     // (ppid==1) — live runs' daemons are parented to their test process, so

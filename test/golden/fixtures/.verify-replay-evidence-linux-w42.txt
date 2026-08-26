@@ -1,10 +1,10 @@
 # W4.2 Verify-replay evidence (Linux tick proof) — IN-VM fresh-jail end-to-end green
 # pin 8c59ec4 (re-minted from 0d0fa9e via TRUE re-record — red-team M2), zmx 0.6.0,
-# Linux aarch64 (Lima sbtest, uid 501), recorded+verified 2026-06-05T18:1x:xxZ.
+# Linux aarch64 (Lima linuxvm, uid 501), recorded+verified 2026-06-05T18:1x:xxZ.
 #
-# WHY in-VM (not brano): the Linux zmx-dir-resolution rows exercise the
+# WHY in-VM (not devbox): the Linux zmx-dir-resolution rows exercise the
 # XDG_RUNTIME_DIR tier (/run/user/501, a Linux systemd construct ABSENT on macOS —
-# brano has no /run/user) and the TMPDIR-collapse OUTCOME; the termios-report-linux
+# devbox has no /run/user) and the TMPDIR-collapse OUTCOME; the termios-report-linux
 # row records the Linux session-PTY termios the engine establishes. These can only
 # be AUTHENTICALLY recorded + replayed on Linux, so record + verify run in-VM and
 # this output is the captured tick evidence (Step-3 brief: "if a row can only replay
@@ -42,7 +42,7 @@ TICK SUMMARY: 2/2 Linux-sided rows replay green in-VM at pin 8c59ec4
 
 # --- 0b DELTA-STRENGTH W3.1 consolidated re-run (impl-0bw-w31, 2026-06-05T19:31:39Z) ---
 # The 2 Linux rows are UNCHANGED by W3.1 (W3.1 touched no Linux fixture). Re-run
-# IN-VM (Lima sbtest, aarch64, uid 501) at the W3.1 TIP against the re-stamped
+# IN-VM (Lima linuxvm, aarch64, uid 501) at the W3.1 TIP against the re-stamped
 # stub 1.8.1 (sha 20a5133) for the consolidated phase-close claim; VM left hermetic
 # (replay-only, no recording, no cargo; fresh /tmp untar, removed after).
 # PATH=$HOME/.bun/bin:$PATH (bun not on the non-login PATH); TMPDIR=/run/user/501

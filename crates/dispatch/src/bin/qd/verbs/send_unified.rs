@@ -711,7 +711,7 @@ pub fn run_send_unified(m: &ArgMatches) -> i32 {
 /// qd–qf W6 — split a raw address into `(name, host)` on the LAST `@`.
 ///
 /// `name@host` is SUGAR over `--host` (TRANSITION §3 / §7 Q2 RULED): the address
-/// `"alpha@brano"` ⇒ `("alpha", Some("brano"))`; a bare `"alpha"` (or a stable_id,
+/// `"alpha@devbox"` ⇒ `("alpha", Some("devbox"))`; a bare `"alpha"` (or a stable_id,
 /// which never contains `@`) ⇒ `("alpha", None)`. We split on the LAST `@` because
 /// neither names nor stable_ids contain `@`; an address is at most one `name@host`
 /// pair, and a stray leading `@` in the name half is caught downstream as an empty
@@ -1735,10 +1735,10 @@ mod tests {
         assert_eq!(parse_address("alpha"), ("alpha", None));
         assert_eq!(parse_address("ab3kx9mq"), ("ab3kx9mq", None));
         // name@host ⇒ (name, Some(host)).
-        assert_eq!(parse_address("alpha@brano"), ("alpha", Some("brano")));
+        assert_eq!(parse_address("alpha@devbox"), ("alpha", Some("devbox")));
         // Split on the LAST '@' (defensive — real names/ids carry no '@', but the
         // rule is well-defined if one somehow appears).
-        assert_eq!(parse_address("a@b@brano"), ("a@b", Some("brano")));
+        assert_eq!(parse_address("a@b@devbox"), ("a@b", Some("devbox")));
         // Degenerate forms are PARSED here (the refusal is resolve_target's job):
         assert_eq!(parse_address("@host"), ("", Some("host")), "empty name half");
         assert_eq!(parse_address("name@"), ("name", Some("")), "empty host half");
@@ -1758,7 +1758,7 @@ mod tests {
     fn resolve_target_empty_host_is_refused_host() {
         // "name@" ⇒ empty host qualifier ⇒ a sync refused{host} (never silently
         // treated as local). Short-circuits before any gather.
-        let env = env_host("brano");
+        let env = env_host("devbox");
         let r = resolve_target("name", Some(""), &env).unwrap_err();
         assert_eq!(r.family, dispatch::origin_send::Family::Refused);
         assert_eq!(r.class, "host");
@@ -1768,8 +1768,8 @@ mod tests {
     fn resolve_target_empty_name_is_refused_address() {
         // "@host" ⇒ empty name ⇒ refused{address} (nothing to resolve). Here the
         // host equals local so we pass the host gate and hit the empty-name gate.
-        let env = env_host("brano");
-        let r = resolve_target("", Some("brano"), &env).unwrap_err();
+        let env = env_host("devbox");
+        let r = resolve_target("", Some("devbox"), &env).unwrap_err();
         assert_eq!(r.family, dispatch::origin_send::Family::Refused);
         assert_eq!(r.class, "address");
     }
@@ -1778,8 +1778,8 @@ mod tests {
     fn resolve_target_foreign_host_is_refused_no_fleet_state() {
         // A host-qualified address for a host that is NOT this host, on a
         // single-machine box (no remote/<h>/) ⇒ fail-closed refused{no-fleet-state}.
-        // local_host = "brano" (QD_HOST), target host "elsewhere" ≠ local.
-        let env = env_host("brano");
+        // local_host = "devbox" (QD_HOST), target host "elsewhere" ≠ local.
+        let env = env_host("devbox");
         let r = resolve_target("alpha", Some("elsewhere"), &env).unwrap_err();
         assert_eq!(r.family, dispatch::origin_send::Family::Refused);
         assert_eq!(r.class, "no-fleet-state");
@@ -1824,7 +1824,7 @@ mod tests {
         // host on the same default env DOES refuse (control).
         let env = dispatch::effects::MapEnv::default(); // QD_HOST unset ⇒ "local"
         // Foreign host still refuses (proves the gate is active under the default).
-        let foreign = resolve_target("alpha", Some("brano"), &env).unwrap_err();
+        let foreign = resolve_target("alpha", Some("devbox"), &env).unwrap_err();
         assert_eq!(foreign.class, "no-fleet-state");
         // "@local" for an EMPTY name passes the host gate (local match) and hits the
         // empty-name gate instead of no-fleet-state — proof the local branch is
@@ -2363,7 +2363,7 @@ mod tests {
             &env,
             &paths,
             &attempt,
-            "worker@brano", // the RAW caller address
+            "worker@devbox", // the RAW caller address
             "hello body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
             None, // no caller-supplied id ⇒ qd mints a ULID
@@ -2378,7 +2378,7 @@ mod tests {
         let log = dispatch::dispositions::read_local_log(&tpaths);
         assert_eq!(log.records.len(), 1, "exactly one envelope logged");
         let env_row = &log.records[0];
-        assert_eq!(env_row.target, "worker@brano", "raw address recorded");
+        assert_eq!(env_row.target, "worker@devbox", "raw address recorded");
         assert_eq!(env_row.body, "hello body", "body verbatim");
         assert_eq!(env_row.origin, "local", "v1 origin-host placeholder");
         assert_eq!(
@@ -2732,7 +2732,7 @@ mod tests {
             &env,
             &paths,
             &attempt,
-            "worker@brano",
+            "worker@devbox",
             "hello body",
             dispatch::origin_send::DEFAULT_EXPIRES_MS,
             None, // no caller-supplied id ⇒ qd mints a ULID
@@ -2745,7 +2745,7 @@ mod tests {
         let tpaths = dispatch::paths::QdPaths::from_home_env(&paths.home, &env);
         let log = dispatch::dispositions::read_local_log(&tpaths);
         assert_eq!(log.records.len(), 1, "envelope logged before the attempt");
-        assert_eq!(log.records[0].target, "worker@brano");
+        assert_eq!(log.records[0].target, "worker@devbox");
         let events = dispatch::dispositions::read_local_events(&tpaths);
         let rows: Vec<(dispatch::dispositions::EventKind, Option<String>)> =
             events.records.iter().map(event_row).collect();

@@ -1,5 +1,5 @@
 # EVIDENCE — DELTA-CORE re-pin 0d0fa9e -> 8c59ec4 (verify-first + verified-diff carry)
-# Owner: impl-0b-delta. Captured: 2026-06-05 on brano (macOS arm64) + Lima sbtest
+# Owner: impl-0b-delta. Captured: 2026-06-05 on devbox (macOS arm64) + Lima linuxvm
 # (Linux aarch64, in-VM). Scope: the orc-3 DELTA-CORE ruling (P1-P12 re-staged to
 # A7 as DELTA-STRENGTH; NOT in this pass).
 #
@@ -23,7 +23,7 @@ relay-health           CONFIRMED  sha e67e2c2ceac9bd3a5cd631b6a6d000f679ca55cf83
 send-pty-paste-burst   CONFIRMED  sha 0558a82d76018d7b51398800e456ca764780e28fe06546d3494bcf8375964352 (golden == 8c59ec4 re-record)
                        (user_record_count=2 unchanged; sub-1024B burst => chunkText single-chunk => 8c59ec4 inert)
 
-## VERIFIED-DIFF CARRY re-confirms (all other rows — macOS on brano)
+## VERIFIED-DIFF CARRY re-confirms (all other rows — macOS on devbox)
 attach-detach-reattach CONFIRMED (byte-identical, same sha)
 build-claude-cmd       CONFIRMED (byte-identical, same sha)
 exit-codes             CONFIRMED (byte-identical, same sha)
@@ -32,7 +32,7 @@ ls-info-json           CONFIRMED (byte-identical, same sha)
 new-session-trace      CONFIRMED (byte-identical, same sha)
 zmx-dir-resolution     CONFIRMED (byte-identical, same sha) [macOS sibling resolution.txt]
 
-## VERIFIED-DIFF CARRY re-confirm (Linux sibling — IN-VM, Lima sbtest, jail under /run/user/501)
+## VERIFIED-DIFF CARRY re-confirm (Linux sibling — IN-VM, Lima linuxvm, jail under /run/user/501)
 zmx-dir-resolution-linux CONFIRMED  sha d6801d27cf83b8669d0e57201b7409e7ac975d78015f20b132eb7a2ad4f4b6eb (golden == 8c59ec4 re-record)
                        (XDG_RUNTIME_DIR tier + TMPDIR-collapse tier both unmoved; uid=501 preserved; zero leftover sessions in VM)
 
@@ -59,5 +59,5 @@ zmx-dir-resolution-linux CONFIRMED  sha d6801d27cf83b8669d0e57201b7409e7ac975d78
 # mutation synthetic 10/10 ; mutation-real 27/27 (counts UNCHANGED — no assertions
 # changed in DELTA-CORE) ; full selftest suite ALL PASSED ; ratchet-back fmt+clippy
 # clean (build+test serialized behind host build-lock; see report for final RC).
-# invisibility: 0 qdrg leftovers brano + VM ; org TS checkout + shared qd-rust on
+# invisibility: 0 qdrg leftovers devbox + VM ; org TS checkout + shared qd-rust on
 # main, HEAD untouched ; phantom-driver fix 43a4d88 present on branch.

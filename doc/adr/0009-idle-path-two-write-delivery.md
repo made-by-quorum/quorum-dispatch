@@ -39,7 +39,7 @@ discipline operates ABOVE this transport hole and **cannot remediate it** — th
 content-verified CR correctly fires nothing because the composer genuinely holds
 nothing.
 
-**OBSERVED boundaries are EVIDENCE, not constants.** On brano (arm64/Darwin) the
+**OBSERVED boundaries are EVIDENCE, not constants.** On devbox (arm64/Darwin) the
 send:pty idle path: **8KB DELIVERED, 12KB and 16KB EMPTY-DROPPED**; the create
 path's multi-round remediation got 16KB through on one boot (it shares the same
 exposed transport). The TS reference observed the drop at **~4KB**. These
@@ -47,7 +47,7 @@ boundaries are **MACHINE/LOAD-DEPENDENT** — no code path and no test asserts t
 any particular size passes unchunked. The **INVARIANT is the chunk size** (≤1024B,
 well under any realistic queue bound).
 
-Evidence ladder (mode a): brano 8KB clean / 12KB+16KB EMPTY-DROPPED
+Evidence ladder (mode a): devbox 8KB clean / 12KB+16KB EMPTY-DROPPED
 (`a4-r6-probe-evidence.md`); TS-side ~4KB single-write drop (verified before the
 port). The fix is the same on both: chunk the text into ≤1024B code-point-safe
 pieces ~150ms apart so the reader drains the queue between writes. **TS landed the
@@ -210,7 +210,7 @@ live bugs — but it CAN, and now does, prove BOTH mechanisms are load-bearing:
   delta (the pass-(b) target) — `8c59ec4` is the commit carrying the chunked-delivery
   reference (`chunkText`/`sendTextChunked` + its call sites in `send.ts` /
   `lifecycle.ts`) + the TS test vectors (`8c59ec4:src/submit.test.ts`).
-- The observed drop boundaries (brano 8KB clean / ≥12KB dropped; TS ~4KB) are
+- The observed drop boundaries (devbox 8KB clean / ≥12KB dropped; TS ~4KB) are
   recorded as **EVIDENCE ROWS only** — machine/load-dependent, never a constant in
   code or a test assertion. The chunk size (≤1024B) is the invariant.
 - Timing: the 200ms settle means the text burst closes BEFORE the CR arrives —

@@ -1477,7 +1477,7 @@ mod tests {
 
     /// An empty pi store (empty/absent root → `scan_transcripts` returns empty →
     /// `pi_cold` empty) contributes ZERO rows and never disturbs existing rows —
-    /// the brano-today clean-zero case, additive no-op.
+    /// the devbox-today clean-zero case, additive no-op.
     #[test]
     fn empty_pi_cold_adds_nothing_to_existing_rows() {
         let mut inputs = base_inputs();

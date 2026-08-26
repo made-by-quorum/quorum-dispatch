@@ -14,7 +14,7 @@ so the oracle does not bake in unfixed behavior). See `coverage-matrix.md`.
 
 ## The jail contract (ABSOLUTE)
 
-The org's REAL TypeScript qd runs on this machine (brano). This harness MUST be
+The org's REAL TypeScript qd runs on this machine (devbox). This harness MUST be
 invisible to it. `lib/jail.sh` establishes a per-run hermetic environment — own
 **HOME** (load-bearing: TS qd keys its registry on `homedir()`, ADD-4), QD_HOME,
 ZMX_DIR, XDG_*, TMPDIR, relay port + socket prefix — all under a per-run temp dir.
@@ -24,7 +24,7 @@ under the run dir) and FAILS CLOSED. Kill/gc refuse any session name not under t
 own prefixed sessions (qd gc + zmx kill) so a detached jailed daemon never leaks.
 
 `selftest/test_jail_refusal.sh` proves the refusals fire (production paths, bare
-names, unregistered PIDs, Lima destructive gate fail-closed on brano).
+names, unregistered PIDs, Lima destructive gate fail-closed off the sandbox).
 
 ## Layout
 

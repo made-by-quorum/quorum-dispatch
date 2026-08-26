@@ -57,6 +57,14 @@ jobs:
       - name: engine scope audit (ADD-8, success criterion 7)
         run: ./scripts/scope-audit.sh
 
+      # Public-export exit gate: nothing that actually ships carries a personal
+      # identity, a private host name, or a private repo owner. Its exclusion list
+      # must stay in sync with copy.bara.sky's origin_files EXCLUDE + the
+      # core.verify_match tripwire — passing here and passing there are the SAME
+      # assertion. Depth-independent: works with the tree at dispatch/ or as root.
+      - name: public-scrub gate
+        run: ./scripts/check-public-scrub.sh
+
       - name: build (through build-lock)
         run: ./scripts/build-lock.sh cargo build --workspace --all-targets
 
@@ -65,7 +73,7 @@ jobs:
         # macos-latest ONLY (ledger: crates/qrmux/GATE-B2.md "Quarantine").
         # Deterministic marker loss on the GH macOS runner that does not
         # reproduce locally (incl. with the runner's prompt width); G3 keeps
-        # two-platform coverage via macOS-local (brano) + ubuntu-latest here.
+        # two-platform coverage via macOS-local (devbox) + ubuntu-latest here.
         env:
           QRMUX_CI_QUARANTINE: ${{ matrix.os == 'macos-latest' && 'g3-macos' || '' }}
         run: ./scripts/build-lock.sh cargo test --workspace
@@ -76,13 +84,10 @@ jobs:
         timeout-minutes: 3
         run: ./scripts/build-lock-smoke.sh
 
-      # A7: golden self-test RUNNER (replaces the former standalone fetch-zmx
-      # step — test_fetch_zmx.sh is one of the suites this runner drives, so the
-      # standalone step was de-duped away). VERIFIED HERMETIC: the whole runner
-      # needs no network and no CI-absent recorded state — every suite reads
-      # in-repo fixtures only (test_fetch_zmx uses the vendored zmx mirror +
-      # QD_ZMX_MIRROR_URL file copies; test_stub_claude / test_normalize touch
-      # only 127.0.0.1 loopback to their own stubs). A4_RUN_LIVE stays unset, so
+      # A7: golden self-test RUNNER. VERIFIED HERMETIC: the whole runner needs no
+      # network and no CI-absent recorded state — every suite reads in-repo
+      # fixtures only (test_stub_claude / test_normalize touch only 127.0.0.1
+      # loopback to their own stubs). A4_RUN_LIVE stays unset, so
       # the ~2min live went-busy scenario is SKIPPED (QA/M6 runs it standalone).
       # Measured locally (TMPDIR=/tmp): ~49s wall. Belt sized ~3x + cold-start.
       - name: golden selftests (hermetic runner)

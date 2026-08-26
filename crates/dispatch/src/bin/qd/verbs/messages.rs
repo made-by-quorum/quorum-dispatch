@@ -561,7 +561,7 @@ fn footer_line(rows: &[(Envelope, SummaryRecord, Direction)], query: &str) -> St
 /// The ends are rendered as `sender → target`, which states the direction
 /// literally instead of leaning on the table's from-the-queried-session glyph:
 /// at full verbosity the reader is looking at one message, not scanning a
-/// column, and `a1b2c3d4 → alpha@brano` needs no legend. An unattributed sender
+/// column, and `a1b2c3d4 → alpha@devbox` needs no legend. An unattributed sender
 /// prints as `—` — the same honest absence the `null` in the row is.
 fn render_full(rows: &[(Envelope, SummaryRecord, Direction)], now_ms: i64, st: Style) -> String {
     let mut out = String::new();
@@ -1042,14 +1042,14 @@ mod tests {
     /// The host set follows the SCOPE, and honors QD_HOST for this host's id.
     #[test]
     fn host_set_follows_scope_and_qd_host() {
-        let env = env_with(&[("QD_HOST", "Brano")]);
+        let env = env_with(&[("QD_HOST", "Devbox")]);
         let (local, _) = resolve_addresses("alpha", &Scope::Local, &env, &[]);
-        assert_eq!(local.hosts, Some(BTreeSet::from(["brano".to_string()])));
+        assert_eq!(local.hosts, Some(BTreeSet::from(["devbox".to_string()])));
 
         let (host, _) = resolve_addresses("alpha", &Scope::Host("Peer".into()), &env, &[]);
         assert_eq!(
             host.hosts,
-            Some(BTreeSet::from(["brano".to_string(), "peer".to_string()]))
+            Some(BTreeSet::from(["devbox".to_string(), "peer".to_string()]))
         );
 
         let (all, _) = resolve_addresses("alpha", &Scope::All, &env, &[]);

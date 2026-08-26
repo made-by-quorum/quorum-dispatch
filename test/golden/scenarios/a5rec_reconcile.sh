@@ -10,7 +10,7 @@
 #   (b) forged I1 dead-PID registry → "Would repair N drift item(s):" + per-item
 #       "tombstone: <name> (pid <N> dead)".
 # The NON-DRY `Repaired` line is LIMA-DEFERRED (see header below) — jail.sh::
-# jail_sweep_belt_ok will NOT pass on brano, so it is recorded only in the Lima
+# jail_sweep_belt_ok will NOT pass on devbox, so it is recorded only in the Lima
 # lane (G-X1). Pin 0d0fa9e. tooling: record.sh@388ccd9 normalize.sh@b581f75.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_a5_lifecycle_lib.sh"
 
@@ -24,7 +24,7 @@ scn_run() {
     while kill -0 "$DEADPID" 2>/dev/null; do DEADPID=$((DEADPID+1)); done
     {
         echo "# RECORDED-FROM pin=0d0fa9e verb=reconcile mode=--dry-run (ADD-12: destructive OFF on macOS)"
-        echo "# NON-DRY 'Repaired' line: LIMA-DEFERRED (G-X1) — TS sweeps literal /tmp; sweep-belt refuses on brano."
+        echo "# NON-DRY 'Repaired' line: LIMA-DEFERRED (G-X1) — TS sweeps literal /tmp; sweep-belt refuses on devbox."
         echo "\$ qd reconcile --dry-run (clean — all agree)"
         scn_qd reconcile --dry-run 2>&1
     } > "$SCN_OUT"

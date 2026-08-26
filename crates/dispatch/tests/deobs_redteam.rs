@@ -108,7 +108,7 @@ fn probe1_many_threads_same_key_exactly_one_line() {
         handles.push(thread::spawn(move || {
             barrier.wait(); // release all racers at once — maximize contention
             let c = clock();
-            record_observed_in(&state, &c, "qrmoh", "claude", "sid-thr", None, &RecordHooks::default())
+            record_observed_in(&state, &c, "obsbox", "claude", "sid-thr", None, &RecordHooks::default())
         }));
     }
     let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
@@ -123,7 +123,7 @@ fn probe1_many_threads_same_key_exactly_one_line() {
     assert_eq!(wins, 1, "exactly one racer wins the first sighting");
     assert_eq!(noops, N - 1, "every other racer no-ops");
     assert_eq!(
-        count_observed_exact(&marks, "qrmoh", "claude", "sid-thr"),
+        count_observed_exact(&marks, "obsbox", "claude", "sid-thr"),
         1,
         "PHYSICAL stream holds exactly one line (write-time, not reader dedup)"
     );
@@ -147,18 +147,18 @@ fn probe3_torn_trailing_line_same_key() {
     std::fs::create_dir_all(&state).unwrap();
 
     // Inject a torn PARTIAL observed line for K with NO trailing newline.
-    let full = build_observed_line("2026-07-15T00:00:00.000Z", "qrmoh", "claude", "sid-torn", None);
+    let full = build_observed_line("2026-07-15T00:00:00.000Z", "obsbox", "claude", "sid-torn", None);
     let torn = &full[..full.len() - 10]; // chop the tail → unterminated partial
     std::fs::write(&marks, torn.as_bytes()).unwrap();
     println!("probe3: injected torn tail (no newline): {torn:?}");
 
     let c = clock();
-    let r = record_observed_in(&state, &c, "qrmoh", "claude", "sid-torn", None, &RecordHooks::default());
+    let r = record_observed_in(&state, &c, "obsbox", "claude", "sid-torn", None, &RecordHooks::default());
     dump_state("probe3", &state);
     println!("probe3: record result = {r:?}");
 
-    let readable = count_observed_exact(&marks, "qrmoh", "claude", "sid-torn");
-    let marker = marker_path(&state, "qrmoh", "claude", "sid-torn");
+    let readable = count_observed_exact(&marks, "obsbox", "claude", "sid-torn");
+    let marker = marker_path(&state, "obsbox", "claude", "sid-torn");
     println!("probe3: readable_lines={readable} marker_exists={}", marker.exists());
 
     // (a) No false 'already recorded' from the torn winner: it must have appended.
@@ -189,18 +189,18 @@ fn probe3b_torn_trailing_line_corrupts_unrelated_append() {
     std::fs::create_dir_all(&state).unwrap();
 
     // A torn partial for K1 (some other writer's crash), no trailing newline.
-    let full_k1 = build_observed_line("2026-07-15T00:00:00.000Z", "qrmoh", "claude", "sid-K1", None);
+    let full_k1 = build_observed_line("2026-07-15T00:00:00.000Z", "obsbox", "claude", "sid-K1", None);
     let torn_k1 = &full_k1[..full_k1.len() - 8];
     std::fs::write(&marks, torn_k1.as_bytes()).unwrap();
 
     // A legitimate, brand-new first sighting of K2.
     let c = clock();
-    let r = record_observed_in(&state, &c, "qrmoh", "claude", "sid-K2", None, &RecordHooks::default());
+    let r = record_observed_in(&state, &c, "obsbox", "claude", "sid-K2", None, &RecordHooks::default());
     dump_state("probe3b", &state);
     println!("probe3b: record K2 result = {r:?}");
 
-    let readable_k2 = count_observed_exact(&marks, "qrmoh", "claude", "sid-K2");
-    let marker_k2 = marker_path(&state, "qrmoh", "claude", "sid-K2");
+    let readable_k2 = count_observed_exact(&marks, "obsbox", "claude", "sid-K2");
+    let marker_k2 = marker_path(&state, "obsbox", "claude", "sid-K2");
     println!(
         "probe3b: K2 readable_lines={readable_k2} marker_exists={}",
         marker_k2.exists()
@@ -228,7 +228,7 @@ fn probe3b_torn_trailing_line_corrupts_unrelated_append() {
 #[test]
 fn probe3c_class_closure_dirty_tail_fuzz() {
     // A representative complete `observed` line we chop to make torn tails.
-    let obs = build_observed_line("2026-07-15T00:00:00.000Z", "qrmoh", "claude", "sid-K1", Some("/x"));
+    let obs = build_observed_line("2026-07-15T00:00:00.000Z", "obsbox", "claude", "sid-K1", Some("/x"));
     let create = r#"{"ts":"2026-07-15T00:00:00.000Z","event":"create","name":"n","backend":"b"}"#;
     let mark = r#"{"ts":"2026-07-15T00:00:00.000Z","sessionId":"s","payload":{"k":"v"}}"#;
 
@@ -262,9 +262,9 @@ fn probe3c_class_closure_dirty_tail_fuzz() {
         let sid = format!("fresh-{label}");
         let sid = sid.replace(['@', '/'], "_"); // keep it a clean single field
         let c = clock();
-        let r = record_observed_in(&state, &c, "qrmoh", "claude", &sid, None, &RecordHooks::default());
-        let readable = count_observed_exact(&marks, "qrmoh", "claude", &sid);
-        let marker = marker_path(&state, "qrmoh", "claude", &sid);
+        let r = record_observed_in(&state, &c, "obsbox", "claude", &sid, None, &RecordHooks::default());
+        let readable = count_observed_exact(&marks, "obsbox", "claude", &sid);
+        let marker = marker_path(&state, "obsbox", "claude", &sid);
         let marker_exists = marker.exists();
 
         // A first sighting that reports Ok(true) (or commits a marker) but yields
@@ -312,27 +312,27 @@ fn probe4a_rotation_surviving_marker_blocks_reobservation() {
 
     // First sighting commits a line + marker.
     assert_eq!(
-        record_observed_in(&state, &c, "qrmoh", "claude", "sid-rot", None, &RecordHooks::default()),
+        record_observed_in(&state, &c, "obsbox", "claude", "sid-rot", None, &RecordHooks::default()),
         Ok(true)
     );
-    let marker = marker_path(&state, "qrmoh", "claude", "sid-rot");
+    let marker = marker_path(&state, "obsbox", "claude", "sid-rot");
     assert!(marker.exists());
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", "sid-rot"), 1);
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", "sid-rot"), 1);
 
     // ROTATION that clears the stream but NOT the marker (the exact QS-8 mis-op).
     std::fs::remove_file(&marks).unwrap();
     println!("probe4a: removed marks.jsonl; marker survives = {}", marker.exists());
 
     // Re-observe the SAME identity after stream loss.
-    let r = record_observed_in(&state, &c, "qrmoh", "claude", "sid-rot", None, &RecordHooks::default());
+    let r = record_observed_in(&state, &c, "obsbox", "claude", "sid-rot", None, &RecordHooks::default());
     dump_state("probe4a", &state);
     println!("probe4a: re-observe after stream-loss-with-surviving-marker = {r:?}");
-    let readable = count_observed_exact(&marks, "qrmoh", "claude", "sid-rot");
+    let readable = count_observed_exact(&marks, "obsbox", "claude", "sid-rot");
     println!("probe4a: readable_lines_after_reobserve = {readable}");
 
     // DOCUMENTED QS-8 hazard captured: the surviving marker fast-paths to a NO-OP
     // and re-observation SILENTLY does not happen. This is the exact masquerade at
-    // the stream-lifetime boundary — BUBBLED to de-observed-coord for the acceptance
+    // the stream-lifetime boundary — BUBBLED to the de-observed owner for the acceptance
     // oracle to scope against QS-8's "rotation must clear markers" documented
     // coupling. (Assertion pins the observed behavior as raw evidence, NOT approval.)
     assert_eq!(r, Ok(false), "QS-8 HAZARD: surviving marker refuses re-observation");
@@ -351,18 +351,18 @@ fn probe4b_rotation_clearing_markers_reobserves() {
     let c = clock();
 
     assert_eq!(
-        record_observed_in(&state, &c, "qrmoh", "claude", "sid-rot2", None, &RecordHooks::default()),
+        record_observed_in(&state, &c, "obsbox", "claude", "sid-rot2", None, &RecordHooks::default()),
         Ok(true)
     );
     // Proper rotation: remove BOTH the stream and the claims dir.
     std::fs::remove_file(&marks).unwrap();
     std::fs::remove_dir_all(state.join("observed-claims")).unwrap();
 
-    let r = record_observed_in(&state, &c, "qrmoh", "claude", "sid-rot2", None, &RecordHooks::default());
+    let r = record_observed_in(&state, &c, "obsbox", "claude", "sid-rot2", None, &RecordHooks::default());
     dump_state("probe4b", &state);
     println!("probe4b: re-observe after PROPER rotation = {r:?}");
     assert_eq!(r, Ok(true), "proper rotation (both cleared) re-observes legitimately");
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", "sid-rot2"), 1);
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", "sid-rot2"), 1);
 }
 
 // ===========================================================================
@@ -379,13 +379,13 @@ fn probe5_composition_seam_duplicate_lines_first_wins() {
     std::fs::create_dir_all(&state).unwrap();
 
     // Two physical lines for the SAME key (simulating a merged/concatenated history).
-    let l1 = build_observed_line("2026-07-15T00:00:00.000Z", "qrmoh", "claude", "sid-comp", Some("/a"));
-    let l2 = build_observed_line("2026-07-15T00:00:01.000Z", "qrmoh", "claude", "sid-comp", Some("/b"));
+    let l1 = build_observed_line("2026-07-15T00:00:00.000Z", "obsbox", "claude", "sid-comp", Some("/a"));
+    let l2 = build_observed_line("2026-07-15T00:00:01.000Z", "obsbox", "claude", "sid-comp", Some("/b"));
     std::fs::write(&marks, format!("{l1}\n{l2}\n")).unwrap();
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", "sid-comp"), 2, "seeded two lines");
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", "sid-comp"), 2, "seeded two lines");
 
     let c = clock();
-    let r = record_observed_in(&state, &c, "qrmoh", "claude", "sid-comp", None, &RecordHooks::default());
+    let r = record_observed_in(&state, &c, "obsbox", "claude", "sid-comp", None, &RecordHooks::default());
     dump_state("probe5", &state);
     println!("probe5: record over a 2-line history = {r:?}");
 
@@ -393,7 +393,7 @@ fn probe5_composition_seam_duplicate_lines_first_wins() {
     // fact), NO third line written.
     assert_eq!(r, Ok(false), "pre-existing duplicate key is seen as already-present (first-wins)");
     assert_eq!(
-        count_observed_exact(&marks, "qrmoh", "claude", "sid-comp"),
+        count_observed_exact(&marks, "obsbox", "claude", "sid-comp"),
         2,
         "no third line added — writer did not amplify the pre-existing duplicate"
     );
@@ -417,16 +417,16 @@ fn probe7_planted_marker_early_noop_never_early_append() {
     let marks = state.join("marks.jsonl");
 
     // Plant a marker for K with NO stream line at all.
-    let marker = marker_path(&state, "qrmoh", "claude", "sid-plant");
+    let marker = marker_path(&state, "obsbox", "claude", "sid-plant");
     std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
     std::fs::write(&marker, b"").unwrap();
     println!("probe7: planted marker with NO line: {}", marker.display());
 
     let c = clock();
-    let r = record_observed_in(&state, &c, "qrmoh", "claude", "sid-plant", None, &RecordHooks::default());
+    let r = record_observed_in(&state, &c, "obsbox", "claude", "sid-plant", None, &RecordHooks::default());
     dump_state("probe7", &state);
     println!("probe7: record with planted marker = {r:?}");
-    let readable = count_observed_exact(&marks, "qrmoh", "claude", "sid-plant");
+    let readable = count_observed_exact(&marks, "obsbox", "claude", "sid-plant");
     println!("probe7: readable_lines = {readable}");
 
     // The SAFE property that MUST hold: a marker can only cause an early NO-OP,
@@ -476,7 +476,7 @@ fn ffwd2a_lock_timeout_leaves_key_recordable() {
     let state_r = state.clone();
     let racer = thread::spawn(move || {
         let c = clock();
-        let r = record_observed_in(&state_r, &c, "qrmoh", "claude", "sid-to", None, &RecordHooks::default());
+        let r = record_observed_in(&state_r, &c, "obsbox", "claude", "sid-to", None, &RecordHooks::default());
         let _ = tx.send(r);
     });
 
@@ -488,10 +488,10 @@ fn ffwd2a_lock_timeout_leaves_key_recordable() {
     println!("ffwd2a: timed-out racer result = {r:?}");
 
     assert!(r.is_err(), "a caller that can't acquire the lock returns a non-fatal Err");
-    let marker = marker_path(&state, "qrmoh", "claude", "sid-to");
+    let marker = marker_path(&state, "obsbox", "claude", "sid-to");
     assert!(!marker.exists(), "timed-out caller left NO orphaned marker");
     assert_eq!(
-        count_observed_exact(&marks, "qrmoh", "claude", "sid-to"),
+        count_observed_exact(&marks, "obsbox", "claude", "sid-to"),
         0,
         "timed-out caller wrote NO partial line"
     );
@@ -501,11 +501,11 @@ fn ffwd2a_lock_timeout_leaves_key_recordable() {
     assert_eq!(rc, 0);
     drop(holder);
     let c = clock();
-    let r2 = record_observed_in(&state, &c, "qrmoh", "claude", "sid-to", None, &RecordHooks::default());
+    let r2 = record_observed_in(&state, &c, "obsbox", "claude", "sid-to", None, &RecordHooks::default());
     dump_state("ffwd2a", &state);
     println!("ffwd2a: record after lock released = {r2:?}");
     assert_eq!(r2, Ok(true), "key stays recordable after a lock timeout (no poison)");
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", "sid-to"), 1);
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", "sid-to"), 1);
 }
 
 // ===========================================================================
@@ -531,7 +531,7 @@ fn probe2_ffwd2b_sigkill_in_section_holder_recovers() {
         .args([
             "--hold-in-section",
             state.to_str().unwrap(),
-            "qrmoh",
+            "obsbox",
             "claude",
             "sid-kill",
             sentinel.to_str().unwrap(),
@@ -556,7 +556,7 @@ fn probe2_ffwd2b_sigkill_in_section_holder_recovers() {
     }
     println!("probe2/ffwd2b: holder is IN-SECTION (sentinel present); no line appended yet");
     assert_eq!(
-        count_observed_exact(&marks, "qrmoh", "claude", "sid-kill"),
+        count_observed_exact(&marks, "obsbox", "claude", "sid-kill"),
         0,
         "holder is pre-append while pinned in-section"
     );
@@ -568,7 +568,7 @@ fn probe2_ffwd2b_sigkill_in_section_holder_recovers() {
 
     // A fresh caller for the SAME key must acquire the (OS-released) lock and record.
     let c = clock();
-    let r = record_observed_in(&state, &c, "qrmoh", "claude", "sid-kill", None, &RecordHooks::default());
+    let r = record_observed_in(&state, &c, "obsbox", "claude", "sid-kill", None, &RecordHooks::default());
     dump_state("probe2/ffwd2b", &state);
     println!("probe2/ffwd2b: recovery record after holder death = {r:?}");
     assert_eq!(
@@ -577,7 +577,7 @@ fn probe2_ffwd2b_sigkill_in_section_holder_recovers() {
         "flock released on death + no durable poison ⇒ next caller records (Ok(true))"
     );
     assert_eq!(
-        count_observed_exact(&marks, "qrmoh", "claude", "sid-kill"),
+        count_observed_exact(&marks, "obsbox", "claude", "sid-kill"),
         1,
         "exactly one line after crash-recovery (no duplicate, no permanent wedge)"
     );
@@ -608,7 +608,7 @@ fn probe6_multiprocess_racers_one_physical_line() {
     let mut children = Vec::new();
     for _ in 0..N {
         let child = Command::new(bin)
-            .args(["--race", state.to_str().unwrap(), "qrmoh", "claude", "sid-mp"])
+            .args(["--race", state.to_str().unwrap(), "obsbox", "claude", "sid-mp"])
             .stdout(Stdio::piped())
             .spawn()
             .expect("spawn racer");
@@ -643,7 +643,7 @@ fn probe6_multiprocess_racers_one_physical_line() {
     let noops = outputs.iter().filter(|o| o.contains("ok=false")).count();
     println!("probe6: wins={wins} noops={noops}");
 
-    let physical = count_observed_exact(&marks, "qrmoh", "claude", "sid-mp");
+    let physical = count_observed_exact(&marks, "obsbox", "claude", "sid-mp");
     // THE DISCRIMINATOR: exactly one PHYSICAL line ⇒ write-time serialization, not
     // reader-side dedup over a physically-duplicated stream.
     assert_eq!(
@@ -694,11 +694,11 @@ fn probe8_torn_mark_injected_between_scan_and_append() {
     };
 
     let c = clock();
-    let r = record_observed_in(&state, &c, "qrmoh", "claude", "sid-mark", None, &hooks);
+    let r = record_observed_in(&state, &c, "obsbox", "claude", "sid-mark", None, &hooks);
     dump_state("probe8", &state);
     println!("probe8: record with torn-mark injected mid-section = {r:?}");
-    let readable = count_observed_exact(&marks, "qrmoh", "claude", "sid-mark");
-    let marker = marker_path(&state, "qrmoh", "claude", "sid-mark");
+    let readable = count_observed_exact(&marks, "obsbox", "claude", "sid-mark");
+    let marker = marker_path(&state, "obsbox", "claude", "sid-mark");
     println!("probe8: readable={readable} marker_exists={}", marker.exists());
 
     assert_eq!(r, Ok(true), "first sighting appends");
@@ -726,18 +726,18 @@ fn probe9_leading_newline_blank_safety_and_scan_idempotent() {
 
     // Two distinct first sightings → `\n{K1}\n\n{K2}\n` (blank line between).
     assert_eq!(
-        record_observed_in(&state, &c, "qrmoh", "claude", "sid-b1", None, &RecordHooks::default()),
+        record_observed_in(&state, &c, "obsbox", "claude", "sid-b1", None, &RecordHooks::default()),
         Ok(true)
     );
     assert_eq!(
-        record_observed_in(&state, &c, "qrmoh", "claude", "sid-b2", None, &RecordHooks::default()),
+        record_observed_in(&state, &c, "obsbox", "claude", "sid-b2", None, &RecordHooks::default()),
         Ok(true)
     );
     dump_state("probe9", &state);
 
     // No spurious/duplicate records; each key readable exactly once.
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", "sid-b1"), 1);
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", "sid-b2"), 1);
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", "sid-b1"), 1);
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", "sid-b2"), 1);
 
     // Force the SCAN path: delete the fast-path markers so re-observe must consult
     // observed_line_in_stream over the blank-line-laced stream.
@@ -745,17 +745,17 @@ fn probe9_leading_newline_blank_safety_and_scan_idempotent() {
     // The scan must SKIP the leading blank lines and find each key → Ok(false),
     // NO new line appended (idempotent over the self-delimited stream).
     assert_eq!(
-        record_observed_in(&state, &c, "qrmoh", "claude", "sid-b1", None, &RecordHooks::default()),
+        record_observed_in(&state, &c, "obsbox", "claude", "sid-b1", None, &RecordHooks::default()),
         Ok(false),
         "scan skips leading blanks and finds K1 → no re-append"
     );
     assert_eq!(
-        record_observed_in(&state, &c, "qrmoh", "claude", "sid-b2", None, &RecordHooks::default()),
+        record_observed_in(&state, &c, "obsbox", "claude", "sid-b2", None, &RecordHooks::default()),
         Ok(false),
         "scan skips leading blanks and finds K2 → no re-append"
     );
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", "sid-b1"), 1, "still exactly one K1");
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", "sid-b2"), 1, "still exactly one K2");
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", "sid-b1"), 1, "still exactly one K1");
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", "sid-b2"), 1, "still exactly one K2");
 }
 
 // ===========================================================================
@@ -836,10 +836,10 @@ fn probe11_oversized_sessionid_marker_failure_is_nonfatal_and_idempotent() {
     let big_sid: String = std::iter::repeat('Z').take(320).collect();
 
     // First sighting still records the line (marker create fails, swallowed).
-    let r1 = record_observed_in(&state, &c, "qrmoh", "claude", &big_sid, None, &RecordHooks::default());
+    let r1 = record_observed_in(&state, &c, "obsbox", "claude", &big_sid, None, &RecordHooks::default());
     println!("probe11: first sighting (oversized sid) = {r1:?}");
     assert_eq!(r1, Ok(true), "line records even though the marker can't be created");
-    assert_eq!(count_observed_exact(&marks, "qrmoh", "claude", &big_sid), 1);
+    assert_eq!(count_observed_exact(&marks, "obsbox", "claude", &big_sid), 1);
 
     // The marker was NOT created (name too long) — confirm the fast path can't have it.
     let claims = state.join("observed-claims");
@@ -851,14 +851,14 @@ fn probe11_oversized_sessionid_marker_failure_is_nonfatal_and_idempotent() {
     // Repeated calls MUST stay idempotent via the locked scan (no marker to hit).
     for _ in 0..5 {
         assert_eq!(
-            record_observed_in(&state, &c, "qrmoh", "claude", &big_sid, None, &RecordHooks::default()),
+            record_observed_in(&state, &c, "obsbox", "claude", &big_sid, None, &RecordHooks::default()),
             Ok(false),
             "scan is authoritative when the marker can never exist — no duplicate"
         );
     }
     dump_state("probe11", &state);
     assert_eq!(
-        count_observed_exact(&marks, "qrmoh", "claude", &big_sid),
+        count_observed_exact(&marks, "obsbox", "claude", &big_sid),
         1,
         "still exactly one line — marker-failure is non-fatal and never duplicates"
     );
@@ -914,7 +914,7 @@ fn probe12_concurrency_chaos_distinct_keys_vs_torn_mark_writer() {
             barrier.wait();
             let c = clock();
             let sid = format!("sid-c{k}");
-            record_observed_in(&state, &c, "qrmoh", "claude", &sid, None, &RecordHooks::default())
+            record_observed_in(&state, &c, "obsbox", "claude", &sid, None, &RecordHooks::default())
         }));
     }
 
@@ -939,9 +939,9 @@ fn probe12_concurrency_chaos_distinct_keys_vs_torn_mark_writer() {
     // Every distinct key readable EXACTLY once despite the torn-mark chaos.
     for k in 0..N {
         let sid = format!("sid-c{k}");
-        let n = count_observed_exact(&marks, "qrmoh", "claude", &sid);
+        let n = count_observed_exact(&marks, "obsbox", "claude", &sid);
         assert_eq!(n, 1, "key {sid} must be readable exactly once (got {n}) over a torn-chaos stream");
-        let marker = marker_path(&state, "qrmoh", "claude", &sid);
+        let marker = marker_path(&state, "obsbox", "claude", &sid);
         assert!(marker.exists(), "marker⟹readable holds for {sid}");
     }
 }

@@ -155,7 +155,7 @@ fn parse_events(stdout: &str) -> Vec<serde_json::Value> {
 /// `v, correlation_id, authored_at, expires_at, target, origin, body`).
 fn log_row(id: &str, authored: i64, expires: i64) -> String {
     format!(
-        r#"{{"v":1,"correlation_id":"{id}","authored_at":{authored},"expires_at":{expires},"target":"alpha@brano","origin":"brano","body":"hi"}}"#
+        r#"{{"v":1,"correlation_id":"{id}","authored_at":{authored},"expires_at":{expires},"target":"alpha@devbox","origin":"devbox","body":"hi"}}"#
     )
 }
 
@@ -230,7 +230,7 @@ fn all_local_projects_derived_states() {
     assert_eq!(d["last_attempt_at"], 1_700_000_000_400i64);
     assert_eq!(d["first_delivered_at"], 1_700_000_000_500i64);
     // R14.2: origin/authored_at come from the JOINED envelope (present here).
-    assert_eq!(d["origin"], "brano", "origin from the joined envelope");
+    assert_eq!(d["origin"], "devbox", "origin from the joined envelope");
     assert_eq!(d["authored_at"], authored);
 
     // R11.1: no events ⇒ last_event null, and the other nullable analytics fields
@@ -239,7 +239,7 @@ fn all_local_projects_derived_states() {
     let p = by_id("PEND");
     assert_eq!(p["state"], "pending");
     assert_eq!(p["last_event"], serde_json::Value::Null);
-    assert_eq!(p["origin"], "brano", "origin from the envelope even with no events");
+    assert_eq!(p["origin"], "devbox", "origin from the envelope even with no events");
     assert_eq!(p["last_attempt_at"], serde_json::Value::Null);
     assert_eq!(p["first_delivered_at"], serde_json::Value::Null);
     assert_eq!(p["attempts"], 0);
@@ -247,7 +247,7 @@ fn all_local_projects_derived_states() {
     let x = by_id("EXPIR");
     assert_eq!(x["state"], "expired", "no delivered event past expires_at");
     assert_eq!(x["last_event"], serde_json::Value::Null);
-    assert_eq!(x["origin"], "brano", "origin from the envelope");
+    assert_eq!(x["origin"], "devbox", "origin from the envelope");
 }
 
 /// THE R8 read-surface pair: a full seeded funnel folds (DEFAULT) to ONE
@@ -399,7 +399,7 @@ fn host_flag_unions_the_peer_replica() {
     let peer_rec = recs.iter().find(|r| r["correlation_id"] == "PEER").unwrap();
     assert_eq!(peer_rec["state"], "delivered", "peer's delivered event projected");
     // R14.2: origin comes from the peer's joined envelope (unioned in), not the event.
-    assert_eq!(peer_rec["origin"], "brano", "origin from the peer's joined envelope");
+    assert_eq!(peer_rec["origin"], "devbox", "origin from the peer's joined envelope");
 
     let (code, stdout, _) = run_dispositions(&home, &["--host", "peerbox", "--events"]);
     assert_eq!(code, 0);

@@ -453,8 +453,8 @@ mod tests {
             "01ABCID".into(),
             1000,
             DEFAULT_EXPIRES_MS,
-            "alpha@brano".into(),
-            "brano".into(),
+            "alpha@devbox".into(),
+            "devbox".into(),
             Some("ab3kx9mq".into()),
             "hello world".into(),
         );
@@ -462,8 +462,8 @@ mod tests {
         assert_eq!(e.correlation_id, "01ABCID");
         assert_eq!(e.authored_at, 1000);
         assert_eq!(e.expires_at, 1000 + DEFAULT_EXPIRES_MS);
-        assert_eq!(e.target, "alpha@brano", "raw caller address, verbatim");
-        assert_eq!(e.origin, "brano");
+        assert_eq!(e.target, "alpha@devbox", "raw caller address, verbatim");
+        assert_eq!(e.origin, "devbox");
         assert_eq!(
             e.sender.as_deref(),
             Some("ab3kx9mq"),
@@ -478,8 +478,8 @@ mod tests {
             "01ABCID".into(),
             1000,
             DEFAULT_EXPIRES_MS,
-            "alpha@brano".into(),
-            "brano".into(),
+            "alpha@devbox".into(),
+            "devbox".into(),
             None,
             "hello world".into(),
         );
