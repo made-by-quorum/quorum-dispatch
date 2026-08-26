@@ -16,6 +16,7 @@ mod kill;
 mod lifecycle;
 mod ls;
 mod mark;
+mod messages;
 mod mirror;
 mod ping;
 mod reconcile;
@@ -67,6 +68,10 @@ pub fn dispatch(matches: &ArgMatches) -> i32 {
         // verb — JSONL projection over log.jsonl ⟕ dispositions.jsonl (format
         // doc §3) for piping into DuckDB.
         Some(("dispositions", m)) => dispositions::run(m),
+        // The per-SESSION half of the same store: `dispositions` is keyed by
+        // correlation_id, `messages` by target — the envelope ⟕ summary join,
+        // filtered to one session, in authored order.
+        Some(("messages", m)) => messages::run(m),
         Some(("wait", m)) => wait::run_wait(m),
         Some(("live", m)) => lifecycle::run_live(m),
         Some(("info", m)) => lifecycle::run_info(m),

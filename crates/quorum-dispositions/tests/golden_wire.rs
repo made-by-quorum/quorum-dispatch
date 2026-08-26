@@ -29,12 +29,51 @@ fn envelope_wire_golden() {
         expires_at: 1_781_284_700_000,
         target: "alpha@brano".to_string(),
         origin: "brano".to_string(),
+        sender: Some("ab3kx9mq".to_string()),
         body: "hello world".to_string(),
     };
     assert_eq!(
         e.to_jsonl_line(),
-        r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","body":"hello world"}"#
+        r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","sender":"ab3kx9mq","body":"hello world"}"#
     );
+}
+
+/// An UNATTRIBUTED send (a human in a shell — no `QD_SESSION_ID`) emits
+/// `"sender":null`, never a skipped key: the row's key set is stable, and an
+/// honest null is the record that nobody claimed the send.
+#[test]
+fn envelope_wire_golden_no_sender() {
+    let e = Envelope {
+        v: 1,
+        correlation_id: "01ABC".to_string(),
+        authored_at: 1_781_241_500_000,
+        expires_at: 1_781_284_700_000,
+        target: "alpha@brano".to_string(),
+        origin: "brano".to_string(),
+        sender: None,
+        body: "hello world".to_string(),
+    };
+    assert_eq!(
+        e.to_jsonl_line(),
+        r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","sender":null,"body":"hello world"}"#
+    );
+}
+
+/// A row written BEFORE `sender` existed (and a peer's envelope from an older
+/// qd) has no `sender` key at all. It must still parse — as an unattributed
+/// envelope, not as corruption. This is what `serde(default)` buys, and it is
+/// the whole backward-compatibility story for the field.
+#[test]
+fn envelope_without_sender_key_parses_as_unattributed() {
+    let legacy = concat!(
+        r#"{"v":1,"correlation_id":"01OLD","authored_at":1781241500000,"expires_at":1781284700000,"#,
+        r#""target":"alpha@brano","origin":"brano","body":"from before the field"}"#,
+        "\n"
+    );
+    let read = parse_log(legacy.as_bytes());
+    assert_eq!(read.corrupt_interior, 0, "a pre-sender row is NOT corrupt");
+    assert_eq!(read.records.len(), 1);
+    assert_eq!(read.records[0].sender, None);
 }
 
 // ---- the five event types (class ONLY on delivery-failed + refused) ----
@@ -195,6 +234,7 @@ fn round_trip_through_parsers() {
         expires_at: 20,
         target: "t".to_string(),
         origin: "o".to_string(),
+        sender: Some("ab3kx9mq".to_string()),
         body: "b".to_string(),
     };
     let ev = DispositionEvent::delivery_failed("rt".into(), 15, "wake".into());
@@ -250,6 +290,7 @@ fn fail_then_retry_then_succeed_folds_to_delivered() {
         expires_at: 100_000,
         target: "t".into(),
         origin: "origin".into(),
+        sender: None,
         body: "b".into(),
     }];
     let out = project_summary(&envs, &events, 400);
@@ -276,6 +317,7 @@ fn fail_then_retry_then_succeed_folds_to_delivered() {
         expires_at: 100_000,
         target: "t".into(),
         origin: "origin".into(),
+        sender: None,
         body: "b".into(),
     };
     let p = project_summary(&[pending_env], &[], 400);
@@ -313,6 +355,7 @@ fn refused_only_summary_is_pending_wire() {
         expires_at: 1_000_000,
         target: "t".into(),
         origin: "origin".into(),
+        sender: None,
         body: "b".into(),
     }];
     let out = project_summary(&envs, &events, 800);

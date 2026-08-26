@@ -525,6 +525,55 @@ pub fn read_events(
     Ok(events)
 }
 
+/// The envelope ⟕ summary JOIN — one row per ENVELOPE in scope (+ `archive`),
+/// each paired with its folded [`SummaryRecord`]. The read surface `qd messages`
+/// calls (`qd dispositions` stays id-rooted on [`query_summary`]).
+///
+/// ENVELOPE-ROOTED, and that is the contract: a message row IS an envelope. An
+/// orphan-event id (events in scope whose envelope is not) is DROPPED here rather
+/// than emitted with a null envelope — event rows carry no `target` column
+/// (R14.2), so an orphan can never be attributed to a session, and a per-session
+/// report must never carry a row whose target it cannot state. Nothing is hidden
+/// by that: those ids stay visible in `qd dispositions`, which is keyed by id and
+/// owes no target.
+///
+/// The projection runs ONCE over the WHOLE scope before any caller-side filter,
+/// because the R10 state precedence is defined over every event for an id —
+/// folding a pre-filtered subset would be a different (and wrong) verdict.
+///
+/// Order is [`read_scoped`]'s deterministic concatenation (local hot → local
+/// archive → remote hosts sorted), inherited from [`project_summary`]'s pass 1;
+/// a caller wanting a timeline sorts on `authored_at` itself. Duplicate envelope
+/// ids dedup FIRST-wins — the original act of authorship — matching
+/// [`logged_envelope`] and the projection's own pass 1.
+pub fn query_joined(
+    paths: &QdPaths,
+    scope: &Scope,
+    archive: bool,
+    now_ms: i64,
+) -> io::Result<Vec<(Envelope, SummaryRecord)>> {
+    let (envelopes, events) = read_scoped(paths, scope, archive)?;
+    let summaries = project_summary(&envelopes, &events, now_ms);
+
+    // id → the FIRST envelope carrying it (the projection dedups the same way).
+    let mut first: std::collections::HashMap<&str, &Envelope> =
+        std::collections::HashMap::with_capacity(envelopes.len());
+    for env in &envelopes {
+        first.entry(env.correlation_id.as_str()).or_insert(env);
+    }
+
+    // Walk the SUMMARIES (pass 1 = envelope order), keeping only the ids that
+    // have an envelope. Orphan-event summaries fall out here with no extra test.
+    Ok(summaries
+        .into_iter()
+        .filter_map(|s| {
+            first
+                .get(s.correlation_id.as_str())
+                .map(|e| ((*e).clone(), s))
+        })
+        .collect())
+}
+
 // ===========================================================================
 // Idempotency helper (W4 inbound mode)
 // ===========================================================================
@@ -645,6 +694,7 @@ mod tests {
             expires_at: expires,
             target: "alpha@brano".to_string(),
             origin: "brano".to_string(),
+            sender: Some("ab3kx9mq".to_string()),
             body: "hello".to_string(),
         }
     }
@@ -774,6 +824,7 @@ mod tests {
                 expires_at: 2,
                 target: "t".to_string(),
                 origin: "o".to_string(),
+                sender: None,
                 body: body.to_string(),
             };
             append_envelope(&paths, &e).unwrap();
@@ -925,6 +976,7 @@ mod tests {
                         expires_at: 2,
                         target: "t".to_string(),
                         origin: "o".to_string(),
+                        sender: None,
                         body: big.clone(),
                     };
                     append_envelope(&paths, &e).unwrap();
@@ -1233,6 +1285,213 @@ mod tests {
         assert_eq!(s.last_event, Some(EventKind::Delivered));
         assert_eq!(s.first_delivered_at, Some(300));
         assert_eq!(s.last_attempt_at, Some(200));
+    }
+
+    // ---- query_joined (the envelope ⟕ summary join) --------------------------
+
+    #[test]
+    fn query_joined_pairs_each_envelope_with_its_folded_summary() {
+        // The join itself: every envelope in scope comes back paired with the
+        // fold of its own events, keyed by correlation_id.
+        let (_tmp, paths) = jailed_paths();
+        let e = env("d", 10, 1000);
+        append_envelope(&paths, &e).unwrap();
+        append_event(&paths, &attempted("d", 400)).unwrap();
+        append_event(&paths, &delivered("d", 500)).unwrap();
+
+        let rows = query_joined(&paths, &Scope::Local, false, 42).unwrap();
+        assert_eq!(rows.len(), 1, "one pair per envelope, got {rows:?}");
+        let (got, s) = &rows[0];
+        assert_eq!(got, &e, "the envelope comes back verbatim, got {got:?}");
+        assert_eq!(s.correlation_id, got.correlation_id, "joined on the id");
+        assert_eq!(s.state, SummaryState::Delivered, "a delivered event exists");
+        assert_eq!(s.attempts, 1, "one attempted event, got {}", s.attempts);
+        assert_eq!(s.last_event, Some(EventKind::Delivered));
+    }
+
+    #[test]
+    fn query_joined_keeps_an_envelope_with_no_events() {
+        // The row a naive INNER join would drop: nothing has been witnessed for
+        // this id yet, but the message exists — pending pre-expiry, expired past
+        // it (both derived from ABSENCE, never stored).
+        let (_tmp, paths) = jailed_paths();
+        append_envelope(&paths, &env("p", 10, 1000)).unwrap();
+
+        let pending = query_joined(&paths, &Scope::Local, false, 999).unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "an un-evented envelope is still a row, got {pending:?}"
+        );
+        assert_eq!(pending[0].1.state, SummaryState::Pending);
+        assert_eq!(pending[0].1.last_event, None, "no events witnessed");
+        assert_eq!(pending[0].1.attempts, 0);
+
+        let expired = query_joined(&paths, &Scope::Local, false, 1000).unwrap();
+        assert_eq!(
+            expired[0].1.state,
+            SummaryState::Expired,
+            "now >= expires_at, got {:?}",
+            expired[0].1.state
+        );
+    }
+
+    #[test]
+    fn query_joined_drops_orphan_events_that_query_summary_keeps() {
+        // THE load-bearing asymmetry (R14.2): an event row carries no `target`,
+        // so an id with events but no envelope in scope cannot be attributed to
+        // any session. The id-keyed surface still owes it a row; this
+        // target-rootable one cannot honestly carry it.
+        let (_tmp, paths) = jailed_paths();
+        append_envelope(&paths, &env("has-env", 10, 1000)).unwrap();
+        append_event(&paths, &attempted("has-env", 20)).unwrap();
+        append_event(&paths, &attempted("orphan", 30)).unwrap();
+        append_event(&paths, &delivered("orphan", 40)).unwrap();
+
+        let rows = query_joined(&paths, &Scope::Local, false, 42).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|(e, _)| e.correlation_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["has-env"],
+            "the orphan has no envelope to attribute, got {ids:?}"
+        );
+
+        let published: Vec<String> = query_summary(&paths, &Scope::Local, false, 42, None)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.correlation_id)
+            .collect();
+        assert!(
+            published.iter().any(|id| id == "orphan"),
+            "query_summary still publishes the orphan, got {published:?}"
+        );
+    }
+
+    #[test]
+    fn query_joined_dedups_duplicate_envelope_ids_first_wins() {
+        // A double-append (corruption, or a pre-R15 origin) must not double-report
+        // one message, and the survivor is the FIRST in file order — the original
+        // act of authorship, the rule `logged_envelope` and project_summary's
+        // pass 1 both take.
+        let (_tmp, paths) = jailed_paths();
+        let first = Envelope {
+            body: "the original".to_string(),
+            ..env("dup", 10, 1000)
+        };
+        let second = Envelope {
+            body: "the double-append".to_string(),
+            ..env("dup", 10, 1000)
+        };
+        append_envelope(&paths, &first).unwrap();
+        append_envelope(&paths, &second).unwrap();
+
+        let rows = query_joined(&paths, &Scope::Local, false, 42).unwrap();
+        assert_eq!(rows.len(), 1, "one row per id, got {rows:?}");
+        assert_eq!(
+            rows[0].0.body, "the original",
+            "first in file order wins, got {:?}",
+            rows[0].0.body
+        );
+    }
+
+    #[test]
+    fn query_joined_preserves_read_scoped_order_and_does_not_sort() {
+        // Order is read_scoped's deterministic concatenation (here: file order),
+        // inherited through project_summary pass 1. Imposing a timeline is the
+        // CALLER's job — a store that quietly sorted would make the union order
+        // the R14a pin 2 determinism test guards unobservable.
+        let (_tmp, paths) = jailed_paths();
+        append_envelope(&paths, &env("c", 300, 100_000)).unwrap();
+        append_envelope(&paths, &env("b", 200, 100_000)).unwrap();
+        append_envelope(&paths, &env("a", 100, 100_000)).unwrap();
+
+        let rows = query_joined(&paths, &Scope::Local, false, 42).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|(e, _)| e.correlation_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["c", "b", "a"],
+            "file order, NOT authored_at order, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn query_joined_archive_flag_unions_the_local_archive_tier() {
+        // Same tiering as read_scoped: the archive is opt-in, and opting in joins
+        // its envelopes too (not just their events).
+        let (_tmp, paths) = jailed_paths();
+        append_envelope(&paths, &env("hot1", 1, 100_000)).unwrap();
+        std::fs::create_dir_all(&paths.dispatch_root).unwrap();
+        std::fs::write(
+            paths.log_archive_path(),
+            format!("{}\n", env("arch1", 2, 100_000).to_jsonl_line()),
+        )
+        .unwrap();
+
+        let hot = query_joined(&paths, &Scope::Local, false, 42).unwrap();
+        let ids: Vec<&str> = hot.iter().map(|(e, _)| e.correlation_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["hot1"],
+            "archive tier excluded when archive=false, got {ids:?}"
+        );
+
+        let both = query_joined(&paths, &Scope::Local, true, 42).unwrap();
+        let mut ids: Vec<&str> = both.iter().map(|(e, _)| e.correlation_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["arch1", "hot1"],
+            "archive tier unioned when archive=true, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn query_joined_folds_over_the_whole_scope_not_per_row() {
+        // The R10 precedence is defined over EVERY event for an id, so the
+        // projection runs once over the whole scope before anything is selected.
+        // An unrelated envelope arriving alongside must not perturb another id's
+        // verdict — the trap a per-row fold over a pre-filtered subset would fall
+        // into.
+        let (_tmp, paths) = jailed_paths();
+        append_envelope(&paths, &env("f", 10, 1_000_000)).unwrap();
+        append_event(&paths, &attempted("f", 100)).unwrap();
+        append_event(&paths, &failed("f", 100, "delivery")).unwrap();
+        append_event(&paths, &attempted("f", 200)).unwrap();
+        append_event(&paths, &delivered("f", 300)).unwrap();
+        let alone = query_joined(&paths, &Scope::Local, false, 400).unwrap();
+
+        append_envelope(&paths, &env("other", 20, 1_000_000)).unwrap();
+        append_event(&paths, &refused("other", 250, "unknown")).unwrap();
+        let neighbored = query_joined(&paths, &Scope::Local, false, 400).unwrap();
+
+        let pick = |rows: &[(Envelope, SummaryRecord)], id: &str| {
+            rows.iter()
+                .find(|(e, _)| e.correlation_id == id)
+                .cloned()
+                .unwrap_or_else(|| panic!("no row for {id}"))
+        };
+        assert_eq!(
+            pick(&alone, "f"),
+            pick(&neighbored, "f"),
+            "an unrelated row must not change f's fold"
+        );
+        let (_, s) = pick(&neighbored, "f");
+        assert_eq!(
+            s.state,
+            SummaryState::Delivered,
+            "fail-then-retry folds delivered, got {:?}",
+            s.state
+        );
+        assert_eq!(s.attempts, 2, "both attempts counted, got {}", s.attempts);
+    }
+
+    #[test]
+    fn query_joined_on_a_missing_store_is_empty_not_an_error() {
+        // Born-empty is the normal first state of a machine, never an error —
+        // the same best-effort posture read_scoped takes.
+        let (_tmp, paths) = jailed_paths();
+        let rows = query_joined(&paths, &Scope::Local, false, 42).unwrap();
+        assert!(rows.is_empty(), "a born-empty store joins to nothing, got {rows:?}");
     }
 
     // ---- read_events (the raw --events surface) ------------------------------

@@ -381,6 +381,27 @@ fn run_send_with_row(
     row_json: &str,
     args: &[&str],
 ) -> (i32, String, String, String, String) {
+    run_send_with_row_as(dir, pid, tombstoned, row_json, args, None)
+}
+
+/// [`run_send_with_row`] with the caller's identity chosen explicitly:
+/// `sender = Some(id)` runs qd as an AGENT SESSION carrying that
+/// `QD_SESSION_ID` (what the envelope's `sender` records), `None` runs it as an
+/// unattributed caller with the variable REMOVED.
+///
+/// Removing it is not cosmetic: `cargo test` inherits the shell's environment,
+/// and a developer running this suite from inside a live agent session would
+/// otherwise leak that session's real id into every envelope — turning the
+/// unattributed assertions into a pass-on-your-laptop/fail-in-CI coin flip (and
+/// silently arming the self-send fence besides).
+fn run_send_with_row_as(
+    dir: &Path,
+    pid: i64,
+    tombstoned: bool,
+    row_json: &str,
+    args: &[&str],
+    sender: Option<&str>,
+) -> (i32, String, String, String, String) {
     let home = dir.join("home");
     let zmx = dir.join("zmx");
     let sessions = home.join(".claude").join("sessions");
@@ -394,14 +415,17 @@ fn run_send_with_row(
     };
     std::fs::write(sessions.join(fname), row_json).unwrap();
 
-    let out = Command::new(qd_bin())
-        .args(args)
+    let mut cmd = Command::new(qd_bin());
+    cmd.args(args)
         .env_remove("QD_HOME") // transport files land under <home>/.quorum/dispatch
         .env_remove("QD_HOST") // the envelope's origin stamps as the "local" v1 placeholder
         .env("HOME", &home)
-        .env("ZMX_DIR", &zmx)
-        .output()
-        .expect("spawn qd");
+        .env("ZMX_DIR", &zmx);
+    match sender {
+        Some(id) => cmd.env("QD_SESSION_ID", id),
+        None => cmd.env_remove("QD_SESSION_ID"),
+    };
+    let out = cmd.output().expect("spawn qd");
     let root = home.join(".quorum").join("dispatch");
     let log = std::fs::read_to_string(root.join("log.jsonl")).unwrap_or_default();
     let disps = std::fs::read_to_string(root.join("dispositions.jsonl")).unwrap_or_default();
@@ -537,6 +561,99 @@ fn send_tombstoned_target_wakes_and_is_not_rejected() {
         "funnel event rows written, got dispositions.jsonl: {disps:?}"
     );
     assert_eq!(rows[2]["class"], "wake", "the wake-failure class (R14.2), got: {disps:?}");
+}
+
+// ===========================================================================
+// The envelope's `sender` — WHICH AGENT SESSION invoked qd (format doc §1).
+//
+// `origin` already answered "which host"; `sender` answers "which session on
+// it", which is what makes the sent side of a conversation recoverable at all.
+// Both arms run the SAME unwakeable-cold send used above: the wake failing is
+// irrelevant here — write-then-deliver means the envelope is durable BEFORE the
+// attempt, so this pins attribution on the write half alone, with no live
+// carrier standing between the assertion and the fact.
+// ===========================================================================
+
+/// An AGENT send stamps the caller's `QD_SESSION_ID` into the envelope, RAW —
+/// no idstore fold, no resolution, exactly the id the caller carried.
+#[test]
+fn send_stamps_the_invoking_agent_session_as_sender() {
+    let temp = tempfile::tempdir().unwrap();
+    let row = r#"{"pid":90101,"sessionId":"mystery-sender-1","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"cold","name":"sendwho","version":"0.1.0","provider":"mystery"}"#;
+    let (_code, _out, _err, log, _disps) = run_send_with_row_as(
+        temp.path(),
+        90101,
+        false,
+        row,
+        &["send", "sendwho", "hi"],
+        Some("ab3kx9mq"),
+    );
+
+    let env_row = sole_log_row(&log);
+    assert_eq!(
+        env_row["sender"], "ab3kx9mq",
+        "the envelope records the invoking agent session, verbatim: {log:?}"
+    );
+    // The pair is the point: host AND session, each in its own field.
+    assert!(env_row["origin"].is_string(), "origin still stamps the HOST: {log:?}");
+}
+
+/// A send with NO `QD_SESSION_ID` (a human in a shell, a cron) records
+/// `sender: null`. The key is PRESENT — an explicit "nobody claimed this" — and
+/// the transport never fabricates an attribution to fill it.
+#[test]
+fn send_without_an_agent_session_records_a_null_sender() {
+    let temp = tempfile::tempdir().unwrap();
+    let row = r#"{"pid":90102,"sessionId":"mystery-sender-2","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"cold","name":"sendanon","version":"0.1.0","provider":"mystery"}"#;
+    let (_code, _out, _err, log, _disps) =
+        run_send_with_row(temp.path(), 90102, false, row, &["send", "sendanon", "hi"]);
+
+    let env_row = sole_log_row(&log);
+    assert!(
+        env_row.get("sender").is_some(),
+        "`sender` is emitted even when unknown — a stable key set: {log:?}"
+    );
+    assert_eq!(
+        env_row["sender"],
+        serde_json::Value::Null,
+        "an unattributed caller is null, never a guess: {log:?}"
+    );
+}
+
+/// An EMPTY `QD_SESSION_ID` is the same fact as an absent one. Worth its own arm
+/// because the two differ at the syscall and would differ in the log if the
+/// read were a bare `env::var().ok()`: a `sender: ""` row would assert an
+/// attribution to a session id that cannot exist — strictly worse than null.
+#[test]
+fn send_with_an_empty_session_id_records_null_not_empty_string() {
+    let temp = tempfile::tempdir().unwrap();
+    let row = r#"{"pid":90103,"sessionId":"mystery-sender-3","cwd":"/w","startedAt":1717000000000,"updatedAt":1717003600000,"status":"cold","name":"sendempty","version":"0.1.0","provider":"mystery"}"#;
+    let (_code, _out, _err, log, _disps) = run_send_with_row_as(
+        temp.path(),
+        90103,
+        false,
+        row,
+        &["send", "sendempty", "hi"],
+        Some(""),
+    );
+
+    assert_eq!(
+        sole_log_row(&log)["sender"],
+        serde_json::Value::Null,
+        "empty ⇒ unattributed, never `sender:\"\"`: {log:?}"
+    );
+}
+
+/// Parse a `log.jsonl` body that must hold EXACTLY one envelope, tolerating the
+/// self-delimiting append framing's blank lines (format doc "common framing").
+fn sole_log_row(log: &str) -> serde_json::Value {
+    let rows: Vec<serde_json::Value> = log
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("log line is not JSON: {l:?} ({e})")))
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one envelope expected, got log.jsonl: {log:?}");
+    rows.into_iter().next().unwrap()
 }
 
 // ===========================================================================

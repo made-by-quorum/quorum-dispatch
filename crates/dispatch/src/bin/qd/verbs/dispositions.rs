@@ -97,7 +97,7 @@ fn emit_or_pipe_exit(payload: &str) {
 /// is normally unreachable — but keeping it means the scope resolver is total
 /// and independently testable, and a future caller invoking the matches without
 /// the clap conflict still refuses cleanly rather than silently preferring one.
-fn select_scope(m: &ArgMatches) -> Result<Scope, Refusal> {
+pub(super) fn select_scope(m: &ArgMatches) -> Result<Scope, Refusal> {
     let host = m.get_one::<String>("host").cloned();
     let all = m.get_flag("all");
     match (host, all) {
@@ -130,7 +130,7 @@ fn select_scope(m: &ArgMatches) -> Result<Scope, Refusal> {
 /// ([`passes_window`]). The bound is saturating (a `--window` larger than
 /// `now_ms` clamps to `i64::MIN` rather than wrapping positive, so it never
 /// silently excludes everything). A malformed duration is a SYNC [`Refusal`].
-fn window_lower_bound(now_ms: i64, m: &ArgMatches) -> Result<Option<i64>, Refusal> {
+pub(super) fn window_lower_bound(now_ms: i64, m: &ArgMatches) -> Result<Option<i64>, Refusal> {
     match m.get_one::<String>("window") {
         None => Ok(None),
         Some(raw) => {

@@ -107,6 +107,7 @@ fn subcommands() -> Vec<Command> {
         cmd_relay(),
         cmd_whoami(),
         cmd_dispositions(),
+        cmd_messages(),
         cmd_wait(),
         cmd_live(),
         cmd_info(),
@@ -874,6 +875,54 @@ fn cmd_dispositions() -> Command {
 }
 
 // --- 13. wait <session>, commands/status.ts:214-217 ---
+// --- messages <session>: the per-SESSION read of the same store ---
+//
+// The flags MIRROR `dispositions` deliberately — `--window/--host/--all/--archive`
+// are the same words for the same scope over the same two files, and the verb
+// reuses that verb's own resolvers for them (`verbs/dispositions::select_scope`,
+// `window_lower_bound`), so a divergence here would be a divergence in behavior,
+// not just in help text. What is NOT shared is the key: `dispositions` takes an
+// optional `correlation_id`, this takes a REQUIRED `<session>`.
+fn cmd_messages() -> Command {
+    Command::new("messages")
+        .about("Report the messages a session sent and received (JSONL with --json)")
+        .override_help(help::MESSAGES)
+        .arg(positional("session"))
+        .arg(long_flag(
+            "json",
+            "Output as JSONL, one message per line (best for scripting)",
+        ))
+        .arg(long_flag(
+            "table",
+            "Force the human table (override the JSON auto-default)",
+        ))
+        .arg(long_flag(
+            "full",
+            "Print each message body in full instead of one elided line (implies the human surface)",
+        ))
+        .arg(long_val(
+            "window",
+            "dur",
+            "Only messages authored within the last <dur> (e.g. 12h, 30m, 45s, 1d; bare integer = seconds)",
+        ))
+        .arg(
+            long_val(
+                "host",
+                "host",
+                "Also read one peer host's replicated log (remote/<host>/)",
+            )
+            .conflicts_with("all"),
+        )
+        .arg(long_flag(
+            "all",
+            "Also read every peer host's replicated log (remote/*/)",
+        ))
+        .arg(long_flag(
+            "archive",
+            "Also read the local archive tier (log.archive.jsonl + dispositions.archive.jsonl)",
+        ))
+}
+
 fn cmd_wait() -> Command {
     Command::new("wait")
         .about("Block until a session transitions from busy to idle")
@@ -2074,6 +2123,9 @@ mod tests {
             // The three the hand-maintained `help::TOP` had silently dropped —
             // the drift FTUE punch R4 exists to make impossible.
             "dispositions",
+            // The per-session read of the same store (envelope ⟕ summary,
+            // filtered by target).
+            "messages",
             "delivery:recover",
             // Hand-parsed pre-clap (main.rs), registered here so R4's generated
             // table can list them.
@@ -2095,8 +2147,9 @@ mod tests {
         // `dispositions`, the stateless JSONL read verb; config + survey are
         // dispatched pre-clap (hand-parsed) but registered here so R4's
         // generated help table can see them; the first-run `setup` verb (R15)
-        // is the 29th.
-        assert_eq!(names.len(), 31);
+        // is the 29th; `messages` — the per-session read over the same two
+        // files `dispositions` reads by id — is the 32nd.
+        assert_eq!(names.len(), 32);
     }
 
     #[test]
@@ -2555,7 +2608,7 @@ mod tests {
     #[test]
     fn hidden_verbs_still_parse_and_reach_their_own_dispatch_arm() {
         use std::collections::BTreeSet;
-        let invocations: [(&str, &[&str]); 26] = [
+        let invocations: [(&str, &[&str]); 27] = [
             ("connect", &["connect", "wk"]),
             ("resume", &["resume", "wk"]),
             ("wrap", &["wrap", "wk"]),
@@ -2570,6 +2623,7 @@ mod tests {
             ("relay", &["relay"]),
             ("whoami", &["whoami"]),
             ("dispositions", &["dispositions"]),
+            ("messages", &["messages", "wk"]),
             ("wait", &["wait", "wk"]),
             ("live", &["live"]),
             ("info", &["info", "wk"]),

@@ -637,6 +637,49 @@ Options:
   -h, --help  display help for command
 "####;
 
+// `messages` is net-new (no TS-era corpus capture), hand-written to the same
+// commander layout as the rest of this file. It carries prose no generated help
+// could: the verb reads as "everything this session said and heard", and it is
+// now close enough to that to be dangerous — the two paragraphs under the
+// options are where the remaining gaps are named. A person who reads only the
+// `about` line must not walk away with the wrong belief, so the limits are
+// stated on the page, not just in the module doc.
+pub const MESSAGES: &str = r####"Usage: qd messages [options] <session>
+
+Report the messages a session sent and received, oldest first.
+
+One row per message: when it was authored, which way it went (-> sent by this
+session, <- addressed to it), how its delivery ended (pending, delivered, failed
+or expired), its correlation id, and the message itself. Both ends interleave on
+one timeline. A session that has since been stopped and collected still reports
+— the log outlives the session it was addressed to.
+
+Options:
+  --json           Output as JSONL, one message per line (best for scripting)
+  --table          Force the human table (override the JSON auto-default)
+  --full           Print each message body in full instead of one elided line
+                   (implies the human surface — it has no meaning under --json,
+                   which never elides)
+  --window <dur>   Only messages authored within the last <dur> (12h, 30m, 45s,
+                   1d; a bare integer = seconds)
+  --host <host>    Also read one peer host's replicated log (remote/<host>/);
+                   conflicts with --all
+  --all            Also read every peer host's replicated log
+  --archive        Also read the local archive tier (log.archive.jsonl)
+  -h, --help       display help for command
+
+This reports only what went through `qd send`, so it is not the whole
+conversation. Two gaps to know: replies made through the relay
+(`mcp__relay__reply`, including the answer a `qd send --wait` receives) write no
+envelope and are invisible here; and the SENT side begins where the log's
+`sender` field does — sends recorded before it existed are unattributed and
+appear on nobody's sent side. A short sent side means "not recorded", which is a
+different claim from "did not happen".
+
+For the same rows keyed by correlation id rather than by session — including
+event rows whose envelope is not in scope — use `qd dispositions`.
+"####;
+
 // W6+W7 (ADD-15, wart-wave): wait completion is now status- AND transcript-keyed
 // (a turn shorter than one poll interval is caught via its JSONL record). The
 // about line DIVERGES from the TS capture (22-help-wait.txt "Block until a

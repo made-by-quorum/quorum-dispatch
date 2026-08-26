@@ -196,7 +196,8 @@ pub fn parse_expires(raw: &str) -> Result<i64, String> {
 /// (operational record); `body` is the message verbatim; `origin` is the origin
 /// host id ([`crate::dispositions::local_host`] — this qd originates, so it is
 /// the origin). `expires_at = authored_at + expires_ms` (saturating, so a huge
-/// `--expires` can never wrap negative).
+/// `--expires` can never wrap negative). `sender` is the agent session that
+/// invoked qd ([`caller_session_id`]), or `None` for an unattributed caller.
 ///
 /// There is deliberately NO disposition-event builder here: the witnessed
 /// events (`attempted`/`queued`/`delivered`/…) are authored at the call sites
@@ -208,6 +209,7 @@ pub fn build_envelope(
     expires_ms: i64,
     target: String,
     origin: String,
+    sender: Option<String>,
     body: String,
 ) -> Envelope {
     Envelope {
@@ -217,8 +219,32 @@ pub fn build_envelope(
         expires_at: authored_at.saturating_add(expires_ms),
         target,
         origin,
+        sender,
         body,
     }
+}
+
+/// The AGENT SESSION invoking qd, for [`Envelope::sender`] — the caller's
+/// `QD_SESSION_ID`, RAW (R9.4), or `None` when it is unset or empty.
+///
+/// Deliberately NOT the resolved-UUID chain `send_unified`'s self-send fence and
+/// `qd whoami` run (`QD_SESSION_ID` → idstore fold → UUID). Two reasons, both
+/// about what a LOG owes:
+///
+/// 1. **A log records, it does not adjudicate.** The fold can fail to resolve
+///    (an id minted by a newer/older store, a pruned idstore), and a resolver
+///    that returns `None` would turn a send that WAS attributable into an
+///    anonymous row. Recording what the caller carried always succeeds, and a
+///    view can resolve it later — the reverse is not recoverable.
+/// 2. **`target` set the precedent.** The envelope stores addresses as given and
+///    lets queries resolve; storing a folded id here would materialize derived
+///    state into the log, the exact thing R9.4 ruled out for `target_host`.
+///
+/// The usual raw-vs-resolved tension does not really bite: `QD_SESSION_ID` is
+/// injected verbatim at session create, so it is already the stable id — not the
+/// grab-bag of name/prefix/`@host` spellings a human types into `target`.
+pub fn caller_session_id(env: &dyn crate::effects::Env) -> Option<String> {
+    env.var("QD_SESSION_ID").filter(|id| !id.is_empty())
 }
 
 // ===========================================================================
@@ -327,7 +353,8 @@ impl Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::effects::FixedClock;
+    use crate::effects::{FixedClock, MapEnv};
+    use std::collections::HashMap;
 
     // ---- ULID ---------------------------------------------------------------
 
@@ -428,6 +455,7 @@ mod tests {
             DEFAULT_EXPIRES_MS,
             "alpha@brano".into(),
             "brano".into(),
+            Some("ab3kx9mq".into()),
             "hello world".into(),
         );
         assert_eq!(e.v, 1);
@@ -436,7 +464,52 @@ mod tests {
         assert_eq!(e.expires_at, 1000 + DEFAULT_EXPIRES_MS);
         assert_eq!(e.target, "alpha@brano", "raw caller address, verbatim");
         assert_eq!(e.origin, "brano");
+        assert_eq!(
+            e.sender.as_deref(),
+            Some("ab3kx9mq"),
+            "the invoking agent session, raw"
+        );
         assert_eq!(e.body, "hello world", "body verbatim");
+    }
+
+    #[test]
+    fn build_envelope_carries_an_absent_sender_as_none() {
+        let e = build_envelope(
+            "01ABCID".into(),
+            1000,
+            DEFAULT_EXPIRES_MS,
+            "alpha@brano".into(),
+            "brano".into(),
+            None,
+            "hello world".into(),
+        );
+        assert_eq!(e.sender, None, "no invoking agent ⇒ unattributed, never guessed");
+    }
+
+    // ---- caller_session_id --------------------------------------------------
+
+    #[test]
+    fn caller_session_id_reads_qd_session_id_raw() {
+        let env = MapEnv {
+            vars: HashMap::from([("QD_SESSION_ID".to_string(), "ab3kx9mq".to_string())]),
+            uid: 0,
+        };
+        assert_eq!(caller_session_id(&env).as_deref(), Some("ab3kx9mq"));
+    }
+
+    /// UNSET and EMPTY are the same fact — nobody claimed the send. An empty
+    /// string would otherwise become a `sender:""` row: an attribution to a
+    /// session that cannot exist, which is worse than none.
+    #[test]
+    fn caller_session_id_is_none_when_unset_or_empty() {
+        let unset = MapEnv::default();
+        assert_eq!(caller_session_id(&unset), None);
+
+        let empty = MapEnv {
+            vars: HashMap::from([("QD_SESSION_ID".to_string(), String::new())]),
+            uid: 0,
+        };
+        assert_eq!(caller_session_id(&empty), None);
     }
 
     #[test]
@@ -447,6 +520,7 @@ mod tests {
             DEFAULT_EXPIRES_MS,
             "t".into(),
             "o".into(),
+            None,
             "b".into(),
         );
         assert_eq!(e.expires_at, i64::MAX, "saturating add, never negative");

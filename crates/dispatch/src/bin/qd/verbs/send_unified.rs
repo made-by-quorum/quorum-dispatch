@@ -1000,6 +1000,7 @@ fn origin_remote_send(
         expires_ms,
         raw_target.to_string(),
         origin,
+        dispatch::origin_send::caller_session_id(env),
         message.to_string(),
     );
     if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {
@@ -1480,6 +1481,13 @@ fn deliver_with_durability(
             expires_ms,
             raw_target.to_string(),
             origin.clone(),
+            // The invoking agent session, RAW from QD_SESSION_ID. Read through
+            // the SAME `env` seam the self-send fence uses, so a test's MapEnv
+            // drives attribution too — and read HERE rather than threaded in,
+            // because a caller-retry (`skip_append`) must NOT rewrite the
+            // sender: the envelope already in the log holds the session that
+            // actually authored the act.
+            dispatch::origin_send::caller_session_id(env),
             message.to_string(),
         );
         if let Err(e) = dispositions::append_envelope(&tpaths, &envelope) {

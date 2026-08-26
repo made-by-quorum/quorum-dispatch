@@ -144,6 +144,7 @@ mod tests {
             expires_at: 2,
             target: "t".to_string(),
             origin: "o".to_string(),
+            sender: None,
             body: "b".to_string(),
         }
         .to_jsonl_line()

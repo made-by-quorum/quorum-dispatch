@@ -94,7 +94,7 @@ durable envelope backs resume-and-deliver's active `pending` (Amendment 2).
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "qd log.jsonl row (envelope, v1)",
   "type": "object",
-  "required": ["v", "correlation_id", "authored_at", "expires_at", "target", "body", "origin"],
+  "required": ["v", "correlation_id", "authored_at", "expires_at", "target", "body", "origin", "sender"],
   "additionalProperties": false,
   "properties": {
     "v":              { "const": 1 },
@@ -109,15 +109,25 @@ durable envelope backs resume-and-deliver's active `pending` (Amendment 2).
     "body":           { "type": "string",
                         "description": "The opaque prose, verbatim, delivered as one message. qd never parses it. Persisted so write-then-deliver / resume-and-deliver can redeliver." },
     "origin":         { "type": "string", "minLength": 1,
-                        "description": "Origin host id (this qd's host) — named for its N10 role (R9.2). On a single machine this is the local host id; disambiguates origin when a peer's log is read from remote/<host>/." }
+                        "description": "Origin host id (this qd's host) — named for its N10 role (R9.2). On a single machine this is the local host id; disambiguates origin when a peer's log is read from remote/<host>/." },
+    "sender":         { "type": ["string", "null"], "minLength": 1,
+                        "description": "The AGENT SESSION that invoked qd, as its QD_SESSION_ID, RAW — or null when the caller carried none (a human in a shell, a cron). `origin` says which HOST authored; `sender` says which session on it. RAW on the same R9.4 ground as `target`: a folded idstore lookup at write time would materialize derived state into the log, and a fold that fails to resolve would anonymize a send that WAS attributable — a log records what the caller carried and lets views resolve. Unlike a human-typed `target` the id has exactly one spelling (injected verbatim at session create), so raw IS the stable id. Never inferred: absence is recorded as null, not guessed from adjacency." }
   }
 }
 ```
 
 Key order on the wire (byte-exact, `preserve_order`): `v, correlation_id,
-authored_at, expires_at, target, origin, body`. (`body` last: it is the
+authored_at, expires_at, target, origin, sender, body`. (`body` last: it is the
 largest and most variable field; keeping it last keeps the head of every line
 cheap to scan.)
+
+`sender` is **born nullable, never backfilled**, and is the one field a v1 reader
+must tolerate MISSING: rows written before it existed — and envelopes arriving
+from a peer running an older qd — carry no `sender` key at all, and are read as
+`null` (unattributed), NOT as corruption. That absence-tolerance is deliberate
+and narrow: every other §1 key stays strictly required, and an old reader meeting
+a new row simply ignores the key it does not know. Because the field is emitted
+even when null, the row's key set is identical either way.
 
 ---
 
@@ -399,6 +409,27 @@ correlation_id, event, created_at, class`; `class` present only on
 funnel history/analytics views project over; the DEFAULT summary (§3a) is the
 fold of exactly these rows.
 
+### 3c · The per-session view (`qd messages <session>`)
+
+`qd messages` publishes the SAME two files under a different key: the §1
+envelope ⟕ its §3a summary, filtered to one session by the envelope's `target`,
+in `authored_at` order. One JSONL row per message (`--json`, and the default for
+a pipe or an agent caller): the envelope's fields — `v, correlation_id,
+authored_at, expires_at, target, origin` — then the disposition's — `state,
+attempts, last_event, last_attempt_at, first_delivered_at` — then `body` last.
+
+Two consequences of the schema, load-bearing for anyone reading such a report:
+
+- The view is **envelope-rooted**, so an orphan-event id (events in scope whose
+  envelope is not) is ABSENT — R14.2 normalized `target` off the event row, so
+  an orphan cannot be attributed to any session. Those ids remain published by
+  `qd dispositions`, which is keyed by id and owes no target.
+- It reports the **addressed** side only. `origin` is the origin HOST (R9.2);
+  no field records the sending SESSION, so "what did this session send" is not
+  a question these files can answer. Nor is a relay reply visible: qd is the
+  sole writer here (§ single-writer law), and the relay server's reply path
+  appends no envelope.
+
 `--as-of` note (frame-side, §5.2 of TRANSITION): dispositions carry **no ledger
 ord** — they are the live overlay. Frame registers this table fresh each
 evaluation and must **not** apply `--as-of` time-travel to it.
@@ -516,6 +547,7 @@ treated as absence-of-rows).
 | expired = no delivery past envelope's own expires_at; view-computed; orphan-event (no envelope) is never expired | §2/§3a, TRANSITION §2, contract §4 |
 | multi-source: delivered-exists anywhere wins (no tie-break); attempt histories union harmlessly | §3a, R8 |
 | `qd dispositions` DEFAULT = summary; `--events` = the raw event funnel (both published/versioned) | §3, R8b |
+| `qd messages <session>` = the SAME files keyed by target: envelope ⟕ summary, envelope-rooted (orphan events absent, they have no target), addressed-side only (no sender-session field, no relay-reply envelope) | §3c |
 | correlation_id minted once at origin; verbatim; idempotency key | §1, TRANSITION identity crux, contract §4 |
 | inbound mode: idempotent on id (delivered-exists), no local log append | §1/§2, Annex A THE ONE DOOR |
 | no `posted` state | contract Annex A (ruled 2026-08-08) |

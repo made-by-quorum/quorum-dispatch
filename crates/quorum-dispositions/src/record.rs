@@ -49,7 +49,7 @@ use std::fmt;
 /// record, not denormalization).
 ///
 /// Wire key order (byte-exact): `v, correlation_id, authored_at, expires_at,
-/// target, origin, body`. `body` is last (largest + most variable field;
+/// target, origin, sender, body`. `body` is last (largest + most variable field;
 /// keeps the head of every line cheap to scan).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -73,6 +73,25 @@ pub struct Envelope {
     /// Origin host id (this qd's host) — named for its N10 role (R9.2).
     /// Disambiguates origin when a peer's log is read from `remote/<host>/`.
     pub origin: String,
+    /// The AGENT SESSION that invoked `qd send`, or `None` when a human at a
+    /// terminal did. `origin` answers *which host*; this answers *which session
+    /// on it* — the pair is what makes "what did this session say?" answerable
+    /// at all (before it, `log.jsonl` recorded only the addressed side).
+    ///
+    /// The value is the caller's `QD_SESSION_ID` **RAW**, on the same R9.4
+    /// ground as `target`: qd stores the id as the caller carried it and lets
+    /// views resolve at query time, rather than materializing a fold of the
+    /// idstore into the log. Raw costs nothing here — unlike a human-typed
+    /// `target`, `QD_SESSION_ID` is injected verbatim at session create, so the
+    /// one spelling stored IS the stable id.
+    ///
+    /// `None` is an HONEST absence, never a fabricated attribution: a caller
+    /// with no `QD_SESSION_ID` (a person in a shell, a cron) is unattributed,
+    /// and so is every row written before this field existed — which is why it
+    /// is `Option` + `serde(default)` rather than a required string. Present on
+    /// the wire either way (as `null`), so the row's key set stays stable.
+    #[serde(default)]
+    pub sender: Option<String>,
     /// The opaque prose, verbatim, delivered as one message. qd never parses it.
     pub body: String,
 }
@@ -539,11 +558,33 @@ mod tests {
             expires_at: 1_781_284_700_000,
             target: "alpha@brano".to_string(),
             origin: "brano".to_string(),
+            sender: Some("ab3kx9mq".to_string()),
             body: "hello world".to_string(),
         };
         assert_eq!(
             e.to_jsonl_line(),
-            r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","body":"hello world"}"#
+            r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","sender":"ab3kx9mq","body":"hello world"}"#
+        );
+    }
+
+    /// The same golden with NO invoking agent (a human in a shell): `sender` is
+    /// emitted as `null` in place, so the key set — and the cheap head-of-line
+    /// scan the field order exists for — is identical either way.
+    #[test]
+    fn envelope_golden_line_unattributed() {
+        let e = Envelope {
+            v: 1,
+            correlation_id: "01ABC".to_string(),
+            authored_at: 1_781_241_500_000,
+            expires_at: 1_781_284_700_000,
+            target: "alpha@brano".to_string(),
+            origin: "brano".to_string(),
+            sender: None,
+            body: "hello world".to_string(),
+        };
+        assert_eq!(
+            e.to_jsonl_line(),
+            r#"{"v":1,"correlation_id":"01ABC","authored_at":1781241500000,"expires_at":1781284700000,"target":"alpha@brano","origin":"brano","sender":null,"body":"hello world"}"#
         );
     }
 
@@ -685,6 +726,7 @@ mod tests {
             expires_at: 20,
             target: "t".to_string(),
             origin: "o".to_string(),
+            sender: Some("ab3kx9mq".to_string()),
             body: "b".to_string(),
         };
         let back: Envelope = serde_json::from_str(&e.to_jsonl_line()).unwrap();

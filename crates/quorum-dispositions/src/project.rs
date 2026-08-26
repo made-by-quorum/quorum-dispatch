@@ -248,6 +248,7 @@ mod tests {
             expires_at: expires,
             target: "t".to_string(),
             origin: "origin-host".to_string(),
+            sender: None,
             body: "b".to_string(),
         }
     }
