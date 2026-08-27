@@ -791,7 +791,7 @@ Options:
 // baked copies fossilized when the engine's CLI moved).
 //
 // FTUE punch R1 (zmx retirement), boundary note: the PROSE here no longer names
-// zmx, but the two `*_NO_ZMX` rows below keep it — those are the LITERAL env-var
+// zmx, but the four `*_NO_ZMX` rows below keep it — those are the LITERAL env-var
 // names `dispatch::shell_init` still emits into the wrapper bodies, so a user who
 // wants the passthrough escape hatch has to type them exactly. RULE: help never
 // documents a variable the code does not read, and never hides one it does.
@@ -799,34 +799,45 @@ Options:
 // follows them, it does not lead them.
 pub const INIT: &str = r####"Usage: qd init [options] <shell>
 
-Print shell integration for <shell> (bash, zsh, or fish): `claude` and `codex`
-wrappers that route a bare interactive launch into a tracked qd session, plus
-the mux socket-dir pin. Evaluate it from your shell's rc file:
+Print shell integration for <shell> (bash, zsh, or fish): `claude`, `codex`,
+`pi` and `opencode` wrappers that route a bare interactive launch into a tracked
+qd session, plus the mux socket-dir pin. Evaluate it from your shell's rc file:
 
   bash   ~/.bashrc:                     eval "$(qd init bash)"
   zsh    ~/.zshrc:                      eval "$(qd init zsh)"
   fish   ~/.config/fish/conf.d/qd.fish: qd init fish | source
 
+Each wrapper names its own harness and lane on the start it routes to:
+
+  claude    qd start <name> --provider claude-code -- <your args>
+  codex     qd start <name> --provider codex --interactive
+  pi        qd start <name> --provider pi --extension
+  opencode  qd start <name> --provider opencode --acp
+
 The claude wrapper passes management subcommands (config, login, mcp, ...),
 headless runs (-p/--print), --version/--help, and non-TTY launches straight
 through to the real claude. Escape hatch: `command claude ...`.
 
-The codex wrapper routes to `qd start --provider codex --interactive` and is
-narrower by design: it routes ONLY a bare `codex`, because that lane accepts no
-launch argv — so `codex exec ...`, `codex resume`, and `codex "<prompt>"` reach
-the real binary instead of losing what you typed. Escape hatch:
-`command codex ...`.
+The codex, pi and opencode wrappers are narrower by design: they route ONLY a
+bare `codex` / `pi` / `opencode`, because those lanes accept no launch argv — so
+`codex exec ...`, `pi "<prompt>"`, `opencode run ...` and every other
+argument-carrying form reach the real binary instead of losing what you typed.
+Escape hatch: `command <program> ...`.
 
 Environment (read by the emitted wrappers at call time):
-  QD_CLAUDE_WRAPPER_FLAGS  Extra flags (whitespace-split) injected on
-                           passthrough REAL launches (headless / non-TTY /
-                           already inside a mux pane) — never on management
-                           subcommands or --version/--help. qd-routed launches
-                           take their flags from the engine launcher
-                           (QD_CLAUDE_FLAGS / config / defaults) instead.
-  QD_CODEX_WRAPPER_FLAGS   The same, for the codex wrapper.
-  CLAUDE_NO_ZMX            Set to disable claude routing (always passthrough).
-  CODEX_NO_ZMX             Set to disable codex routing (always passthrough).
+  QD_CLAUDE_WRAPPER_FLAGS   Extra flags (whitespace-split) injected on
+                            passthrough REAL launches (headless / non-TTY /
+                            already inside a mux pane) — never on management
+                            subcommands or --version/--help. qd-routed launches
+                            take their flags from the engine launcher
+                            (QD_CLAUDE_FLAGS / config / defaults) instead.
+  QD_CODEX_WRAPPER_FLAGS    The same, for the codex wrapper.
+  QD_PI_WRAPPER_FLAGS       The same, for the pi wrapper.
+  QD_OPENCODE_WRAPPER_FLAGS The same, for the opencode wrapper.
+  CLAUDE_NO_ZMX             Set to disable claude routing (always passthrough).
+  CODEX_NO_ZMX              Set to disable codex routing (always passthrough).
+  PI_NO_ZMX                 Set to disable pi routing (always passthrough).
+  OPENCODE_NO_ZMX           Set to disable opencode routing (always passthrough).
 
 Options:
   -h, --help  display help for command
@@ -878,7 +889,17 @@ Options:
 /// second concept before the table made sense. It is the last row now, which is
 /// where a once-per-machine command belongs, and its own `--help` carries the
 /// detail the note used to.
-pub const HUMAN_VERBS: [&str; 5] = ["ls", "start", "stop", "attach", "setup"];
+///
+/// `send` sits between the lifecycle and `setup` because it is the one verb
+/// here that acts on a session you already have rather than on its existence.
+/// It is on the table at all because the summary line promises the messaging
+/// ("and message the agents in them") and the table answered with four verbs
+/// that only start, stop, list, and attach — the reader had to already know
+/// `qd --help-all` to find the thing the first line advertised. The CARRIERS
+/// (`send:pty`, `send:relay`, `send:http`) stay hidden: bare `send` picks the
+/// lane and the wire, so they are a power-user override of a decision the
+/// human table should not make the reader aware of.
+pub const HUMAN_VERBS: [&str; 6] = ["ls", "start", "stop", "attach", "send", "setup"];
 
 /// The one-line notice a top-level help prints when this machine's install is
 /// not finished (FTUE punch: the help says so instead of announcing "first run"
@@ -1170,8 +1191,8 @@ pub fn render_top(
     let mut sections: Vec<(&str, Vec<(String, String)>)> = Vec::new();
 
     // The human verbs in the RULED order (the session lifecycle ls/start/stop/
-    // attach, then `setup`) rather than registration order — the punch item
-    // names that sequence, and it reads as the lifecycle it is.
+    // attach, then `send`, then `setup`) rather than registration order — the
+    // punch item names that sequence, and it reads as the lifecycle it is.
     let commands: Vec<_> = HUMAN_VERBS
         .iter()
         .filter_map(|n| find(n))

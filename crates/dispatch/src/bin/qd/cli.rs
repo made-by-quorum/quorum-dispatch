@@ -78,7 +78,7 @@ pub fn build_cli() -> Command {
 /// matched.
 ///
 /// FTUE punch R14 — the ONE hide site. The human CLI is the verbs named in
-/// `help::HUMAN_VERBS` (the four session verbs plus `setup`);
+/// `help::HUMAN_VERBS` (the four session verbs, `send`, plus `setup`);
 /// everything else is `.hide(true)` HERE, in one pass over the list, rather
 /// than sprinkled across thirty builder functions where it would be one more
 /// thing to forget. `.hide(true)` is a HELP-ONLY property in clap: it drops the
@@ -987,7 +987,7 @@ fn cmd_gc() -> Command {
 // wrapper INTO the rc file, and it fossilized).
 fn cmd_init() -> Command {
     Command::new("init")
-        .about("Print shell integration (claude + codex wrappers) — add `eval \"$(qd init bash)\"` to your rc file")
+        .about("Print shell integration (claude/codex/pi/opencode wrappers) — add `eval \"$(qd init bash)\"` to your rc file")
         .override_help(help::INIT)
         .arg(positional("shell"))
 }
@@ -2213,10 +2213,16 @@ mod tests {
         assert!(all.contains("adopt [options] <session>"));
     }
 
-    // === FTUE punch R14 / R4 — the generated, five-verb help surface ===
+    // === FTUE punch R14 / R4 — the generated, six-verb help surface ===
 
-    /// R14: `qd --help` shows EXACTLY the four session verbs plus `setup`, in
-    /// ONE `Commands:` table. Everything else is hidden.
+    /// R14: `qd --help` shows EXACTLY the four session verbs, `send`, and
+    /// `setup`, in ONE `Commands:` table. Everything else is hidden.
+    ///
+    /// `send` joined the table because the summary line above it promises the
+    /// messaging ("and message the agents in them") and the table then had no
+    /// row that delivered one. The carriers (`send:pty`/`send:relay`) stay
+    /// hidden: bare `send` already picks the lane, so they are a power-user
+    /// override, not a second thing to learn.
     ///
     /// `setup` used to sit below the table in a `First run:` section of its own,
     /// under a three-line note. Both are gone: it is a command like the others,
@@ -2228,7 +2234,7 @@ mod tests {
     /// `help::HUMAN_VERBS` reds its row assert; reordering the list reds the
     /// positional row asserts.
     #[test]
-    fn visible_help_table_is_the_four_session_verbs_plus_setup() {
+    fn visible_help_table_is_the_session_verbs_plus_send_and_setup() {
         use std::collections::BTreeSet;
         let cmd = build_cli();
         let visible: BTreeSet<&str> = cmd
@@ -2236,8 +2242,8 @@ mod tests {
             .filter(|c| !c.is_hide_set())
             .map(|c| c.get_name())
             .collect();
-        let expected: BTreeSet<&str> = ["ls", "start", "stop", "attach", "setup"].into();
-        assert_eq!(visible, expected, "the human surface is R14's five rows");
+        let expected: BTreeSet<&str> = ["ls", "start", "stop", "attach", "send", "setup"].into();
+        assert_eq!(visible, expected, "the human surface is R14's six rows");
 
         let top = help::render_top(&cmd, false, false, &[]);
         // Commander layout is preserved — only the source of the bytes changed.
@@ -2249,20 +2255,24 @@ mod tests {
                 && top.contains("append it to any command for that command's help"),
             "{top}"
         );
-        // The five human verbs, in the ruled order, with the `ls|list` alias style.
+        // The six human verbs, in the ruled order, with the `ls|list` alias style.
         let commands = top.split("\nCommands:\n").nth(1).expect("a Commands: section");
         let rows: Vec<&str> = commands.lines().take_while(|l| l.starts_with("  ")).collect();
-        assert_eq!(rows.len(), 5, "the five human verbs, one table: {rows:?}");
+        assert_eq!(rows.len(), 6, "the six human verbs, one table: {rows:?}");
         assert!(rows[0].starts_with("  ls|list [options]"), "{rows:?}");
         assert!(rows[1].starts_with("  start [options] <name> [claudeArgs...]"), "{rows:?}");
         assert!(rows[2].starts_with("  stop [options] <session>"), "{rows:?}");
         assert!(rows[3].starts_with("  attach [options] <session>"), "{rows:?}");
-        assert!(rows[4].starts_with("  setup [options]"), "{rows:?}");
+        // `send`'s positionals are clap-OPTIONAL (the `--inbound-envelope` mode
+        // takes none), so the row reads `[session] [message]` — the runtime
+        // check, not clap, is what requires them in origin mode.
+        assert!(rows[4].starts_with("  send [options] [session] [message]"), "{rows:?}");
+        assert!(rows[5].starts_with("  setup [options]"), "{rows:?}");
         // No `First run:` section, no note under it, and no "first run" anywhere.
         assert!(!top.contains("First run"), "{top}");
         assert!(!top.to_lowercase().contains("first run"), "{top}");
         // No hidden verb leaks a row, and the safety-net section stays empty.
-        for hidden in ["send:relay", "reconcile", "dispositions", "bootstrap", "gc ", "wrap ["] {
+        for hidden in ["send:relay", "send:pty", "reconcile", "dispositions", "bootstrap", "gc ", "wrap ["] {
             assert!(!top.contains(hidden), "{hidden} must not be on the human table: {top}");
         }
         assert!(!top.contains("Other commands:"), "nothing unclassified is visible: {top}");
@@ -2616,7 +2626,7 @@ mod tests {
     #[test]
     fn hidden_verbs_still_parse_and_reach_their_own_dispatch_arm() {
         use std::collections::BTreeSet;
-        let invocations: [(&str, &[&str]); 27] = [
+        let invocations: [(&str, &[&str]); 26] = [
             ("connect", &["connect", "wk"]),
             ("resume", &["resume", "wk"]),
             ("wrap", &["wrap", "wk"]),
@@ -2624,7 +2634,6 @@ mod tests {
             ("kill", &["kill", "wk"]),
             ("new", &["new", "wk"]),
             ("reconcile", &["reconcile"]),
-            ("send", &["send", "wk", "hi"]),
             ("send:pty", &["send:pty", "wk", "hi"]),
             ("send:relay", &["send:relay", "wk", "hi"]),
             ("send:http", &["send:http", "wk", "hi"]),

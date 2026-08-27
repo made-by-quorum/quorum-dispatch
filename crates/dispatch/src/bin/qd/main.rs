@@ -118,8 +118,8 @@ fn run(argv: &[String]) -> i32 {
             return 0;
         }
         // --help-all: the FULL verb surface (FTUE punch R4). `qd --help` lists
-        // the four session verbs plus `setup` (R14) and hides the rest — hidden,
-        // not removed: every one of them still parses and dispatches. Agents and
+        // the four session verbs, `send`, and `setup` (R14) and hides the rest —
+        // hidden, not removed: every one still parses and dispatches. Agents and
         // power users need a way to SEE that surface, so this flag prints the
         // same generated table with the hidden rows included, exit 0.
         //
