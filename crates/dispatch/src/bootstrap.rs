@@ -443,8 +443,9 @@ pub fn check_wrapper(deps: &WrapperDeps) -> (WrapperStepOutcome, Vec<String>) {
     }
 
     let question = format!(
-        "Add the claude + codex shell wrappers to {} (routes a bare `claude` or \
-         `codex` into a tracked qd session; adds one line: {})? [y/N] ",
+        "Add the claude/codex/pi/opencode shell wrappers to {} (routes a bare \
+         `claude`, `codex`, `pi` or `opencode` into a tracked qd session; adds one \
+         line: {})? [y/N] ",
         deps.rc_display, line
     );
     if !(deps.prompt_yes_no)(&question) {

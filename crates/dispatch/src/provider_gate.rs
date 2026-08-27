@@ -150,6 +150,16 @@ const PINS: &[Pin] = &[
                  machine\", never \"which lane do I open\": no verb branches on any of \
                  these, and lane/provider selection stays behind `LaneOps`",
     },
+    Pin {
+        path: "shell_init.rs",
+        literals: 4,
+        routing: 0,
+        reason: "`qd init`'s wrapper table: 3 are the EXECUTABLE names the emitted shell \
+                 functions shadow (`codex()`, `pi()`, `opencode()` — the command, not the \
+                 provider id, which is why claude's row spells neither) and 1 is `pi` as a \
+                 generated session-name PREFIX. Every `--provider` argument in the emission \
+                 comes from `Harness::provider_id`, so no id is spelled here at all",
+    },
     // ---- conformance: bucket 1, naming providers IS the job -----------------
     Pin {
         path: "conformance/harness.rs",

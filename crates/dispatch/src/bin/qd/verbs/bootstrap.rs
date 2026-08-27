@@ -135,7 +135,8 @@ pub fn run() -> i32 {
             out.push('\n');
         }
         out.push_str(
-            "\n# qd shell integration (claude + codex wrappers) — see `qd init --help`.\n",
+            "\n# qd shell integration (claude/codex/pi/opencode wrappers) — see \
+             `qd init --help`.\n",
         );
         out.push_str(init_line(shell));
         out.push('\n');

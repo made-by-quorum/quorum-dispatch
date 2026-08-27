@@ -44,31 +44,42 @@
 //! would also override the engine launcher's defaults, which is not what a
 //! wrapper-only flag preference means.
 //!
-//! ## The codex wrapper (same shape, one deliberate difference)
+//! Every wrapper names its harness on the `qd start` it routes to
+//! (`--provider claude-code` / `codex` / `pi` / `opencode`) and pins the lane
+//! `qd attach` can open. `claude`'s provider id is NOT its command name, which
+//! is exactly why the argument is spelled out rather than left to the engine's
+//! default.
 //!
-//! codex now has a mux-pane lane of its own (`qd start <name> --provider codex
-//! --interactive`, verbs/lifecycle.rs), so `codex` gets the same treatment:
-//! bare interactive launch outside zmx → tracked, attachable session; every
-//! other shape → the real binary; `command codex ...` is the escape hatch;
-//! `CODEX_NO_ZMX` disables routing; `QD_CODEX_WRAPPER_FLAGS` rides passthrough
-//! REAL launches only.
+//! ## The codex, pi and opencode wrappers (same shape, one deliberate difference)
+//!
+//! Each of the other three harnesses has an attachable lane of its own —
+//! `codex/mux-pane` (`--interactive`), `pi/extension` (`--extension`) and
+//! `opencode/acp` (`--acp`, whose `qd attach` opens a real opencode TUI as a
+//! second client on the bridge's server) — so `codex`, `pi` and `opencode` get
+//! the same treatment as `claude`: bare interactive launch outside zmx →
+//! tracked, attachable session; every other shape → the real binary;
+//! `command <prog> ...` is the escape hatch; `<PROG>_NO_ZMX` disables routing;
+//! `QD_<PROG>_WRAPPER_FLAGS` rides passthrough REAL launches only.
 //!
 //! THE DIFFERENCE: the claude wrapper forwards `"$@"` through `qd start ... --
-//! "$@"`, and the codex wrapper forwards NOTHING — an invocation carrying ANY
-//! argument passes through to the real codex instead of being routed. That is
-//! not timidity, it is the engine's contract: the interactive codex lane builds
-//! its argv as a bare `codex` (`create_codex_tui` passes `claude_args: vec![]`)
-//! and `qd start`'s `-p` is explicitly refused there, so routing an
-//! argument-carrying invocation would silently drop what the user typed —
-//! including `codex "fix the parser"`, whose whole content is the argument.
-//! Passing it through loses only the session tracking, and says so by doing the
-//! obvious thing; routing it would lose the prompt. When the engine's codex lane
-//! learns to accept a launch argv, this is the one line to revisit.
+//! "$@"`, and the other three forward NOTHING — an invocation carrying ANY
+//! argument passes through to the real binary instead of being routed. That is
+//! not timidity, it is the engine's contract: `qd start` populates the launch
+//! passthrough for the CLAUDE PANE LANE ALONE (`verbs/lifecycle.rs`:
+//! `passthrough: if claude_pane { claude_args } else { Vec::new() }`), so
+//! routing an argument-carrying invocation would silently drop what the user
+//! typed — including `codex exec ...`, `pi "fix the parser"` and
+//! `opencode run ...`, whose whole content is the argument. Passing it through
+//! loses only the session tracking, and says so by doing the obvious thing;
+//! routing it would lose the prompt. When one of those lanes learns to accept a
+//! launch argv, its entry in `PASSTHROUGH_WRAPPERS` is the one place to revisit.
 //!
 //! Library-first: everything here is PURE (string emission + path math); the
 //! bin verb wires the real env/zmx-dir.
 
 use std::path::{Path, PathBuf};
+
+use quorum_qw::lane::Harness;
 
 use crate::effects::Env;
 
@@ -163,38 +174,208 @@ pub fn rc_path(shell: Shell, home: &Path, env: &dyn Env) -> PathBuf {
 /// always wins — the export only fills the unset case).
 pub fn init_script(shell: Shell, zmx_dir: &str) -> String {
     match shell {
-        Shell::Bash => posix_script(
-            zmx_dir,
-            "$QD_CLAUDE_WRAPPER_FLAGS",
-            "$QD_CODEX_WRAPPER_FLAGS",
-            "bash",
-        ),
-        // zsh does not word-split unquoted parameters; `${=VAR}` forces the
-        // sh-style split the flag list needs.
-        Shell::Zsh => posix_script(
-            zmx_dir,
-            "${=QD_CLAUDE_WRAPPER_FLAGS}",
-            "${=QD_CODEX_WRAPPER_FLAGS}",
-            "zsh",
-        ),
+        Shell::Bash | Shell::Zsh => posix_script(shell, zmx_dir),
         Shell::Fish => fish_script(zmx_dir),
     }
 }
 
-/// The bash/zsh emission. `wflags` / `cxflags` are the (shell-specific)
-/// word-splitting expansions of `QD_CLAUDE_WRAPPER_FLAGS` /
-/// `QD_CODEX_WRAPPER_FLAGS`.
-fn posix_script(zmx_dir: &str, wflags: &str, cxflags: &str, shell_name: &str) -> String {
-    format!(
+/// The shell-specific word-splitting expansion of a wrapper-flags variable.
+///
+/// bash splits an unquoted parameter; zsh does NOT, and `${=VAR}` is the
+/// spelling that forces the sh-style split the flag list needs. One function
+/// because four wrappers now ask the same question, and a per-wrapper literal
+/// is a per-wrapper chance to forget the zsh form.
+fn flags_expansion(shell: Shell, var: &str) -> String {
+    match shell {
+        Shell::Zsh => format!("${{={var}}}"),
+        _ => format!("${var}"),
+    }
+}
+
+/// A wrapper that routes ONLY the zero-argument launch — codex, pi, opencode.
+///
+/// # Why these three share one shape and claude does not
+///
+/// The divergence is the engine's, not a stylistic one. `qd start` forwards a
+/// `-- <argv>` tail into the launch for the CLAUDE PANE LANE ALONE
+/// (`verbs/lifecycle.rs`: `passthrough: if claude_pane { claude_args } else {
+/// Vec::new() }`), so on every other lane an argument-carrying invocation would
+/// be created with the argument SILENTLY DROPPED — including `codex "fix the
+/// parser"` and `pi "fix the parser"`, whose whole content is the argument.
+///
+/// So each of these routes a BARE invocation and passes everything else to the
+/// real binary. Passing through costs only the session tracking; routing would
+/// cost what the user typed. When a lane learns to accept a launch argv, its
+/// entry here is the one place to revisit.
+struct PassthroughWrapper {
+    /// The command being shadowed — also the shell function's name.
+    program: &'static str,
+    /// The harness this wrapper wraps. Held as the ENUM rather than the id
+    /// string so the `--provider` argument is `Harness::provider_id`'s answer
+    /// and can never drift from what `qd start` parses — the id is not always
+    /// the command name (`claude` is `claude-code`), and the one place that
+    /// mapping lives is `quorum_qw::lane`.
+    provider: Harness,
+    /// The topology flag that pins the ATTACHABLE lane, with its leading space
+    /// (`" --interactive"`), or `""` to take the create default.
+    ///
+    /// Every one of these names the harness's default lane today, and each is
+    /// passed anyway: the wrapper's requirement is a lane `qd attach` can open,
+    /// not "whatever the default is", and `Harness::create_default_mode` is the
+    /// one default in this codebase that is explicitly allowed to move.
+    lane_flag: &'static str,
+    /// Set to disable routing entirely (always passthrough).
+    no_zmx_var: &'static str,
+    /// Extra flags injected on passthrough REAL launches only.
+    flags_var: &'static str,
+    /// Prefix of the generated session name.
+    name_prefix: &'static str,
+    /// Subcommands that are NOT a run — they pass through UNFLAGGED.
+    management: &'static [&'static str],
+    /// The help/version flags, honoured anywhere in argv and always unflagged.
+    help_flags: &'static [&'static str],
+    /// Why some run-shaped subcommand is missing from `management`, as a
+    /// comment body (no leading `#`, no indentation — the emitters add both).
+    /// Empty for a program with no such subcommand.
+    management_note: &'static str,
+}
+
+/// The three non-claude wrappers, in emission order.
+const PASSTHROUGH_WRAPPERS: &[PassthroughWrapper] = &[
+    PassthroughWrapper {
+        program: "codex",
+        provider: Harness::Codex,
+        // codex's create default is `codex/app-server` — a headless resident
+        // with a viewer. `--interactive` asks for the plain TUI in a pane,
+        // which is what a human who typed `codex` was about to get.
+        lane_flag: " --interactive",
+        no_zmx_var: "CODEX_NO_ZMX",
+        flags_var: "QD_CODEX_WRAPPER_FLAGS",
+        name_prefix: "cx",
+        management: &[
+            "login",
+            "logout",
+            "mcp",
+            "mcp-server",
+            "app-server",
+            "remote-control",
+            "app",
+            "plugin",
+            "completion",
+            "update",
+            "doctor",
+            "sandbox",
+            "debug",
+            "apply",
+            "archive",
+            "unarchive",
+            "delete",
+            "features",
+            "help",
+        ],
+        help_flags: &["--version", "-V", "-h", "--help"],
+        management_note:
+            "`exec`/`review`/`resume`/`fork` are deliberately ABSENT: they are real runs,\n\
+                          so they take the wrapper flags on the passthrough below.",
+    },
+    PassthroughWrapper {
+        program: "pi",
+        provider: Harness::Pi,
+        // pi's create default IS `pi/extension`; naming it keeps the wrapper on
+        // the lane whose pane carries the quorum control channel, so `qd send`
+        // can drive the same session the human is typing into.
+        lane_flag: " --extension",
+        no_zmx_var: "PI_NO_ZMX",
+        flags_var: "QD_PI_WRAPPER_FLAGS",
+        name_prefix: "pi",
+        management: &[
+            "install",
+            "remove",
+            "uninstall",
+            "update",
+            "list",
+            "config",
+            "auth",
+        ],
+        // pi's version flag is lowercase `-v`, codex's is `-V`. They are
+        // per-program facts, which is why this is a field.
+        help_flags: &["--version", "-v", "-h", "--help"],
+        // Every pi subcommand is management; its RUN shape is a bare
+        // `pi [@files...] [messages...]`, caught by the argument rule below.
+        management_note: "",
+    },
+    PassthroughWrapper {
+        program: "opencode",
+        provider: Harness::Opencode,
+        // opencode has exactly one live lane and this is it, so `--acp` names
+        // the truth rather than overriding anything. `qd attach` opens a real
+        // opencode TUI on the bridge's own server as a second client.
+        lane_flag: " --acp",
+        no_zmx_var: "OPENCODE_NO_ZMX",
+        flags_var: "QD_OPENCODE_WRAPPER_FLAGS",
+        name_prefix: "oc",
+        management: &[
+            "completion",
+            "acp",
+            "mcp",
+            "attach",
+            "debug",
+            "providers",
+            "auth",
+            "agent",
+            "upgrade",
+            "uninstall",
+            "serve",
+            "web",
+            "models",
+            "stats",
+            "export",
+            "import",
+            "github",
+            "pr",
+            "session",
+            "plugin",
+            "plug",
+            "db",
+        ],
+        help_flags: &["--version", "-v", "-h", "--help"],
+        management_note:
+            "`run` is deliberately ABSENT: it is a real run, so it takes the wrapper\n\
+             flags on the passthrough below. `acp` IS here — it is the bridge qd itself\n\
+             spawns, and routing it would ask qd to start a session through qd.",
+    },
+];
+
+/// Emit `body` as a comment block at `indent`, one `# ` per line. Empty in,
+/// empty out — a wrapper with nothing to explain emits no blank comment.
+fn comment_block(body: &str, indent: &str) -> String {
+    if body.is_empty() {
+        return String::new();
+    }
+    body.lines()
+        .map(|l| format!("{indent}# {l}\n"))
+        .collect::<String>()
+}
+
+/// The bash/zsh emission.
+fn posix_script(shell: Shell, zmx_dir: &str) -> String {
+    let shell_name = shell.name();
+    let wflags = flags_expansion(shell, "QD_CLAUDE_WRAPPER_FLAGS");
+    // Asked of the lane crate rather than spelled here: `claude-code` is the
+    // PROVIDER ID and `claude` is the command, and this file has no business
+    // holding a second copy of that mapping.
+    let cc = Harness::ClaudeCode.provider_id();
+    let mut out = format!(
         r#"# qd shell integration — emitted by `qd init {shell_name}`; do not edit.
 # Pin the zmx socket dir so every shell + qd agree on one control socket
 # (a pre-set ZMX_DIR wins; this only fills the unset case).
 export ZMX_DIR="${{ZMX_DIR:-{zmx_dir}}}"
 
 # claude wrapper: passthrough by default; only a bare interactive launch
-# OUTSIDE zmx routes through 'qd start'. Escape hatch: 'command claude ...'.
-# QD_CLAUDE_WRAPPER_FLAGS (whitespace-split) is injected on passthrough REAL
-# launches only — never on management subcommands or --version/--help.
+# OUTSIDE zmx routes through 'qd start --provider {cc}'. Escape hatch:
+# 'command claude ...'. QD_CLAUDE_WRAPPER_FLAGS (whitespace-split) is injected
+# on passthrough REAL launches only — never on management subcommands or
+# --version/--help.
 claude() {{
   local _qd_arg _qd_name
   # Already inside zmx, or zmx explicitly disabled → never nest, passthrough.
@@ -221,56 +402,93 @@ claude() {{
   # start-then-attach is the supported path). If create fails — e.g. a first-run
   # folder-trust dialog blocks the boot-to-idle wait — fall back to launching
   # claude directly so `claude` is never worse than running it raw.
+  #
+  # `--provider {cc}` is claude's PROVIDER ID, not its command name, and
+  # it is passed explicitly for the same reason the other three wrappers pass
+  # theirs: the wrapper names the harness it wraps rather than relying on the
+  # engine's default provider staying claude.
   _qd_name="cc-$(date +%Y%m%d-%H%M%S)-$$"
-  if qd start "$_qd_name" -- "$@"; then
+  if qd start "$_qd_name" --provider {cc} -- "$@"; then
     qd attach "$_qd_name"
   else
     command claude {wflags} "$@"
   fi
 }}
+"#
+    );
+    for w in PASSTHROUGH_WRAPPERS {
+        out.push_str(&posix_wrapper(shell, w));
+    }
+    out
+}
 
-# codex wrapper: the same shape as claude's — only a bare interactive launch
-# OUTSIDE zmx routes through 'qd start --provider codex --interactive'.
-# Escape hatch: 'command codex ...'. QD_CODEX_WRAPPER_FLAGS (whitespace-split)
+/// One bash/zsh passthrough wrapper. See [`PassthroughWrapper`] for why these
+/// three share a body and claude does not.
+fn posix_wrapper(shell: Shell, w: &PassthroughWrapper) -> String {
+    let PassthroughWrapper {
+        program,
+        provider,
+        lane_flag,
+        no_zmx_var,
+        flags_var,
+        name_prefix,
+        management,
+        help_flags,
+        management_note,
+    } = w;
+    let provider = provider.provider_id();
+    let flags = flags_expansion(shell, flags_var);
+    // The first-argument arm catches management subcommands AND help/version;
+    // the argv scan below catches help/version anywhere else.
+    let first_arm = management
+        .iter()
+        .chain(help_flags.iter())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("|");
+    let help_arm = help_flags.join("|");
+    let note = comment_block(management_note, "  ");
+    format!(
+        r#"
+# {program} wrapper: the same shape as claude's — only a bare interactive launch
+# OUTSIDE zmx routes through 'qd start --provider {provider}{lane_flag}'.
+# Escape hatch: 'command {program} ...'. {flags_var} (whitespace-split)
 # is injected on passthrough REAL launches only.
-codex() {{
+{program}() {{
   local _qd_arg _qd_name
   # Already inside zmx, or zmx explicitly disabled → never nest, passthrough.
-  if [ -n "$ZMX_SESSION" ] || [ -n "$CODEX_NO_ZMX" ]; then
-    command codex {cxflags} "$@"; return
+  if [ -n "$ZMX_SESSION" ] || [ -n "${no_zmx_var}" ]; then
+    command {program} {flags} "$@"; return
   fi
   # Management subcommands and help/version pass straight through, unflagged.
-  # `exec`/`review`/`resume`/`fork` are deliberately ABSENT: they are real runs,
-  # so they take the wrapper flags on the passthrough below.
-  case "${{1:-}}" in
-    login|logout|mcp|mcp-server|app-server|remote-control|app|plugin|completion|update|doctor|sandbox|debug|apply|archive|unarchive|delete|features|help|--version|-V|-h|--help)
-      command codex "$@"; return ;;
+{note}  case "${{1:-}}" in
+    {first_arm})
+      command {program} "$@"; return ;;
   esac
   for _qd_arg in "$@"; do
     case "$_qd_arg" in
-      --version|-V|-h|--help) command codex "$@"; return ;;
+      {help_arm}) command {program} "$@"; return ;;
     esac
   done
-  # ANY remaining argument → the real codex. The engine's interactive codex lane
-  # launches a BARE `codex` (it accepts no passthrough argv and refuses -p), so
-  # routing an argument-carrying invocation — `codex exec ...`, `codex resume`,
-  # or a bare prompt like `codex "fix the parser"` — would silently drop it.
-  # Passing through costs only the session tracking; routing would cost the args.
+  # ANY remaining argument → the real {program}. The engine forwards a launch
+  # argv on the claude pane lane ALONE, so routing an argument-carrying
+  # invocation here would silently DROP what the user typed. Passing through
+  # costs only the session tracking; routing would cost the args.
   if [ "$#" -gt 0 ]; then
-    command codex {cxflags} "$@"; return
+    command {program} {flags} "$@"; return
   fi
   # stdout is not a TTY → passthrough.
   if [ ! -t 1 ]; then
-    command codex {cxflags}; return
+    command {program} {flags}; return
   fi
   # Remaining case: a bare interactive launch outside zmx → tracked session.
   # Create detached, then attach; on failure fall back to a direct launch so
-  # `codex` is never worse than running it raw.
-  _qd_name="cx-$(date +%Y%m%d-%H%M%S)-$$"
-  if qd start "$_qd_name" --provider codex --interactive; then
+  # `{program}` is never worse than running it raw.
+  _qd_name="{name_prefix}-$(date +%Y%m%d-%H%M%S)-$$"
+  if qd start "$_qd_name" --provider {provider}{lane_flag}; then
     qd attach "$_qd_name"
   else
-    command codex {cxflags}
+    command {program} {flags}
   fi
 }}
 "#
@@ -278,7 +496,8 @@ codex() {{
 }
 
 fn fish_script(zmx_dir: &str) -> String {
-    format!(
+    let cc = Harness::ClaudeCode.provider_id();
+    let mut out = format!(
         r#"# qd shell integration — emitted by `qd init fish`; do not edit.
 # Pin the zmx socket dir (a pre-set ZMX_DIR wins; this fills the unset case).
 if not set -q ZMX_DIR
@@ -286,7 +505,8 @@ if not set -q ZMX_DIR
 end
 
 # claude wrapper: passthrough by default; only a bare interactive launch
-# OUTSIDE zmx routes through 'qd start'. Escape hatch: 'command claude ...'.
+# OUTSIDE zmx routes through 'qd start --provider {cc}'. Escape hatch:
+# 'command claude ...'.
 function claude
     set -l _qd_wflags (string split -n ' ' -- "$QD_CLAUDE_WRAPPER_FLAGS")
     if test -n "$ZMX_SESSION"; or test -n "$CLAUDE_NO_ZMX"
@@ -318,55 +538,91 @@ function claude
     # start-then-attach is the supported path). If create fails — e.g. a first-run
     # folder-trust dialog blocks the boot-to-idle wait — fall back to launching
     # claude directly so `claude` is never worse than running it raw.
+    #
+    # `--provider {cc}` is claude's PROVIDER ID, not its command name, and
+    # it is passed explicitly for the same reason the other three wrappers pass
+    # theirs: the wrapper names the harness it wraps.
     set -l _qd_name cc-(date +%Y%m%d-%H%M%S)-$fish_pid
-    if qd start $_qd_name -- $argv
+    if qd start $_qd_name --provider {cc} -- $argv
         qd attach $_qd_name
     else
         command claude $_qd_wflags $argv
     end
 end
+"#
+    );
+    for w in PASSTHROUGH_WRAPPERS {
+        out.push_str(&fish_wrapper(w));
+    }
+    out
+}
 
-# codex wrapper: the same shape as claude's — only a bare interactive launch
-# OUTSIDE zmx routes through 'qd start --provider codex --interactive'.
-# Escape hatch: 'command codex ...'.
-function codex
-    set -l _qd_wflags (string split -n ' ' -- "$QD_CODEX_WRAPPER_FLAGS")
-    if test -n "$ZMX_SESSION"; or test -n "$CODEX_NO_ZMX"
-        command codex $_qd_wflags $argv
+/// One fish passthrough wrapper — the same contract as [`posix_wrapper`], in
+/// fish's syntax. Flag words are quoted `case` items; subcommands are bare.
+fn fish_wrapper(w: &PassthroughWrapper) -> String {
+    let PassthroughWrapper {
+        program,
+        provider,
+        lane_flag,
+        no_zmx_var,
+        flags_var,
+        name_prefix,
+        management,
+        help_flags,
+        management_note,
+    } = w;
+    let provider = provider.provider_id();
+    let quoted = |f: &&'static str| format!("'{f}'");
+    let first_arm = management
+        .iter()
+        .map(|s| s.to_string())
+        .chain(help_flags.iter().map(quoted))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let help_arm = help_flags.iter().map(quoted).collect::<Vec<_>>().join(" ");
+    let note = comment_block(management_note, "        ");
+    format!(
+        r#"
+# {program} wrapper: the same shape as claude's — only a bare interactive launch
+# OUTSIDE zmx routes through 'qd start --provider {provider}{lane_flag}'.
+# Escape hatch: 'command {program} ...'.
+function {program}
+    set -l _qd_wflags (string split -n ' ' -- "${flags_var}")
+    if test -n "$ZMX_SESSION"; or test -n "${no_zmx_var}"
+        command {program} $_qd_wflags $argv
         return
     end
     if test (count $argv) -gt 0
-        # Management subcommands and help/version pass through unflagged
-        # (`exec`/`review`/`resume`/`fork` are real runs — flagged, below).
-        switch $argv[1]
-            case login logout mcp mcp-server app-server remote-control app plugin completion update doctor sandbox debug apply archive unarchive delete features help '--version' '-V' '-h' '--help'
-                command codex $argv
+        # Management subcommands and help/version pass through unflagged.
+{note}        switch $argv[1]
+            case {first_arm}
+                command {program} $argv
                 return
         end
         for _qd_arg in $argv
             switch $_qd_arg
-                case '--version' '-V' '-h' '--help'
-                    command codex $argv
+                case {help_arm}
+                    command {program} $argv
                     return
             end
         end
-        # ANY remaining argument → the real codex. The engine's interactive codex
-        # lane launches a BARE `codex` (no passthrough argv, and -p is refused),
-        # so routing an argument-carrying invocation would silently drop it.
-        command codex $_qd_wflags $argv
+        # ANY remaining argument → the real {program}. The engine forwards a
+        # launch argv on the claude pane lane ALONE, so routing an
+        # argument-carrying invocation would silently drop what the user typed.
+        command {program} $_qd_wflags $argv
         return
     end
     if not isatty stdout
-        command codex $_qd_wflags
+        command {program} $_qd_wflags
         return
     end
     # Create detached, then attach; on failure fall back to a direct launch so
-    # `codex` is never worse than running it raw.
-    set -l _qd_name cx-(date +%Y%m%d-%H%M%S)-$fish_pid
-    if qd start $_qd_name --provider codex --interactive
+    # `{program}` is never worse than running it raw.
+    set -l _qd_name {name_prefix}-(date +%Y%m%d-%H%M%S)-$fish_pid
+    if qd start $_qd_name --provider {provider}{lane_flag}
         qd attach $_qd_name
     else
-        command codex $_qd_wflags
+        command {program} $_qd_wflags
     end
 end
 "#
@@ -462,9 +718,9 @@ mod tests {
     // --- emission invariants -------------------------------------------------
     //
     // The wrapper CONTRACT, asserted per shell:
-    //   1. routes a bare launch through `qd start <generated-name>` then
-    //      `qd attach` (named-detached-then-attach — `qd start --attach` is an
-    //      A5-deferred surface the backend honestly rejects),
+    //   1. routes a bare launch through `qd start <generated-name> --provider
+    //      <id>` then `qd attach` (named-detached-then-attach — `qd start
+    //      --attach` is an A5-deferred surface the backend honestly rejects),
     //   1b. falls back to a direct `command claude` when `qd start` fails (so a
     //      first-run trust dialog can never leave `claude` worse than raw),
     //   2. passthrough for management subcommands,
@@ -472,15 +728,15 @@ mod tests {
     //   4. --version/--help passthrough WITHOUT wrapper flags,
     //   5. bakes the zmx dir as an overridable default.
     //
-    // The codex wrapper's contract is the same, minus argv forwarding: it routes
-    // ONLY the zero-argument launch (`qd start --provider codex --interactive`
-    // takes no passthrough argv, so anything else must reach the real binary).
+    // The codex / pi / opencode wrappers' contract is the same, minus argv
+    // forwarding: they route ONLY the zero-argument launch, because `qd start`
+    // populates its launch passthrough on the claude pane lane alone.
 
     #[test]
     fn bash_script_invariants() {
         let s = init_script(Shell::Bash, "/run/user/501");
         assert!(
-            s.contains(r#"if qd start "$_qd_name" -- "$@"; then"#)
+            s.contains(r#"if qd start "$_qd_name" --provider claude-code -- "$@"; then"#)
                 && s.contains(r#"qd attach "$_qd_name""#),
             "route: {s}"
         );
@@ -503,46 +759,179 @@ mod tests {
         assert!(s.contains("CLAUDE_NO_ZMX"));
     }
 
+    /// The provider argument is the harness's REAL id, not the command name —
+    /// the one place those diverge is `claude` → `claude-code`, and a wrapper
+    /// that shipped `--provider claude` would fail every launch at parse.
     #[test]
-    fn bash_codex_wrapper_invariants() {
+    fn every_wrapper_names_its_providers_real_id() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let s = init_script(shell, "/run/user/501");
+            for h in Harness::ALL {
+                assert!(
+                    s.contains(&format!("--provider {}", h.provider_id())),
+                    "{shell:?} emits no wrapper for {}",
+                    h.provider_id()
+                );
+            }
+            // The one place the command name and the provider id diverge. A
+            // wrapper that shipped `--provider claude` would fail every launch
+            // at parse, and the emission is the only place that could do it.
+            assert!(
+                !s.contains("--provider claude "),
+                "`claude` is the COMMAND; `claude-code` is the provider id: {s}"
+            );
+        }
+        assert!(
+            quorum_qw::lane::parse_provider_arg("claude").is_none(),
+            "if a bare `claude` ever parses as a provider id, the wrapper comments \
+             explaining why the emission spells `claude-code` are stale"
+        );
+    }
+
+    /// Every wrapper routes to a lane `qd attach` can open a terminal on. A
+    /// wrapper that created a lane with no terminal would start a session and
+    /// then fail to show it — the one failure mode the fallback cannot catch,
+    /// because `qd start` would have SUCCEEDED.
+    #[test]
+    fn every_wrapper_pins_an_attachable_lane() {
+        use quorum_qw::lane::{CreateTopology, Lane};
+        let claude = (Harness::ClaudeCode, CreateTopology::Default);
+        let others = PASSTHROUGH_WRAPPERS.iter().map(|w| {
+            let topology = match w.lane_flag.trim() {
+                "--interactive" => CreateTopology::Interactive,
+                "--extension" => CreateTopology::Extension,
+                "--acp" => CreateTopology::Acp,
+                other => panic!("{} pins an unrecognised lane flag {other:?}", w.program),
+            };
+            (w.provider, topology)
+        });
+        for (harness, topology) in std::iter::once(claude).chain(others) {
+            let id = harness.provider_id();
+            let lane = Lane::for_create(id, topology)
+                .unwrap_or_else(|| panic!("the {id} wrapper's lane must exist"));
+            assert!(
+                lane.is_pane() || lane.has_viewer(),
+                "the {id} wrapper routes to {lane}, which `qd attach` cannot open"
+            );
+        }
+    }
+
+    /// The three passthrough wrappers are generated from one body, so the
+    /// per-harness FACTS are what a test can still get wrong: the flag words
+    /// each program actually accepts, and the subcommands that are real runs.
+    #[test]
+    fn passthrough_wrapper_table_is_per_harness_truth() {
+        let by = |p: &str| {
+            PASSTHROUGH_WRAPPERS
+                .iter()
+                .find(|w| w.program == p)
+                .unwrap_or_else(|| panic!("no {p} wrapper"))
+        };
+        // codex spells version `-V`; pi and opencode spell it `-v`. Getting
+        // this wrong routes `pi -v` into a tracked session instead of printing
+        // a version.
+        assert!(by("codex").help_flags.contains(&"-V"));
+        assert!(by("pi").help_flags.contains(&"-v"));
+        assert!(by("opencode").help_flags.contains(&"-v"));
+        // Real runs must NOT sit in the unflagged management arm.
+        for (program, run_verb) in [("codex", "exec"), ("codex", "resume"), ("opencode", "run")] {
+            assert!(
+                !by(program).management.contains(&run_verb),
+                "`{program} {run_verb}` is a real run — it must take the wrapper flags"
+            );
+        }
+        // Every wrapper must be able to say "not this shell function" and
+        // "not this harness's flags".
+        for w in PASSTHROUGH_WRAPPERS {
+            assert!(w.no_zmx_var.ends_with("_NO_ZMX"), "{}", w.no_zmx_var);
+            assert!(
+                w.flags_var.starts_with("QD_") && w.flags_var.ends_with("_WRAPPER_FLAGS"),
+                "{}",
+                w.flags_var
+            );
+        }
+        // Distinct session-name prefixes: two wrappers sharing one would make
+        // `qd ls` unreadable about which harness a row came from.
+        let mut prefixes: Vec<&str> = PASSTHROUGH_WRAPPERS.iter().map(|w| w.name_prefix).collect();
+        prefixes.push("cc"); // claude's, which is inline
+        prefixes.sort_unstable();
+        let n = prefixes.len();
+        prefixes.dedup();
+        assert_eq!(prefixes.len(), n, "session-name prefixes must be distinct");
+    }
+
+    #[test]
+    fn bash_passthrough_wrapper_invariants() {
         let s = init_script(Shell::Bash, "/run/user/501");
-        assert!(s.contains("codex() {"), "codex wrapper missing: {s}");
-        // Routes through the interactive codex lane, then attaches.
-        assert!(
-            s.contains(r#"if qd start "$_qd_name" --provider codex --interactive; then"#),
-            "route: {s}"
-        );
-        // ...and forwards NO argv (the lane accepts none — see the module docs).
-        assert!(
-            !s.contains(r#"--provider codex --interactive -- "$@""#),
-            "codex lane takes no passthrough argv: {s}"
-        );
-        // Any argument at all reaches the real binary instead of being dropped.
-        assert!(
-            s.contains(
-                r#"if [ "$#" -gt 0 ]; then
-    command codex $QD_CODEX_WRAPPER_FLAGS "$@""#
+        // Each of the three defines a function, routes through its own lane,
+        // forwards NO argv, and falls back to an argument-free direct launch.
+        for (program, route, flags_var, no_zmx) in [
+            (
+                "codex",
+                "--provider codex --interactive",
+                "QD_CODEX_WRAPPER_FLAGS",
+                "CODEX_NO_ZMX",
             ),
-            "argument passthrough: {s}"
-        );
-        // Create-fail fallback to a direct (argument-free) codex launch.
-        assert!(
-            s.contains(
-                r#"else
-    command codex $QD_CODEX_WRAPPER_FLAGS
+            (
+                "pi",
+                "--provider pi --extension",
+                "QD_PI_WRAPPER_FLAGS",
+                "PI_NO_ZMX",
+            ),
+            (
+                "opencode",
+                "--provider opencode --acp",
+                "QD_OPENCODE_WRAPPER_FLAGS",
+                "OPENCODE_NO_ZMX",
+            ),
+        ] {
+            assert!(
+                s.contains(&format!("{program}() {{")),
+                "{program} missing: {s}"
+            );
+            assert!(
+                s.contains(&format!(r#"if qd start "$_qd_name" {route}; then"#)),
+                "{program} route: {s}"
+            );
+            assert!(
+                !s.contains(&format!(r#"{route} -- "$@""#)),
+                "{program}'s lane takes no passthrough argv: {s}"
+            );
+            // Any argument at all reaches the real binary instead of being dropped.
+            assert!(
+                s.contains(&format!(
+                    r#"if [ "$#" -gt 0 ]; then
+    command {program} ${flags_var} "$@""#
+                )),
+                "{program} argument passthrough: {s}"
+            );
+            // Create-fail fallback to a direct (argument-free) launch.
+            assert!(
+                s.contains(&format!(
+                    r#"else
+    command {program} ${flags_var}
   fi"#
-            ),
-            "fallback: {s}"
-        );
+                )),
+                "{program} fallback: {s}"
+            );
+            assert!(s.contains(no_zmx), "{program} escape hatch: {s}");
+        }
         assert!(s.contains("login|logout|mcp|mcp-server|app-server"));
         assert!(s.contains(r#"--version|-V|-h|--help) command codex "$@""#));
-        assert!(s.contains("CODEX_NO_ZMX"));
-        // `exec`/`review`/`resume`/`fork` are REAL runs — they must not sit in
-        // the unflagged management arm.
+        assert!(s.contains("install|remove|uninstall|update|list|config|auth"));
+        assert!(s.contains(r#"--version|-v|-h|--help) command pi "$@""#));
+        assert!(s.contains("completion|acp|mcp|attach|debug|providers|auth"));
+        assert!(s.contains(r#"--version|-v|-h|--help) command opencode "$@""#));
+        // codex: `exec`/`review`/`resume`/`fork` are REAL runs — they must not
+        // sit in the unflagged management arm. Same for `opencode run`.
         assert!(!s.contains("|exec|"), "exec must take wrapper flags: {s}");
         assert!(
             !s.contains("|resume|"),
             "resume must take wrapper flags: {s}"
+        );
+        assert!(
+            !s.contains("|run|"),
+            "opencode run must take wrapper flags: {s}"
         );
     }
 
@@ -550,22 +939,29 @@ mod tests {
     fn zsh_script_uses_forced_word_split() {
         let s = init_script(Shell::Zsh, "/run/user/501");
         // zsh must use ${=VAR} (no implicit word splitting in zsh).
-        assert!(s.contains("${=QD_CLAUDE_WRAPPER_FLAGS}"), "{s}");
-        assert!(!s.contains(" $QD_CLAUDE_WRAPPER_FLAGS "), "{s}");
-        assert!(s.contains("${=QD_CODEX_WRAPPER_FLAGS}"), "{s}");
-        assert!(!s.contains(" $QD_CODEX_WRAPPER_FLAGS "), "{s}");
+        for var in [
+            "QD_CLAUDE_WRAPPER_FLAGS",
+            "QD_CODEX_WRAPPER_FLAGS",
+            "QD_PI_WRAPPER_FLAGS",
+            "QD_OPENCODE_WRAPPER_FLAGS",
+        ] {
+            assert!(s.contains(&format!("${{={var}}}")), "{var}: {s}");
+            assert!(!s.contains(&format!(" ${var} ")), "{var} unsplit: {s}");
+        }
         assert!(s.contains("qd attach"));
         assert!(s.contains("if qd start"));
         assert!(!s.contains("qd start --attach"));
-        assert!(s.contains("codex() {"));
+        assert!(s.contains("--provider claude-code"));
         assert!(s.contains("--provider codex --interactive"));
+        assert!(s.contains("--provider pi --extension"));
+        assert!(s.contains("--provider opencode --acp"));
     }
 
     #[test]
     fn fish_script_invariants() {
         let s = init_script(Shell::Fish, "/run/user/501");
         assert!(s.contains("function claude"));
-        assert!(s.contains("if qd start $_qd_name -- $argv"));
+        assert!(s.contains("if qd start $_qd_name --provider claude-code -- $argv"));
         assert!(s.contains("qd attach $_qd_name"));
         // Create-fail fallback to a direct claude launch.
         assert!(s.contains("command claude $_qd_wflags $argv"));
@@ -578,19 +974,51 @@ mod tests {
     }
 
     #[test]
-    fn fish_codex_wrapper_invariants() {
+    fn fish_passthrough_wrapper_invariants() {
         let s = init_script(Shell::Fish, "/run/user/501");
-        assert!(s.contains("function codex"));
-        assert!(s.contains("if qd start $_qd_name --provider codex --interactive"));
-        // No argv forwarding into the codex lane; args reach the real binary.
-        assert!(
-            !s.contains("--provider codex --interactive -- $argv"),
-            "{s}"
-        );
-        assert!(s.contains("command codex $_qd_wflags $argv"), "{s}");
+        for (program, route, flags_var, no_zmx) in [
+            (
+                "codex",
+                "--provider codex --interactive",
+                "QD_CODEX_WRAPPER_FLAGS",
+                "CODEX_NO_ZMX",
+            ),
+            (
+                "pi",
+                "--provider pi --extension",
+                "QD_PI_WRAPPER_FLAGS",
+                "PI_NO_ZMX",
+            ),
+            (
+                "opencode",
+                "--provider opencode --acp",
+                "QD_OPENCODE_WRAPPER_FLAGS",
+                "OPENCODE_NO_ZMX",
+            ),
+        ] {
+            assert!(s.contains(&format!("function {program}")), "{program}: {s}");
+            assert!(
+                s.contains(&format!("if qd start $_qd_name {route}")),
+                "{program} route: {s}"
+            );
+            // No argv forwarding into these lanes; args reach the real binary.
+            assert!(
+                !s.contains(&format!("{route} -- $argv")),
+                "{program} forwards no argv: {s}"
+            );
+            assert!(
+                s.contains(&format!("command {program} $_qd_wflags $argv")),
+                "{program} argument passthrough: {s}"
+            );
+            assert!(
+                s.contains(&format!("string split -n ' ' -- \"${flags_var}\"")),
+                "{program} flag split: {s}"
+            );
+            assert!(s.contains(no_zmx), "{program} escape hatch: {s}");
+        }
         assert!(s.contains("case login logout mcp mcp-server app-server"));
-        assert!(s.contains("CODEX_NO_ZMX"));
-        assert!(s.contains("string split -n ' ' -- \"$QD_CODEX_WRAPPER_FLAGS\""));
+        assert!(s.contains("case install remove uninstall update list config auth"));
+        assert!(s.contains("case completion acp mcp attach debug providers auth"));
     }
 
     #[test]
@@ -629,5 +1057,30 @@ mod tests {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
+    }
+
+    /// fish's syntax shares nothing with the posix pair, so the two `-n` checks
+    /// above cover none of it. Same skip-if-absent posture.
+    #[test]
+    fn fish_script_is_parseable_by_fish() {
+        let script = init_script(Shell::Fish, "/run/user/501");
+        let dir = std::env::temp_dir().join(format!("qd-init-fish-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("qd.fish");
+        if std::fs::write(&path, &script).is_err() {
+            return;
+        }
+        let out = std::process::Command::new("fish")
+            .arg("-n")
+            .arg(&path)
+            .output();
+        if let Ok(out) = out {
+            assert!(
+                out.status.success(),
+                "fish -n rejected the emission:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
