@@ -35,7 +35,7 @@ enemy is the false fail):
 | Outcome | Evidence | Bin behavior |
 |---|---|---|
 | `Verified` | a user record == message byte-exact (the --wait anchor contract) | unchanged success |
-| `Truncated{expected,recorded}` | a record SHORTER than the message sharing its leading `min(64,len)` bytes (covers prefix AND mid-loss shapes; longest candidate) | **loud `payload truncated in delivery: expected N bytes, recorded M` + exit 1** — the EXISTING delivery-failure class, fired AFTER went-busy as a distinct named error. **NO auto-retry** (the truncated turn already reached the model; a blind resend double-submits — the loud failure IS the safe contract) |
+| `Truncated{expected,recorded}` | a record SHORTER than the message and carrying EITHER of two independent signatures (a UNION; longest candidate) — **(a) ANCHORED:** it shares the message's leading `min(64,len)` bytes (tail-drop, and the discontiguous `head ++ tail` mid-loss shape); **(b) UNANCHORED:** it is a contiguous substring of the message and is ≥16 bytes long (head-drop / interior-run shapes, which share NO leading bytes). **(b) is the 2026-08-27 widening — see the addendum below.** | **loud `payload truncated in delivery: expected N bytes, recorded M` + exit 1** — the EXISTING delivery-failure class, fired AFTER went-busy as a distinct named error. **NO auto-retry** (the truncated turn already reached the model; a blind resend double-submits — the loud failure IS the safe contract) |
 | `Unattributable` | records exist, none matches, none carries the signature | one stderr WARN, success unchanged |
 | `NoRecord` | reads succeeded, zero records in budget | path-split below |
 | `SourceUnavailable` | every read errored | one stderr WARN, success unchanged |
@@ -92,3 +92,72 @@ Rust-side-first with a named divergence row (D16 flip + D21). The TS-side
 closure proposal sits in Pete's TS inbox (A7 M11 routing); the gate report
 records that state. If/when TS adopts, the row reclassifies to parity
 (D5/D6 precedent).
+
+## Addendum (2026-08-27, head-drop-widening): truncation is NOT prefix-preserving
+
+**What was wrong.** As authored, the `Truncated` signature required the recorded
+record to share the message's **leading** `min(64, len)` bytes. The Context above
+states the reason plainly — it was written for the reader-stall **tail-drop**,
+where "the writer's 150ms chunk pacing outruns the stalled reader … and
+mid-payload bytes drop," so what lands necessarily starts at byte 0. The
+one-parenthetical claim that this "covers prefix AND mid-loss shapes" held only
+for the DISCONTIGUOUS `head ++ tail` mid-loss record, which still opens on the
+leading bytes. **A record that shares NO leading bytes was structurally invisible
+to it.**
+
+**What made that false.** The macOS pty write cap (ADR-0009 addendum
+`macos-tty-write-cap`, 2026-08-27) produces exactly the shape the signature could
+not see: XNU exposes at most `TTYHOG - 2` = **1022** bytes of a payload to the
+line discipline at once, the rest stays parked in the blocked writer, and an
+inferred child-side input flush during Claude Code's boot discards what is
+QUEUED while keeping what is written AFTER. The survivor is a **SUFFIX**, not a
+prefix. A 1048-byte `qd start -p` prompt landed as its trailing 26 bytes
+(`" has returned,\nprint DONE."`), and this read-back — the one gate positioned to
+catch it — fell past the `Truncated` branch to **`Unattributable`**, which is
+explicitly *degrade-warn-never-fail*. The verb exited **0** while the session
+obeyed the fragment. Six identical harness runs.
+
+**The change.** `carries_truncation_signature`
+(`quorum-qw/src/submit.rs:472-541`) is now a **UNION** of two independent
+evidence shapes, guards unchanged (empty record → never evidence; equal-length →
+the exact-match path's job; longer → never our payload):
+
+- **(a) ANCHORED** — first `min(TRUNC_SIGNATURE_PREFIX=64, record.len())` bytes
+  equal the same-length prefix of the message. **Byte-for-byte the pre-widening
+  rule**, carried across unchanged.
+- **(b) UNANCHORED** — the record is a **contiguous substring** of the message
+  and is at least `TRUNC_SUBSTRING_FLOOR = 16` bytes long.
+
+**Why only (b) carries a floor.** (a) is anchored, so POSITION is its evidence —
+a foreign record has no reason to begin exactly where our delivery began, and
+even a very short (a) hit is real. (b) has no anchor, so LENGTH is the only
+evidence it carries; a short foreign interjection (`ok`, `yes`, `continue`) sits
+inside a long prompt by pure chance and must not be promoted from a degrade-warn
+into an exit-1 `payload truncated in delivery`. 16 bytes clears those and sits
+comfortably under the 26-byte suffix that forced the widening, so the floor costs
+no observed true positive. The floor is a floor on **EVIDENCE, not on damage** —
+a 4-byte suffix is still catastrophic loss, but it is not attributable to this
+turn, and `Unattributable` remains the honest verdict there (the R8
+degrade-rather-than-guess rule stands).
+
+**This is a PURE WIDENING.** Keeping (a) unfloored means no record that graded
+`Truncated` under the old rule loses that grade under the new one. The
+Outcome-policy table, the path-split, the exit-code contract, and the
+"loud-fail ONLY on positive truncation evidence" design constraint are all
+unchanged in kind.
+
+**Cost.** `str::contains` with a `&str` needle is a two-way search — linear in
+the two lengths, not the naive O(n·m) — and it runs at most once per record **at
+budget end**, never inside the 500ms poll loop (which still only does the
+byte-exact compare). No poll iteration became quadratic.
+
+**Scope note — the RECOVERY lane is a different mechanism and was NOT widened.**
+`events.rs::matched_full_chunk_prefix` (the dead-dangling `qd delivery:recover`
+sweep, `RecoveryVerdict::Truncated`) still keys on a run of whole chunk SHAs from
+chunk 0 forward, so it remains genuinely chunk-prefix-shaped. A head-drop
+recovered by that path grades **(c) Abandoned** → `pending-abandoned{recovery-
+no-candidate}` → RECOVERED-ATTRIBUTED ("could not confirm delivery — NOT proof it
+didn't land"), which is honest but weaker than what this read-back now reports.
+Closing that gap is a separate change, not made here. `doc/DELIVERY-RECEIPTS.md`
+carries a note at the two places where its wording assumed the two lanes shared a
+signature.

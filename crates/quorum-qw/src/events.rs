@@ -1001,7 +1001,17 @@ pub trait RecoveryDeps {
 ///   best-effort closer (`pending-abandoned{recovery-no-candidate}` +
 ///   `recovered:true` + attribution);
 /// - (d) [`Unattributable`] — no `content_sha256`, a search can never run →
-///   `pending-abandoned{recovery-unattributable}`.
+///   `pending-abandoned{recovery-unattributable}`;
+/// - (e) [`ReceiptClosed`] — a receipt-closed carrier, for which the sha search is
+///   the wrong instrument rather than a weak one → NO terminal.
+///
+/// (e) is the youngest and joins (a)/(b) on the non-foreclosing side. The four
+/// above it split "we searched and found nothing" by how much the search was worth;
+/// (e) says the search does not apply, which is a distinct thing to know and is why
+/// it is not folded into either of them: `SourceUnavailable` would claim a read
+/// failed that was never attempted, and `EmptyWindow` would claim a window was
+/// searched and found empty. Both are false, and both would be re-litigated by
+/// every later sweep.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecoveryVerdict {
     /// An exact-sha candidate landed (§6.2). Carries the anchor + attribution.
@@ -1037,6 +1047,56 @@ pub enum RecoveryVerdict {
     /// legitimate but must NOT claim "no-candidate"; emits
     /// `pending-abandoned{recovery-unattributable}` (no `recovered`/attribution).
     Unattributable,
+    /// (e) RECEIPT-CLOSED CARRIER (§6.0): the `send-initiated` names a carrier whose
+    /// delivery is adjudicated by a RECEIPT on the carrier's own key, never by
+    /// reading the recipient's transcript back. The §6.2/§6.3 sha search is not a
+    /// weaker instrument here, it is the WRONG one — see
+    /// [`is_receipt_closed_send_path`] for why it can only ever miss — so it does
+    /// not run. Undetermined in kind, exactly like (a)/(b) → emits NO terminal; the
+    /// receipt (or the observer that owns it) closes the send, and until then it
+    /// stays open. Carries the `send_path` so the caller's reason string can name
+    /// the carrier that declined the search.
+    ReceiptClosed { send_path: String },
+}
+
+/// The `send_path` values naming a **receipt-closed** carrier: one that hands the
+/// payload to a transport which mints its OWN receipt, and whose delivery question
+/// is answered by that receipt (or by the observer that watches for it), never by a
+/// byte-exact read-back of the recipient's transcript.
+///
+/// ── WHY A SEARCH CANNOT ADJUDICATE THESE ────────────────────────────────────
+/// §6.2 matches `sha256(user_record_text)` against the send's `content_sha256`,
+/// i.e. the payload bytes AS TYPED. A relay message does not land in the child's
+/// transcript as the payload: it lands wrapped, `<channel message_id=…>body
+/// </channel>`, so its sha can never equal `sha(payload)` no matter how healthy
+/// the delivery was. §6.3's chunk-prefix fallback cannot save it either — the
+/// wrapper's prefix is not the payload's prefix. A search over these records has
+/// exactly one reachable outcome for a LANDED send, `Abandoned`, which is a FALSE
+/// terminal: the QS-1 failure this whole lattice exists to prevent.
+///
+/// These records also carry no `transcript`/`transcript_offset` (the emitters omit
+/// them deliberately — `delivery::emit_daemon_send_events`,
+/// `delivery::priming::prime_over_relay`), so without this carve-out
+/// [`build_window`] silently falls back to the WEAK time-window rather than
+/// declining, and a busy child's unrelated turns become the "candidates existed"
+/// that promote the miss to `Abandoned`.
+///
+/// ── WHY THE LIST IS SHORT ───────────────────────────────────────────────────
+/// The pre-existing defence for receipt-closed carriers is a VERB gate one layer
+/// up, not a `send_path` gate here: `qd delivery:recover`'s `SWEPT_VERBS` is
+/// `{send:pty, new-p, send}`, and every daemon/resident carrier writes verb
+/// `send:relay`, so `pi`, `pi/extension`, `acp/*`, `codex`, `codex/app-server`
+/// never reach [`recovery_read`] at all. Listing them here would mint a SECOND
+/// registry of lane strings that drifts against the first for no gain.
+///
+/// `"relay"` is here because the priming send broke that symmetry on purpose: it
+/// moved onto the relay carrier while KEEPING verb `new-p` (its identity is a
+/// property of the send, and qd's intent record already keys on it), so it is
+/// swept, unlike every other relay send. Any future carrier that likewise keeps a
+/// swept verb while delivering over a receipt-closed transport must be added here
+/// — that is the extension rule, and it is the only one.
+pub fn is_receipt_closed_send_path(send_path: &str) -> bool {
+    send_path == "relay"
 }
 
 /// The window source for recovery-read (§6.1): offset-present (strong) vs
@@ -1067,6 +1127,19 @@ struct Candidate {
 /// append stays at the call site — see [`emit_recovery_verdict`]). Pure over
 /// `deps`.
 pub fn recovery_read(deps: &dyn RecoveryDeps, si: &EventRecord) -> RecoveryVerdict {
+    // §6.0 — (e) RECEIPT-CLOSED CARRIER, asked FIRST, before any recovery key is
+    // even read. Whether a transcript search is the right instrument is a property
+    // of the CARRIER, and it is prior to "do we hold a search key": a relay send
+    // holds a perfectly good content_sha256 and the search still cannot hit, because
+    // the bytes in the transcript are the `<channel …>` envelope and not the
+    // payload. Answering (d) Unattributable for one of these would be just as wrong
+    // as answering (c) Abandoned — both are terminals, and the send is not closed
+    // here. See [`is_receipt_closed_send_path`].
+    if let Some(sp) = si.str_field("send_path") {
+        if is_receipt_closed_send_path(&sp) {
+            return RecoveryVerdict::ReceiptClosed { send_path: sp };
+        }
+    }
     // Pull the recovery inputs off the send-initiated record.
     // (d) MISSING content_sha256 — a legacy/foreign record with no recovery key; a
     // search can never run. Close honestly as UNATTRIBUTABLE (never "no-candidate").
@@ -1320,8 +1393,10 @@ fn extract_candidates(
 ///   best-effort closer (D4's "recovered (attributed)" category).
 /// - (d) `Unattributable` → `pending-abandoned{recovery-unattributable}`, NO
 ///   `recovered`/attribution (no search ran; never claims "no-candidate").
-/// - (a) `SourceUnavailable` / (b) `EmptyWindow` → `None`: NO terminal, the send
-///   stays dead-dangling-recoverable for a later run (like the G/B door arms).
+/// - (a) `SourceUnavailable` / (b) `EmptyWindow` / (e) `ReceiptClosed` → `None`: NO
+///   terminal, the send stays dead-dangling-recoverable for a later run (like the
+///   G/B door arms). For (e) "a later run" means the carrier's receipt, not a later
+///   sweep — this module has nothing further to say about it either way.
 pub fn recovery_event(
     send_id: &str,
     content_sha256: &str,
@@ -1369,8 +1444,10 @@ pub fn recovery_event(
             recovered: None,
             attribution: None,
         }),
-        // (a),(b) UNDETERMINED → NO terminal (dead-dangling-recoverable).
-        RecoveryVerdict::SourceUnavailable | RecoveryVerdict::EmptyWindow => None,
+        // (a),(b),(e) UNDETERMINED → NO terminal (dead-dangling-recoverable).
+        RecoveryVerdict::SourceUnavailable
+        | RecoveryVerdict::EmptyWindow
+        | RecoveryVerdict::ReceiptClosed { .. } => None,
     }
 }
 
@@ -1410,7 +1487,7 @@ pub fn emit_recovery_verdict(
     if let Some(existing) = first_terminal_for(&merged.records, &send_id) {
         return Ok(verdict_from_terminal(&existing));
     }
-    // SourceUnavailable / EmptyWindow → recovery_event returns None: emit NO terminal,
+    // SourceUnavailable / EmptyWindow / ReceiptClosed → recovery_event None: NO terminal,
     // leaving the send dead-dangling-recoverable (R6 (a)/(b)). We still ran the lock +
     // idempotence re-check above, so if another run resolved it (its read succeeded) we
     // already adopted that terminal on the raced-in path. Every other verdict emits its
@@ -1685,19 +1762,27 @@ pub(crate) fn received_from_terminal(rec: &EventRecord) -> Received {
 }
 
 /// Map a recovery verdict to a [`Received`] (§7 inline-recovery return), or `None`
-/// when the verdict minted NO terminal — (a) `SourceUnavailable` / (b) `EmptyWindow`:
-/// undetermined this poll, no resolution, so [`await_received`] must NOT return; it
-/// keeps polling (a later poll may resolve it once the transcript is readable / the
-/// window grows; else the budget exhausts to a positive `anchor-timeout`). The
-/// terminal-minting verdicts (Anchored / Truncated / (c) Abandoned / (d)
-/// Unattributable) resolve the await.
+/// when the verdict minted NO terminal — (a) `SourceUnavailable` / (b) `EmptyWindow`
+/// / (e) `ReceiptClosed`: undetermined this poll, no resolution, so
+/// [`await_received`] must NOT return; it keeps polling (a later poll may resolve it
+/// once the transcript is readable / the window grows / the carrier's receipt lands;
+/// else the budget exhausts to a positive `anchor-timeout`). The terminal-minting
+/// verdicts (Anchored / Truncated / (c) Abandoned / (d) Unattributable) resolve the
+/// await.
+///
+/// (e) belongs on the `None` side for the same reason it mints no terminal: a poll
+/// that declined to search has resolved nothing. Returning `Abandoned` here would
+/// let the INLINE recovery foreclose exactly the send the sweep-side carve-out
+/// protects — the same false terminal through the other door.
 fn received_from_verdict(v: &RecoveryVerdict) -> Option<Received> {
     match v {
         RecoveryVerdict::Anchored { .. } => Some(Received::Anchored),
         RecoveryVerdict::Truncated { .. } => Some(Received::AnchoredMismatch),
         RecoveryVerdict::Abandoned { .. } => Some(Received::Abandoned),
         RecoveryVerdict::Unattributable => Some(Received::Abandoned),
-        RecoveryVerdict::SourceUnavailable | RecoveryVerdict::EmptyWindow => None,
+        RecoveryVerdict::SourceUnavailable
+        | RecoveryVerdict::EmptyWindow
+        | RecoveryVerdict::ReceiptClosed { .. } => None,
     }
 }
 
@@ -3326,6 +3411,183 @@ mod tests {
             now: 0,
         };
         assert_eq!(recovery_read(&deps, &si), RecoveryVerdict::Unattributable);
+    }
+
+    // ---------------------------------------------------------------------
+    // G5 (e): the RECEIPT-CLOSED carrier carve-out
+    // ---------------------------------------------------------------------
+
+    /// A `send-initiated` in the shape the relay priming path writes: the CALLER's
+    /// verb (`new-p` — swept, deliberately unchanged when the carrier moved), one
+    /// chunk, and NO `transcript`/`transcript_offset`. `send_path` is the only thing
+    /// that varies, which is the point of the pair of tests below.
+    fn si_record_carrier(content: &str, send_path: &str, ts: &str) -> EventRecord {
+        let sha = sha256_hex(content.as_bytes());
+        let p = Payload::SendInitiated {
+            send_id: "s".into(),
+            verb: "new-p".into(),
+            send_path: send_path.into(),
+            content_sha256: sha.clone(),
+            content_len: content.len() as u64,
+            chunks: 1,
+            chunk_sha256s: vec![sha],
+            chunk_sha256s_capped: false,
+            transcript: None,
+            transcript_offset: None,
+            content_preview: None,
+        };
+        let env = Envelope {
+            v: 1,
+            ts: ts.to_string(),
+            pid: std::process::id(),
+            seq: 0,
+            session: Some("sid".into()),
+            name: None,
+            start_ms: None,
+        };
+        parse_one(&build_record_line(&env, &p, CHUNK_SHA_CAP)).unwrap()
+    }
+
+    /// How a relay message ACTUALLY lands in the child's transcript: wrapped in the
+    /// channel envelope, so `sha(user_record_text)` is the sha of the WRAPPER and can
+    /// never equal the send's `sha(payload)`.
+    fn channel_wrapped(body: &str, ts: Option<&str>) -> String {
+        user_line(
+            &format!("<channel message_id=relay-1781241549123-7>{body}</channel>"),
+            ts,
+        )
+    }
+
+    #[test]
+    fn g5_receipt_closed_relay_prime_is_not_abandoned_when_it_landed() {
+        // THE REGRESSION. `qd start -p` on the claude pane lane now primes over the
+        // RELAY, keeping verb `new-p` (so the sweep still picks it up) but recording
+        // send_path "relay" with no transcript anchor. The prime LANDED — it is right
+        // there in the transcript — but wrapped in `<channel …>`, so the §6.2 exact-sha
+        // search cannot hit it, and the missing offset drops build_window onto the
+        // time-window, where the child's later turns are "candidates". Pre-fix that is
+        // (c) Abandoned: `pending-abandoned{recovery-no-candidate}` for a prime that
+        // arrived. The carrier is receipt-closed, so no search runs at all.
+        let prompt = "review the failing test and report back";
+        let send_ts = "2026-06-06T06:00:00.000Z";
+        let transcript = format!(
+            "{}\n{}\n",
+            channel_wrapped(prompt, Some("2026-06-06T06:00:01.000Z")),
+            user_line(
+                "and now something else entirely",
+                Some("2026-06-06T06:00:09.000Z")
+            ),
+        );
+        let si = si_record_carrier(prompt, "relay", send_ts);
+        let deps = PlantedDeps {
+            text: Some(transcript),
+            path: "/t.jsonl".into(),
+            now: 0,
+        };
+        assert_eq!(
+            recovery_read(&deps, &si),
+            RecoveryVerdict::ReceiptClosed {
+                send_path: "relay".into()
+            },
+            "a receipt-closed carrier declines the search; it never forecloses a landed prime"
+        );
+        // MUTATION EVIDENCE: kills deleting the §6.0 carve-out from `recovery_read`,
+        // and kills narrowing `is_receipt_closed_send_path` to `false` / to a path
+        // other than "relay" — each of those re-runs the sha search over the wrapped
+        // landing and returns `Abandoned{time-window}`, the false terminal.
+    }
+
+    #[test]
+    fn g5_pane_send_path_still_searches_and_still_abandons() {
+        // THE PIN, on the SAME fixture shape. Only send_path differs: a pty/pane send
+        // is transcript-anchored, so the offset-absent time-window search runs exactly
+        // as before and reaches the disclosed (c) closer. The carve-out is a carrier
+        // carve-out, not a "records without a transcript anchor" carve-out.
+        let prompt = "review the failing test and report back";
+        let send_ts = "2026-06-06T06:00:00.000Z";
+        let transcript = format!(
+            "{}\n{}\n",
+            channel_wrapped(prompt, Some("2026-06-06T06:00:01.000Z")),
+            user_line(
+                "and now something else entirely",
+                Some("2026-06-06T06:00:09.000Z")
+            ),
+        );
+        let deps = PlantedDeps {
+            text: Some(transcript),
+            path: "/t.jsonl".into(),
+            now: 0,
+        };
+        for pane_path in ["idle", "busy-queued"] {
+            let si = si_record_carrier(prompt, pane_path, send_ts);
+            assert_eq!(
+                recovery_read(&deps, &si),
+                RecoveryVerdict::Abandoned {
+                    attribution: "time-window".into()
+                },
+                "{pane_path}: pty/pane verdicts are byte-for-byte what they were"
+            );
+        }
+        // MUTATION EVIDENCE: kills widening `is_receipt_closed_send_path` to accept
+        // the pane paths (or to `true`), and kills moving the carve-out's key from
+        // send_path onto "has no transcript_offset" — both would answer ReceiptClosed
+        // here and silently stop recovering real pty danglings.
+    }
+
+    #[test]
+    fn g5_receipt_closed_precedes_the_missing_key_check() {
+        // The carve-out is asked BEFORE the (d) content_sha256 check, because whether a
+        // search is the right instrument is prior to whether we hold its key. A relay
+        // record stripped of its sha is still not adjudicable from a transcript, and
+        // `pending-abandoned{recovery-unattributable}` is just as foreclosing as
+        // `{recovery-no-candidate}`.
+        let line = r#"{"v":1,"ts":"2026-06-06T06:00:00.000Z","pid":1,"seq":0,"session":"sid","event":"send-initiated","send_id":"s","verb":"new-p","send_path":"relay"}"#;
+        let si = parse_one(line).unwrap();
+        let deps = PlantedDeps {
+            text: Some(format!("{}\n", user_line("anything at all", None))),
+            path: "/t.jsonl".into(),
+            now: 0,
+        };
+        assert_eq!(
+            recovery_read(&deps, &si),
+            RecoveryVerdict::ReceiptClosed {
+                send_path: "relay".into()
+            }
+        );
+        // And the (d) row keeps its answer: a record with NEITHER a sha NOR a
+        // receipt-closed send_path is still Unattributable, so the reorder took
+        // nothing from the check it now sits in front of.
+        let pane = r#"{"v":1,"ts":"2026-06-06T06:00:00.000Z","pid":1,"seq":0,"session":"sid","event":"send-initiated","send_id":"s","verb":"new-p","send_path":"idle"}"#;
+        assert_eq!(
+            recovery_read(&deps, &parse_one(pane).unwrap()),
+            RecoveryVerdict::Unattributable
+        );
+        // MUTATION EVIDENCE: kills moving the §6.0 carve-out below the content_sha256
+        // lookup (first assert flips to Unattributable — a terminal), and kills
+        // dropping the `is_receipt_closed_send_path` guard so every record short-
+        // circuits (second assert flips to ReceiptClosed).
+    }
+
+    #[test]
+    fn g5_receipt_closed_mints_no_terminal_through_either_door() {
+        // (e) sits with (a)/(b) on the non-foreclosing side of BOTH mappings: the
+        // sweep's `recovery_event` (no late terminal appended) and `await_received`'s
+        // inline `received_from_verdict` (the poll resolves nothing and keeps polling).
+        // Either one alone would leave the other door open to the false terminal.
+        let v = RecoveryVerdict::ReceiptClosed {
+            send_path: "relay".into(),
+        };
+        assert!(
+            recovery_event("s", "sha", &v).is_none(),
+            "(e) appends NO terminal — the send stays open for its receipt"
+        );
+        assert!(
+            received_from_verdict(&v).is_none(),
+            "(e) resolves no await — inline recovery must not foreclose either"
+        );
+        // MUTATION EVIDENCE: kills moving `ReceiptClosed` onto either mapping's
+        // terminal-minting arm — `Some(PendingAbandoned{..})` in `recovery_event`, or
+        // `Some(Received::Abandoned)` in `received_from_verdict`.
     }
 
     #[test]

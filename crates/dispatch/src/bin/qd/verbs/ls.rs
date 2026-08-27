@@ -473,11 +473,69 @@ fn run_inner(
     // P0 wave-1 LAZY MINT (the backfill path for pre-existing sessions): any
     // session with a provider session_id but no mapped stable id gets one
     // minted now, under the store's exclusive lock (concurrent `ls` is safe —
-    // dedupe-by-session guarantees one id). Engine `ls` writing engine state is
+    // dedupe-by-session guarantees one id; concurrent `qd start` is NOT — see
+    // the IN-FLIGHT-START GATE below). Engine `ls` writing engine state is
     // ruled acceptable; a mint failure degrades to a warned id-less row.
+    //
+    // IN-FLIGHT-START GATE (`ls`-vs-`start`, the other half of the fix):
+    // `qd start` pre-mints an UNBOUND id keyed by NAME before launch and binds
+    // it to the provider session_id only after the boot waiter reads that id
+    // back — a window of up to `BootTimeouts::pid_phase_ms` (40s). An `ls`
+    // landing inside that window sees the session's provider session_id with no
+    // mapped stable id and mints a SECOND, already-BOUND id for it; the start's
+    // later bind then loses first-wins (`BindOutcome::SessionHasDifferentId`)
+    // and the divergence is PERMANENT. Diagnosed in
+    // doc/log/2026-06-21-bond-identity-divergence-diagnosis.md §2 ("The race");
+    // §3(A) closed only the start half (the A-2 bind retry), which cannot help
+    // when something else mints during the window — this is the `ls` half.
+    //
+    // The gate CANNOT be keyed to the specific start: on this path the row
+    // comes from join.rs's ColdJsonl branch, where `name` is the provider's own
+    // transcript title (NOT the requested name) and pid/started_at_ms/
+    // socket_dir/entrypoint are all `None`. So it asks the only question the
+    // evidence supports — "is ANY start in flight right now?" (the id store's
+    // newest STILL-UNBOUND mint, within the same 40s budget) — and then skips
+    // only rows that are THEMSELVES fresh (`last_active_ms`/`started_at_ms`
+    // within that budget). BOTH conditions, because the second keeps the
+    // backfill doing its actual job: enumerating a machine's old, never-minted,
+    // dormant sessions still mints them mid-start; only seconds-old rows defer.
+    //
+    // DEGRADATION: a skipped row renders `---` (no `qdId`) for that ONE `ls`
+    // and is minted by the next `ls` after the window — deferral, never loss,
+    // and never a nonzero exit. That degraded shape is already sanctioned for
+    // the store-unwritable case (p0_id_matrix.rs `b_ls_lazy_mint_failure_
+    // degrades_warned_exit_0` pins `---` + exit 0).
     if let Ok(ids_path) = common::ids_store_path(&dispatch::effects::RealEnv) {
+        use dispatch::effects::Clock;
+        let now = dispatch::effects::RealClock.now_ms();
+        let budget = dispatch::boot::BootTimeouts::default().pid_phase_ms;
+        // ONE fold up front (the per-row mint takes the store lock and folds
+        // again; this read is only the gate's evidence). An unparseable `ts`
+        // contributes no evidence — the gate fails OPEN to the old behavior.
+        // "Within the budget of now" is the ABSOLUTE distance in both places
+        // below: a stamp from the FUTURE (clock skew, a restored state dir) is
+        // out of the window rather than in flight forever — the same fail-open
+        // direction as an unparseable `ts`.
+        let within_budget = |ts: i64| (now - ts).abs() <= budget;
+        let start_in_flight = dispatch::idstore::fold(&ids_path)
+            .newest_unbound_mint_ms
+            .is_some_and(within_budget);
         for s in &mut sessions {
             if s.qd_id.is_none() && !s.session_id.is_empty() {
+                // The row's own age, from whichever stamps it carries:
+                // `last_active_ms` and `started_at_ms` (on the ColdJsonl path
+                // NEITHER may be populated — such a row is never "fresh", so it
+                // keeps minting exactly as today). Fresh if EITHER is inside the
+                // window — the conservative reading, since either being recent
+                // means the row is not the dormant backfill case.
+                let row_is_fresh = s
+                    .last_active_ms
+                    .into_iter()
+                    .chain(s.started_at_ms)
+                    .any(within_budget);
+                if start_in_flight && row_is_fresh {
+                    continue; // deferred to the next `ls`; renders `---`
+                }
                 match dispatch::idstore::mint_or_get(
                     &ids_path,
                     &s.session_id,

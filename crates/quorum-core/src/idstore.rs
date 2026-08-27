@@ -98,6 +98,18 @@ pub struct IdMap {
     /// First-wins. STRICTLY the parent pointer — never the fork's own id (which
     /// stays `by_session[fork_uuid]`).
     pub by_parent: HashMap<String, String>,
+    /// The `ts` (epoch ms) of the newest mint that is STILL UNBOUND at the end
+    /// of the fold — i.e. evidence that a `qd start` is mid-flight between its
+    /// [`mint_unbound`] and its [`bind`]. `None` when no unbound mint survives
+    /// the fold (or none carries a parseable `ts`).
+    ///
+    /// "STILL unbound" is the whole point: a mint that was unbound on its own
+    /// line but BOUND by a later `bind` line is a COMPLETED start and must not
+    /// gate anything — see [`fold_str`] for how the single forward pass resolves
+    /// that. Read by `qd ls`'s lazy-mint backfill to avoid minting a second,
+    /// divergent id for a session whose start has not bound yet
+    /// (doc/log/2026-06-21-bond-identity-divergence-diagnosis.md §2).
+    pub newest_unbound_mint_ms: Option<i64>,
 }
 
 impl IdMap {
@@ -112,8 +124,23 @@ impl IdMap {
 /// UNBOUND (reserve the id only); `bind` events resolve onto their mint
 /// (id must exist, unbound; session must not already have an id). First-wins
 /// in both directions, in file order.
+///
+/// ADDITIONAL INVARIANT — [`IdMap::newest_unbound_mint_ms`]: the fold also
+/// reports the newest `ts` among mints that are still unbound WHEN THE FOLD
+/// ENDS. Because this is a single forward pass, an unbound mint's `ts` is only
+/// a CANDIDATE while folding (a `bind` for it may still be several lines away);
+/// the maximum is therefore taken at the end, over only those candidate ids
+/// whose `by_id` slot is still `None`. A `ts` that [`crate::timefmt::iso_to_epoch_ms`]
+/// cannot parse (fixtures write `"ts":"t"`) contributes NO candidate — that line
+/// still folds normally in every other respect, and the omission fails the
+/// consumer's gate OPEN rather than wedging it. Nothing else about the fold —
+/// record format, first-wins, torn-line tolerance, `by_id`/`by_session`/
+/// `by_parent` — changes.
 pub fn fold_str(text: &str) -> IdMap {
     let mut map = IdMap::default();
+    // id → ts of an unbound mint, CANDIDATE only: a later `bind` line in this
+    // same pass can retire it. Resolved against `by_id` after the loop.
+    let mut unbound_candidates: HashMap<String, i64> = HashMap::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -133,6 +160,18 @@ pub fn fold_str(text: &str) -> IdMap {
                 if session_id.is_empty() {
                     // UNBOUND mint (pre-boot): the id is reserved, no session yet.
                     map.by_id.entry(id.to_string()).or_insert(None);
+                    // In-flight-start evidence, first-wins per id and only when
+                    // THIS line's id is actually sitting unbound (a duplicate
+                    // mint line for an already-BOUND id contributes nothing).
+                    if map.by_id.get(id).is_some_and(Option::is_none) {
+                        if let Some(ts) = v
+                            .get("ts")
+                            .and_then(|x| x.as_str())
+                            .and_then(crate::timefmt::iso_to_epoch_ms)
+                        {
+                            unbound_candidates.entry(id.to_string()).or_insert(ts);
+                        }
+                    }
                     continue;
                 }
                 map.by_id
@@ -173,6 +212,14 @@ pub fn fold_str(text: &str) -> IdMap {
             _ => continue,
         }
     }
+    // Resolve the candidates: only ids whose slot is STILL `None` after the
+    // whole pass are in-flight starts (a `bind` later in the file filled the
+    // slot for every start that completed).
+    map.newest_unbound_mint_ms = unbound_candidates
+        .iter()
+        .filter(|(id, _)| map.by_id.get(*id).is_some_and(Option::is_none))
+        .map(|(_, ts)| *ts)
+        .max();
     map
 }
 
@@ -716,6 +763,98 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let map = fold(&store(&dir));
         assert!(map.is_empty());
+    }
+
+    // --- newest_unbound_mint_ms (the `ls`-vs-`start` in-flight gate's input) ---
+
+    /// One `qd start` mid-flight: `mint_unbound` is on disk, its `bind` is not
+    /// yet. The fold reports that mint's ts — the evidence `qd ls` needs to
+    /// defer its backfill.
+    #[test]
+    fn fold_reports_a_live_unbound_mint_ts() {
+        let ts = crate::timefmt::epoch_ms_to_iso(1_772_205_426_146);
+        let text = format!(
+            r#"{{"v":1,"ts":"{ts}","event":"mint","id":"swka284k","session_id":null,"name":"wk"}}"#
+        ) + "\n";
+        let map = fold_str(&text);
+        assert_eq!(map.newest_unbound_mint_ms, Some(1_772_205_426_146));
+        assert_eq!(map.by_id["swka284k"], None, "still an unbound reservation");
+    }
+
+    /// THE subtle case: the mint is unbound AT ITS OWN LINE but a later `bind`
+    /// resolves it. That start COMPLETED — it must gate nothing. (A pass that
+    /// took the max while folding, instead of after, reds here.)
+    #[test]
+    fn fold_ignores_an_unbound_mint_that_a_later_bind_resolved() {
+        let ts = crate::timefmt::epoch_ms_to_iso(1_772_205_426_146);
+        let mint = format!(
+            r#"{{"v":1,"ts":"{ts}","event":"mint","id":"swka284k","session_id":null,"name":"wk"}}"#
+        );
+        let bound = format!(
+            r#"{{"v":1,"ts":"{ts}","event":"bind","id":"swka284k","session_id":"uuid-wk"}}"#
+        );
+        let text = format!("{mint}\n{bound}\n");
+        let map = fold_str(&text);
+        assert_eq!(
+            map.newest_unbound_mint_ms, None,
+            "a bound start is not in flight"
+        );
+        assert_eq!(map.by_session["uuid-wk"], "swka284k");
+    }
+
+    /// Several unbound mints (old abandoned ones + one fresh): the NEWEST wins,
+    /// and file order does not decide it.
+    #[test]
+    fn fold_takes_the_newest_of_several_unbound_mints() {
+        let old = crate::timefmt::epoch_ms_to_iso(1_600_000_000_000);
+        let new = crate::timefmt::epoch_ms_to_iso(1_772_205_426_146);
+        let mid = crate::timefmt::epoch_ms_to_iso(1_700_000_000_000);
+        let a = format!(r#"{{"ts":"{old}","event":"mint","id":"aaaaaaaa","session_id":null}}"#);
+        let b = format!(r#"{{"ts":"{new}","event":"mint","id":"bbbbbbbb","session_id":null}}"#);
+        let c = format!(r#"{{"ts":"{mid}","event":"mint","id":"cccccccc","session_id":null}}"#);
+        let text = format!("{a}\n{b}\n{c}\n");
+        assert_eq!(
+            fold_str(&text).newest_unbound_mint_ms,
+            Some(1_772_205_426_146)
+        );
+    }
+
+    /// An unparseable `ts` (the repo's `"t"` fixture placeholder) contributes
+    /// NOTHING — it neither wedges the gate nor gets ranked as newest — while
+    /// the line still folds normally in every other respect.
+    #[test]
+    fn fold_unparseable_ts_on_an_unbound_mint_contributes_nothing() {
+        let text = concat!(
+            r#"{"v":1,"ts":"t","event":"mint","id":"aaaaaaaa","session_id":null,"name":"wk"}"#,
+            "\n",
+        );
+        let map = fold_str(text);
+        assert_eq!(map.newest_unbound_mint_ms, None, "fails OPEN, never wedges");
+        assert_eq!(map.by_id["aaaaaaaa"], None, "the reservation still folded");
+
+        // …and a real stamp alongside it is still reported (the bad line is
+        // skipped, not poisoning the whole fold).
+        let good = crate::timefmt::epoch_ms_to_iso(1_772_205_426_146);
+        let text2 = text.to_string()
+            + &format!(r#"{{"ts":"{good}","event":"mint","id":"bbbbbbbb","session_id":null}}"#)
+            + "\n";
+        assert_eq!(
+            fold_str(&text2).newest_unbound_mint_ms,
+            Some(1_772_205_426_146)
+        );
+    }
+
+    /// An empty store — and one with only BOUND mints — reports no in-flight
+    /// start (the common case: `ls` mints exactly as it does today).
+    #[test]
+    fn fold_no_unbound_mint_reports_none() {
+        assert_eq!(fold_str("").newest_unbound_mint_ms, None);
+        assert_eq!(IdMap::default().newest_unbound_mint_ms, None);
+        let ts = crate::timefmt::epoch_ms_to_iso(1_772_205_426_146);
+        let text = format!(
+            r#"{{"v":1,"ts":"{ts}","event":"mint","id":"aaaaaaaa","session_id":"s1"}}"#
+        ) + "\n";
+        assert_eq!(fold_str(&text).newest_unbound_mint_ms, None);
     }
 
     // --- resolve_to_uuid (S4 — the ONE whoami/attribution resolution chain) ---

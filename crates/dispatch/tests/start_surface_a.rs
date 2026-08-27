@@ -324,6 +324,138 @@ fn a1_human_output_unchanged_without_json() {
 }
 
 // ===========================================================================
+// A-2 — a bind failure with `-p` STRANDS the prompt (the I6 second half)
+// ===========================================================================
+
+/// Seed the jail's id store with a SQUATTER: a `mint` line that already binds
+/// `uuid` to `squatter_id`, so the bind phase's `idstore::bind` answers
+/// `SessionHasDifferentId` on its FIRST pass and the phase fails `diverged`
+/// immediately (no budget burn — which is why these rows are not `#[ignore]`).
+///
+/// This stands in for the real incident's cause: a `qd ls` lazy mint had already
+/// claimed the provider uuid under a different stable id before `start` bound its
+/// own pre-minted one. The record shape is `idstore`'s on-disk `mint` event
+/// (`quorum-core/src/idstore.rs`) verbatim.
+fn seed_squatter_mint(jail: &Jail, uuid: &str, squatter_id: &str, name: &str) {
+    let state = jail.qd_home.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let line = serde_json::json!({
+        "v": 1,
+        "ts": "2026-01-01T00:00:00.000Z",
+        "event": "mint",
+        "id": squatter_id,
+        "session_id": uuid,
+        "name": name,
+    })
+    .to_string();
+    std::fs::write(state.join("ids.jsonl"), format!("{line}\n")).unwrap();
+}
+
+/// A `diverged` bind failure with `-p`: exit 1, the divergence line AND the
+/// stranded-prompt line on stderr, and `promptDelivered: false` in the machine
+/// error object. The claude pane lane does NOT deliver `-p` at create — the
+/// priming send at the bottom of `run_start` does, and every bind-failure arm
+/// `return 1`s ABOVE it. So the session is left not merely RUNNING but NEVER
+/// ASKED ANYTHING, and this row is what makes the surface say so.
+///
+/// MUTATION EVIDENCE: deleting the stranded-prompt `eprintln!` (or narrowing it
+/// to the `unbound`/`ambiguous` arms) reds the stderr assert; deleting the
+/// `obj["error"]["promptDelivered"] = false` assignment reds the JSON assert;
+/// flipping the emitted value to `true` reds it too. Inverting the
+/// `stranded_prompt` predicate (`is_none_or` / `s.is_empty()`) reds both.
+#[test]
+fn a2_diverged_with_prompt_discloses_prompt_not_delivered() {
+    require_bins();
+    let jail = Jail::establish("a2dp");
+    let name = "a2dp-s";
+    let env = jail.fakerepl_env(name);
+    seed_squatter_mint(&jail, &jail.uuid, "sqtr2345", "squatter");
+    let start = std::time::Instant::now();
+    let (code, out, err) = run_qd(
+        &jail,
+        &[
+            "start",
+            "--interactive",
+            "--json",
+            name,
+            "-p",
+            "what is 2+2?",
+        ],
+        &env,
+    );
+    let elapsed = start.elapsed();
+    assert_eq!(code, 1, "diverged exits 1 (out: {out:?} err: {err:?})");
+    // Immediate — the diverged arm never polls (contrast the unbound row below,
+    // which burns the full boot-phase budget by design).
+    assert!(
+        elapsed < std::time::Duration::from_secs(35),
+        "diverged fails immediately: {elapsed:?}"
+    );
+    // The arm's own line, unchanged.
+    assert!(
+        err.contains("stable-id divergence") && err.contains("sqtr2345"),
+        "divergence line names both ids: {err:?}"
+    );
+    // The newly-disclosed second half: what was left UNDONE.
+    assert!(
+        err.contains("the -p prompt was NOT delivered"),
+        "stranded-prompt line on stderr: {err:?}"
+    );
+    assert!(
+        err.contains("was never asked anything"),
+        "stranded-prompt line says what was left undone: {err:?}"
+    );
+    let v = parse_json_stdout(&out);
+    assert_eq!(v["error"]["class"], "diverged");
+    assert_eq!(v["error"]["session"]["name"], name);
+    assert_eq!(
+        v["error"]["promptDelivered"],
+        serde_json::Value::Bool(false),
+        "machine disclosure of the stranded prompt: {out:?}"
+    );
+    jail.teardown();
+}
+
+/// The SAME divergence, bare (no `-p`): exit 1 and class `diverged` as before,
+/// and the disclosure is ABSENT on both surfaces — no stranded-prompt line on
+/// stderr, and NO `promptDelivered` key in the error object at all (absent, not
+/// `null`). This row is what pins the additive/unchanged-bytes claim: a bare
+/// start has no prompt to strand and its error object stays byte-identical to
+/// the pre-change one.
+///
+/// MUTATION EVIDENCE: emitting the key or the stderr line UNCONDITIONALLY (i.e.
+/// dropping the `if stranded_prompt` guard on either) reds this row while the
+/// `-p` row above stays green — without it that mutation survives the suite.
+/// Writing the key as `Value::Null` when absent reds the `.get()` assert.
+#[test]
+fn a2_diverged_bare_start_omits_prompt_delivered_key() {
+    require_bins();
+    let jail = Jail::establish("a2db");
+    let name = "a2db-s";
+    let env = jail.fakerepl_env(name);
+    seed_squatter_mint(&jail, &jail.uuid, "sqtr6789", "squatter");
+    let (code, out, err) = run_qd(&jail, &["start", "--interactive", "--json", name], &env);
+    assert_eq!(code, 1, "diverged exits 1 (out: {out:?} err: {err:?})");
+    assert!(
+        err.contains("stable-id divergence") && err.contains("sqtr6789"),
+        "same arm, same line: {err:?}"
+    );
+    // NEGATIVE, stderr: nothing was stranded, so nothing is said.
+    assert!(
+        !err.contains("prompt was NOT delivered"),
+        "no stranded-prompt line without -p: {err:?}"
+    );
+    let v = parse_json_stdout(&out);
+    assert_eq!(v["error"]["class"], "diverged");
+    // NEGATIVE, JSON: absent-not-null (the discipline `qdId` already follows).
+    assert!(
+        v["error"].get("promptDelivered").is_none(),
+        "the key is ABSENT on a bare start, not null/false: {out:?}"
+    );
+    jail.teardown();
+}
+
+// ===========================================================================
 // A-3 — relay-wait precedence: flag > env alias > default-on
 // ===========================================================================
 

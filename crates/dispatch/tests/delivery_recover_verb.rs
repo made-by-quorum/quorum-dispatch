@@ -896,7 +896,13 @@ fn watch_interrupted_that_landed_is_recovered_not_false_failed() {
 
     // Post-watch-interrupt dead-dangling state: send-initiated (bytes acked, turn
     // submitted), NO terminal (the door minted none per rider 2), writer dead, old
-    // ts. (send_path is immaterial to recovery — it keys on transcript+offset+sha.)
+    // ts. (This row's `send_path` is a PANE one, which is what keeps it on the
+    // transcript+offset+sha search. `send_path` stopped being immaterial to
+    // recovery on 2026-08-27: `events::is_receipt_closed_send_path` now carves
+    // the receipt-closed carriers — today just "relay", the `-p` prime's new one
+    // — out of that search entirely, because a relay body lands wrapped in
+    // `<channel …>` and can never match `sha(payload)`, so searching for it could
+    // only ever mint a FALSE abandonment.)
     write_send_initiated(
         &j,
         "sid-wi",

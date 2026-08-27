@@ -2182,6 +2182,14 @@ fn terminal_from_verdict(v: &crate::events::RecoveryVerdict) -> Terminal {
         V::EmptyWindow => Terminal::Undetermined {
             reason: "window-empty".to_string(),
         },
+        // The carrier is receipt-closed, so the transcript search never ran — it is
+        // the wrong instrument for these, not a weak one. `Undetermined` with the
+        // carrier NAMED, because the operator reading this line needs to know the
+        // sweep declined rather than looked and lost: the answer for this send is
+        // the carrier's receipt, and it is not in a transcript for anyone to find.
+        V::ReceiptClosed { send_path } => Terminal::Undetermined {
+            reason: format!("receipt-closed carrier {send_path:?}"),
+        },
     }
 }
 
@@ -5888,5 +5896,79 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+// ===========================================================================
+// The recovery-verdict → Terminal mapping for the receipt-closed carrier.
+// ===========================================================================
+
+#[cfg(test)]
+mod receipt_closed_terminal_tests {
+    use super::*;
+    use crate::events::RecoveryVerdict as V;
+
+    #[test]
+    fn receipt_closed_maps_to_undetermined_naming_the_carrier() {
+        // `LaneOps::recover` reports whatever `terminal_from_verdict` says, and the
+        // sweep prints it. (e) must land on the UNDETERMINED side with (a)/(b): it is
+        // the whole point of the carve-out that a relay-carried prime is never
+        // reported as a non-delivery. The reason NAMES the carrier so the line reads
+        // "the sweep declined", not "the sweep looked and lost".
+        match terminal_from_verdict(&V::ReceiptClosed {
+            send_path: "relay".into(),
+        }) {
+            Terminal::Undetermined { reason } => {
+                assert!(
+                    reason.contains("relay"),
+                    "the carrier is named in the reason; got {reason:?}"
+                );
+            }
+            other => panic!("(e) must be Undetermined, never a terminal; got {other:?}"),
+        }
+        // MUTATION EVIDENCE: kills mapping `ReceiptClosed` onto
+        // `Terminal::NotDelivered{..}` (or onto Seen/Mismatch) — the arm that would
+        // hand the sweep a false negative for a prime that landed; and kills dropping
+        // the `send_path` from the reason string.
+    }
+
+    #[test]
+    fn the_two_foreclosing_verdicts_are_still_the_only_two() {
+        // The pin that (e) did not disturb the lattice: exactly `Abandoned` and
+        // `Unattributable` produce a NotDelivered, and both keep the ledger's own
+        // reason token rather than a second vocabulary invented here.
+        let foreclosing = [
+            (
+                terminal_from_verdict(&V::Abandoned {
+                    attribution: "offset".into(),
+                }),
+                "recovery-no-candidate",
+            ),
+            (
+                terminal_from_verdict(&V::Unattributable),
+                "recovery-unattributable",
+            ),
+        ];
+        for (t, token) in foreclosing {
+            match t {
+                Terminal::NotDelivered { reason } => assert_eq!(reason, token),
+                other => panic!("expected NotDelivered{{{token}}}, got {other:?}"),
+            }
+        }
+        for v in [
+            V::SourceUnavailable,
+            V::EmptyWindow,
+            V::ReceiptClosed {
+                send_path: "relay".into(),
+            },
+        ] {
+            assert!(
+                matches!(terminal_from_verdict(&v), Terminal::Undetermined { .. }),
+                "{v:?} must mint no negative"
+            );
+        }
+        // MUTATION EVIDENCE: kills swapping any Undetermined arm to NotDelivered (or
+        // the reverse), and kills rewriting either foreclosing arm's reason token to a
+        // string `events::recovery_event` does not write.
     }
 }

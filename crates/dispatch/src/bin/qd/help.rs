@@ -402,10 +402,15 @@ Options:
   --json                 Emit the started session's identity as JSON on stdout:
                          {name, qdId, sessionId, status, live}. Exit 0 guarantees
                          the id is bound; a bind failure emits {error: {class:
-                         "unbound"|"ambiguous"|"diverged", ...}} and exits 1
+                         "unbound"|"ambiguous"|"diverged", ...}} and exits 1 —
+                         and with -p that object also carries
+                         promptDelivered: false (the prompt is NOT delivered on a
+                         bind failure). The key is absent without -p
   --no-await-relay       Skip the default relay-readiness wait (exit 0 then
                          means idle, not relay-reachable)
-  -p, --prompt <prompt>  Send an initial prompt after the session starts
+  -p, --prompt <prompt>  Send an initial prompt after the session starts (the
+                         send runs AFTER the bind phase — a bind failure exits 1
+                         with the prompt UNDELIVERED)
   --model <model>        Set the model before sending the prompt
   --provider <provider>  Which agent to run: claude-code, codex, pi or opencode.
                          A LANE may be named instead, as <provider>/<lane> —
@@ -448,7 +453,9 @@ Exit codes (with -p, for external composition — see doc/PROTOCOL.md, ADR 0008)
   10  Session created and ready, but the prompt was NOT confirmed submitted after
       bounded remediation. The session EXISTS — attach and check the composer.
   1   Any other failure (create/boot/bind error, or the PID file vanished after
-      boot). Bind failures leave the session RUNNING and say so on stderr.
+      boot). Bind failures leave the session RUNNING and the prompt NOT
+      DELIVERED — the priming send runs after the bind phase — and say both on
+      stderr; under --json the error object carries promptDelivered: false.
 "####;
 
 // P0 W1 (qb spec-cli §11): `new` is RETIRED — erroring stub pointing at

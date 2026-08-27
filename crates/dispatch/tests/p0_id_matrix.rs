@@ -725,102 +725,210 @@ fn codex_start_refuses_fork_loudly() {
 }
 
 // ===========================================================================
-// B — bind-residual (wave-2 open-q 3): SUPERSEDED by lifecycle-collapse A-2.
+// B — bind-residual (wave-2 open-q 3): the WARN-only contract is superseded by
+// lifecycle-collapse A-2; the LAZY-MINT DIVERGENCE it predicted is NOT, and is
+// re-armed below against the `ls`-side in-flight gate.
 //
 // The wave-2 contract this section pinned — row present / sessionId missing →
-// start SUCCEEDS with a loud WARNING, mint reserved-but-unbound, `ls` later
-// lazy-mints a DIVERGENT id for the late-stamped UUID — is dead: the A-2 bind
-// micro-phase makes exit 0 GUARANTEE the id is bound (spec D4), the unbound
-// arm exits 1 after the boot-phase budget, and the lazy-mint divergence is
-// exactly what A-2 kills. The residual shape is no longer even constructible
-// with a default fakerepl (it now stamps a deterministic sessionId; the seeded
-// fixture is QD_FAKEREPL_OMIT_SESSION_ID=1). New-contract coverage:
+// start SUCCEEDS with a loud WARNING, mint reserved-but-unbound — is dead: the
+// A-2 bind micro-phase makes exit 0 GUARANTEE the id is bound (spec D4) and the
+// unbound arm exits 1 after the boot-phase budget. The residual shape is no
+// longer even constructible with a default fakerepl (it now stamps a
+// deterministic sessionId; the seeded fixture is QD_FAKEREPL_OMIT_SESSION_ID=1).
+// New-contract coverage:
 //   - bindphase.rs unit arms (fake clock: unbound-at-budget, ambiguous
 //     never-retries, diverged names both ids)
 //   - start_surface_a.rs a2_seeded_nonebindable_exits_1_class_unbound
 //     (#[ignore] acceptance row — burns the real ~40s budget by design)
+//
+// CORRECTION (this banner previously claimed "the lazy-mint divergence is
+// exactly what A-2 kills" — that is FALSE in the CONCURRENT case, and it was
+// the assumption the gate below invalidates): A-2 is a RETRY inside `qd start`.
+// It closes the race only when nothing ELSE mints during the retry window. It
+// cannot help when a concurrent `qd ls` lazy-mints a bound id for the very
+// session start is waiting on — bind is first-wins per session, so start's
+// later bind gets `SessionHasDifferentId` and dies `BindPhaseFailure::Diverged`
+// (exit 1), permanently. Diagnosed at
+// doc/log/2026-06-21-bond-identity-divergence-diagnosis.md §2; §3(A) closed the
+// start half only.
+//
+// WHAT NOW CLOSES IT: the `ls` half — ls.rs's IN-FLIGHT-START GATE. `fold_str`
+// reports the newest STILL-UNBOUND mint (`IdMap::newest_unbound_mint_ms`); when
+// one is within `BootTimeouts::pid_phase_ms` of now, `ls` skips its lazy-mint
+// backfill for rows that are THEMSELVES fresh, so no second id can be minted
+// inside a start's window. The skipped row renders `---` for that one `ls` and
+// is minted by the next one — deferral, never loss, exit 0 throughout.
+//
+// The two rows below replace the frozen wave-2 repro (which stamped a late
+// sessionId and asserted the divergence `assert_ne!(late_id, minted)` as
+// CORRECT behavior): the first pins that the divergence no longer happens, the
+// second pins the gate's NARROWNESS so it can never become "ls stops minting".
 // ===========================================================================
 
-#[cfg(any())] // SUPERSEDED — kept for the wave-2 record; never compiled.
-fn b_bind_residual_unbound_mint_warns_loud() {
-    require_bins();
-    let jail = Jail::establish("bres");
-    let wrap = jail.wrapper("wk", "wk", None); // no QD_FAKEREPL_SESSION_ID
+/// `ls`-vs-`start` (the race doc/log/2026-06-21-bond-identity-divergence-
+/// diagnosis.md §2 names): a `qd start` is mid-flight — its UNBOUND mint is on
+/// disk, its `bind` has not landed — and a FRESH row for a provider session
+/// with no mapped id is present. `qd ls` must NOT mint a second (bound) id for
+/// it: that mint is what makes start's later bind lose first-wins and turns the
+/// divergence permanent. The row degrades to `---` at exit 0 for THIS ls only.
+///
+/// This is the re-armed form of the frozen wave-2 repro, whose
+/// `assert_ne!(late_id, minted)` asserted the divergence as correct behavior.
+///
+/// MUTATION EVIDENCE: dropping the in-flight condition (`ls` mints
+/// unconditionally, today's bug) reds the "nothing appended" + no-qdId asserts;
+/// dropping the FRESHNESS condition alone still passes here but reds the
+/// companion test below; folding `newest_unbound_mint_ms` from the mint line
+/// alone WITHOUT the later-bind resolution would also pass here and red the
+/// idstore unit arm — all three are separately pinned.
+#[test]
+fn b_ls_defers_lazy_mint_while_a_start_is_in_flight() {
+    use dispatch::effects::Clock;
+    let jail = Jail::establish("infl");
+    let now = dispatch::effects::RealClock.now_ms();
 
-    let (code, out, err) = run_qd(&jail, &wrap, &["start", "wk"]);
-    assert_eq!(code, 0, "the session is up — exit 0; stderr: {err}");
-    assert!(out.contains("Started detached session \"wk\""), "{out}");
+    // A live, FRESH row (own pid; updatedAt = now → Session.last_active_ms)
+    // carrying a provider sessionId that has no mapped stable id yet.
+    let pid = std::process::id() as i64;
+    std::fs::write(
+        jail.dirs
+            .home
+            .join(".claude")
+            .join("sessions")
+            .join(format!("{pid}.json")),
+        format!(
+            r#"{{"pid":{pid},"sessionId":"late-uuid-0001","cwd":"/w","status":"idle",
+                 "name":"wk","startedAt":{now},"updatedAt":{now}}}"#
+        ),
+    )
+    .unwrap();
 
-    let minted = env_id_of(&jail.launches()[0]);
+    // The in-flight start: exactly what `qd start` writes before launching —
+    // an UNBOUND mint keyed by NAME, stamped with the real clock.
+    let minted = dispatch::idstore::mint_unbound(
+        &jail.ids_path(),
+        Some("wk"),
+        &dispatch::effects::RealClock,
+    )
+    .unwrap();
     assert!(dispatch::idstore::is_valid_id(&minted));
-    // The WARNING is loud + names the unbound id (pinning the wording's
-    // load-bearing fragments, not the full sentence).
+
+    let (code, out, err) = run_qd_inner(&jail, None, &["ls", "--table"]);
+    assert_eq!(code, 0, "a deferred mint is not a failure; stderr: {err}");
     assert!(
-        err.contains("WARNING")
-            && err.contains("carries no sessionId yet")
-            && err.contains(&minted)
-            && err.contains("unbound"),
-        "loud bind-residual warning naming {minted}: {err}"
+        out.lines().any(|l| l.contains("wk") && l.contains("---")),
+        "the deferred row shows the id-less placeholder: {out}"
     );
-    // The mint is reserved (collision-checked forever) but UNBOUND.
+
+    // THE assert: no second id exists for the session start is waiting on.
     let ids = jail.ids_fold();
+    assert_eq!(
+        ids.by_session.get("late-uuid-0001"),
+        None,
+        "ls must not mint inside a start's bind window: {ids:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(jail.ids_path())
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count(),
+        1,
+        "append-only proof: ls appended NOTHING"
+    );
     assert_eq!(
         ids.by_id.get(&minted),
         Some(&None),
-        "the mint stays unbound: {ids:?}"
+        "the start's mint is still unbound and still bindable"
     );
-    assert!(ids.by_session.is_empty(), "no UUID binding exists");
-    // The id never surfaces on any session: the row is id-less on every surface.
-    let rows = ls_rows(&jail);
-    let wk = rows.iter().find(|r| r.0.as_deref() == Some("wk")).unwrap();
-    assert_eq!(wk.1, None, "row carries no qdId: {rows:?}");
-    // WP-B7 PIECE 1 adapt: this row asserts the id-less placeholder on the SHORT
-    // TEXT surface. Under the table→JSON auto-flip an agent caller's bare `--short`
-    // auto-flips to JSON, so we inject `--table` (the surface selector) to keep the
-    // short surface — `--table --short` is the ratified agent short-text escape
-    // hatch (surface=Table + content=short ⇒ short table). Coverage preserved
-    // (still pins `---` + name on the short surface), not masked.
-    let (code, out, _e) = run_qd_inner(&jail, None, &["ls", "--table", "--short"]);
+    // The --json surface degrades identically: row present, no qdId key.
+    let (code, out, _e) = run_qd_inner(&jail, None, &["ls", "--json"]);
     assert_eq!(code, 0);
-    assert!(
-        out.lines().any(|l| l.contains("---") && l.contains("wk")),
-        "--short shows the id-less placeholder: {out}"
+    let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let row = &rows.as_array().unwrap()[0];
+    assert_eq!(row["name"], "wk");
+    assert!(row.get("qdId").is_none(), "no qdId on a deferred row: {row}");
+
+    // …and the start's bind still WINS when it lands — the whole point of the
+    // deferral. (LAST, because it ends the in-flight window: every `ls` after
+    // this one surfaces `minted` for the row, which is the DESIRED convergence.)
+    assert_eq!(
+        dispatch::idstore::bind(
+            &jail.ids_path(),
+            &minted,
+            "late-uuid-0001",
+            &dispatch::effects::RealClock,
+        )
+        .unwrap(),
+        dispatch::idstore::BindOutcome::Bound,
+        "no divergence: start binds its OWN pre-minted id"
     );
+    assert_eq!(
+        ls_qd_id_for(&jail, "late-uuid-0001").as_deref(),
+        Some(minted.as_str()),
+        "the next ls surfaces the START's id — one id, no divergence"
+    );
+}
 
-    // CONTINUATION (panel-review hardening): the row later gains a sessionId
-    // (claude stamps it after the verb's read). The warning's promised
-    // divergence is REAL and pinned: `ls` lazily mints a DIFFERENT id for the
-    // UUID; the launch-env id stays reserved-but-unbound FOREVER (never
-    // surfaces on any session, still collision-checked).
-    let sessions = jail.dirs.home.join(".claude").join("sessions");
-    let row_path = std::fs::read_dir(&sessions)
-        .unwrap()
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|x| x == "json"))
-        .expect("the wk row");
-    let row: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&row_path).unwrap()).unwrap();
-    let mut stamped = row.clone();
-    stamped["sessionId"] = serde_json::Value::String("late-uuid-0001".into());
-    std::fs::write(&row_path, serde_json::to_string(&stamped).unwrap()).unwrap();
+/// The NARROWING that keeps the gate honest: an in-flight start defers only
+/// rows that are THEMSELVES fresh. A machine's old, never-minted, dormant
+/// sessions are exactly what the lazy-mint backfill exists for, and they are
+/// still minted mid-start — the gate is a seconds-wide deferral, not a switch
+/// that turns the backfill off whenever any start is running.
+///
+/// MUTATION EVIDENCE: gating on the in-flight start ALONE (skipping every
+/// unminted row while a start is in flight) reds this test's mint asserts;
+/// removing the gate entirely reds the companion test above.
+#[test]
+fn b_ls_still_mints_a_stale_row_while_a_start_is_in_flight() {
+    use dispatch::effects::Clock;
+    let jail = Jail::establish("infs");
+    let now = dispatch::effects::RealClock.now_ms();
+    // Comfortably outside BootTimeouts::default().pid_phase_ms (40s).
+    let old = now - 3_600_000;
 
-    let (code, _out, _err) = run_qd_inner(&jail, None, &["ls"]);
-    assert_eq!(code, 0);
+    let pid = std::process::id() as i64;
+    std::fs::write(
+        jail.dirs
+            .home
+            .join(".claude")
+            .join("sessions")
+            .join(format!("{pid}.json")),
+        format!(
+            r#"{{"pid":{pid},"sessionId":"dormant-uuid-1","cwd":"/w","status":"idle",
+                 "name":"dz","startedAt":{old},"updatedAt":{old}}}"#
+        ),
+    )
+    .unwrap();
+
+    // Same in-flight start as above — a DIFFERENT session's, which is precisely
+    // why it must not suppress this row's backfill.
+    let minted = dispatch::idstore::mint_unbound(
+        &jail.ids_path(),
+        Some("wk"),
+        &dispatch::effects::RealClock,
+    )
+    .unwrap();
+
+    let (code, out, err) = run_qd_inner(&jail, None, &["ls", "--table"]);
+    assert_eq!(code, 0, "stderr: {err}");
+
     let ids = jail.ids_fold();
-    let late_id = ids
+    let backfilled = ids
         .by_session
-        .get("late-uuid-0001")
+        .get("dormant-uuid-1")
         .cloned()
-        .expect("ls lazy-minted for the late-stamped UUID");
-    assert_ne!(
-        late_id, minted,
-        "the divergence the warning names: the lazy mint is a DIFFERENT id"
-    );
+        .expect("a stale row is still backfilled mid-start");
+    assert_ne!(backfilled, minted, "it gets its OWN id, not the start's");
     assert_eq!(
         ids.by_id.get(&minted),
         Some(&None),
-        "the launch-env id stays unbound forever"
+        "the in-flight start's mint is untouched"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.contains("dz") && !l.contains("---")),
+        "the stale row renders its freshly-minted id: {out}"
     );
 }
 

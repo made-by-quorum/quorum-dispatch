@@ -14,7 +14,7 @@ epilogue; golden scenario `new_went_busy_exit.sh`.)
 |------|---------|------|
 | `0`  | Created + ready; with `-p`, the prompt was ACCEPTED (the session went busy). | Normal success. Without `-p`, success is always 0. |
 | `10` | Created + ready, prompt delivered, PID file readable, but the session never went busy after bounded remediation (STALLED). The session EXISTS — attach and check the composer. | Only reachable with `-p`. The prompt may sit unsubmitted; the turn-start is unconfirmed. |
-| `1`  | Any other failure: create/boot/I6/Bug-D errors, OR the PID file vanished after boot (an infra failure, NOT a stall — routing it to 10 would lie about an addressable session). | Pre-delivery failures, and the PID-file-vanished case. |
+| `1`  | Any other failure: create/boot/I6/Bug-D errors, OR the PID file vanished after boot (an infra failure, NOT a stall — routing it to 10 would lie about an addressable session). | Pre-delivery failures, and the PID-file-vanished case. With `-p`, a bind failure is exactly such a pre-delivery failure: the priming send runs AFTER the bind phase, so the session is left RUNNING and NEVER ASKED — under `--json` the error object says so as `promptDelivered: false` (the key is absent without `-p`). |
 
 Notes for composers:
 

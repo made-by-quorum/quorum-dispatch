@@ -69,7 +69,7 @@ TERMINAL_EVENTS = [ turn-anchored, turn-anchored-mismatch, anchor-timeout,
 | terminal | class | one-line meaning |
 |---|---|---|
 | `turn-anchored` | **LANDED** | the sent bytes appear as a consumed turn in the recipient transcript (pty/new-p; or a recovered anchor) |
-| `turn-anchored-mismatch` | **LANDED (truncated)** | a chunk-prefix-truncated version of the send landed |
+| `turn-anchored-mismatch` | **LANDED (truncated)** | a TRUNCATED version of the send landed. The shape depends on which lane minted it: the **recovery** sweep means chunk-prefix-truncated; the **W8 read-back** also covers head-drop / interior-run shapes (§1.2.1) |
 | `message-seen` | **LANDED** | **the message ENTERED THE SESSION'S CONTEXT — the real receipt** (relay / async-pty / daemon lanes) |
 | `send-failed` | **FAILED** | a **pre-wire door failure** — provably never reached the wire (the ONLY foreclosing "didn't land") |
 | `pending-abandoned` | **PENDING (disclosed)** | the recovery best-effort closer — see §2; NEVER a hard "failed" |
@@ -95,6 +95,28 @@ recovery-read may append a late `turn-anchored` after an `anchor-timeout`, so th
 takes the **first** terminal in file-read order as the verdict. `send-initiated` +
 exactly one terminal per `send_id` is the invariant.
 
+### 1.2.1 `turn-anchored-mismatch` is minted by TWO lanes with DIFFERENT signatures
+
+The terminal is one kind; the evidence behind it is not. Read `recovered` to tell
+which lane minted it, because the two ask different questions and one is strictly
+weaker.
+
+| lane | `recovered` | signature | blind to |
+|---|---|---|---|
+| **W8 read-back** (`emit_w8_mismatch`, `delivery/pty.rs:1489`; verdict from `submit.rs::verify_chunked_payload`) | `false` | UNION (ADR-0012 addendum 2026-08-27): **(a)** record shares the message's leading `min(64,len)` bytes, **OR (b)** record is a contiguous substring of the message ≥16 bytes long | records under the 16-byte evidence floor with no shared prefix (→ `Unattributable`, degrade-warn) |
+| **recovery sweep** (`events.rs::recovery_read` → `matched_full_chunk_prefix`, `events.rs:1124,1158`) | `true` | a run of whole chunk SHAs **from chunk 0 forward** — genuinely chunk-prefix-shaped | any survivor that does not start at chunk 0: a **head-drop suffix**, an interior run (→ **(c) Abandoned** → `pending-abandoned{recovery-no-candidate}` → RECOVERED-ATTRIBUTED) |
+
+**Why this matters.** Truncation is NOT prefix-preserving. The macOS pty write
+cap (ADR-0009 addendum `macos-tty-write-cap`) drops the HEAD of a payload and
+leaves a SUFFIX: XNU exposes at most `TTYHOG - 2` = 1022 bytes to the line
+discipline at once, and an inferred child-side flush during boot discards what is
+queued while keeping what is written after. A 1048-byte `qd start -p` prompt
+landed as its trailing 26 bytes. That shape is now positively graded by the W8
+read-back and is still invisible to the recovery sweep, which reports the honest
+but weaker RECOVERED-ATTRIBUTED ("could not confirm delivery — NOT proof it
+didn't land") rather than LANDED (truncated). Closing that gap is an open,
+disclosed asymmetry — not a claim either lane makes falsely.
+
 ---
 
 ## 2. THE RESOLUTION RECIPE
@@ -107,7 +129,7 @@ RECOVERED-ATTRIBUTED — and no send may resolve to a false LANDED.**
 | first terminal for `send_id` | outcome | reader statement |
 |---|---|---|
 | `turn-anchored` (any) | **LANDED** | delivered. If `recovered:true`: delivered, recovered late via the recovery-read path — *metadata only, still delivered* |
-| `turn-anchored-mismatch` (any) | **LANDED (truncated)** | delivered, but a chunk-prefix-truncated form; `expected_len`/`actual_len` disclose the truncation |
+| `turn-anchored-mismatch` (any) | **LANDED (truncated)** | delivered, but a TRUNCATED form; `expected_len`/`actual_len` disclose the truncation. Not necessarily chunk-prefix-shaped — see §1.2.1 |
 | `message-seen` | **LANDED** | delivered — entered context |
 | `send-failed` | **FAILED** | provably did not land (pre-wire door: `reason` token) |
 | `pending-abandoned{reason:"recovery-no-candidate", recovered:true, attribution}` | **RECOVERED-ATTRIBUTED (disclosed PENDING)** | **"could not confirm delivery — NOT proof it didn't land."** The recovery searched the recipient transcript past the send's anchor (`attribution` = `offset`\|`time-window`) and found no matching candidate. NEVER read "landed", never a hard "failed" |
@@ -323,11 +345,18 @@ not confirm delivery — NOT proof it didn't land." This is an accepted, **discl
 residual (a structural key limit; NoRecord ruling §7) — **not** a hard "failed" and
 **not** a false "landed."
 
-**(4) partial-write-landed** — a truncated prefix of the message landed as a real turn.
+**(4) partial-write-landed** — a truncated part of the message landed as a real turn.
 → Chunk-prefix truncation detected → `turn-anchored-mismatch{recovered:true}` →
 **LANDED (truncated)**, with `expected_len`/`actual_len` disclosing the truncation. The
 door-side partial-write case (a `send:pty` whose PTY write partially failed) emits **no
 foreclosing terminal** — it stays recoverable, not a false "failed."
+**Shape caveat (§1.2.1):** this recovery-lane row holds only when the survivor is a
+chunk PREFIX. A **head-drop** survivor (a suffix — the shape the macOS pty write cap
+produces, ADR-0009 addendum `macos-tty-write-cap`) matches no chunk-0 run, so the
+recovery sweep grades it **(c) Abandoned** → `pending-abandoned{recovery-no-candidate,
+recovered:true, attribution}` → **RECOVERED-ATTRIBUTED**, not LANDED (truncated). The
+contemporaneous W8 read-back DOES grade that shape `Truncated` (ADR-0012 addendum);
+the recovery sweep does not.
 
 **(5) watch-interrupted** — the `--wait` watch is torn down (process exit / panic) before
 a verdict.

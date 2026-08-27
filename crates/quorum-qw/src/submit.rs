@@ -316,10 +316,23 @@ pub const VERIFY_POLL_MS: u64 = 500;
 pub const BUSY_QUEUED_VERIFY_TIMEOUT_S: u64 = 120;
 
 /// How many leading bytes of a record must match the message prefix for the
-/// record to count as the same-turn truncation signature (covers both prefix and
-/// mid-loss shapes — a mid-loss record `first-1KB ++ last-1KB` still shares the
-/// message's leading bytes). `min(64, recorded.len())` bytes are compared.
+/// record to count as the ANCHORED same-turn truncation signature (the ORIGINAL
+/// W8 shape: a TAIL-drop, plus the DISCONTIGUOUS mid-loss record
+/// `first-1KB ++ last-1KB`, which still opens on the message's leading bytes but
+/// is NOT a contiguous run of it). `min(64, recorded.len())` bytes are compared.
+/// See [`carries_truncation_signature`] for the UNANCHORED companion.
 const TRUNC_SIGNATURE_PREFIX: usize = 64;
+
+/// Evidence FLOOR for the UNANCHORED (contiguous-substring) truncation signature:
+/// a record that does NOT share the message's leading bytes must be at least this
+/// many bytes long before a substring hit counts as positive truncation evidence.
+/// The anchored signature needs no such floor because POSITION is its evidence (a
+/// record that starts where the delivery starts is not a coincidence); a substring
+/// hit has no anchor, so LENGTH is the only evidence it carries, and a short
+/// foreign interjection ("ok", "continue", "yes") sits inside a long prompt by pure
+/// chance. 16 bytes clears those and is comfortably under the 26-byte suffix of the
+/// incident that forced the widening, so the floor costs no observed true positive.
+const TRUNC_SUBSTRING_FLOOR: usize = 16;
 
 /// Predicate: does `message` need post-delivery verification? TRUE iff the
 /// PRODUCTION splitter ([`chunk_text`]) yields more than one chunk — never a
@@ -415,11 +428,15 @@ pub enum PayloadVerifyOutcome {
     /// payload arrived.
     Verified,
     /// At budget end, no exact match but a record SHORTER than the message that
-    /// shares its leading bytes (the same-turn truncation signature). `expected`
-    /// = the sent message length; `recorded` = the truncated record length.
+    /// carries the same-turn truncation signature — it either shares the message's
+    /// leading bytes (ANCHORED: tail-drop / discontiguous mid-loss) or is a
+    /// CONTIGUOUS SUBSTRING of it past [`TRUNC_SUBSTRING_FLOOR`] (UNANCHORED:
+    /// head-drop, which leaves a suffix, or an interior drop). `expected` = the
+    /// sent message length; `recorded` = the truncated record length.
     Truncated { expected: usize, recorded: usize },
     /// At budget end, records exist past the offset but none matched and none
-    /// carries the truncation signature (e.g. a foreign / multi-block record).
+    /// carries the truncation signature — neither shared leading bytes NOR a
+    /// contiguous substring past the floor (e.g. a foreign / multi-block record).
     /// Degrade-warn, never loud-fail.
     Unattributable,
     /// At budget end, at least one read succeeded but ZERO records were ever seen
@@ -453,18 +470,73 @@ pub trait VerifyDeps {
 }
 
 /// Does `record` carry the same-turn truncation signature against `message`?
-/// True iff it is non-empty, strictly SHORTER than `message`, and its first
-/// `min(TRUNC_SIGNATURE_PREFIX, record.len())` bytes equal the same-length prefix
-/// of `message`. (A record EQUAL in length is handled by the exact-match path; a
-/// LONGER record is never our truncated payload.)
+///
+/// GUARDS FIRST, unchanged: an EMPTY record is never evidence; a record EQUAL in
+/// length is the exact-match path's job; a LONGER record is never our truncated
+/// payload. Past those, EITHER of two independent shapes of positive evidence is
+/// enough — the predicate is a UNION, so every shape that graded `Truncated`
+/// before still does:
+///
+///   (a) ANCHORED — its first `min(TRUNC_SIGNATURE_PREFIX, record.len())` bytes
+///       equal the same-length prefix of `message`. The ORIGINAL W8 signature,
+///       written for the TAIL-drop (under a sustained PTY-reader stall the tty
+///       queue saturates and the REST of the payload drops, so what lands starts
+///       at byte 0), and it also catches the DISCONTIGUOUS mid-loss shape
+///       `head ++ tail`, which opens on the leading bytes but is NOT a contiguous
+///       run of the message and so is invisible to (b).
+///
+///   (b) UNANCHORED — `record` is a CONTIGUOUS SUBSTRING of `message` and is at
+///       least [`TRUNC_SUBSTRING_FLOOR`] bytes long. THE WIDENING: a HEAD-drop
+///       leaves a SUFFIX and an interior drop leaves an INTERIOR run, and neither
+///       shares the message's leading bytes, so (a) is structurally blind to both.
+///       That blindness is what let a 1048-byte prompt land as its trailing 26
+///       bytes (" has returned,\nprint DONE."), fall past the `Truncated` branch
+///       to `Unattributable` — explicitly degrade-warn-never-fail — and exit 0
+///       with a warning while the session obeyed the fragment. A suffix is
+///       truncation evidence exactly as much as a prefix is.
+///
+///       WHY A HEAD-DROP IS THE SHAPE THIS PATH PRODUCES (and why the lost count
+///       is a CONSTANT, not a coincidence): the pane carrier writes to a pty
+///       master, and XNU stops feeding the line discipline once the input queue
+///       reaches `TTYHOG - 2` = 1022 bytes (macOS `MAX_INPUT`/`MAX_CANON` are
+///       1024 — NOT the "~4096B" ADR 0009 §29-52 assumes). At most 1022 bytes are
+///       ever exposed in the kernel at once; the rest stays parked in the writer's
+///       blocked `write_all`. A child-side input flush during boot discards what
+///       is queued and keeps what is written after — so a 1048-byte payload loses
+///       exactly 1022 and keeps 26. Six runs, six identical deltas. The SIZE is a
+///       kernel capacity; only WHETHER it fires is the boot race.
+///
+/// WHY ONLY (b) CARRIES A FLOOR: (a) is anchored — a foreign record has no reason
+/// to begin exactly where our delivery began, so position alone is evidence and
+/// even a very short (a) hit is real. (b) has no anchor: length is the ONLY
+/// evidence it carries, and a 3-byte record coincidentally appearing inside a long
+/// message must NOT promote a degrade-warn into the `PayloadTruncated` terminal.
+/// [`TRUNC_SUBSTRING_FLOOR`] is a floor on EVIDENCE, not on damage — a 4-byte
+/// suffix is still a catastrophic loss, but it is not something we can honestly
+/// ATTRIBUTE to this turn, and `Unattributable` is the correct verdict there (R8:
+/// degrade rather than guess). Keeping the floor off (a) is also what makes this a
+/// pure widening: no record that graded `Truncated` under the old rule loses that
+/// grade under the new one.
+///
+/// COST: `str::contains` with a `&str` needle runs a two-way search — LINEAR in
+/// the two lengths, NOT the O(n·m) of a naive scan — and it runs at most ONCE PER
+/// RECORD AT BUDGET END, never inside the poll loop (that loop only ever does the
+/// byte-exact compare). Payloads here are bounded (a prompt, a few KB), so even a
+/// naive scan would be free; the point being pinned is that no poll iteration got
+/// accidentally quadratic.
 fn carries_truncation_signature(record: &str, message: &str) -> bool {
     let rec = record.as_bytes();
     let msg = message.as_bytes();
     if rec.is_empty() || rec.len() >= msg.len() {
         return false;
     }
+    // (a) ANCHORED: shared leading bytes (byte-for-byte the pre-widening rule).
     let n = rec.len().min(TRUNC_SIGNATURE_PREFIX);
-    rec[..n] == msg[..n]
+    if rec[..n] == msg[..n] {
+        return true;
+    }
+    // (b) UNANCHORED: a contiguous run of the message, past the evidence floor.
+    rec.len() >= TRUNC_SUBSTRING_FLOOR && message.contains(record)
 }
 
 /// Bounded post-delivery verification of a CHUNKED payload (wart-wave-spec §4
@@ -474,8 +546,10 @@ fn carries_truncation_signature(record: &str, message: &str) -> bool {
 /// - ANY record text == `message` (byte-exact) → [`PayloadVerifyOutcome::Verified`]
 ///   immediately (incl. on a later poll — a slow-resolving transcript still wins).
 /// - At budget end (no exact match), evaluate the LAST successful read's records:
-///   * a truncation-signature candidate (shorter + shared leading bytes) →
-///     [`PayloadVerifyOutcome::Truncated`] (the LONGEST candidate if several);
+///   * a truncation-signature candidate — shorter AND either sharing the
+///     message's leading bytes or being a contiguous substring of it past
+///     [`TRUNC_SUBSTRING_FLOOR`] (see [`carries_truncation_signature`]) →
+///     [`PayloadVerifyOutcome::Truncated`] (the LONGEST candidate if several, R8);
 ///   * records exist but none match / none carries the signature →
 ///     [`PayloadVerifyOutcome::Unattributable`];
 ///   * zero records ever seen but at least one read succeeded →
@@ -528,8 +602,10 @@ pub fn verify_chunked_payload(
     }
 
     // POSITIVE truncation evidence: the LONGEST record carrying the same-turn
-    // signature (shorter + shared leading bytes). Longest = the most complete
-    // truncated candidate (R8: pick the best evidence, not the first).
+    // signature (shorter + shared leading bytes, OR a contiguous substring past
+    // the floor — head/interior drops grade the same as tail drops). Longest = the
+    // most complete truncated candidate (R8: pick the best evidence, not the
+    // first). Runs ONCE, here at budget end — never per poll iteration.
     let truncated = records
         .iter()
         .filter(|r| carries_truncation_signature(r, message))
@@ -849,6 +925,195 @@ mod tests {
                 expected: 4096,
                 recorded: 3000,
             }
+        );
+    }
+
+    // --- truncation-signature SHAPE rows (the head/interior-drop widening) ---
+    //
+    // W8's original signature recognised truncation ONLY when the record was a
+    // PREFIX of the message — a TAIL loss. A HEAD loss leaves a SUFFIX and an
+    // interior loss leaves an INTERIOR run, and neither shares the leading bytes,
+    // so both fell past the `Truncated` branch to `Unattributable` (degrade-warn)
+    // and shipped as exit 0. These rows pin the widened union: anchored-leading
+    // bytes OR a contiguous substring past `TRUNC_SUBSTRING_FLOOR`.
+
+    /// The REAL incident's proportions: a 1048-byte prompt of which only the
+    /// trailing 26 bytes (" has returned,\nprint DONE.") reached the session —
+    /// 1022 lost, the pty master's `TTYHOG - 2` in-flight cap on macOS.
+    /// The head is prose-shaped so the suffix shares NOTHING with the leading
+    /// bytes — exactly the shape the anchored-only rule was blind to.
+    fn incident_prompt() -> (String, &'static str) {
+        const TAIL: &str = " has returned,\nprint DONE.";
+        assert_eq!(
+            TAIL.len(),
+            26,
+            "the incident's recorded fragment is 26 bytes"
+        );
+        let mut head = String::new();
+        while head.len() < 1048 - TAIL.len() {
+            head.push_str("Poll the lane roster every few seconds and wait until the worker ");
+        }
+        head.truncate(1048 - TAIL.len());
+        let msg = format!("{head}{TAIL}");
+        assert_eq!(msg.len(), 1048, "the incident's sent prompt is 1048 bytes");
+        assert!(
+            !msg.starts_with(TAIL),
+            "the suffix must NOT also be a prefix, or the row would pass on the old rule"
+        );
+        (msg, TAIL)
+    }
+
+    #[test]
+    fn trunc_signature_suffix_record_is_the_incident_shape() {
+        // MUTATION EVIDENCE: kills dropping the UNANCHORED (substring) disjunct —
+        // i.e. reverting `carries_truncation_signature` to prefix-only. Under the
+        // old rule this exact shape graded `Unattributable`, which the bin layer
+        // turns into a WARNING + exit 0; here it must reach the `PayloadTruncated`
+        // terminal instead.
+        let (msg, tail) = incident_prompt();
+        assert!(
+            carries_truncation_signature(tail, &msg),
+            "a 26-byte SUFFIX of a 1048-byte prompt is truncation evidence"
+        );
+        let f = FakeVerify::new(vec![ok(&[tail])]);
+        assert_eq!(
+            verify_chunked_payload(&f, &msg, VERIFY_TIMEOUT_S, VERIFY_POLL_MS),
+            PayloadVerifyOutcome::Truncated {
+                expected: 1048,
+                recorded: 26,
+            },
+            "the head-drop must grade Truncated, NOT degrade to Unattributable"
+        );
+    }
+
+    #[test]
+    fn trunc_signature_interior_record_is_truncation() {
+        // MUTATION EVIDENCE: kills narrowing the widening to `ends_with` (a
+        // suffix-only fix). A MID-drop leaves an INTERIOR contiguous run that is
+        // neither a prefix nor a suffix, and it must grade Truncated too.
+        let msg = format!(
+            "{}{}{}",
+            "OPENING PREAMBLE THAT NEVER ARRIVED. ".repeat(4),
+            "the interior fragment that did arrive intact",
+            " TRAILING TAIL THAT ALSO NEVER ARRIVED.".repeat(4),
+        );
+        let recorded = "the interior fragment that did arrive intact";
+        assert!(!msg.starts_with(recorded) && !msg.ends_with(recorded));
+        assert!(carries_truncation_signature(recorded, &msg));
+        let f = FakeVerify::new(vec![ok(&[recorded])]);
+        assert_eq!(
+            verify_chunked_payload(&f, &msg, VERIFY_TIMEOUT_S, VERIFY_POLL_MS),
+            PayloadVerifyOutcome::Truncated {
+                expected: msg.len(),
+                recorded: recorded.len(),
+            }
+        );
+    }
+
+    #[test]
+    fn trunc_signature_anchored_shape_survives_the_widening() {
+        // MUTATION EVIDENCE: kills REPLACING the anchored rule with the substring
+        // rule instead of UNIONing them. A discontiguous mid-loss record
+        // (`head ++ tail`, the W8 shape) shares the leading 64 bytes but is NOT a
+        // contiguous substring of the message — a pure `contains` rewrite would
+        // silently regrade it from Truncated to Unattributable.
+        let msg = format!(
+            "{}{}{}",
+            "H".repeat(1000),
+            "M".repeat(1000),
+            "T".repeat(1000)
+        );
+        let recorded = format!("{}{}", "H".repeat(100), "T".repeat(100));
+        assert!(
+            !msg.contains(&recorded),
+            "H-run followed directly by T-run does not occur in the message"
+        );
+        assert!(
+            carries_truncation_signature(&recorded, &msg),
+            "shared leading bytes are still, on their own, truncation evidence"
+        );
+    }
+
+    #[test]
+    fn trunc_signature_short_prefix_needs_no_floor() {
+        // MUTATION EVIDENCE: kills hoisting TRUNC_SUBSTRING_FLOOR above the
+        // anchored branch (applying the floor to BOTH shapes). The floor exists
+        // because a substring hit is UNANCHORED; a prefix is anchored at byte 0,
+        // where the delivery starts, so even a 3-byte prefix stays evidence and
+        // the pre-existing grade is preserved exactly.
+        let msg = "the original payload text, sent in full";
+        assert!(3 < TRUNC_SUBSTRING_FLOOR);
+        assert!(carries_truncation_signature("the", msg));
+    }
+
+    #[test]
+    fn trunc_signature_substring_floor_holds_on_both_sides() {
+        // MUTATION EVIDENCE: kills deleting the floor (a 15-byte coincidental run
+        // would then fire a loud terminal) AND kills an off-by-one in either
+        // direction. The message is a repeating alphabet, so EVERY window is a
+        // genuine substring — the ONLY thing separating these two rows is length.
+        let msg: String = (0..200u32)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
+        let below = &msg[100..100 + TRUNC_SUBSTRING_FLOOR - 1];
+        let at = &msg[100..100 + TRUNC_SUBSTRING_FLOOR];
+        assert!(
+            msg.contains(below) && msg.contains(at),
+            "both are real substrings"
+        );
+        assert!(
+            !msg.starts_with(below) && !msg.starts_with(at),
+            "neither is anchored, so only the floor decides"
+        );
+        assert!(
+            !carries_truncation_signature(below, &msg),
+            "{} bytes is BELOW the floor — unanchored coincidence, degrade",
+            TRUNC_SUBSTRING_FLOOR - 1
+        );
+        assert!(
+            carries_truncation_signature(at, &msg),
+            "{} bytes is AT the floor — evidence",
+            TRUNC_SUBSTRING_FLOOR
+        );
+    }
+
+    #[test]
+    fn trunc_signature_non_substring_is_not_evidence() {
+        // MUTATION EVIDENCE: kills weakening `contains` into "shares any run" or a
+        // constant `true`. A foreign record that is neither anchored nor contiguous
+        // in the message must STILL degrade — the widening must not turn the
+        // never-false-fail guarantee (R8) into a loud terminal on someone else's
+        // turn.
+        let msg = "P".repeat(2048);
+        let foreign = "a completely unrelated user message";
+        assert!(!carries_truncation_signature(foreign, &msg));
+        let f = FakeVerify::new(vec![ok(&[foreign])]);
+        assert_eq!(
+            verify_chunked_payload(&f, &msg, VERIFY_TIMEOUT_S, VERIFY_POLL_MS),
+            PayloadVerifyOutcome::Unattributable
+        );
+    }
+
+    #[test]
+    fn trunc_signature_guards_reject_empty_equal_and_longer() {
+        // MUTATION EVIDENCE: kills removing either guard. Empty: `"".contains` is
+        // true for every message, so dropping the is_empty check would grade every
+        // blank record a truncation. Equal-length: that is the exact-match path's
+        // job. Longer: never our payload — and the anchored branch would index
+        // `msg[..n]` with `n > msg.len()` and PANIC, so the length guard is
+        // load-bearing beyond its verdict.
+        let msg = "the original payload text";
+        assert!(
+            !carries_truncation_signature("", msg),
+            "empty is never evidence"
+        );
+        assert!(
+            !carries_truncation_signature(msg, msg),
+            "equal length belongs to the exact-match path"
+        );
+        assert!(
+            !carries_truncation_signature(&format!("{msg} and then some more"), msg),
+            "a LONGER record is never our truncated payload"
         );
     }
 

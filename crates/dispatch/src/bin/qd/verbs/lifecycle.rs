@@ -1539,6 +1539,34 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                     (*pid, Some(existing_id.clone()))
                 }
             };
+            // --- I6 completion: a bind failure with `-p` also strands the PROMPT ---
+            // Every arm above says what was left RUNNING. None of them said what was
+            // left UNDONE, and with `-p` that is the whole point of the call: the
+            // claude lane does NOT deliver its prompt at create (`create_prompt_refusal`
+            // refuses it there) — the priming send at the bottom of this function is
+            // what delivers it, and it runs AFTER this phase. `quorum_qw::delivery::priming`
+            // states the ordering as its own contract: "It also runs AFTER `qd start`'s
+            // bind phase — a qd-side phase that `start` returns before". So EVERY
+            // `return 1` here is upstream of delivery, and the session is left not
+            // merely running but NEVER ASKED ANYTHING. The I6 posture — say exactly what
+            // was left — owes the caller both halves.
+            //
+            // CONDITIONAL on `-p`: a bare start has no prompt to strand, and its bytes
+            // on all three arms are UNCHANGED. The remedy defers to the arm above rather
+            // than naming a command outright, because two of the three arms have just
+            // told the caller that addressing this session is not yet trustworthy
+            // (`ambiguous`: a duplicated name; `diverged`: `qd ls` will surface the
+            // OTHER id).
+            let stranded_prompt = prompt.as_deref().is_some_and(|s| !s.is_empty());
+            if stranded_prompt {
+                eprintln!(
+                    "qd start: the -p prompt was NOT delivered — the priming send runs \
+                     after the bind phase, and this start returned before it. Session \
+                     \"{name}\" IS RUNNING and was never asked anything. Once the \
+                     identity above is resolved, deliver it with \"qd send {name} \
+                     <prompt>\" or type it after \"qd attach {name}\"."
+                );
+            }
             if json_out {
                 // The ruled machine error object (spec A-2): the prime recipe
                 // branches on `class` — unbound → stop-and-retry once;
@@ -1547,13 +1575,21 @@ pub fn run_new(m: &ArgMatches) -> i32 {
                 if let Some(reg) = registry_id {
                     ids["registry"] = serde_json::Value::String(reg);
                 }
-                let obj = serde_json::json!({
+                let mut obj = serde_json::json!({
                     "error": {
                         "class": fail.class(),
                         "session": { "name": name, "pid": pid },
                         "ids": ids,
                     }
                 });
+                // ADDITIVE, and PRESENT ONLY when `-p` was given (the absent-not-null
+                // discipline `qdId` already follows in `render.rs`): a bare start's
+                // error object is byte-identical to today's. `false` is the only value
+                // it can ever carry here — the key exists to let a composer branch on
+                // "my prompt is still undelivered" without parsing the stderr prose.
+                if stranded_prompt {
+                    obj["error"]["promptDelivered"] = serde_json::Value::Bool(false);
+                }
                 println!("{obj}");
             }
             return 1;
@@ -1742,7 +1778,7 @@ pub fn run_new(m: &ArgMatches) -> i32 {
         return match priming::prime_new_session(&deps, &params) {
             Ok(primed) => {
                 render_notes(&primed.notes);
-                map_deliver_outcome(primed.deliver, &name)
+                map_deliver_outcome(primed.deliver, &name, primed.relayed)
             }
             Err(refused) => {
                 render_notes(&refused.notes);
@@ -2027,7 +2063,11 @@ pub(super) fn pi_tui_failure_line(verb: &str, e: &PiTuiError) -> String {
 ///
 /// The TS WARNING wording (lifecycle.ts:923-930) is ported verbatim for the
 /// Stalled branch; PidFileMissing gets its own infra-distinguishing stderr.
-fn map_deliver_outcome(outcome: dispatch::submit::DeliverOutcome, name: &str) -> i32 {
+fn map_deliver_outcome(
+    outcome: dispatch::submit::DeliverOutcome,
+    name: &str,
+    relayed: bool,
+) -> i32 {
     use dispatch::submit::DeliverOutcome;
     match outcome {
         DeliverOutcome::Accepted => {
@@ -2035,12 +2075,28 @@ fn map_deliver_outcome(outcome: dispatch::submit::DeliverOutcome, name: &str) ->
             0
         }
         DeliverOutcome::Stalled => {
-            // VERBATIM TS WARNING block (qa/hardening@3dd9f1e:src/commands/
-            // lifecycle.ts:923-930) — the session exists, the prompt may sit
-            // unsubmitted in the composer. Exit 10 is the Rust-only contract.
+            // The TS WARNING block (qa/hardening@3dd9f1e:src/commands/
+            // lifecycle.ts:923-930) — the session exists, the prompt did not
+            // produce a busy turn. Exit 10 is the Rust-only contract.
+            //
+            // CARRIER-HONEST SECOND LINE (2026-08-27, with the `-p` relay
+            // carrier): the code and its meaning are carrier-blind — 10 is
+            // "created, prompt NOT confirmed" on both paths — but the REMEDY is
+            // not. The pane arm's sentence is the original, byte-for-byte: text
+            // was typed into a composer and may be sitting there unsubmitted.
+            // The relay arm has NO composer to look in (the payload was POSTed
+            // into the child's MCP relay), so repeating that sentence would send
+            // an operator to inspect a composer nothing was ever typed into.
+            // What is true there is that the message crossed the wire and the
+            // child's `message-seen` receipt did not arrive inside the budget.
+            let second = if relayed {
+                "The relay accepted it but the session never acknowledged it."
+            } else {
+                "The prompt may be in the composer but not submitted."
+            };
             eprintln!(
                 "WARNING: Prompt sent to \"{name}\" but session did not go busy.\n\
-                 The prompt may be in the composer but not submitted.\n  \
+                 {second}\n  \
                  Attach: qd attach {name}"
             );
             10
