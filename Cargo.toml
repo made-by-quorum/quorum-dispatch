@@ -1,0 +1,35 @@
+# Standalone workspace root for the PUBLIC quorum-dispatch export.
+#
+# This file is INERT where it lives. Privately, `dispatch/` has no Cargo.toml at
+# all: its [workspace] table was dissolved into the parent root at the repo top
+# level (two cargo workspace roots cannot nest). The private root's members glob
+# is `dispatch/crates/*`, which does not match this dot-prefixed directory, so
+# cargo never scans it here.
+#
+# On export, copybara's `core.move(".export-overlay", "")` lifts this file to the
+# root of the public tree, where it becomes the workspace root that `cargo build`
+# needs. Keep the [workspace.package] values below in sync with the private root
+# `Cargo.toml`'s [workspace.package] — EXCEPT `repository`, which must stay the
+# public URL (see below).
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+# Every key the nine dispatch crates inherit with `<key>.workspace = true`.
+# All nine inherit exactly the same four; verified by grepping
+# crates/*/Cargo.toml. Any key any crate inherits must be present here or that
+# crate fails to parse.
+[workspace.package]
+edition = "2021"
+rust-version = "1.95"
+license = "MIT"
+# PUBLIC repository URL. Do NOT copy the private root's value here — that URL
+# names the private org and re-leaks it into the export (the export tripwire
+# will fail on it, and it is a confusing failure to debug).
+repository = "https://github.com/made-by-quorum/quorum-dispatch"
+
+# Build-health: shrink debug-symbol bloat. line-tables-only keeps file/line for
+# backtraces but drops the full variable/type DWARF, cutting the bulk of the
+# weight. Mirrors the private root so public and private builds behave alike.
+[profile.dev]
+debug = "line-tables-only"
