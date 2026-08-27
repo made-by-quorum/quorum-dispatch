@@ -18,23 +18,32 @@ brew install quorum-dispatch
 
 ## Moving the pin
 
-The formula pins a commit tarball of `made-by-quorum/quorum-dispatch` over
-https, because that repo carries no tags yet. To ship a newer `main`:
+`bump-pin.sh` does it. It resolves the mirror's `main`, digests that commit
+tarball, rewrites the formula in a clone of the tap, and commits — it does
+**not** push unless you say so:
 
 ```sh
-SHA=$(git ls-remote https://github.com/made-by-quorum/quorum-dispatch main | cut -f1)
-curl -sL -o /tmp/qd.tar.gz \
-  "https://github.com/made-by-quorum/quorum-dispatch/archive/$SHA.tar.gz"
-shasum -a 256 /tmp/qd.tar.gz
+bash packaging/homebrew/bump-pin.sh            # stage the bump, print the diff
+bash packaging/homebrew/bump-pin.sh --push     # ... and push it to the tap
+bash packaging/homebrew/bump-pin.sh --version 0.2.0   # also move the stated version
+bash packaging/homebrew/bump-pin.sh --ref <sha>       # pin something other than main
 ```
 
-Put that `$SHA` in `url` and the digest in `sha256`. If `version` does not move
-(it is stated by hand — it is what `qd --version` reports, not the crate
-version, which is `0.0.0`), add or increment `revision` as well, or Homebrew
-will not offer the upgrade to anyone who already installed.
+Two things it gets right that are easy to get wrong by hand:
 
-Pin a SHA that exists **on `made-by-quorum/quorum-dispatch`** — that is the repo
-the formula downloads from, and it is not always where the change was authored.
+- **`revision`.** `version` is stated by hand — it is what `qd --version`
+  reports, not the crate version, which is `0.0.0` — so a source bump does not
+  move it, and Homebrew offers no upgrade to anyone who already installed
+  unless `revision` moves instead. The script increments it by default, and
+  drops it when `--version` moves the version (the correct pairing).
+- **The commit it pins exists on `made-by-quorum/quorum-dispatch`.** That is the
+  repo the tarball url resolves against, and it is not always where the change
+  was authored — so land the export first. The script also checks the tarball
+  carries the export layout (root `Cargo.toml`, both crates) before pinning it,
+  rather than letting an unexported tree fail on every user's machine.
+
+Knobs: `QD_PUBLIC_REPO`, `QD_TAP_REMOTE`, and `QD_TAP_DIR` to use a tap clone
+you already have instead of a throwaway one.
 
 ## Smoke-testing a formula change
 
