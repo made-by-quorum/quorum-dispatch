@@ -86,6 +86,10 @@ NOT_EXPORTED=(
   # Not a copybara origin_files exclude — excluded from the export by explicit
   # owner decision. Listed here for the same reason: it does not ship.
   ":(exclude)${P}LESSONS.md"
+  # Owner-excluded internal docs (mirror copy.bara.sky EXCLUDE): a private-SSH
+  # install doc and the multi-repo packaging ADR. They do not ship.
+  ":(exclude)${P}doc/install.md"
+  ":(exclude)${P}doc/adr/0018-rust-stack-packaging-and-install.md"
 )
 
 # --- reason 2: COVERED BY A COPYBARA core.replace CONTENT TRANSFORM -----------

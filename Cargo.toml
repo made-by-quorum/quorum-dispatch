@@ -22,7 +22,7 @@ members = ["crates/*"]
 [workspace.package]
 edition = "2021"
 rust-version = "1.95"
-license = "MIT"
+license = "Apache-2.0"
 # PUBLIC repository URL. Do NOT copy the private root's value here — that URL
 # names the private org and re-leaks it into the export (the export tripwire
 # will fail on it, and it is a confusing failure to debug).
