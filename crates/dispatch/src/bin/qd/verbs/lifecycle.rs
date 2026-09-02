@@ -2691,19 +2691,26 @@ mod tests {
     // covered by the golden new_went_busy_exit.sh scenario (M4 Level 2).
     #[test]
     fn deliver_outcome_accepted_is_0() {
-        assert_eq!(map_deliver_outcome(DeliverOutcome::Accepted, "wk"), 0);
+        // Accepted ignores `relayed` — the delivered path is carrier-agnostic.
+        assert_eq!(map_deliver_outcome(DeliverOutcome::Accepted, "wk", false), 0);
     }
 
     #[test]
     fn deliver_outcome_stalled_is_10() {
-        assert_eq!(map_deliver_outcome(DeliverOutcome::Stalled, "wk"), 10);
+        // `relayed` changes only the WARNING remedy wording; the code is 10 on
+        // BOTH carriers ("created, prompt NOT confirmed" is carrier-blind).
+        // Assert both so a future change that leaks the carrier into the exit
+        // code is caught here, not just in the (wording-only) golden.
+        assert_eq!(map_deliver_outcome(DeliverOutcome::Stalled, "wk", false), 10);
+        assert_eq!(map_deliver_outcome(DeliverOutcome::Stalled, "wk", true), 10);
     }
 
     #[test]
     fn deliver_outcome_pidfile_missing_is_1_not_10() {
         // R1: a vanished PID file is infra (exit 1), explicitly NOT the stalled
         // code 10 — routing it to 10 would lie to an external spawn caller.
-        assert_eq!(map_deliver_outcome(DeliverOutcome::PidFileMissing, "wk"), 1);
+        // PidFileMissing ignores `relayed`.
+        assert_eq!(map_deliver_outcome(DeliverOutcome::PidFileMissing, "wk", false), 1);
     }
 
     // -------------------------------------------------------------------------
