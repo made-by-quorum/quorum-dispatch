@@ -1,8 +1,8 @@
 # Quickstart
 
-An agent-facing CLI. Agents use dispatch to discover, spawn, and message agents running in claude code, codex, pi, or opencode.
+Agents use dispatch to discover, spawn, and message agents running in claude code, codex, pi, or opencode across one or more machines. 
 
-`brew install made-by-quorum/quorum-dispatch` and `qd --help` to get started. 
+Have your agent `brew install made-by-quorum/quorum-dispatch` and `qd --help` to get started. 
  
 # Dispatch
 
