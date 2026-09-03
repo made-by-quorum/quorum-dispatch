@@ -16,47 +16,6 @@ via `QD_HOME`). This repository hosts the engine workspace:
 - **`golden`** / **`fakerepl`** — the golden-test harness and the deterministic
   fake REPL the suites drive (`crates/golden`, `crates/fakerepl`).
 
-## Install
-
-```sh
-brew tap made-by-quorum/quorum-dispatch
-brew trust made-by-quorum/quorum-dispatch/quorum-dispatch
-brew install quorum-dispatch
-qd setup
-```
-
-Homebrew 6 will not load a formula from a third-party tap until you trust it —
-that middle line is not optional, and `brew install` fails with a message
-naming it if you skip it.
-
-The formula builds from this repo over plain https — a pinned commit tarball, no
-credentials and no repo access needed. It installs **two** binaries: `qd`, the
-command, and `qw`, the lane worker `qd` spawns over stdio for every session
-operation. You never invoke `qw` yourself, but `qd` cannot open a lane without
-it: `qd` resolves `qw` as a **sibling of its own executable** and never via
-`PATH`, so a `qw` belonging to some other install can never be picked up
-(ADR-0020). Homebrew puts both in the same `bin`, which is exactly that
-invariant. `qd setup` finishes the install; it is report-only until `--fix`.
-
-The formula itself lives in the tap, not in this repo —
-[`made-by-quorum/quorum-dispatch`](https://github.com/made-by-quorum/homebrew-quorum-dispatch). See
-[`packaging/homebrew/`](packaging/homebrew/) for how to move its pin and how to
-smoke-test a change to it.
-
-### From source
-
-```sh
-cargo install --git https://github.com/made-by-quorum/quorum-dispatch --locked \
-  quorum-dispatch --bin qd
-cargo install --git https://github.com/made-by-quorum/quorum-dispatch --locked \
-  quorum-qw --bin qw
-```
-
-Two invocations, for the sibling reason above — they land in the same
-`~/.cargo/bin` from the same rev, which is the invariant: one directory, one
-install, one pin. `--bin` is not optional: the `quorum-dispatch` package also
-carries internal harness bins that are not part of the product.
-
 ## Status
 
 In active use across macOS (arm64) and Linux (x86_64), gated by a green
