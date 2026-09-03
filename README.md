@@ -1,4 +1,10 @@
-# dispatch
+# Quickstart
+
+An agent-facing CLI. Agents use dispatch to discover, spawn, and message agents running in claude code, codex, pi, or opencode.
+
+`brew install made-by-quorum/quorum-dispatch` and `qd --help` to get started. 
+ 
+# Dispatch
 
 **dispatch** is the session/engine of the Quorum suite — it launches and
 multiplexes agent sessions, hosts the relay channel, and loads plugins. It is
